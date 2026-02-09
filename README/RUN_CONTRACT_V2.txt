@@ -1,0 +1,40 @@
+RUN tie-break contract — pv=2 (strict) — OANDA_MT5
+
+Channel: %OANDA_MT5_ROOT%\RUN
+
+Files:
+- tiebreak_request.json   (written by SafetyBot)
+- tiebreak_response.json  (written by SCUD)
+
+RULES (P0):
+- pv MUST be 2. pv!=2 => hard reject (ignore file), fail-open.
+- Exact keys only (strict schema). Unknown keys => reject.
+- No price-like keys or string values (bid/ask/ohlc/open/high/low/close/price/rate/tick/quote/spread).
+- Compact JSON length <= 2048 chars.
+- TTL is enforced by file mtime and ttl_sec (1..60).
+
+REQUEST (tiebreak_request.json):
+{
+  "pv": 2,
+  "ts_utc": "YYYY-MM-DDTHH:MM:SSZ",
+  "rid": "TB-YYYYMMDD-HHMMSS-PID-RND",
+  "ttl_sec": 30,
+  "cands": ["EURUSD", "GBPUSD"],
+  "mode": "LIVE" | "PAPER",
+  "ctx": { "mode": "LIVE"|"PAPER", "note": "..." }
+}
+
+RESPONSE (tiebreak_response.json):
+{
+  "pv": 2,
+  "ts_utc": "YYYY-MM-DDTHH:MM:SSZ",
+  "rid": "same as request",
+  "tb": 0 | 1 | 2,
+  "pref": "EURUSD" | "" ,
+  "reasons": ["green_gate","n_ok","src=loop"]
+}
+
+Semantics:
+- tb==1 means "apply" and pref MUST be one of cands.
+- tb==0 means "ignore" (no tie-break granted).
+- tb==2 reserved.

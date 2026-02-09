@@ -1,0 +1,22 @@
+RUNBOOK — SYSTEM INFORMACYJNY (PC-only, OFFLINE v6)
+
+Root:
+- C:\OANDA_MT5_SYSTEM\  (zalecane; spójne z manifestami i dokumentacją)
+
+OFFLINE (bez sieci i bez KEY):
+1) Nie wkładaj pendrive KEY (label: OANDAKEY).
+   - SafetyBot ma wejść w tryb bezpieczny i nie wystartuje (to jest oczekiwane).
+2) Uruchom diagnostykę:
+   - python TOOLS\diag_bundle_v6.py
+3) Uruchom bramki OFFLINE:
+   - python TOOLS\gate_v6.py --mode offline
+4) Sprawdź dowody:
+   - EVIDENCE\gates\*.txt
+   - DIAG\bundles\LATEST\*.json/txt
+
+ONLINE (w tym release: DO_WERYFIKACJI_ONLINE):
+- Nie wydajemy GO dla ONLINE na tym etapie.
+- Testy brokerskie i stop-level są odłożone do osobnego przebiegu po podłączeniu MT5/KEY.
+
+Zasada:
+- Brak autonomicznych napraw; hotfix inicjuje operator (HOTFIX\incoming → active → archive).

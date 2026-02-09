@@ -1,0 +1,92 @@
+{
+  "canonical": {
+    "core_is_immutable": true,
+    "core_meta_note": "CORE jest audytowany w PHASE-2: meta musi byc zgodne z kanonem (release_id i root_expected). Brak plikow wykonywalnych w CORE w tym release jest dopuszczalny, ale CORE/RELEASE_META.json nie moze wprowadzac sprzecznosci.",
+    "core_meta_path": "CORE/RELEASE_META.json",
+    "release_id": "20260207_1321_v6_2_corehygiene2",
+    "release_meta_path": "RELEASE_META.json",
+    "root_expected_windows": "C:\\OANDA_MT5_SYSTEM"
+  },
+  "deprecations": {
+    "deprecated_files_expected_absent_from_root": [
+      "AUDIT_META.json",
+      "OUTER_META.json",
+      "f6.txt"
+    ],
+    "moved_to_archive_history": [
+      [
+        "AUDIT_META.json",
+        "ARCHIVE/HISTORY/AUDIT_META.json.HISTORY_from_20260205_0711_v6_all_in_one.bak"
+      ],
+      [
+        "OUTER_META.json",
+        "ARCHIVE/HISTORY/OUTER_META.json.HISTORY_from_20260205_0711_v6_all_in_one.bak"
+      ],
+      [
+        "f6.txt",
+        "ARCHIVE/HISTORY/f6.txt.HISTORY_from_20260205_0711_v6_all_in_one.bak"
+      ]
+    ]
+  },
+  "evidence": {
+    "dir": "EVIDENCE",
+    "gates_dir": "EVIDENCE/gates",
+    "missing_evidence_is_fail": true,
+    "online_smoke_dir": "EVIDENCE/online_smoke"
+  },
+  "modes": {
+    "offline": {
+      "key_required": false,
+      "network": "forbidden",
+      "sequence": [
+        {
+          "args": [],
+          "tool": "TOOLS/diag_bundle_v6.py"
+        },
+        {
+          "args": [
+            "--mode",
+            "offline"
+          ],
+          "tool": "TOOLS/gate_v6.py"
+        }
+      ]
+    },
+    "online_preflight": {
+      "key_required": false,
+      "network": "allowed_but_not_used_by_tools",
+      "sequence": [
+        {
+          "args": [
+            "--mode",
+            "online_preflight"
+          ],
+          "tool": "TOOLS/gate_v6.py"
+        }
+      ]
+    },
+    "online_smoke_windows": {
+      "key_required": false,
+      "network": "required_for_terminal_connection",
+      "note": "To jest test IPC/terminal_info/version. Bez handlu. Wymaga Windows + uruchomionego terminala.",
+      "sequence": [
+        {
+          "args": [
+            "--mt5-path",
+            "C:\\Program Files\\OANDA TMS MT5 Terminal\\terminal64.exe"
+          ],
+          "tool": "TOOLS/online_smoke_mt5.py"
+        }
+      ]
+    }
+  },
+  "path_policy": {
+    "clean_mt5_forbidden": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    "hard_root_windows": "C:\\OANDA_MT5_SYSTEM",
+    "legacy_root_allowed_only_if_suffix_system": true,
+    "legacy_root_banned_prefix": "C:\\OANDA_MT5",
+    "required_oanda_mt5_exe": "C:\\Program Files\\OANDA TMS MT5 Terminal\\terminal64.exe"
+  },
+  "schema_version": 1,
+  "title": "AUDIT_POLICY — jedyne zrodlo prawdy audytorskiej"
+}

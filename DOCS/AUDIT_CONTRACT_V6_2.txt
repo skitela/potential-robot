@@ -1,0 +1,75 @@
+AUDIT_CONTRACT_V6_1 — OANDA MT5 System 6-in-1
+
+1) Cel nadrzędny
+- ONLINE_READINESS na Windows 11 + MT5 + OANDA (Polska): system ma startować, nie zawieszać się, nie wyciekać sekretów i mieć techniczne zabezpieczenia (timeouts/retry/backoff/safe-mode).
+- OFFLINE_BASELINE jest warunkiem koniecznym i służy redukcji ryzyka (determinism, brak sekretów, brak min uruchomieniowych). OFFLINE nie jest celem nadrzędnym.
+
+2) Zasady nieprzekraczalne
+- Zakaz modyfikacji strategii tradingowej i logiki biznesowej (wejścia/wyjścia/ryzyko). Dozwolone tylko technikalia: determinism/manifesty, bramki, DIAG, crash-proof init, sanitizacja sekretów, timeouty subprocess, runbook/rollback, tooling release.
+- Zero zgadywania: wnioski muszą mieć dowód (plik + linia + cytat <= 25 słów) w raporcie.
+
+3) Jeden aktywny zestaw narzędzi (eliminuje „wybieranie wersji”)
+- NORMATYWNE: TOOLS/gate_v6.py oraz TOOLS/diag_bundle_v6.py.
+- Jeśli w paczce występują inne warianty gate/diag (np. v5), mają status ARCHIWALNY i nie mogą być uruchamiane w audycie V6.1.
+
+4) Determinism: rozdzielenie release tree vs runtime-output
+- Release tree deterministyczny = zawartość ZIP:
+  - katalogi runtime (DIAG/, EVIDENCE/) zawierają wyłącznie placeholdery (.keep) i stałe pliki szablonów.
+  - MANIFEST.json + MANIFEST.sha256 obejmują wyłącznie release tree (bez runtime-output).
+- Runtime-output = pliki tworzone po uruchomieniu narzędzi (np. EVIDENCE/gates/*, DIAG/bundles/LATEST/*):
+  - NIE są częścią deterministycznego ZIP;
+  - są pakowane osobno jako „EVIDENCE/DIAG package”.
+- DIAG/bundles/LATEST (runtime) ma zawierać 4 wymagane pliki:
+  env_snapshot.json, gate_snapshot.txt, logs_snippet.txt, error_bundle.json
+  oraz opcjonalnie .keep.
+
+5) Secrets policy (jawne, bez „domyślnego rozsądku”)
+- secrets_scan ma:
+  - jawne wykluczenia: EVIDENCE/ oraz DIAG/ (brak samozatrucia),
+  - FAIL tylko dla sekretów literalnych (np. klucze/tokeny/hasła zakodowane wprost),
+  - allowlist dla referencji typu: config/env/self/CFG (np. odczyt z pliku, ENV, atrybutów CFG).
+
+6) Kanały zewnętrzne
+- ZAKAZANE zawsze: notyfikacje/komunikacja na zewnątrz (Telegram, email, webhook, push, SMS, HTTP POST do usług zewn.).
+- DOPUSZCZALNE warunkowo (ONLINE): advisory fetch w SCUD/Scout tylko gdy:
+  (a) brak pól price-like (bid/ask/ohlc/open/high/low/close/price/rate/tick/quote/spread),
+  (b) brak wpływu na loop tradingowy poza tie-breakerem w Top-K przy GREEN,
+  (c) brak zapisu zewnętrznych danych do META wykorzystywanego przez bota.
+
+7) Statusy werdyktu
+- OFFLINE_BASELINE_GO / OFFLINE_BASELINE_NO_GO.
+- ONLINE_READINESS_GO / ONLINE_READINESS_DO_WERYFIKACJI_ONLINE / ONLINE_READINESS_NO_GO.
+- ONLINE_READINESS_GO wolno wystawić WYŁĄCZNIE po wykonaniu ONLINE_RUNBOOK_WIN11 z dowodami PASS.
+
+8) Procedura audytu (jedyna obowiązująca)
+A) OFFLINE_BASELINE (bez internetu, bez logowania do MT5, bez realnych sekretów):
+   gate → diag → gate → gate (stabilność)
+B) ONLINE_RUNBOOK_WIN11 (na docelowym Windows 11 + MT5 + OANDA):
+   testy runtime (KEY/ACL/MT5 path + server + login bez sekretów w repo, uruchomienie demo, weryfikacja logów, kontrola timeoutów i trybu awaryjnego).
+
+9) Dowody
+- Logi i raporty OFFLINE zapisuj do EVIDENCE/ i/lub zewnętrznego katalogu logs/ w WORKDIR.
+- Dowody nie mogą ujawniać wrażliwych ścieżek sekretów/KEY: normalizuj do <ROOT>/<KEY_PATH>.
+
+
+=== V6.2 ADDENDUM (P0) ===
+1) HARD ROOT
+   - Jedyny dozwolony katalog root: legacy root_SYSTEM
+   - Poza tym: FAIL (bez wyjątków). Egzekwowane w gate_v6.py (statycznie) i runtime (BIN/runtime_root.py).
+
+2) ZAKAZ LEGACY ROOT
+   - Literalne odniesienia do legacy root (stary katalog bez sufiksu _SYSTEM) są zakazane w kodzie i dokumentacji.
+   - Gate: path_policy_legacy_root FAILuje przy wykryciu takich odniesień.
+
+3) TRYB LIVE vs OFFLINE
+   - LIVE: terminal OANDA MT5 jest hard requirement:
+     C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe
+     Brak terminala => FAIL na starcie systemu (zanim zaczniemy łączyć się z MT5).
+   - OFFLINE: dopuszczalne analizy/diag (learner/SCUD), ale status terminala musi być jawnie raportowany w EVIDENCE.
+
+4) BOOTSTRAP „PANCERNY”
+   - RUN/BOOTSTRAP_V6_2.ps1:
+     - tworzy .venv bez Activate.ps1,
+     - instaluje zależności wg lock (requirements.offline.lock / requirements.live.lock),
+     - robi smoke test (TOOLS/smoke_compile_v6_2.py: import/py_compile),
+     - zapisuje: pip freeze --all, SHA256 locka, oraz status MT5 terminala do EVIDENCE\bootstrap.

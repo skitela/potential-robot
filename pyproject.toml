@@ -1,0 +1,67 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [
+  "DB",
+  "META",
+  "RUN",
+  "LOGS",
+  "__pycache__",
+  ".venv",
+  "venv",
+]
+
+[tool.ruff.lint]
+# Keep the rule set practical for a mixed IO/runtime project.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4"]
+# Black compatibility and pragmatic exceptions.
+ignore = ["E203", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+
+[tool.black]
+line-length = 120
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+follow_imports = "silent"
+files = ["BIN"]
+[tool.oanda_mt5_gate]
+mode = "release"
+timeout_sec = 60
+
+structural_required = [
+  "BIN/safetybot.py::RequestGovernor.day_state",
+  "BIN/safetybot.py::MT5Client.order_send",
+  "BIN/safetybot.py::RequestGovernor._group_price_cap",
+  "BIN/safetybot.py::RequestGovernor._group_borrow_allowance",
+]
+
+
+# In this offline build environment, external linters/security tools may be unavailable.
+# Enable them in your CI where tooling is installed.
+enable_black = false
+enable_isort = false
+enable_ruff = false
+enable_mypy = false
+enable_bandit = true
+bandit_severity_level = "medium"
+enable_pip_audit = true
+
+enable_compileall = true
+enable_unittest = true
+
+timeout_compileall = 120
+timeout_unittest = 240
+timeout_pip_audit = 60
+
+pip_audit_requirements = ["requirements-dev.txt", "requirements.txt"]

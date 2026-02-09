@@ -1,0 +1,20 @@
+{
+  "schema_version": "infosys.event.v1",
+  "event_id": "evt-20260204-120000-0001",
+  "timestamp_utc": "2026-02-04T12:00:00Z",
+  "release_id": "oanda_mt5_20260204_120000_v3_3_22H_INFOv3",
+  "component": "safetybot|scud|learner|gate|ops",
+  "severity": "INFO|WARN|ERROR|CRITICAL",
+  "event_type": "STARTED_OK|CRITICAL_ERROR|HEARTBEAT_MISSED|SHUTDOWN_OK",
+  "summary": "krótki opis",
+  "context": {
+    "runtime_root": "C:\\\\OANDA_MT5",
+    "pid": 12345,
+    "lock_path": "RUN\\\\safetybot.lock"
+  },
+  "guardrails": {
+    "auto_fix_attempted": false,
+    "filesystem_modified": false,
+    "auto_restart_attempted": false
+  }
+}

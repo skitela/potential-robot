@@ -1,0 +1,30 @@
+05_REPAIR_AGENT_SPEC — SPECYFIKACJA KOMPONENTU REPAIR_AGENT (AUTO-REPAIR)
+
+Cel:
+- Automatyczna reakcja na alerty InfoBota.
+- Restart uslug i opcjonalne zastosowanie hotfixa.
+- Brak zmiany strategii tradingu.
+
+Wejscia (lokalne):
+- RUN/infobot_alert.json
+- LOGS/ (status logow)
+- HOTFIX/incoming/ (opcjonalnie)
+
+Wyjscia:
+- RUN/repair_status.json
+- LOGS/repair_agent/repair_agent.log
+- DIAG/bundles (wywolanie diag_bundle_v6)
+
+Tryby:
+1) Detect: odczyt alertu
+2) Repair: diag -> restart -> weryfikacja
+3) Auto-hotfix (opcjonalnie): zastosuj najnowszy hotfix z HOTFIX/incoming
+4) Recover: status=\"recovered\" i sygnal do InfoBota
+
+Zakazy:
+- Brak komunikacji sieciowej.
+- Brak zmian w CORE.
+- Brak ingerencji w logike strategii.
+
+Uwagi:
+- Auto-hotfix moze byc wylaczony przez AUTO_HOTFIX=False w BIN/repair_agent.py

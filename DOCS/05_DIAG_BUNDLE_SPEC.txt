@@ -1,0 +1,39 @@
+05_DIAG_BUNDLE_SPEC — specyfikacja DIAG\bundles\LATEST (v6)
+
+Narzędzie:
+- python TOOLS\diag_bundle_v6.py
+
+Reguła twarda:
+- Zawsze nadpisuj DIAG\bundles\LATEST\
+- Zawsze archiwizuj:
+  - poprzedni LATEST → DIAG\bundles\INCIDENTS\incident_YYYYMMDD_HHMMSS\
+  - nowy LATEST → DIAG\bundles\INCIDENTS\incident_YYYYMMDD_HHMMSS_LATEST\
+
+W LATEST zawsze 4 pliki:
+1) env_snapshot.json
+   - minimalny format (OFFLINE):
+     {
+       "timestamp": "...",
+       "root": "C:\\OANDA_MT5_SYSTEM\\",
+       "os_name": "nt",
+       "python": {"version": "..."},
+       "offline": true
+     }
+
+2) gate_snapshot.txt
+   - ostatni znany dowód bramki (najświeższy plik z EVIDENCE\gates\), skrócony i po redakcji.
+
+3) logs_snippet.txt
+   - wycinek logów (ostatnie N linii), po sanitizacji.
+
+4) error_bundle.json
+   - OFFLINE: może być puste (lista errors = []).
+   - ONLINE: wypełniane na podstawie realnych incydentów/retcode.
+
+Dowód OFFLINE runtime:
+- diag_bundle_v6 tworzy: EVIDENCE\gates\offline_runtime_<id>.txt
+  - zawiera ścieżki DIAG/LATEST i ARCHIVE + czasy mtime plików.
+
+Sanitizacja:
+- Redaguj: hasła, tokeny, klucze, Bearer.
+- Nie ujawniaj treści TOKEN/BotKey.env ani pełnych ścieżek do sekretów.

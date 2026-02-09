@@ -1,0 +1,31 @@
+02_HOTFIX_WORKFLOW — ZASADY I ŚLAD DOWODOWY
+
+Cele:
+- Minimalna ingerencja operatora, ale zawsze świadoma inicjacja.
+- Pełna audytowalność: kto, kiedy, co zastosował, z jakim wynikiem bramek.
+
+Struktura HOTFIX:
+- HOTFIX\incoming\<hotfix_id>\      (hotfix przygotowany do oceny)
+- HOTFIX\active\<hotfix_id>\        (aktywny overlay)
+- HOTFIX\archive\<hotfix_id>\       (archiwum)
+
+Warunki wejścia:
+- Hotfix NIE może zawierać plików w ścieżkach CORE\
+- Hotfix NIE może dodawać plików *.exe/*.bat ani *.pyc/*.pyo/__pycache__
+
+Proces Apply Hotfix (operator uruchamia):
+1) Generuje run_id i zapisuje start do EVIDENCE\hotfix_records\hotfix_record_<id>.json (status STARTED)
+2) Wykonuje bramki G0–G3 + skany czystości (G1) na incoming
+3) Tworzy backup bieżącego stanu overlay (active → archive) oraz loguje to w hotfix_record
+4) Aktywuje hotfix: incoming → active (kopiowanie/overlay)
+5) Wykonuje bramki ponownie po aktywacji (min. G0/G1/G3)
+6) Zapisuje wynik końcowy (PASS/FAIL) + ścieżki dowodów
+
+Rozróżnienie audytowe (twarde):
+- Operator uruchamia Apply Hotfix: DOZWOLONE.
+- Narzędzie samo uruchamia się lub samo naprawia: NIEDOZWOLONE → FAIL.
+
+Dowody minimalne:
+- EVIDENCE\hotfix_records\hotfix_record_<id>.json
+- EVIDENCE\gates\gate_run_<run_id>.txt
+- EVIDENCE\gates\clean_scan_<run_id>.txt

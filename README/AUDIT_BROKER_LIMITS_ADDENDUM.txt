@@ -1,0 +1,25 @@
+DODATEK AUDYTOWY — LIMITY BROKERA/PLATFORMY (OANDA TMS)
+
+Cel:
+- Zmniejszyć ryzyko odcięcia dostępu lub odrzucania zleceń przez przeciążenie.
+
+Wartości referencyjne (z regulaminu OANDA TMS, Appendix 3 i 4)
+1) Limity zapytań o ceny (na dobę kalendarzową):
+   - Poziom ostrzegawczy: 1000 zapytań/dobę
+   - Poziom odcięcia: 5000 zapytań/dobę
+
+2) Limity zleceń i pozycji:
+   - Limit market orders: 50 zleceń na sekundę (dotyczy tylko market orders)
+   - Limit łączny: 500 pozycji + zleceń oczekujących jednocześnie
+     (bez zleceń Take Profit i Stop Loss)
+
+Wymóg audytowy (praktyczny)
+- System ma mieć liczniki i progi „wewnętrzne” (bezpieczniejsze niż progi regulaminowe),
+  oraz ma raportować aktualne liczniki w logach / plikach diagnostycznych.
+- Jeżeli progi są przekroczone:
+  * system nie „naprawia się sam”,
+  * system przechodzi do stanu bezpiecznego (bez eskalacji operacji),
+  * operator dostaje czytelny komunikat na ekranie.
+
+Dowody do EVIDENCE
+- zrzut liczników (np. JSON) + fragment LOGS z komunikatem o stanie limitów.

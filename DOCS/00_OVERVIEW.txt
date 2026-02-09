@@ -1,0 +1,26 @@
+00_OVERVIEW — SYSTEM OPERACYJNY (CORE/HOTFIX/DIAG/EVIDENCE/DOCS) + INFOBOT
+
+Release ID: 20260204_1320_v5
+
+Cel:
+- Zapewnić audytowalny, lokalny workflow dla systemu tradingowo‑skalpingowego na Windows 11.
+- Dodać InfoBot (wyłącznie informacyjny, screen‑only) oraz proces „quasi‑naprawy” (HOTFIX), gdzie zawsze uczestniczy operator.
+- Wymusić bramki PASS/FAIL i dowody w EVIDENCE: brak dowodu = FAIL.
+
+Zakres:
+- NIE zmieniamy strategii tradingu/scalpingu (logika wejść/wyjść/zarządzanie pozycją pozostaje bez zmian).
+- Nie używamy żadnych kanałów zewnętrznych. Komunikaty wyłącznie na ekranie + log lokalny.
+
+Porównanie paczek referencyjnych (plikowo, bez uruchamiania tradingu):
+- MT5_demo: brak plików *.pyc i katalogów __pycache__.
+- demo1: zawiera pliki *.pyc oraz __pycache__ (regresja czystości artefaktu; ryzyko niedeterminizmu i różnic środowiskowych).
+- v4: wprowadza katalogi CORE/HOTFIX/DIAG/DOCS oraz dodatkowe README audytowe; brak *.pyc/__pycache__/exe/bat.
+
+Konsekwencje:
+- demo1 nie spełnia bramki G1 (Czystość) — FAIL.
+- v5 usuwa regresję oraz dopina brakujące deliverables w DOCS i bramki w formacie 1:1.
+
+Ważne stałe:
+- Root projektu na komputerze docelowym: C:\OANDA_MT5_SYSTEM\
+- Audyt/czystość skanuje WYŁĄCZNIE ten katalog (nigdy całe C:\).
+- Dane wrażliwe wyłącznie na pendrive identyfikowany po etykiecie woluminu (label): OANDAKEY.

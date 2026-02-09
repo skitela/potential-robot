@@ -1,0 +1,6 @@
+# bandit.yaml — configuration for Bandit security scan
+# Usage (as in TOOLS/gate.py): bandit -c bandit.yaml -r BIN
+
+exclude_dirs: ["tests", "DB", "META", "RUN", "LOGS", "__pycache__", ".venv", "venv"]
+
+# If you want to narrow tests later, use 'tests' or 'skips'. Keep default coverage for now.

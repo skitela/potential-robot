@@ -1,0 +1,35 @@
+HANDOFF (2026-02-08)
+
+RELEASE ZIP (single-file handoff with embedded evidence):
+- dist\20260207_1321_v6_2_corehygiene2.zip
+
+EVIDENCE ZIP (standalone evidence bundle):
+- dist\20260207_1321_v6_2_corehygiene2_EVIDENCE.zip
+
+CHECKSUMS:
+- dist\CHECKSUMS_RELEASE_20260208.txt
+- dist\CHECKSUMS_HANDOFF_20260208.txt
+- dist\CHECKSUMS_HANDOFF_20260208.self.txt
+
+VERIFY:
+- dist\VERIFY_20260208.txt
+
+AUDIT REPORTS:
+- EVIDENCE\audit_report_p0_20260208_112200.txt
+- README\AUDIT_P0_SUMMARY_20260208.txt
+- README\AUDIT_P0_CHANGELOG_20260208.txt
+
+GATE EVIDENCE:
+- EVIDENCE\gates\cleanliness_20260208_112055.txt
+- EVIDENCE\gates\audit_policy_canon_20260208_112055.txt
+- EVIDENCE\gates\path_policy_legacy_root_20260208_112055.txt
+- EVIDENCE\gates\bootstrap_assets_20260208_112055.txt
+- EVIDENCE\gates\live_terminal_policy_20260208_112055.txt
+- EVIDENCE\gates\manifest_integrity_root_20260208_112055.txt
+- EVIDENCE\gates\manifest_integrity_core_20260208_112055.txt
+- EVIDENCE\gates\cfg_completeness_20260208_112055.txt
+- EVIDENCE\gates\key_presence_20260208_112055.txt
+- EVIDENCE\gates\diag_latest_20260208_112055.txt
+- EVIDENCE\gates\core_acl_20260208_112055.txt
+- EVIDENCE\gates\secrets_scan_20260208_112055.txt
+- EVIDENCE\gates\online_preflight_contracts_20260208_112121.txt

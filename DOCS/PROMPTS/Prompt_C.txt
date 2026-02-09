@@ -1,0 +1,15 @@
+PROMPT C — AUDYT DOKUMENTACJI (DOCS ↔ bramki ↔ manifesty)
+
+Wejście:
+- Zawartość DOCS (00..07)
+- MANIFEST.sha256 + FILELIST.txt
+- gate_snapshot.txt z ostatniego uruchomienia
+
+Zadanie:
+1) Wykryj niespójności: dokumenty vs bramki vs manifesty.
+2) Wykryj brakujące deliverables (nazwy plików wymagane).
+3) Wypisz poprawki dokumentacyjne (bez dotykania strategii).
+4) Zakończ listą „blokujących braków” dla GO/NO‑GO.
+
+Wyjście:
+- Raport audytu dokumentacji (krótko i jednoznacznie).

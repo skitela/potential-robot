@@ -1,0 +1,20 @@
+AUDITCANON1 — changelog (warstwa audytowa; CORE bez zmian)
+
+KANON release_id: 20260207_0035_v6_2
+
+Zmiany (PHASE-1; bez dotykania CORE/):
+1) Dodano AUDIT_POLICY.json jako jedyne źródło prawdy audytorskiej (tryby: offline, online_preflight, online_smoke_windows).
+2) README_AUDYT_SYSTEMU.txt zredukowany do roli wrappera — wskazuje na AUDIT_POLICY.json.
+3) Pliki sprzeczne/historiczne przeniesiono do ARCHIVE/HISTORY/:
+   - AUDIT_META.json
+   - OUTER_META.json
+   - f6.txt
+4) TOOLS/gate_v6.py:
+   - naprawiono skan legacy-root (wykrywanie prefixu C:\\ + OANDA_MT5 bez _SYSTEM)
+   - dodano bramkę audit_policy_canon
+   - dodano bramkę online_preflight_contracts (w trybie online_preflight)
+5) Zaktualizowano DOCS/07_RELEASE_PROCESS.txt pod nowy kanon.
+6) Regeneracja: FILELIST.txt, MANIFEST.json, MANIFEST.sha256.
+
+Uwaga:
+- Ślady runtime (DIAG/EVIDENCE) nie są częścią deterministycznego release; dowody są osobno.

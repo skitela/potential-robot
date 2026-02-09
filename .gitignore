@@ -1,0 +1,37 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Editor/IDE
+.vs/
+.vscode/
+
+# Runtime outputs
+LOGS/
+RUN/
+DATA/
+DB/
+DB_BACKUPS/
+DIAG/bundles/
+DIAG/reports/
+
+# Evidence and archives (keep curated report only)
+EVIDENCE/*
+!EVIDENCE/oanda_limits_audit_report.md
+
+# Large reference docs (keep curated text elsewhere)
+DOCS/OANDA/_extract/
+DOCS/OANDA/*.pdf
+README/*.pdf
+README/*.docx
+
+# Archives/builds
+ARCHIVE/
+dist/
+*.log
+*.zip

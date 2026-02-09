@@ -1,0 +1,7 @@
+{
+  "core_immutable": true,
+  "no_external_channels": true,
+  "notes": "CORE: komponent immutowalny. W tym release zawiera wyłącznie metadane i placeholdery (.keep). Brak zmian strategii.",
+  "release_id": "20260207_1321_v6_2_corehygiene2",
+  "root_expected": "C:\\OANDA_MT5_SYSTEM"
+}

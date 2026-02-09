@@ -1,0 +1,23 @@
+POLITYKA BEZPIECZEŃSTWA PAKIETU (DEMO)
+
+Cel:
+- Paczka DEMO służy do uruchomienia systemu w trybie testowym z siecią (DEMO/PAPER), bez realnych środków.
+
+Zasady (twarde):
+1) W ZIP NIE MA sekretów:
+   - brak kluczy, tokenów, haseł, .env, certyfikatów prywatnych, danych dostępowych.
+   - wszystkie dane dostępu do MT5/OANDA są wyłącznie na pendrive (OANDAKEY).
+
+2) ZIP NIE JEST szyfrowany hasłem (na tym etapie):
+   - ochrona opiera się na kontroli dostępu do laptopa, szyfrowaniu nośnika OANDAKEY oraz higienie artefaktów.
+
+3) Pendrive jako „kill‑switch”:
+   - system ma cyklicznie (docelowo co ~15 s) sprawdzać obecność OANDAKEY.
+   - brak OANDAKEY => przejście do stanu STOP (bez kontynuacji pętli tradingowej).
+
+4) Źródło prawdy audytu:
+   - źródłem prawdy jest rozpakowane drzewo paczki oraz MANIFEST.* (snapshot).
+   - hash ZIP jest publikowany zewnętrznie (sidecar), jeżeli jest wymagany.
+
+Notatka:
+- W kodzie mogą występować słowa „token”, „banned_tokens” itp. w znaczeniu technicznym (nie jako sekret).

@@ -1,0 +1,32 @@
+CHECKLISTA WDROŻENIOWA — OFFLINE v6 (PC-only)
+
+A) Integralność artefaktu (OFFLINE)
+[ ] Rozpakowano ZIP do C:\OANDA_MT5_SYSTEM\
+[ ] Bramki manifestu PASS:
+    - python TOOLS\gate_v6.py --mode offline
+    - dowody: EVIDENCE\gates\manifest_integrity_root_<id>.txt + manifest_integrity_core_<id>.txt
+
+B) Czystość release (OFFLINE)
+[ ] Brak __pycache__, *.pyc/*.pyo, *.exe/*.bat
+    - dowód: EVIDENCE\gates\cleanliness_<id>.txt
+
+C) KEY (OFFLINE)
+[ ] KEY nieobecny (label: OANDAKEY) → PASS_SAFE_MODE
+    - dowód: EVIDENCE\gates\key_presence_<id>.txt
+
+D) DIAG (OFFLINE)
+[ ] Utworzono DIAG/LATEST i archiwum INCIDENTS:
+    - python TOOLS\diag_bundle_v6.py
+    - dowody: DIAG\bundles\LATEST\(4 pliki) + EVIDENCE\gates\offline_runtime_<id>.txt
+
+E) Sekrety (OFFLINE)
+[ ] Brak sekretów w plikach systemu (poza hashami w manifestach)
+    - dowód: EVIDENCE\gates\secrets_scan_<id>.txt
+
+F) CORE (OFFLINE na Windows)
+[ ] CORE ma ACL bez prawa zapisu dla operatora
+    - dowód: EVIDENCE\gates\core_acl_<id>.txt
+
+G) ONLINE (NIE na tym etapie)
+[ ] DO_WERYFIKACJI_ONLINE: stop-level, limity brokera, retcode live, tryby close-only/long-only/short-only
+    - brak GO dla ONLINE w tym release

@@ -1,0 +1,117 @@
+AUDIT CONTRACT – OANDA_MT5 SafetyBot/SCUD (V)
+
+Wersja kontraktu: V.2
+Data: 2026-02-01 (UTC)
+
+Cel:
+Kontrakt audytu definiuje twarde zasady (P0) i wymagania kontrolne (Gate/Testy) dla paczki OANDA_MT5.
+Kontrakt jest częścią RELEASE; Gate ma wyłapywać regresje zanim ZIP trafi na produkcję.
+
+P0 – ZASADY (twarde, FAIL):
+1) Determinizm i brak zawieszeń
+   - Każdy subprocess.run posiada timeout.
+   - Pętle „ciągłe” mają stały interwał (min. 10s) i obsługę wyjątków bez crasha.
+   - Każdy wyjątek w except ma pierwszy statement cg.tlog(...).
+
+2) Zgodność separacji odpowiedzialności (SCUD/Scout)
+   - SCUD może działać online i pracować ciągle.
+   - Zapisy do META (scout_advice.json / verdict.json / shadowb) NIE zawierają pól price-like
+     (bid/ask/ohlc/open/high/low/close/price/rate/tick/quote/spread) ani żadnych „zewnętrznych kwotowań”.
+   - SCUD jest doradcą (tie-breaker), nie może blokować bota: brak/stare/błędne dane => bot działa normalnie.
+
+3) OANDA/TMS – odporność na odmowę zlecenia (serwer)
+   - Bot nie zapętla retry przy limitach/trybach serwera.
+   - Retcode-y ograniczeń (limit positions/limit volume/limit orders, long-only/short-only/close-only itp.)
+     skutkują COOLDOWN dla symbolu i wyjściem z próby (bez spamowania order_send).
+   - Retcode-y awaryjne (too many requests/connection/error/trade disabled/server disables autotrading)
+     uruchamiają GLOBAL_BACKOFF zgodnie z zamkniętą listą.
+
+4) Limity obciążenia (PRICE/SYS/ORDER)
+   - System posiada liczniki i budżety dla PRICE, SYS oraz ORDER (order_send).
+   - Limity OANDA (Appendix 3/4) są jawne i egzekwowane:
+     * PRICE: WARNING=1000 i CUT-OFF=5000 na „calendar day”.
+     * MARKET ORDERS: 50/s.
+     * POSITIONS+PENDING: 500 jednocześnie (bez TP/SL).
+   - „Calendar day” jest egzekwowany konserwatywnie: budżet dzienny jest liczony równolegle
+     dla NY/UTC/PL i obowiązuje najbardziej restrykcyjna z trzech wersji (strict-min).
+   - Budżety są „twarde”: po wyczerpaniu — brak nowych wejść; dopuszczone wyłącznie operacje awaryjne.
+
+5) I/O atomowe i przenośne
+   - Zapisy plików JSON wykonywane atomowo: tmp + os.replace (Windows-safe).
+   - Blokady plikowe są krótkie i zawsze zwalniane.
+
+6) Brak danych użytkownika w release
+   - Release ZIP NIE zawiera: DB/*.sqlite, LOGS/*.log, META/*.json (poza .keep), żadnych dumpów.
+   - Release ZIP NIE zawiera: dist/, build/, *.egg-info, cache, artefaktów build.
+
+7) Narzędzia release
+   - TOOLS/pack_release.py tworzy ZIP deterministycznie, na allowliście plików.
+   - Gate weryfikuje: brak bytecode, brak artefaktów build/runtime, brak regresji statystycznej.
+
+8) Testowalność minimalna
+   - tests/ zawiera testy P0 (guard price-like + atomic write + zip scan).
+   - python -m unittest discover musi przechodzić w release.
+
+P1 – ZASADY (miękkie, WARN):
+1) Logowanie ma być jednoznaczne (tagi, symbol, retcode_num + retcode_name).
+2) Zależności wymagane w requirements.txt/requirements-dev.txt.
+
+GATE / TESTY:
+- Gate(mode=release) musi przejść dla drzewa źródłowego.
+- Gate(--zip) musi przejść dla gotowego ZIP:
+  - ZIP_HAS_BYTECODE: FAIL jeśli *.pyc / __pycache__.
+  - ZIP_HAS_BUILD_ARTIFACTS: FAIL jeśli dist/, build/, *.egg-info, zagnieżdżone archiwa,
+    lub runtime state w DB/LOGS/META/LOCK/RUN poza .keep.
+- GATE_Y_STAT_FAIL (uogólniony check statystyczny – AST):
+  - MIN_SAMPLE_N istnieje (int >= 30) oraz jest użyty do wymuszenia YELLOW przy małej próbie
+    i do gatingu tie-break w run_once.
+
+Źródła (do weryfikacji zgodności OANDA/TMS – tytuł + data):
+- Best Execution Policy (TMS Brokers S.A. / OANDA TMS) – 2025-08-18.
+- Terms and Conditions (TMS Brokers S.A. / OANDA TMS) – 2025-10-01.
+- Financial Instruments Specification (CFDs) (TMS Brokers S.A. / OANDA TMS) – 2026-01-30.
+========================
+RISK_POLICY_DEFAULTS (v3.3.22D)
+========================
+1) Kalendarz doby (D):
+   - Granica doby: 00:00–24:00 Europe/Warsaw (PL) dla decyzji dziennych (limity strat, budżet ORDER).
+   - Dodatkowo: liczniki NY/UTC są nadal utrzymywane i raportowane; budżety PRICE/SYS mają „twardy guard”
+     (jeżeli którykolwiek z liczników przekroczy cap — STOP nowych wejść).
+
+2) Limity strat dziennych (PL doba):
+   - soft: 2.0% (dd_pct >= 0.02) → tylko tryb HOT + ryzyko na trade mnożone przez 0.5.
+   - hard: 3.0% (dd_pct >= 0.03) → brak nowych wejść (zostają tylko działania zamykające).
+
+3) Ryzyko na transakcję (pozycjonowanie wolumenu z SL):
+   - HOT (scalp): 0.30% equity (min 0.20%, max 0.40%).
+   - WARM (dłuższe utrzymanie): 1.00% equity (min 0.80%, max 1.50%).
+   - Twardy sufit: 1.50% equity na pojedynczą pozycję.
+
+4) „Heat” portfela (łączny risk do SL dla pozycji bota):
+   - max_open_risk_pct: 1.80% equity (suma ryzyk SL).
+   - max_positions_parallel: 5; max_positions_per_symbol: 1.
+
+5) Throttle zleceń (dla większej liczby prób w scalpingu, bez „szaleństw”):
+   - min_seconds_between_orders: 1.0
+   - max_orders_per_minute: 6
+   - max_orders_per_hour: 120
+
+---
+P0 – NADKRYTYCZNE UWAGI DO PROMPTU (runtime, anty-zapętlenie)
+Te punkty mają eliminować sytuację: PASS statyczny (audyt/gate) ale FAIL w runtime (crash, watchdog restart, lub zjadanie budżetu na starcie).
+
+A) Gate strukturalny (P0, FAIL):
+   - Wymagane metody (muszą istnieć jako metody klas, nie funkcje zagnieżdżone):
+     * BIN/safetybot.py::RequestGovernor._group_price_cap
+     * BIN/safetybot.py::RequestGovernor._group_borrow_allowance
+   - Brak którejkolwiek => FAIL (zapobiega AttributeError w can_consume()).
+
+B) Test kontraktowy (P0, FAIL):
+   - Test ma wykrywać brak powyższych metod oraz regresje typu:
+     * Persistence.set_cooldown() nie może zależeć od dostępności MT5 (cooldown to stan wewnętrzny, zapis do DB musi działać).
+     * OrderThrottle.can_trade() musi zwracać bool (False gdy MT5 niedostępny), nigdy None.
+
+C) Budżet 400 a pętla HOT (P1, zalecenie):
+   - Przy price_budget_day=400 HOT nie może wykonywać pełnych obliczeń M5 wielokrotnie na tej samej świecy.
+     Wymóg: „skip same-bar” także dla HOT (lub m5_pull_sec_hot=300), żeby nie zjadać budżetu bez informacji.
+---

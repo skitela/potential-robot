@@ -1,0 +1,25 @@
+DODATEK AUDYTOWY — MT5 „Stops level” (minimalne odległości SL/TP/pending)
+
+Co to jest
+- „Stops level” (czasem: „Stop levels”) to minimalna odległość od bieżącej ceny, wewnątrz której
+  nie wolno ustawiać:
+  * Stop Loss,
+  * Take Profit,
+  * zleceń oczekujących (pending).
+- Parametr ustala broker i jest widoczny w specyfikacji instrumentu w MT5.
+
+Dlaczego to jest krytyczne
+- Jeżeli system spróbuje ustawić SL/TP/pending za blisko, serwer odrzuci modyfikację lub zlecenie
+  (typowy komunikat: „Invalid Stops”).
+- To nie jest kwestia „filozofii tradingu”, tylko warunków technicznych egzekucji zleceń.
+
+Jak to zweryfikować (manualnie)
+1) W MT5 otwórz specyfikację instrumentu (właściwości symbolu).
+2) Odczytaj „Stops level” i zapisz wartość do EVIDENCE\...\stoplevels_snapshot.txt
+   (dla instrumentów, które system faktycznie używa).
+3) W logach (LOGS) sprawdź, czy w trakcie testu nie pojawiają się błędy związane z „Invalid Stops”.
+
+Wymóg audytowy
+- System ma dokumentować, że respektuje minimalne odległości (np. przez logowanie wyliczonej
+  odległości SL/TP i porównanie do „Stops level”).
+- Jeżeli broker ma „dynamiczne” poziomy, system ma to obsłużyć konserwatywnie (większy bufor).

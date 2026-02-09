@@ -1,0 +1,9 @@
+AUDIT P0 CHANGELOG
+DATE: 2026-02-08
+
+- Regenerated release package and evidence via pack_release.
+- Updated P0 summary and audit report with actual ZIP hash/size.
+- Noted audit meta hash (pre-embed) alongside actual ZIP hash.
+- Generated release checksum file for ZIP and evidence ZIP.
+- Added handoff checksums with separate self-checksum file.
+- Refreshed HANDOFF_20260208.zip after checksum updates.

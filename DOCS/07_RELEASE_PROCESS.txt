@@ -1,0 +1,18 @@
+07_RELEASE_PROCESS — REPRODUKCJA I WERSJONOWANIE
+
+Definicja deterministyczności:
+- „Deterministyczność” = zgodność manifestu: identyczne pliki i identyczne SHA-256.
+- ZIP jako kontener może mieć różne metadane czasowe; prawdą jest MANIFEST.sha256.
+
+Wymagane artefakty:
+- FILELIST.txt (lista plików)
+- MANIFEST.sha256 (root)
+- CORE\MANIFEST.sha256
+- HOTFIX\HOTFIX_MANIFEST.sha256
+- RELEASE_META.json + AUDIT_POLICY.json (kanon: release_id, tryby audytu, reguly evidence); OUTER_META.json/AUDIT_META.json przeniesione do ARCHIVE/HISTORY jako historyczne
+
+Zasady czystości:
+- Zakaz: __pycache__, *.pyc, *.pyo, *.exe, *.bat w C:\OANDA_MT5_SYSTEM\
+
+Staging i produkcja:
+- Produkcja to zawsze wdrożenie po PASS bramek w staging.

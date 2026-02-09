@@ -1,0 +1,30 @@
+{
+  "constraints": {
+    "audit_scan_root_only": "C:\\OANDA_MT5_SYSTEM",
+    "core_immutable_enforced_by_ntfs": true,
+    "determinism_by_manifest_sha256": true,
+    "no_autonomous_repairs": true,
+    "no_exe_bat_pyc_pyo_pycache": true
+  },
+  "generated_at_utc": "2026-02-07T13:21:14+00:00",
+  "generated_at_warsaw": "2026-02-07T14:21:14+01:00",
+  "is_release": true,
+  "key_volume_label_expected": "OANDAKEY",
+  "notes": "Release v6 (OFFLINE): ZM-01..ZM-06: deklaracja brakujących pól CFG bez zgadywania wartości; KEY identyfikowany po labelu OANDAKEY (Get-Volume/WMIC), bez skanowania liter dysków; narzędzia gate_v6 oraz diag_bundle_v6; DIAG LATEST zawsze nadpisywany i archiwizowany; dowody w EVIDENCE/gates (cfg_completeness, key_presence, offline_runtime itd.); wymuszenie trybu bezpiecznego bez KEY; CORE ACL gate (icacls) oraz jawna allowlista fałszywych alarmów w secrets-scan; dokumentacja uzupełniona o DO_WERYFIKACJI_ONLINE i zakaz wystawiania GO dla ONLINE na tym etapie.\n\nV6.2 P0: twardy root (C:\\OANDA_MT5_SYSTEM) egzekwowany w gate i runtime; zakaz legacy root (C:\\OANDA_MT5); bootstrap V6.2 (RUN/BOOTSTRAP_V6_2.ps1) tworzy .venv bez Activate.ps1, instaluje zależności wg lock, robi smoke test (py_compile), zapisuje pip freeze --all oraz status MT5 terminala w EVIDENCE.\n\nCORE_HYGIENE1: usunieto runtime-output DIAG/bundles/INCIDENTS z drzewa release (w ZIP maja zostac tylko .keep); znormalizowano CORE/RELEASE_META.json (release_id/root_expected); zregenerowano MANIFEST.json i MANIFEST.sha256.\n\nCORE_HYGIENE2: TOOLS/smoke_compile_v6_2.py przerobiony na syntax-only (compile(source) bez py_compile), aby nie tworzyc .pyc/__pycache__.",
+  "packages_compared": {
+    "baseline_demo1_zip": "zip-demo-1.zip",
+    "baseline_mt5_demo_zip": "oanda mt5_demo.zip",
+    "previous_info_system_zip": "wdrozenie_info_system_v4.zip"
+  },
+  "release_id": "20260207_1321_v6_2_corehygiene2",
+  "release_name": "OANDA_MT5_SYSTEM_V6.2.0",
+  "release_version": "6.2.0",
+  "root_expected": "C:\\OANDA_MT5_SYSTEM",
+  "schema_version": 1,
+  "scope": {
+    "external_channels": false,
+    "operational_layer_changed": true,
+    "screen_only": true,
+    "strategy_changed": false
+  }
+}

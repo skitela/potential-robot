@@ -1,0 +1,23 @@
+CHANGELOG — wdrozenie_info_system_v3.zip
+
+Release ID: oanda_mt5_20260204_120000_v3_3_22H_INFOv3
+Built at (UTC): 2026-02-04T12:00:00Z
+
+Cel: ujednolicenie dokumentacji demo1 vs MT5_demo + przygotowanie pakietu wdrożeniowego systemu informacyjnego (PC-only, ).
+
+Zmiany (źródło -> efekt):
+1) [demo1] README/README_TESTS.txt: usunięto odniesienia do LAUNCHER\start.bat (nieobecne w ZIP) i zastąpiono je manualnym uruchomieniem z BIN\*.py.
+2) [baseline] Zachowano czystość release (brak __pycache__/.pyc w ZIP) — demo1 zawierało .pyc, usunięto w tej paczce.
+3) [nowe] Dodano dokumenty wdrożeniowe systemu informacyjnego:
+ - README/INFO_SYSTEM_OVERVIEW.txt
+ - README/INFO_SYSTEM_RUNBOOK.txt
+ - README/INFO_SYSTEM_SCHEMA.json
+ - README/INFO_SYSTEM_CHECKLIST.txt
+4) [nowe] Dodano narzędzie pomocnicze do audytu README: TOOLS/audit_readmes.py
+5) [nowe] Dodano EVIDENCE dla tej paczki: EVIDENCE/evidence_20260204_1200/post/INFO_SYSTEM_CHANGES.json
+
+Brak zmian w logice tradingowej i zasadach strategii.
+
+2026-02-04 — v4
+- Dodano audyt bramek (G0–G6) oraz dodatki dot. limitów OANDA TMS i MT5 Stops level.
+- Usunięto odniesienia do kanałów zewnętrznych; system pozostaje PC-only.

@@ -1,0 +1,27 @@
+OPERATOR CHECKLIST: TIEBREAK + DB (SHORT)
+
+A) TIEBREAK (RUN channel)
+1) Ensure SCUD is running (check RUN/scudfab02.lock and LOGS/scudfab02.log fresh).
+2) Ensure SafetyBot is running (RUN/safetybot.lock and LOGS/safetybot.log fresh).
+3) Check that RUN/tiebreak_request.json appears during a near-tie event.
+4) Verify RUN/tiebreak_response.json appears within <1s.
+5) In SafetyBot log, confirm:
+   - TIEBREAK_RESP with latency_ms
+   - No repeated TIEBREAK_TIMEOUT for the same pair
+
+B) DB HEALTH (SQLite)
+1) Verify decision_events.sqlite exists and is writable by SafetyBot.
+2) Confirm SCUD and Learner read without SQLITE_BUSY storms (no repeated "locked"/"busy" logs).
+3) If BUSY appears, verify:
+   - WAL mode enabled (SafetyBot writes)
+   - busy_timeout active (SCUD/Learner)
+4) Check META/scout_shadowb.jsonl growth:
+   - No duplicate event_id lines
+   - File grows smoothly (no rapid duplicate bursts)
+
+C) Quick FAIL signals
+- Missing tiebreak response while requests exist
+- Repeated SQLITE_BUSY without backoff
+- Shadowb duplicate amplification
+
+END

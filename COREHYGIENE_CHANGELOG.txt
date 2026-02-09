@@ -1,0 +1,7 @@
+COREHYGIENE1 — zmiany mechaniczne (bez strategii)
+release_id: 20260207_1321_v6_2_corehygiene2
+
+1) DIAG/ w release: usunieto runtime-output (incident_*); pozostawiono tylko .keep.
+2) CORE/RELEASE_META.json: znormalizowano release_id i root_expected.
+3) AUDIT_POLICY.json + README_AUDYT_SYSTEMU.txt: aktualizacja kanonicznego release_id.
+4) Regeneracja manifestow: MANIFEST.json, MANIFEST.sha256, FILELIST.txt (w kolejnym kroku).

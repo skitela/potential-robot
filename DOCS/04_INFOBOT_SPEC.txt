@@ -1,0 +1,45 @@
+04_INFOBOT_SPEC — SPECYFIKACJA KOMPONENTU INFOBOT (SCREEN-ONLY)
+
+Cel:
+- Dostarczać operatorowi informacje o stanie systemu i incydentach.
+- Nie wykonywać transakcji i nie wpływać na strategię.
+
+Wejścia (TYLKO lokalne):
+- LOGS\ (logi systemu tradingowego)
+- RUN\  (status/heartbeat/lock)
+- EVIDENCE\ (wyniki bramek i działania hotfix)
+- DIAG\ (bundle LATEST i archiwum INCIDENTS)
+
+Wyjścia:
+- Powiadomienie na ekranie (toast + okno podsumowania)
+- Log lokalny InfoBota (LOGS\infobot\infobot.log)
+- DIAG bundle (LATEST + INCIDENTS)
+
+Widok ekranu (GUI):
+- Duży napis "SYSTEM ŻYJE" (czerwony) w osobnym oknie InfoBota.
+- Komunikaty "SYSTEM ALERT" oraz "SYSTEM DOWN" przy problemach.
+- Okno jest wyśrodkowane, zajmuje ok. 15% ekranu i jest rozciągalne.
+
+Tryby pracy:
+1) Heartbeat:
+   - cykliczny komunikat „system żyje / brak alarmów” + wskaźnik ostatniego ticku logowego (bez danych wrażliwych)
+2) Watchdog:
+   - wykrycie braku heartbeat / pętli błędów
+   - eskalacja po 3 restartach: 0 / 15 / 60 min
+3) Podsumowanie dzienne:
+   - ok. 20:30 Europe/Warsaw
+   - zawartość: liczba błędów, status bramek, informacja o hotfixach, (opcjonalnie) ogólne P/L + liczba sygnałów z DB jeśli dostępne
+
+Zakazy:
+- InfoBot nie ma prawa:
+  - składać zleceń,
+  - zmieniać parametrów strategii,
+  - zapisywać do CORE,
+   - wysyłać danych na zewnątrz (wyjątek: opcjonalny email statusowy po świadomym włączeniu).
+
+Uwagi implementacyjne:
+- Powiadomienia ekranowe: toast systemowy + okno podsumowania (bez kanałów zewnętrznych).
+- Każde powiadomienie ma identyfikator: event_id, severity, component, timestamp.
+- Email (opcjonalnie): SMTP po zmiennych środowiskowych, bez logowania haseł w logach.
+   - Odbiorcy: lista rozdzielona przecinkami.
+   - Dodatkowy SMTP (opcjonalny) jako fallback.

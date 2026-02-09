@@ -1,0 +1,18 @@
+PROMPT A — PROJEKT PROCESU (bez kodu)
+
+Wejście:
+- Wymagania bramek G0–G6 i struktury katalogów
+- Release ID: 20260204_1320_v5
+- Zakazy: brak kanałów zewnętrznych; brak autonomicznych napraw; CORE immutable NTFS
+
+Zadanie:
+1) Zwróć listę bramek PASS/FAIL w formacie tabeli.
+2) Dla każdej bramki podaj:
+   - kryterium,
+   - wymagany dowód (ścieżka w EVIDENCE),
+   - jak wykryć FAIL,
+   - minimalne kroki operatora.
+3) Zwróć definicję „GO/NO‑GO” oraz warunek „PASS bez dowodu = FAIL”.
+
+Wyjście:
+- Specyfikacja procesu (bez kodu), jednoznaczna i audytowalna.

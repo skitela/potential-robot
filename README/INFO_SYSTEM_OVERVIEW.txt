@@ -1,0 +1,26 @@
+OANDA_MT5 — SYSTEM INFORMACYJNY — v3
+
+Cel:
+- Zapewnić stabilne, audytowalne informowanie o stanie pracy systemu (uruchomienie, praca, błąd krytyczny, zatrzymanie).
+- Praca wyłącznie z komputera: bez telefonu i .
+- Brak autonomicznych działań destrukcyjnych: system informacyjny nie modyfikuje plików runtime i nie wykonuje samodzielnie restartów produkcyjnych.
+
+Kanały:
+1) EKRAN (obowiązkowy) — alarmy krytyczne, które mogą zatrzymać system lub uniemożliwić pracę.
+2) LOGI (obowiązkowe) — pełny ślad zdarzeń w formacie JSONL (1 linia = 1 zdarzenie).
+
+Zdarzenia (minimum):
+- START_REQUESTED, STARTED_OK, START_FAILED
+- HEARTBEAT_OK, HEARTBEAT_MISSED
+- CRITICAL_ERROR, SHUTDOWN_REQUESTED, SHUTDOWN_OK, SHUTDOWN_FAILED
+
+Zasady bezpieczeństwa:
+- System informacyjny nie podejmuje decyzji tradingowych.
+- System informacyjny nie wysyła zleceń i nie zmienia parametrów strategii.
+- System informacyjny nie zapisuje żadnych danych cenowych/kwotowań do plików META.
+- Wszystkie działania operatora mają być odnotowane w logach (kto/kiedy/co/wynik).
+
+Pliki i format:
+- LOGS/infosys_events.jsonl — dziennik zdarzeń
+- README/INFO_SYSTEM_SCHEMA.json — szkic schematu zdarzenia (payload)
+- README/INFO_SYSTEM_RUNBOOK.txt — procedury operacyjne (PC-only)

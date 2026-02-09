@@ -1,0 +1,17 @@
+PROMPT B — ANALIZA INCYDENTU (z DIAG\bundles\LATEST)
+
+Wejście (wklej 1:1):
+- error_bundle.json
+- logs_snippet.txt
+- gate_snapshot.txt
+- release_id
+
+Zadanie:
+1) Wskaż przyczynę najbardziej prawdopodobną i jej wpływ operacyjny.
+2) Zaproponuj hotfix (tylko warstwa operacyjna; bez zmiany strategii).
+3) Wypisz listę plików do zmiany (ścieżki względem ROOT) oraz uzasadnienie każdej zmiany.
+4) Podaj ryzyka i testy weryfikacyjne.
+5) Zakończ wynikiem: PASS/FAIL i które bramki muszą być powtórzone.
+
+Wyjście:
+- Plan hotfix + „HOTFIX_RECORD (szablon)” w JSON (bez sekretów).

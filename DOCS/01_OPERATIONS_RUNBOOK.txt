@@ -1,0 +1,40 @@
+01_OPERATIONS_RUNBOOK — OPERACJE DLA JEDNEGO OPERATORA (Windows 11)
+
+Zasada nadrzędna:
+- Wdrożenie zawsze przez STAGING → weryfikacja bramek → dopiero potem przeniesienie do produkcji.
+- CORE jest nietykalny (NTFS ACL). Hotfix nie może dotykać CORE.
+
+1) STAGING (rozpakowanie i weryfikacja)
+A. Rozpakuj ZIP do katalogu staging (np. C:\OANDA_MT5_SYSTEM_STAGING\).
+B. Uruchom weryfikację integralności (G0) — zgodność z MANIFEST.sha256.
+C. Uruchom skan czystości (G1) — brak *.pyc, *.pyo, __pycache__, brak *.exe i *.bat.
+D. Zapisz dowody do EVIDENCE\gates\.
+
+2) Produkcja (C:\OANDA_MT5_SYSTEM\)
+A0. Jeśli komponenty odziedziczone oczekują innego root, ustaw zmienną środowiskową OANDA_MT5_ROOT = C:\OANDA_MT5_SYSTEM\ (bez zmian w strategii).
+
+A. Skopiuj zweryfikowane pliki z staging do produkcji.
+B. Ustaw ACL dla CORE tak, aby operator nie miał prawa zapisu (G2). Zapisz zrzut ACL do EVIDENCE\gates\.
+
+3) InfoBot (screen‑only)
+A. InfoBot odczytuje lokalny stan (LOGS/RUN/retcode/wyjątki).
+B. InfoBot emituje komunikaty WYŁĄCZNIE na ekran (toast + okno podsumowania) i loguje lokalnie.
+C. InfoBot tworzy DIAG bundle:
+   - DIAG\bundles\LATEST\ (zawsze nadpisane)
+   - archiwum w DIAG\bundles\INCIDENTS\incident_YYYYMMDD_HHMMSS\ (zawsze)
+
+4) Incydent i HOTFIX (human‑in‑the‑loop)
+A. Operator uruchamia diagnostykę → powstaje LATEST + archiwum INCIDENTS.
+B. Operator wkleja do ChatGPT: error_bundle.json + logs_snippet.txt + gate_snapshot.txt + release_id.
+C. Operator otrzymuje plan hotfix, listę plików i HOTFIX_RECORD.
+D. Operator umieszcza poprawione pliki w HOTFIX\incoming\<hotfix_id>\ (ścieżki względem ROOT).
+E. Operator uruchamia Apply Hotfix (narzędzie uruchamiane przez operatora; nie jest autonomiczne).
+F. Jeśli bramki FAIL → hotfix nie przechodzi do active.
+
+5) Dzienny rytm informacji (screen‑only)
+- Heartbeat na ekranie.
+- Watchdog: restart 0 / 15 / 60 min (po 3 nieudanych restartach eskalacja na ekran).
+- Podsumowanie dzienne ok. 20:30 (Europe/Warsaw) — tylko ekran + log lokalny.
+
+Uwaga:
+- Ten runbook opisuje proces. Implementacja narzędzi (diagnostyka / apply hotfix) musi respektować zakaz autonomicznych napraw i zakaz modyfikacji CORE.

@@ -1,0 +1,74 @@
+03_GATES_PASS_FAIL — definicje bramek (PASS/FAIL) + dowody
+
+Zasada twarda:
+- PASS bez dowodu w EVIDENCE = FAIL.
+- Na etapie v6 NIE wystawiamy GO dla ONLINE.
+- Bramki zależne od MT5/KEY/sieci mają status: DO_WERYFIKACJI_ONLINE.
+
+Narzędzie (OFFLINE):
+- python TOOLS\gate_v6.py --mode offline
+- python TOOLS\diag_bundle_v6.py
+
+G0 — Czystość artefaktu (OFFLINE)
+- Kryterium: brak __pycache__, *.pyc, *.pyo oraz brak *.exe i *.bat w C:\OANDA_MT5_SYSTEM\
+- Dowody:
+  - EVIDENCE\gates\cleanliness_<id>.txt
+
+G1 — Integralność (manifest) (OFFLINE)
+- Kryterium: SHA-256 wszystkich plików zgodny z:
+  - MANIFEST.sha256 (root)
+  - CORE\MANIFEST.sha256
+- Dowody:
+  - EVIDENCE\gates\manifest_integrity_root_<id>.txt
+  - EVIDENCE\gates\manifest_integrity_core_<id>.txt
+
+GCFG — Spójność konfiguracji (ZM-01) (OFFLINE)
+- Kryterium: wszystkie pola konfiguracji używane jako CFG.<pole> są zadeklarowane w class CFG.
+- Dowody:
+  - EVIDENCE\gates\cfg_completeness_<id>.txt
+
+GKEY — Obecność KEY (ZM-02) (OFFLINE)
+- Kryterium: w OFFLINE KEY nieobecny → PASS_SAFE_MODE.
+  - KEY identyfikowany wyłącznie po etykiecie woluminu (label): OANDAKEY.
+  - Jeśli wolumin istnieje, ale brakuje TOKEN\BotKey.env → FAIL (KEY błędnie przygotowany).
+- Dowody:
+  - EVIDENCE\gates\key_presence_<id>.txt
+
+G2 — CORE nietykalny (NTFS ACL) (ZM-04) (OFFLINE na Windows)
+- Kryterium: operator nie ma prawa zapisu do CORE.
+- Dowody:
+  - EVIDENCE\gates\core_acl_<id>.txt
+
+G3 — Dowodowość DIAG (LATEST + INCIDENTS) (ZM-03) (OFFLINE)
+- Kryterium:
+  - DIAG\bundles\LATEST zawiera dokładnie: env_snapshot.json, gate_snapshot.txt, logs_snippet.txt, error_bundle.json
+  - LATEST jest nadpisywany, a każdy snapshot trafia do DIAG\bundles\INCIDENTS\incident_*
+- Dowody:
+  - EVIDENCE\gates\diag_latest_<id>.txt
+  - EVIDENCE\gates\offline_runtime_<id>.txt
+
+GSECRETS — Brak sekretów w repozytorium (ZM-05) (OFFLINE)
+- Kryterium: brak haseł/tokenów/kluczy API w plikach.
+- Allowlista jawna: linie hashy w plikach *.sha256 (64-hex + ścieżka) oraz jawne placeholdery <REDACTED>.
+- Dowody:
+  - EVIDENCE\gates\secrets_scan_<id>.txt
+
+ONLINE — DO_WERYFIKACJI_ONLINE (ZM-06)
+- Zakres:
+  - stop-level/min. dystanse SL/TP/pending na realnym serwerze MT5
+  - tryby close-only/long-only/short-only
+  - limity OANDA TMS (rate-limits, tempo zleceń) oraz throttling
+  - realne retcode/odrzucenia w sieci
+- Dowody (powstaną dopiero po włączeniu ONLINE):
+  - EVIDENCE\broker_limits\...
+  - EVIDENCE\stoplevels\...
+  - EVIDENCE\run_history\...
+
+  P0 SUMMARY (2026-02-08)
+  - README\AUDIT_P0_SUMMARY_20260208.txt
+
+  P0 CHANGELOG (2026-02-08)
+  - README\AUDIT_P0_CHANGELOG_20260208.txt
+
+  HANDOFF (2026-02-08)
+  - HANDOFF_20260208.txt
