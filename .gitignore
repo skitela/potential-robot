@@ -19,12 +19,14 @@ DB/
 DB_BACKUPS/
 DIAG/bundles/
 DIAG/reports/
+DIAG/
 
 # Evidence and archives (keep curated report only)
 EVIDENCE/*
 !EVIDENCE/oanda_limits_audit_report.md
 
 # Large reference docs (keep curated text elsewhere)
+DOCS/OANDA/
 DOCS/OANDA/_extract/
 DOCS/OANDA/*.pdf
 README/*.pdf
@@ -35,3 +37,12 @@ ARCHIVE/
 dist/
 *.log
 *.zip
+
+# Sensitive or volatile dirs
+HOTFIX/
+LOCK/
+META/
+OANDAKEY/
+
+# Checksums or generated lists
+CHECKSUMS_BINARIES_SHA256.txt
