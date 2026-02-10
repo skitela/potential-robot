@@ -27,3 +27,13 @@ Dowody:
 - ONLINE_SMOKE: EVIDENCE/online_smoke/<run_id>_mt5_smoke.json
 
 Zasada: brak dowodu = FAIL (szczegóły w AUDIT_POLICY.json).
+
+PRZYPOMINAJKA: PUSH DO GITHUB (device flow)
+1) Otwórz PowerShell w C:\OANDA_MT5_SYSTEM
+2) Uruchom:
+   & "C:\ProgramData\skite\GitHubDesktop\app-3.5.4\resources\app\git\cmd\git.exe" push -u origin master
+3) Jeśli pojawi się kod, wejdź na:
+   https://github.com/login/device
+   Wklej kod i zatwierdź.
+4) Jeśli URL repo jest inny, ustaw go przed pushem:
+   & "C:\ProgramData\skite\GitHubDesktop\app-3.5.4\resources\app\git\cmd\git.exe" remote set-url origin <URL>
