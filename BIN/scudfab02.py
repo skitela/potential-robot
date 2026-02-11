@@ -23,6 +23,7 @@ Network:
 from __future__ import annotations
 
 import os, sys, json, time, random, hashlib, logging, sqlite3, shutil
+import concurrent.futures as cf
 import datetime as dt
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -494,61 +495,260 @@ def sqlite_fetchall_retry(conn: sqlite3.Connection, q: str, params: Tuple = (), 
 # -------------------------
 # Research (RSS allowlist)
 # -------------------------
-ALLOWLIST_RSS = [
-    "https://feeds.reuters.com/reuters/businessNews",
-    "https://feeds.bbci.co.uk/news/business/rss.xml",
+RSS_SOURCES: List[Dict[str, Any]] = [
+    {
+        "source_id": "reuters_business",
+        "url": "https://feeds.reuters.com/reuters/businessNews",
+        "instrument_tags": ["EURUSD", "GBPUSD", "XAUUSD", "DAX40", "US500"],
+        "keyword_only": True,
+    },
+    {
+        "source_id": "fed_press",
+        "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+        "instrument_tags": ["EURUSD", "XAUUSD", "US500"],
+    },
+    {
+        "source_id": "ecb_press",
+        "url": "https://www.ecb.europa.eu/rss/press.html",
+        "instrument_tags": ["EURUSD", "DAX40"],
+    },
+    {
+        "source_id": "boe_news",
+        "url": "https://www.bankofengland.co.uk/rss/news",
+        "instrument_tags": ["GBPUSD"],
+    },
+    {
+        "source_id": "bundesbank_press",
+        "url": "https://www.bundesbank.de/en/rss-feeds/press-releases-624784",
+        "instrument_tags": ["DAX40", "EURUSD"],
+    },
+    {
+        "source_id": "bbc_business",
+        "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "instrument_tags": ["EURUSD", "GBPUSD", "XAUUSD", "DAX40", "US500"],
+        "keyword_only": True,
+    },
 ]
+
+RSS_TIMEOUT_SEC = 1.5
+RSS_MAX_WORKERS = 3
+RSS_MAX_BYTES = 262144  # 256 KiB
+RSS_MAX_ITEMS_PER_SOURCE = 8
+RSS_MAX_ITEMS_TOTAL = 25
+RSS_FRESH_MAX_AGE_SEC = 24 * 3600
+RSS_RT_AGE_SEC = 2 * 3600
+
+INSTRUMENT_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "EURUSD": (
+        " euro ",
+        " ecb ",
+        " eurozone ",
+        " euro area ",
+        " german bund ",
+    ),
+    "GBPUSD": (
+        " pound ",
+        " sterling ",
+        " boe ",
+        " bank of england ",
+        " uk inflation ",
+    ),
+    "XAUUSD": (
+        " gold ",
+        " bullion ",
+        " safe haven ",
+        " precious metal ",
+    ),
+    "DAX40": (
+        " dax ",
+        " germany ",
+        " german ",
+        " eurostoxx ",
+        " bundestag ",
+    ),
+    "US500": (
+        " s&p ",
+        " sp500 ",
+        " us equities ",
+        " wall street ",
+        " federal reserve ",
+    ),
+}
 
 def sha256(s: str) -> str:
     return hashlib.sha256((s or "").encode("utf-8", errors="ignore")).hexdigest()
 
-def fetch_rss_signals(timeout_sec: float = 6.0) -> Dict[str, Any]:
+def _entry_ts_utc(entry: Any) -> Optional[dt.datetime]:
+    try:
+        st = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+        if st:
+            return dt.datetime(*st[:6], tzinfo=UTC)
+    except Exception as e:
+        cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+
+    for key in ("published", "updated", "created"):
+        raw = getattr(entry, key, None)
+        if raw:
+            t = parse_ts_utc(str(raw))
+            if t is not None:
+                return t
+    return None
+
+def _iso_utc(t: dt.datetime) -> str:
+    return t.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def _guess_instrument_tags(text: str, fallback_tags: List[str], *, allow_fallback: bool = True) -> List[str]:
+    s = f" {str(text or '').lower()} "
+    tags: List[str] = []
+    for sym, kws in INSTRUMENT_KEYWORDS.items():
+        for kw in kws:
+            if kw in s:
+                tags.append(sym)
+                break
+    if tags:
+        return sorted(set(tags))
+    if allow_fallback:
+        return list(fallback_tags or [])
+    return []
+
+def _freshness_label(source_ts: dt.datetime, fetch_ts: dt.datetime) -> str:
+    age = (fetch_ts - source_ts).total_seconds()
+    if age < 0:
+        return "future_skew"
+    if age <= RSS_RT_AGE_SEC:
+        return "rt_2h"
+    if age <= RSS_FRESH_MAX_AGE_SEC:
+        return "fresh_24h"
+    return "stale"
+
+def _impact_class(source_id: str, freshness: str) -> str:
+    if freshness == "rt_2h":
+        if source_id in {"fed_press", "ecb_press", "boe_news", "bundesbank_press"}:
+            return "major"
+        return "normal"
+    if freshness == "fresh_24h":
+        return "normal"
+    return "minor"
+
+def _fetch_one_rss_source(source: Dict[str, Any], timeout_sec: float) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    try:
+        import requests
+        import feedparser
+
+        source_id = str(source.get("source_id") or "").strip().lower()
+        url = str(source.get("url") or "").strip()
+        fallback_tags = [str(x).strip().upper() for x in (source.get("instrument_tags") or []) if str(x).strip()]
+        allow_fallback = not bool(source.get("keyword_only", False))
+        if not source_id or not url:
+            return out
+
+        resp = requests.get(url, timeout=timeout_sec, headers={"User-Agent": "scudfab02"}, stream=True)
+        buf = bytearray()
+        try:
+            for chunk in resp.iter_content(chunk_size=16384):
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                if len(buf) >= RSS_MAX_BYTES:
+                    break
+        finally:
+            try:
+                resp.close()
+            except Exception as e:
+                cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+
+        txt = bytes(buf).decode("utf-8", errors="ignore")
+        feed = feedparser.parse(txt)
+        domain = url.split("/")[2].lower() if "/" in url else ""
+        fetch_ts = _now_utc()
+        fetch_iso = _iso_utc(fetch_ts)
+
+        for entry in (feed.entries or [])[:RSS_MAX_ITEMS_PER_SOURCE]:
+            try:
+                title = str(getattr(entry, "title", "") or "")
+                summary = str(getattr(entry, "summary", "") or "")
+                link = str(getattr(entry, "link", "") or "")
+                source_ts = _entry_ts_utc(entry)
+                if source_ts is None:
+                    continue
+                freshness = _freshness_label(source_ts, fetch_ts)
+                if freshness not in {"rt_2h", "fresh_24h"}:
+                    continue
+                tags = _guess_instrument_tags(f"{title} {summary}", fallback_tags, allow_fallback=allow_fallback)
+                if not tags:
+                    continue
+                rec = {
+                    "source_id": source_id,
+                    "domain": domain,
+                    "instrument_tags": tags,
+                    "ts_source_utc": _iso_utc(source_ts.astimezone(UTC)),
+                    "ts_fetch_utc": fetch_iso,
+                    "headline_sha256": sha256(title),
+                    "summary_sha256": sha256(summary),
+                    "link_sha256": sha256(link),
+                    "freshness": freshness,
+                    "impact_class": _impact_class(source_id, freshness),
+                }
+                out.append(rec)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+                continue
+    except Exception as e:
+        cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+        logging.warning(f"RSS_FAIL source={source.get('source_id')} err={type(e).__name__}")
+    return out
+
+def fetch_rss_signals(timeout_sec: float = RSS_TIMEOUT_SEC) -> Dict[str, Any]:
     """
-    Non-price online research. Returns hashed/scrubbed signals only.
+    Non-price online research. Returns hashed/scrubbed, normalized signals only.
     """
     out = {"ts_utc": _now_utc().replace(microsecond=0).isoformat().replace("+00:00","Z"), "items": []}
     if DETERMINISTIC_MODE or (not ALLOW_RSS_RESEARCH):
         return out
+    items: List[Dict[str, Any]] = []
+    futures = []
+    max_workers = max(1, min(RSS_MAX_WORKERS, len(RSS_SOURCES)))
     try:
-        import requests
-        import feedparser
-        for url in ALLOWLIST_RSS:
+        with cf.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="scudrss") as ex:
+            for src in RSS_SOURCES:
+                futures.append(ex.submit(_fetch_one_rss_source, src, timeout_sec))
             try:
-                r = requests.get(url, timeout=timeout_sec, headers={"User-Agent":"scudfab02"}, stream=True)
-                # Limit response size to avoid hangs/memory blowups on malformed feeds.
-                max_bytes = 262144  # 256 KiB
-                buf = bytearray()
-                try:
-                    for chunk in r.iter_content(chunk_size=16384):
-                        if not chunk:
-                            break
-                        buf.extend(chunk)
-                        if len(buf) >= max_bytes:
-                            break
-                except Exception as e:
-                    cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
-                txt = bytes(buf).decode("utf-8", errors="ignore")
-                try:
-                    r.close()
-                except Exception as e:
-                    cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
-                feed = feedparser.parse(txt)
-                # Only store hashes and domain
-                domain = url.split("/")[2].lower()
-                for e in (feed.entries or [])[:10]:
-                    title = getattr(e, "title", "") or ""
-                    summary = getattr(e, "summary", "") or ""
-                    # Scrub: if looks like price, do not keep raw; only hash
-                    h = sha256(title + "|" + summary)
-                    out["items"].append({"domain": domain, "headline_sha256": h})
-            except Exception as e:
-                cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
-                logging.warning(f"RSS_FAIL domain={url} err={type(e).__name__}")
+                for fut in cf.as_completed(futures, timeout=max(2.0, timeout_sec * 3.0)):
+                    try:
+                        items.extend(fut.result() or [])
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+            except cf.TimeoutError:
+                logging.warning("RSS_TIMEOUT_BATCH")
     except Exception as e:
         cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
         logging.warning(f"NET_DISABLED_OR_FAIL err={type(e).__name__}")
+
+    # Deterministic priority and dedupe:
+    # rt_2h first, then fresh_24h, then lexical fallback.
+    prio = {"rt_2h": 0, "fresh_24h": 1}
+    dedup: Dict[str, Dict[str, Any]] = {}
+    for rec in items:
+        try:
+            key = f"{rec.get('source_id','')}|{rec.get('headline_sha256','')}|{rec.get('link_sha256','')}"
+            if key and key not in dedup:
+                dedup[key] = rec
+        except Exception as e:
+            cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+            continue
+    out["items"] = sorted(
+        list(dedup.values()),
+        key=lambda r: (
+            prio.get(str(r.get("freshness") or ""), 9),
+            str(r.get("source_id") or ""),
+            str(r.get("headline_sha256") or ""),
+        ),
+    )[:RSS_MAX_ITEMS_TOTAL]
+
     # Guard output (no price-like keys/values)
     guard_obj_no_price_like(out)
+    guard_obj_limits(out)
     return out
 
 # -------------------------
