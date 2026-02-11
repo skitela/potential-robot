@@ -8,12 +8,15 @@ import os
 import platform
 import re
 import sys
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parent / "SCHEMAS" / "llm_policy_v1.json"
 DENYLIST_PATH_PREFIXES = ("EVIDENCE/", "DIAG/", "TOKEN/", "DPAPI/")
+EVIDENCE_BUNDLE_NAME = "evidence_bundle.zip"
+EVIDENCE_BUNDLE_SHA_NAME = "evidence_bundle.zip.sha256"
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)\b(openai_api_key|gemini_api_key|api_key|token|password)\b\s*[:=]\s*\S+"),
@@ -131,6 +134,37 @@ def evaluate_quality_checks(
     checks["all_pass"] = all(value for key, value in checks.items() if key not in ("all_pass", "fail_reasons"))
     checks["fail_reasons"] = [key for key, value in checks.items() if key not in ("all_pass", "fail_reasons") and not value]
     return checks
+
+
+def build_evidence_bundle(evidence_dir: Path) -> Tuple[Path, Path, str, int]:
+    bundle_path = evidence_dir / EVIDENCE_BUNDLE_NAME
+    bundle_sha_path = evidence_dir / EVIDENCE_BUNDLE_SHA_NAME
+
+    if bundle_path.exists():
+        bundle_path.unlink()
+    if bundle_sha_path.exists():
+        bundle_sha_path.unlink()
+
+    files: List[Tuple[str, Path]] = []
+    for path in evidence_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(evidence_dir).as_posix()
+        if rel in (EVIDENCE_BUNDLE_NAME, EVIDENCE_BUNDLE_SHA_NAME):
+            continue
+        files.append((rel, path))
+
+    with zipfile.ZipFile(bundle_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for rel, path in sorted(files, key=lambda item: item[0]):
+            info = zipfile.ZipInfo(rel)
+            info.date_time = (1980, 1, 1, 0, 0, 0)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = (0o644 & 0xFFFF) << 16
+            archive.writestr(info, path.read_bytes())
+
+    bundle_hash = sha256_file(bundle_path)
+    bundle_sha_path.write_text(f"{bundle_hash}  {EVIDENCE_BUNDLE_NAME}\n", encoding="utf-8")
+    return bundle_path, bundle_sha_path, bundle_hash, len(files)
 
 
 class DyrygentExternal:
@@ -275,6 +309,7 @@ class DyrygentExternal:
         redaction_path.write_text(json.dumps(redaction_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         checks_path.write_text(json.dumps(checks, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         verdict_path.write_text(json.dumps(verdict, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        bundle_path, bundle_sha_path, bundle_hash, bundle_files = build_evidence_bundle(self.evidence_dir)
 
         self.files_touched.extend(
             [
@@ -283,13 +318,17 @@ class DyrygentExternal:
                 str(redaction_path.relative_to(self.system_root)).replace("\\", "/"),
                 str(checks_path.relative_to(self.system_root)).replace("\\", "/"),
                 str(verdict_path.relative_to(self.system_root)).replace("\\", "/"),
+                str(bundle_path.relative_to(self.system_root)).replace("\\", "/"),
+                str(bundle_sha_path.relative_to(self.system_root)).replace("\\", "/"),
             ]
         )
 
         return {
             "reports": [str(manifest_path), str(redaction_path), str(checks_path), str(verdict_path)],
             "state": str(payload_path),
-            "evidence_zip_sha256": "",
+            "bundle": str(bundle_path),
+            "bundle_file_count": bundle_files,
+            "evidence_zip_sha256": bundle_hash,
         }
 
     def run_full_validation(self) -> Dict[str, object]:
