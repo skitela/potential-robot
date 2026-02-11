@@ -36,7 +36,7 @@ UTC = timezone.utc
 CHECK_SEC = 10
 RESTART_WAIT_SEC = 15
 MAX_RETRY_PER_ALERT = 3
-AUTO_HOTFIX = True  # full auto-repair mode
+AUTO_HOTFIX = os.environ.get("REPAIR_AUTO_HOTFIX", "0") == "1"
 
 ALERT_FILE = "infobot_alert.json"
 STATUS_FILE = "repair_status.json"

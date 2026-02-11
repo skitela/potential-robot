@@ -22,7 +22,7 @@ Network:
 """
 from __future__ import annotations
 
-import os, sys, json, time, math, random, hashlib, logging, sqlite3, shutil
+import os, sys, json, time, random, hashlib, logging, sqlite3, shutil
 import datetime as dt
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,6 +38,7 @@ import re
 UTC = dt.timezone.utc
 
 DETERMINISTIC_MODE = os.environ.get("OFFLINE_DETERMINISTIC", "").strip() == "1"
+ALLOW_RSS_RESEARCH = os.environ.get("SCUD_ALLOW_RSS", "").strip() == "1"
 if DETERMINISTIC_MODE:
     random.seed(0)
 
@@ -506,7 +507,7 @@ def fetch_rss_signals(timeout_sec: float = 6.0) -> Dict[str, Any]:
     Non-price online research. Returns hashed/scrubbed signals only.
     """
     out = {"ts_utc": _now_utc().replace(microsecond=0).isoformat().replace("+00:00","Z"), "items": []}
-    if DETERMINISTIC_MODE:
+    if DETERMINISTIC_MODE or (not ALLOW_RSS_RESEARCH):
         return out
     try:
         import requests
@@ -1091,4 +1092,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
