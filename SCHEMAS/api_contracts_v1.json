@@ -1,0 +1,143 @@
+{
+  "schema_id": "api_contracts_v1",
+  "modules": [
+    {
+      "path": "BIN/common_guards.py",
+      "functions": [
+        {
+          "name": "tlog",
+          "params": [
+            "logger",
+            "level",
+            "code",
+            "message",
+            "exc",
+            "throttle_sec",
+            "key"
+          ]
+        },
+        {
+          "name": "contains_price_like_strict",
+          "params": [
+            "obj"
+          ]
+        },
+        {
+          "name": "guard_max_json_len",
+          "params": [
+            "obj",
+            "max_len"
+          ]
+        },
+        {
+          "name": "guard_max_numeric_tokens",
+          "params": [
+            "obj",
+            "max_tokens"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "BIN/common_contract.py",
+      "functions": [
+        {
+          "name": "validate_run_request_v2",
+          "params": [
+            "obj"
+          ]
+        },
+        {
+          "name": "validate_run_response_v2",
+          "params": [
+            "obj",
+            "rid_expected"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "BIN/runtime_root.py",
+      "functions": [
+        {
+          "name": "get_run_mode",
+          "params": []
+        },
+        {
+          "name": "get_runtime_root",
+          "params": [
+            "*",
+            "enforce"
+          ]
+        },
+        {
+          "name": "require_live_oanda_terminal",
+          "params": []
+        },
+        {
+          "name": "project_paths",
+          "params": [
+            "root"
+          ]
+        },
+        {
+          "name": "ensure_dirs",
+          "params": [
+            "paths"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "DYRYGENT_EXTERNAL.py",
+      "classes": [
+        {
+          "name": "DyrygentExternal",
+          "methods": [
+            {
+              "name": "register_ai_agent",
+              "params": [
+                "self",
+                "agent_name"
+              ]
+            },
+            {
+              "name": "query_external_ai",
+              "params": [
+                "self",
+                "question",
+                "ai"
+              ]
+            },
+            {
+              "name": "run_full_validation",
+              "params": [
+                "self"
+              ]
+            },
+            {
+              "name": "status_report",
+              "params": [
+                "self"
+              ]
+            }
+          ]
+        }
+      ],
+      "functions": [
+        {
+          "name": "parse_args",
+          "params": [
+            "argv"
+          ]
+        },
+        {
+          "name": "main",
+          "params": [
+            "argv"
+          ]
+        }
+      ]
+    }
+  ]
+}

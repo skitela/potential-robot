@@ -13,6 +13,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+try:
+    from TOOLS.offline_network_guard import offline_network_guard
+except Exception:  # pragma: no cover
+    from contextlib import nullcontext
+
+    def offline_network_guard(enabled: bool = True) -> object:  # type: ignore[misc]
+        return nullcontext()
+
+try:
+    from TOOLS.runlog_jsonl import append_event
+except Exception:  # pragma: no cover
+    def append_event(path: Path, event: str, run_id: str, **fields: object) -> Dict[str, object]:
+        record = {"event": event, "run_id": run_id}
+        record.update(fields)
+        return record
+
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parent / "SCHEMAS" / "llm_policy_v1.json"
 DENYLIST_PATH_PREFIXES = ("EVIDENCE/", "DIAG/", "TOKEN/", "DPAPI/")
 EVIDENCE_BUNDLE_NAME = "evidence_bundle.zip"
@@ -178,6 +194,7 @@ class DyrygentExternal:
         max_files: int = 50,
         max_total_bytes: int = 1_000_000,
         max_file_bytes: int = 256_000,
+        run_log_path: Optional[Path] = None,
     ) -> None:
         self.system_root = Path(system_root).resolve()
         self.evidence_dir = Path(evidence_dir).resolve()
@@ -189,6 +206,7 @@ class DyrygentExternal:
         self.max_file_bytes = int(max_file_bytes)
 
         self.iteration_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_id = self.iteration_id
         self.status = "INIT"
         self.logs: List[str] = []
         self.agents: Dict[str, Dict[str, object]] = {}
@@ -200,21 +218,41 @@ class DyrygentExternal:
         self.limits_touch = False
         self.cleanup_touch = False
         self.last_state: Dict[str, object] = {}
+        self.run_log_path = (
+            Path(run_log_path).resolve()
+            if run_log_path
+            else (self.evidence_dir / "runlog.jsonl").resolve()
+        )
 
         self.log("DyrygentExternal initialized in OFFLINE mode")
+        self._append_run_event(
+            "dyrygent_init",
+            mode=self.mode,
+            dry_run=self.dry_run,
+            system_root=str(self.system_root),
+            evidence_dir=str(self.evidence_dir),
+        )
 
     def log(self, message: str) -> None:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.logs.append(f"[{ts}] {message}")
+
+    def _append_run_event(self, event: str, **fields: object) -> None:
+        try:
+            append_event(self.run_log_path, event, self.run_id, **fields)
+        except Exception as exc:  # pragma: no cover
+            self.log(f"Run log append failed: {type(exc).__name__}: {exc}")
 
     def register_ai_agent(self, agent_name: str) -> None:
         existing = {item["name"] for item in self.ai_agents}
         if agent_name not in existing:
             self.ai_agents.append({"name": agent_name, "mode": "OFFLINE_STUB"})
             self.log(f"AI agent '{agent_name}' registered as OFFLINE_STUB")
+            self._append_run_event("ai_agent_registered", agent_name=agent_name, mode="OFFLINE_STUB")
 
     def query_external_ai(self, question: str, ai: str = "placeholder") -> str:
         self.log(f"Blocked AI query for '{ai}' (offline only): {question[:120]}")
+        self._append_run_event("ai_query_blocked", ai=str(ai), question_preview=question[:120])
         return f"[AI-{ai}] OFFLINE_STUB: network integrations are disabled."
 
     def _select_files(self, file_index: List[str]) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], int]:
@@ -296,6 +334,12 @@ class DyrygentExternal:
         checks: Dict[str, object],
         verdict: Dict[str, object],
     ) -> Dict[str, object]:
+        def report_path(path: Path) -> str:
+            try:
+                return str(path.relative_to(self.system_root)).replace("\\", "/")
+            except ValueError:
+                return str(path)
+
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
 
         payload_path = self.evidence_dir / "llm_payload_redacted.txt"
@@ -313,13 +357,14 @@ class DyrygentExternal:
 
         self.files_touched.extend(
             [
-                str(payload_path.relative_to(self.system_root)).replace("\\", "/"),
-                str(manifest_path.relative_to(self.system_root)).replace("\\", "/"),
-                str(redaction_path.relative_to(self.system_root)).replace("\\", "/"),
-                str(checks_path.relative_to(self.system_root)).replace("\\", "/"),
-                str(verdict_path.relative_to(self.system_root)).replace("\\", "/"),
-                str(bundle_path.relative_to(self.system_root)).replace("\\", "/"),
-                str(bundle_sha_path.relative_to(self.system_root)).replace("\\", "/"),
+                report_path(payload_path),
+                report_path(manifest_path),
+                report_path(redaction_path),
+                report_path(checks_path),
+                report_path(verdict_path),
+                report_path(bundle_path),
+                report_path(bundle_sha_path),
+                report_path(self.run_log_path),
             ]
         )
 
@@ -333,67 +378,79 @@ class DyrygentExternal:
 
     def run_full_validation(self) -> Dict[str, object]:
         self.status = "RUNNING"
-        policy = load_policy(self.policy_path)
-        file_index = sorted(set(iter_repo_paths(self.system_root, policy)))
-        included, excluded, total_bytes = self._select_files(file_index)
-        payload, manifest_files, redaction_report = self._build_payload(included, excluded)
+        self._append_run_event("validation_started", mode=self.mode, policy_path=str(self.policy_path))
+        with offline_network_guard(enabled=self.mode == "OFFLINE"):
+            policy = load_policy(self.policy_path)
+            file_index = sorted(set(iter_repo_paths(self.system_root, policy)))
+            included, excluded, total_bytes = self._select_files(file_index)
+            payload, manifest_files, redaction_report = self._build_payload(included, excluded)
 
-        manifest = {
-            "run_id": self.iteration_id,
-            "mode": self.mode,
-            "tool_versions": {"python": platform.python_version()},
-            "policy_hash": sha256_text(json.dumps(policy, sort_keys=True)),
-            "totals": {
-                "included_count": len(included),
-                "excluded_count": len(excluded),
-                "total_bytes": total_bytes,
-            },
-            "files": manifest_files,
-        }
+            manifest = {
+                "run_id": self.iteration_id,
+                "mode": self.mode,
+                "tool_versions": {"python": platform.python_version()},
+                "policy_hash": sha256_text(json.dumps(policy, sort_keys=True)),
+                "totals": {
+                    "included_count": len(included),
+                    "excluded_count": len(excluded),
+                    "total_bytes": total_bytes,
+                },
+                "files": manifest_files,
+            }
 
-        payload_parts = []
-        for item in manifest_files:
-            if "sha256_raw" not in item:
-                continue
-            payload_parts.append(f"{item['rel_path']}|{item['sha256_raw']}|{item['bytes']}")
-        manifest["payload_id"] = sha256_text("v1|" + manifest["policy_hash"] + "|" + "|".join(sorted(payload_parts)))
+            payload_parts = []
+            for item in manifest_files:
+                if "sha256_raw" not in item:
+                    continue
+                payload_parts.append(f"{item['rel_path']}|{item['sha256_raw']}|{item['bytes']}")
+            manifest["payload_id"] = sha256_text("v1|" + manifest["policy_hash"] + "|" + "|".join(sorted(payload_parts)))
 
-        checks = evaluate_quality_checks(manifest_files, payload, redaction_report)
-        verdict = {
-            "iteration_id": self.iteration_id,
-            "status": "PASS" if checks["all_pass"] else "FAIL",
-            "mode": self.mode,
-            "dry_run": self.dry_run,
-            "payload_id": manifest["payload_id"],
-            "reasons": checks["fail_reasons"],
-            "files_touched": self.files_touched,
-            "strategy_touch": self.strategy_touch,
-            "limits_touch": self.limits_touch,
-            "cleanup_touch": self.cleanup_touch,
-            "ai_agents": self.ai_agents,
-            "evidence": {
-                "reports": [],
-                "state": "",
-                "evidence_zip_sha256": "",
-            },
-        }
+            checks = evaluate_quality_checks(manifest_files, payload, redaction_report)
+            verdict = {
+                "iteration_id": self.iteration_id,
+                "status": "PASS" if checks["all_pass"] else "FAIL",
+                "mode": self.mode,
+                "dry_run": self.dry_run,
+                "payload_id": manifest["payload_id"],
+                "reasons": checks["fail_reasons"],
+                "files_touched": self.files_touched,
+                "strategy_touch": self.strategy_touch,
+                "limits_touch": self.limits_touch,
+                "cleanup_touch": self.cleanup_touch,
+                "ai_agents": self.ai_agents,
+                "evidence": {
+                    "reports": [],
+                    "state": "",
+                    "evidence_zip_sha256": "",
+                },
+            }
 
-        evidence = self._write_evidence(payload, manifest, redaction_report, checks, verdict)
-        verdict["evidence"] = evidence
-        verdict["files_touched"] = list(self.files_touched)
-        (self.evidence_dir / "verdict.json").write_text(json.dumps(verdict, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            evidence = self._write_evidence(payload, manifest, redaction_report, checks, verdict)
+            verdict["evidence"] = evidence
+            verdict["files_touched"] = list(self.files_touched)
+            (self.evidence_dir / "verdict.json").write_text(
+                json.dumps(verdict, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
 
-        self.status = "PASS" if verdict["status"] == "PASS" else "FAIL"
-        self.reasons = list(verdict["reasons"])
-        self.last_state = {
-            "policy": policy,
-            "manifest": manifest,
-            "checks": checks,
-            "redaction_report": redaction_report,
-            "payload": payload,
-            "verdict": verdict,
-        }
-        return verdict
+            self.status = "PASS" if verdict["status"] == "PASS" else "FAIL"
+            self.reasons = list(verdict["reasons"])
+            self.last_state = {
+                "policy": policy,
+                "manifest": manifest,
+                "checks": checks,
+                "redaction_report": redaction_report,
+                "payload": payload,
+                "verdict": verdict,
+            }
+            self._append_run_event(
+                "validation_finished",
+                status=self.status,
+                included_count=int(manifest["totals"]["included_count"]),
+                excluded_count=int(manifest["totals"]["excluded_count"]),
+                payload_id=str(verdict["payload_id"]),
+            )
+            return verdict
 
     def status_report(self) -> Dict[str, object]:
         return {
@@ -429,6 +486,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-file-bytes", type=int, default=256_000)
     parser.add_argument("--print-summary", action="store_true")
     parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH))
+    parser.add_argument(
+        "--run-log",
+        default=os.environ.get("DYRYGENT_RUN_LOG", ""),
+        help="Optional JSONL run log path.",
+    )
     return parser.parse_args(argv)
 
 
@@ -454,6 +516,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         max_files=args.max_files,
         max_total_bytes=args.max_total_bytes,
         max_file_bytes=args.max_file_bytes,
+        run_log_path=Path(args.run_log) if args.run_log else None,
     )
 
     verdict = dyrygent.run_full_validation()
