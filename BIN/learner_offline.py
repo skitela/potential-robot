@@ -19,7 +19,7 @@ Uruchomienie:
 
 from __future__ import annotations
 
-import os, sys, json, time, math, sqlite3, logging, shutil
+import os, sys, json, time, math, sqlite3, logging, shutil, ctypes
 import datetime as dt
 from pathlib import Path
 try:
@@ -41,6 +41,136 @@ def _now_utc() -> dt.datetime:
     if DETERMINISTIC_MODE:
         return dt.datetime(1970, 1, 1, tzinfo=UTC)
     return dt.datetime.now(tz=UTC)
+
+def _env_int(name: str, default: int, *, vmin: int, vmax: int) -> int:
+    try:
+        raw = os.environ.get(name, str(default))
+        val = int(str(raw).strip() or str(default))
+    except Exception:
+        val = int(default)
+    return max(vmin, min(vmax, int(val)))
+
+def _env_float(name: str, default: float, *, vmin: float, vmax: float) -> float:
+    try:
+        raw = os.environ.get(name, str(default))
+        val = float(str(raw).strip() or str(default))
+    except Exception:
+        val = float(default)
+    return max(vmin, min(vmax, float(val)))
+
+def _cpu_pct_windows(sample_sec: float = 0.15) -> Optional[float]:
+    # Lightweight CPU snapshot without external deps (Windows GetSystemTimes).
+    try:
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
+
+        def _ft_to_int(ft: FILETIME) -> int:
+            return (int(ft.dwHighDateTime) << 32) | int(ft.dwLowDateTime)
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        idle1, kern1, user1 = FILETIME(), FILETIME(), FILETIME()
+        ok1 = kernel32.GetSystemTimes(ctypes.byref(idle1), ctypes.byref(kern1), ctypes.byref(user1))
+        if not ok1:
+            return None
+        time.sleep(max(0.05, min(0.5, float(sample_sec))))
+        idle2, kern2, user2 = FILETIME(), FILETIME(), FILETIME()
+        ok2 = kernel32.GetSystemTimes(ctypes.byref(idle2), ctypes.byref(kern2), ctypes.byref(user2))
+        if not ok2:
+            return None
+
+        idle_delta = _ft_to_int(idle2) - _ft_to_int(idle1)
+        kern_delta = _ft_to_int(kern2) - _ft_to_int(kern1)
+        user_delta = _ft_to_int(user2) - _ft_to_int(user1)
+        total = kern_delta + user_delta
+        if total <= 0:
+            return None
+        busy = max(0, total - idle_delta)
+        pct = 100.0 * (float(busy) / float(total))
+        return float(max(0.0, min(100.0, pct)))
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        return None
+
+def _cpu_pct_posix() -> Optional[float]:
+    # Approximation from load average when available.
+    try:
+        la1, _, _ = os.getloadavg()
+        cpus = int(os.cpu_count() or 1)
+        if cpus <= 0:
+            return None
+        pct = 100.0 * (float(la1) / float(cpus))
+        return float(max(0.0, min(100.0, pct)))
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        return None
+
+def read_cpu_percent(sample_sec: float = 0.15) -> Optional[float]:
+    if os.name == "nt":
+        return _cpu_pct_windows(sample_sec=sample_sec)
+    return _cpu_pct_posix()
+
+def read_mem_available_mb() -> Optional[float]:
+    # Available physical memory only, no external deps.
+    try:
+        if os.name == "nt":
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_uint32),
+                    ("dwMemoryLoad", ctypes.c_uint32),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            ms = MEMORYSTATUSEX()
+            ms.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ok = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+            if not ok:
+                return None
+            return float(ms.ullAvailPhys) / float(1024 ** 2)
+
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        avail_pages = os.sysconf("SC_AVPHYS_PAGES")
+        return float(page_size * avail_pages) / float(1024 ** 2)
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        return None
+
+def decide_resource_mode(
+    cpu_pct: Optional[float],
+    mem_available_mb: Optional[float],
+    *,
+    cpu_soft_max_pct: float,
+    cpu_hard_max_pct: float,
+    mem_min_mb: float,
+) -> Tuple[str, str]:
+    # Priority: hard memory/cpu stop, then soft cpu throttling.
+    if mem_available_mb is not None and float(mem_available_mb) < float(mem_min_mb):
+        return ("skip", "mem_low")
+    if cpu_pct is not None and float(cpu_pct) >= float(cpu_hard_max_pct):
+        return ("skip", "cpu_hard")
+    if cpu_pct is not None and float(cpu_pct) >= float(cpu_soft_max_pct):
+        return ("light", "cpu_soft")
+    return ("normal", "ok")
+
+def effective_scan_params(
+    *,
+    base_window_days: int,
+    base_row_limit: int,
+    load_mode: str,
+    light_window_days: int,
+    light_row_limit: int,
+) -> Tuple[int, int]:
+    mode = str(load_mode or "").strip().lower()
+    if mode == "light":
+        wd = min(int(base_window_days), int(light_window_days))
+        rl = min(int(base_row_limit), int(light_row_limit))
+        return (max(1, wd), max(1, rl))
+    return (max(1, int(base_window_days)), max(1, int(base_row_limit)))
 
 MAX_NUMERIC_TOKENS = 50
 MAX_NUMERIC_LIST_LEN = 50
@@ -639,14 +769,76 @@ def run_once(root: Path) -> int:
     db_dir = dirs["DB"]
     logs_dir = dirs["LOGS"]
 
-    window_days = int(os.environ.get("LEARNER_WINDOW_DAYS", "180") or "180")
-    row_limit = int(os.environ.get("LEARNER_ROW_LIMIT", "20000") or "20000")
+    base_window_days = _env_int("LEARNER_WINDOW_DAYS", 180, vmin=1, vmax=3650)
+    base_row_limit = _env_int("LEARNER_ROW_LIMIT", 20000, vmin=1, vmax=1_000_000)
+
+    guard_enabled = str(os.environ.get("LEARNER_RESOURCE_GUARD", "1")).strip() != "0"
+    load_mode = "normal"
+    load_reason = "guard_off"
+    cpu_pct: Optional[float] = None
+    mem_available_mb: Optional[float] = None
+    window_days = int(base_window_days)
+    row_limit = int(base_row_limit)
+
+    if guard_enabled:
+        cpu_sample_sec = _env_float("LEARNER_CPU_SAMPLE_SEC", 0.15, vmin=0.05, vmax=0.50)
+        cpu_soft_max_pct = _env_float("LEARNER_CPU_SOFT_MAX_PCT", 70.0, vmin=5.0, vmax=99.0)
+        cpu_hard_max_pct = _env_float("LEARNER_CPU_HARD_MAX_PCT", 85.0, vmin=10.0, vmax=100.0)
+        mem_min_mb = _env_float("LEARNER_MEM_MIN_MB", 1500.0, vmin=128.0, vmax=131072.0)
+        light_window_days = _env_int("LEARNER_LIGHT_WINDOW_DAYS", 90, vmin=1, vmax=3650)
+        light_row_limit = _env_int("LEARNER_LIGHT_ROW_LIMIT", 5000, vmin=1, vmax=1_000_000)
+
+        cpu_pct = read_cpu_percent(sample_sec=cpu_sample_sec)
+        mem_available_mb = read_mem_available_mb()
+        load_mode, load_reason = decide_resource_mode(
+            cpu_pct,
+            mem_available_mb,
+            cpu_soft_max_pct=cpu_soft_max_pct,
+            cpu_hard_max_pct=cpu_hard_max_pct,
+            mem_min_mb=mem_min_mb,
+        )
+        window_days, row_limit = effective_scan_params(
+            base_window_days=base_window_days,
+            base_row_limit=base_row_limit,
+            load_mode=load_mode,
+            light_window_days=light_window_days,
+            light_row_limit=light_row_limit,
+        )
+
+        if load_mode == "skip":
+            logging.warning(
+                "RESOURCE_GUARD_SKIP | "
+                f"reason={load_reason} cpu_pct={None if cpu_pct is None else round(cpu_pct, 2)} "
+                f"mem_available_mb={None if mem_available_mb is None else round(mem_available_mb, 1)}"
+            )
+            return 0
+        if load_mode == "light":
+            logging.info(
+                "RESOURCE_GUARD_LIGHT | "
+                f"reason={load_reason} cpu_pct={None if cpu_pct is None else round(cpu_pct, 2)} "
+                f"mem_available_mb={None if mem_available_mb is None else round(mem_available_mb, 1)} "
+                f"window_days={window_days} row_limit={row_limit}"
+            )
+
     now = _now_utc()
     since = (now - dt.timedelta(days=max(1, window_days))).replace(microsecond=0)
     since_iso = since.isoformat().replace("+00:00","Z")
 
     rows = fetch_closed_events(db_dir / "decision_events.sqlite", since_iso_utc=since_iso, limit=row_limit)
     meta_advice, report = build_advice(rows, window_days=window_days)
+    try:
+        meta_advice.setdefault("notes", []).append(f"load_mode={load_mode}")
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+    report["resource_guard"] = {
+        "enabled": bool(guard_enabled),
+        "mode": str(load_mode),
+        "reason": str(load_reason),
+        "cpu_pct": None if cpu_pct is None else round(float(cpu_pct), 2),
+        "mem_available_mb": None if mem_available_mb is None else round(float(mem_available_mb), 1),
+        "window_days_effective": int(window_days),
+        "row_limit_effective": int(row_limit),
+    }
 
     # Hard gates for META output
     guard_obj_no_price_like(meta_advice)
