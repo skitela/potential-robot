@@ -14,7 +14,12 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # Structured logging / guards
 from BIN import common_guards as cg
@@ -207,7 +212,6 @@ def _gate_online_preflight_contracts() -> tuple[bool, list[str]]:
 
     return (len(issues) == 0), issues
 
-ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "EVIDENCE" / "gates"
 DIAG_LATEST = ROOT / "DIAG" / "bundles" / "LATEST"
 DIAG_INCIDENTS = ROOT / "DIAG" / "bundles" / "INCIDENTS"

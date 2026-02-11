@@ -32,6 +32,8 @@ def iter_py(root: Path):
 def check_syntax(p: Path) -> None:
     # Avoid py_compile (writes .pyc). Pure syntax check only.
     src = p.read_text(encoding='utf-8', errors='replace')
+    if src.startswith('\ufeff'):
+        src = src.lstrip('\ufeff')
     compile(src, str(p), 'exec')
 
 

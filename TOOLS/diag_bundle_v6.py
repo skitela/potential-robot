@@ -21,11 +21,16 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
-from BIN import common_guards as cg  # type: ignore
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from BIN import common_guards as cg  # type: ignore
+
 LATEST = ROOT / "DIAG" / "bundles" / "LATEST"
 INCIDENTS = ROOT / "DIAG" / "bundles" / "INCIDENTS"
 EVIDENCE_DIR = ROOT / "EVIDENCE" / "gates"

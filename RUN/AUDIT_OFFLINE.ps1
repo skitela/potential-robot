@@ -1,7 +1,9 @@
 ﻿param(
     [string]$Root = "",
     [string]$Evidence = "",
-    [switch]$PrintSummary
+    [switch]$PrintSummary,
+    [string]$SyncTarget = "C:\agentkotweight\EVIDENCE",
+    [switch]$NoSync
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,5 +51,26 @@ Write-Host "[AUDIT_OFFLINE] Mode=OFFLINE"
 
 & python @args
 $exitCode = $LASTEXITCODE
+
+if (-not $NoSync) {
+    $syncScript = Join-Path $PSScriptRoot "SYNC_EVIDENCE.ps1"
+    $syncSource = Join-Path $Root "EVIDENCE"
+    if (-not (Test-Path $syncScript)) {
+        Write-Warning "[AUDIT_OFFLINE] Sync script missing: $syncScript"
+        if ($exitCode -eq 0) {
+            $exitCode = 91
+        }
+    } else {
+        Write-Host "[AUDIT_OFFLINE] SyncSource=$syncSource"
+        Write-Host "[AUDIT_OFFLINE] SyncTarget=$SyncTarget"
+        powershell -ExecutionPolicy Bypass -File $syncScript -SourceEvidence $syncSource -TargetEvidence $SyncTarget
+        $syncExit = $LASTEXITCODE
+        Write-Host "[AUDIT_OFFLINE] SyncExitCode=$syncExit"
+        if ($syncExit -ne 0 -and $exitCode -eq 0) {
+            $exitCode = $syncExit
+        }
+    }
+}
+
 Write-Host "[AUDIT_OFFLINE] ExitCode=$exitCode"
 exit $exitCode
