@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "reasons": [
+    "Wszystkie testy jednostkowe i integracyjne poza środowiskowym przeszły poprawnie.",
+    "Błąd testu integracyjnego dotyczy braku aktywnego MetaTrader5, nie dotyczy logiki systemu.",
+    "Orchestrator i agenci spełniają wymagania funkcjonalne oraz audytowe."
+  ],
+  "files_touched": [
+    "DYRYGENT_EXTERNAL.py",
+    "EVIDENCE/test_run_report_20260211.txt"
+  ],
+  "strategy_touch": "NO",
+  "limits_touch": "NO",
+  "cleanup_touch": "NO"
+}

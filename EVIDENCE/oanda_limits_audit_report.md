@@ -53,3 +53,22 @@
   - UTC calendar day
   - Rolling 24-hour window
 - Safe mode blocks new orders; emergency operations can proceed.
+
+# EVIDENCE: Guard layer wdrożony
+
+- Plik: main.py
+- Dodano klasę GuardLayer, która sprawdza limity i tryb safe mode agentów przed uruchomieniem operacji orchestratora.
+- Test: py_compile (brak błędów), uruchomienie orchestratora z warstwą ochronną.
+- Nie dotknięto strategii.
+
+## Reprodukcja:
+1. Uruchom main.py
+2. Jeśli którykolwiek agent jest w trybie safe mode, operacje zostaną zablokowane.
+3. W przeciwnym razie orchestrator uruchomi, monitoruje i zatrzyma agentów.
+
+---
+
+Dowody:
+- main.py (zmiana)
+- VERDICT.json (status PASS)
+- repo_hygiene_py_compile.txt (brak błędów)

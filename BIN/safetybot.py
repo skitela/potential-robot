@@ -42,7 +42,6 @@ import shutil
 import subprocess
 import platform
 import getpass
-import math
 
 def sqlite_exec_retry(conn: sqlite3.Connection, query: str, params=None, *, tries: int = 6, base_sleep: float = 0.15):
     """

@@ -3,7 +3,7 @@ import threading
 import time
 import datetime as dt
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional
 
 
 class OandaLimitsGuard:

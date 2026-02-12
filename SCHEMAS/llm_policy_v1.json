@@ -1,0 +1,27 @@
+{
+  "allowlist": [
+    "*.py",
+    "BIN/**/*.py",
+    "TOOLS/**/*.py",
+    "RUN/**/*.ps1",
+    "DOCS/**/*.md",
+    "DOCS/**/*.txt"
+  ],
+  "denylist": [
+    "EVIDENCE/**",
+    "DIAG/**",
+    "TOKEN/**",
+    "DPAPI/**",
+    ".venv/**",
+    "venv/**",
+    "__pycache__/**",
+    "*.zip",
+    "*.exe",
+    "*.dll",
+    "*.pyd",
+    "*.bin"
+  ],
+  "max_files": 50,
+  "max_total_bytes": 1000000,
+  "max_file_bytes": 256000
+}
