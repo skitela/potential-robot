@@ -128,7 +128,20 @@ function Get-LlmKeyStatus {
     $meta = @{}
     if (Test-Path $metaPath) {
         try {
-            $meta = (Get-Content -Raw -Encoding UTF8 $metaPath | ConvertFrom-Json -AsHashtable)
+            $metaRaw = Get-Content -Raw -Encoding UTF8 $metaPath
+            $metaObj = $null
+            try {
+                $metaObj = ($metaRaw | ConvertFrom-Json -AsHashtable -ErrorAction Stop)
+            } catch {
+                $metaObj = ($metaRaw | ConvertFrom-Json -ErrorAction Stop)
+            }
+            if ($metaObj -is [hashtable]) {
+                $meta = $metaObj
+            } elseif ($metaObj -ne $null) {
+                foreach ($p in $metaObj.PSObject.Properties) {
+                    $meta[[string]$p.Name] = $p.Value
+                }
+            }
         } catch {
             $meta = @{}
         }
