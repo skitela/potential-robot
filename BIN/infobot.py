@@ -87,6 +87,7 @@ WEEKLY_SUMMARY_DAY = 0  # Monday
 WEEKLY_SUMMARY_HOUR = 8
 WEEKLY_SUMMARY_MIN = 0
 AUDIT_COMMAND = os.environ.get("INFOBOT_AUDIT_CMD", "")
+CODEX_REPAIR_STATES = {"repairing_codex", "repairing_codex_pending", "repairing_codex_running"}
 
 # Location for operator tools moved out of release root.
 TOOLS_BAT_DIR = Path(r"C:\OANDA_MT5_SYSTEM_STAGING\TOOLS_BAT")
@@ -124,7 +125,32 @@ def _write_json_atomic(path: Path, obj: Dict[str, object]) -> None:
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    moved = False
+    last_exc: Optional[Exception] = None
+    try:
+        os.replace(tmp, path)
+        moved = True
+    except Exception as exc:
+        last_exc = exc
+        try:
+            shutil.move(str(tmp), str(path))
+            moved = True
+        except Exception as exc2:
+            last_exc = exc2
+    if not moved:
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            moved = True
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+    if not moved and last_exc is not None:
+        raise last_exc
 
 
 def _read_json(path: Path) -> Optional[Dict[str, object]]:
@@ -519,7 +545,49 @@ def _daily_summary(root: Path, status: Dict[str, Dict[str, object]]) -> str:
     lines.append(f"czas_pl={_now_pl().isoformat()}")
     for name, st in status.items():
         lines.append(f"{name}: blokada={int(bool(st.get('lock')))} log_poprawny={int(bool(st.get('log_ok')))}")
+    for line in _llm_key_status_lines():
+        lines.append(line)
     return "\n".join(lines)
+
+
+def _llm_key_statuses() -> Dict[str, Dict[str, object]]:
+    defaults: Dict[str, Dict[str, object]] = {
+        "openai": {"status": "unknown", "present": False, "rotation_due": False, "age_days": None},
+        "gemini": {"status": "unknown", "present": False, "rotation_due": False, "age_days": None},
+    }
+    try:
+        from TOOLS.secrets_dpapi import all_rotation_status  # type: ignore
+
+        raw = all_rotation_status(rotation_days=60)
+        out: Dict[str, Dict[str, object]] = {}
+        for provider in ("openai", "gemini"):
+            item = raw.get(provider) if isinstance(raw, dict) else None
+            if isinstance(item, dict):
+                out[provider] = {
+                    "status": str(item.get("status") or "unknown"),
+                    "present": bool(item.get("present")),
+                    "rotation_due": bool(item.get("rotation_due")),
+                    "age_days": item.get("age_days"),
+                }
+            else:
+                out[provider] = dict(defaults[provider])
+        return out
+    except Exception:
+        return defaults
+
+
+def _llm_key_status_lines() -> list[str]:
+    out: list[str] = []
+    stats = _llm_key_statuses()
+    for provider in ("openai", "gemini"):
+        item = stats.get(provider) or {}
+        out.append(
+            f"llm_key_{provider}: status={item.get('status')} "
+            f"present={int(bool(item.get('present')))} "
+            f"rotation_due={int(bool(item.get('rotation_due')))} "
+            f"age_days={item.get('age_days')}"
+        )
+    return out
 
 
 def _reason_pl(reason: str) -> str:
@@ -537,6 +605,16 @@ def _reason_pl(reason: str) -> str:
     }
     code_pl = mapping.get(code, code)
     return f"{comp}:{code_pl}" if comp else code_pl
+
+
+def _repair_view(status: str, attempt: int) -> tuple[str, str]:
+    st = str(status or "")
+    if st in CODEX_REPAIR_STATES:
+        return _status_text("SYSTEM W NAPRAWIE PRZEZ CODEX"), "orange"
+    if st == "repairing":
+        extra = f"NAPRAWA PROBA {attempt}/3" if attempt else "NAPRAWA W TOKU"
+        return _status_text("SYSTEM W NAPRAWIE", extra), "orange"
+    return _status_text("SYSTEM W NAPRAWIE"), "orange"
 
 
 def _sqlite_connect_ro(db_path: Path) -> sqlite3.Connection:
@@ -694,20 +772,27 @@ def main() -> int:
                         }
                         _write_json_atomic(alert_path, alert)
                         logging.warning("ALARM krytyczny")
-                        _gui_update(gui, _status_text("SYSTEM NIE DZIALA"), "red")
-                        if str(alert.get("event_id") or "") != last_alert_email_id:
-                            body = "\n".join([
-                                "INFOBOT ALARM",
-                                f"ts_pl={alert['ts_pl']}",
-                                "status=nie_dziala",
-                            ])
-                            if _send_email("INFOBOT NIE DZIALA", body):
-                                last_alert_email_id = str(alert.get("event_id") or "")
-                                state["last_alert_email_id"] = last_alert_email_id
-                                _write_json_atomic(state_path, state)
+                        rec_probe = _read_json(recover_path) or {}
+                        rec_status_probe = str(rec_probe.get("status") or "")
+                        if rec_status_probe in CODEX_REPAIR_STATES:
+                            txt, color = _repair_view(rec_status_probe, int(rec_probe.get("attempt") or 0))
+                            _gui_update(gui, txt, color)
+                            current_status = "repairing_codex"
+                        else:
+                            _gui_update(gui, _status_text("SYSTEM NIE DZIALA"), "red")
+                            if str(alert.get("event_id") or "") != last_alert_email_id:
+                                body = "\n".join([
+                                    "INFOBOT ALARM",
+                                    f"ts_pl={alert['ts_pl']}",
+                                    "status=nie_dziala",
+                                ])
+                                if _send_email("INFOBOT NIE DZIALA", body):
+                                    last_alert_email_id = str(alert.get("event_id") or "")
+                                    state["last_alert_email_id"] = last_alert_email_id
+                                    _write_json_atomic(state_path, state)
+                            current_status = "alert"
                         last_alert_reason = reason
                         last_alert_ts = now
-                        current_status = "alert"
                 last_watch = now
 
             # Recovery notification
@@ -729,11 +814,12 @@ def main() -> int:
                     _send_email("INFOBOT ODZYSKANY", "System odzyskany i dziala.")
                     current_status = "alive"
 
-            if rec and str(rec.get("status")) == "repairing":
+            if rec and str(rec.get("status") or "") in ({"repairing"} | CODEX_REPAIR_STATES):
+                rec_status = str(rec.get("status") or "")
                 attempt = int(rec.get("attempt") or 0)
-                extra = f"NAPRAWA PROBA {attempt}/3" if attempt else "NAPRAWA W TOKU"
-                _gui_update(gui, _status_text("SYSTEM W NAPRAWIE", extra), "orange")
-                current_status = "repairing"
+                txt, color = _repair_view(rec_status, attempt)
+                _gui_update(gui, txt, color)
+                current_status = "repairing_codex" if rec_status in CODEX_REPAIR_STATES else "repairing"
 
             if rec and str(rec.get("status")) == "failed":
                 rid = str(rec.get("event_id") or "")
