@@ -263,8 +263,7 @@ def _init_gui(
 
         def _on_close():
             try:
-                gui["hidden"] = True
-                root.withdraw()
+                _gui_action_window_close(gui)
             except Exception:
                 pass
 
@@ -352,6 +351,27 @@ def _gui_status_emit(gui: Dict[str, object], text: str, color: str) -> None:
     }
     try:
         _write_json_atomic(Path(path_raw), payload)
+    except Exception:
+        pass
+
+
+def _gui_action_window_close(gui: Dict[str, object]) -> None:
+    gui["hidden"] = True
+    root = gui.get("root")
+    if root is None:
+        return
+    try:
+        root.withdraw()
+    except Exception:
+        pass
+
+
+def _gui_action_window_minimize(gui: Dict[str, object]) -> None:
+    root = gui.get("root")
+    if root is None:
+        return
+    try:
+        root.iconify()
     except Exception:
         pass
 

@@ -12,9 +12,17 @@ class TestInfobotRepairControls(unittest.TestCase):
     class _Root:
         def __init__(self) -> None:
             self.destroyed = False
+            self.withdrawn = False
+            self.iconified = False
 
         def destroy(self) -> None:
             self.destroyed = True
+
+        def withdraw(self) -> None:
+            self.withdrawn = True
+
+        def iconify(self) -> None:
+            self.iconified = True
 
     def test_default_repair_command_missing_script(self) -> None:
         root = Path("C:/__oanda_mt5_missing_root_for_test__")
@@ -83,6 +91,21 @@ class TestInfobotRepairControls(unittest.TestCase):
             self.assertEqual("orange", obj.get("color"))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_gui_action_window_close_hides_window(self) -> None:
+        root = self._Root()
+        gui = {"root": root, "hidden": False, "closed": False, "exit": False}
+        infobot._gui_action_window_close(gui)
+        self.assertTrue(gui["hidden"])
+        self.assertTrue(root.withdrawn)
+        self.assertFalse(gui["closed"])
+        self.assertFalse(gui["exit"])
+
+    def test_gui_action_window_minimize_iconifies(self) -> None:
+        root = self._Root()
+        gui = {"root": root}
+        infobot._gui_action_window_minimize(gui)
+        self.assertTrue(root.iconified)
 
 
 if __name__ == "__main__":
