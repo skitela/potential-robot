@@ -125,6 +125,8 @@ class CFG:
 
     # pętla globalna (scheduler wybiera co zrobić w tej iteracji)
     scan_interval_sec: int = 60
+    # częstotliwość sprawdzania obecności klucza USB podczas uśpienia pętli
+    usb_watch_check_interval_sec: int = 3
 
     # --- V1.10: Time anchoring + open-position always-on guard ---
     open_positions_guard_sec: int = 60
@@ -3796,8 +3798,12 @@ class SafetyBot:
         if base < 10:
             logging.info(f"SLEEP_CLAMP | requested={base}s clamped=10s")
             base = 10
-        for _ in range(base):
-            time.sleep(1)
+        step = int(max(1, getattr(CFG, "usb_watch_check_interval_sec", 1)))
+        elapsed = 0
+        while elapsed < base:
+            wait_s = min(step, base - elapsed)
+            time.sleep(wait_s)
+            elapsed += wait_s
             if not usb_present():
                 logging.critical("USB MISSING | KILL SWITCH => FORCE FLAT + STOP")
                 ok = self.mt.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
