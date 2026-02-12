@@ -96,7 +96,8 @@ def _read_json(path: Path) -> Optional[Dict[str, object]]:
     if not path.exists():
         return None
     try:
-        obj = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        raw = path.read_text(encoding="utf-8", errors="ignore").lstrip("\ufeff")
+        obj = json.loads(raw)
         return obj if isinstance(obj, dict) else None
     except Exception:
         return None
@@ -200,12 +201,12 @@ def _run_diag(root: Path) -> None:
 
 
 def _restart_all(root: Path) -> None:
-    stop_bat = TOOLS_BAT_DIR / "stop.bat"
-    start_bat = TOOLS_BAT_DIR / "start.bat"
+    stop_bat = root / "stop.bat"
+    start_bat = root / "start.bat"
     if not stop_bat.exists():
-        stop_bat = root / "stop.bat"
+        stop_bat = TOOLS_BAT_DIR / "stop.bat"
     if not start_bat.exists():
-        start_bat = root / "start.bat"
+        start_bat = TOOLS_BAT_DIR / "start.bat"
     if stop_bat.exists():
         _run_cmd(f"\"{stop_bat}\"")
     if start_bat.exists():
@@ -307,8 +308,15 @@ def main() -> int:
     lock_path = run_dir / "repair_agent.lock"
 
     if lock_path.exists():
-        print("REPAIR_AGENT juz dziala.")
-        return 1
+        try:
+            raw = lock_path.read_text(encoding="utf-8", errors="ignore").strip()
+            pid = int(raw) if raw.isdigit() else 0
+            if pid and _pid_is_running(pid):
+                print("REPAIR_AGENT juz dziala.")
+                return 1
+        except Exception:
+            print("REPAIR_AGENT juz dziala.")
+            return 1
     lock_path.write_text(str(os.getpid()), encoding="utf-8")
 
     status_path = run_dir / STATUS_FILE
@@ -479,7 +487,10 @@ def main() -> int:
         try:
             lock_path.unlink(missing_ok=True)
         except Exception:
-            pass
+            try:
+                lock_path.write_text("", encoding="utf-8")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

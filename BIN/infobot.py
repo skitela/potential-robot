@@ -15,7 +15,6 @@ import os
 import sqlite3
 import shutil
 import subprocess
-import sys
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -56,6 +55,7 @@ STATE_FILE = "infobot_state.json"
 HEARTBEAT_FILE = "infobot_heartbeat.json"
 ALERT_FILE = "infobot_alert.json"
 RECOVER_FILE = "repair_status.json"
+GUI_STATUS_FILE = "infobot_gui_status.json"
 DEFAULT_COLOR = "07"
 ALIVE_COLOR = "0C"
 FAIL_COLOR = "0C"
@@ -87,6 +87,11 @@ WEEKLY_SUMMARY_DAY = 0  # Monday
 WEEKLY_SUMMARY_HOUR = 8
 WEEKLY_SUMMARY_MIN = 0
 AUDIT_COMMAND = os.environ.get("INFOBOT_AUDIT_CMD", "")
+REPAIR_COMMAND = os.environ.get("INFOBOT_REPAIR_CMD", "")
+WEEKLY_REPAIR_ENABLED = os.environ.get("INFOBOT_WEEKLY_REPAIR_ENABLED", "1") == "1"
+WEEKLY_REPAIR_DAY = int(os.environ.get("INFOBOT_WEEKLY_REPAIR_DAY", "0"))
+WEEKLY_REPAIR_HOUR = int(os.environ.get("INFOBOT_WEEKLY_REPAIR_HOUR", "1"))
+WEEKLY_REPAIR_MIN = int(os.environ.get("INFOBOT_WEEKLY_REPAIR_MIN", "0"))
 CODEX_REPAIR_STATES = {"repairing_codex", "repairing_codex_pending", "repairing_codex_running"}
 
 # Location for operator tools moved out of release root.
@@ -157,7 +162,7 @@ def _read_json(path: Path) -> Optional[Dict[str, object]]:
     if not path.exists():
         return None
     try:
-        raw = path.read_text(encoding="utf-8", errors="ignore")
+        raw = path.read_text(encoding="utf-8", errors="ignore").lstrip("\ufeff")
         obj = json.loads(raw)
         return obj if isinstance(obj, dict) else None
     except Exception:
@@ -193,7 +198,11 @@ def _print_banner(lines: list[str], color: str) -> None:
     _set_console_color(DEFAULT_COLOR)
 
 
-def _init_gui(stop_cmd: Optional[str] = None, audit_cmd: Optional[str] = None) -> Optional[Dict[str, object]]:
+def _init_gui(
+    stop_cmd: Optional[str] = None,
+    repair_cmd: Optional[str] = None,
+    status_path: Optional[str] = None,
+) -> Optional[Dict[str, object]]:
     if not GUI_ENABLED:
         return None
     try:
@@ -248,7 +257,8 @@ def _init_gui(stop_cmd: Optional[str] = None, audit_cmd: Optional[str] = None) -
             "exit": False,
             "hidden": False,
             "stop_cmd": stop_cmd or "",
-            "audit_cmd": audit_cmd or "",
+            "repair_cmd": repair_cmd or "",
+            "status_path": status_path or "",
         }
 
         def _on_close():
@@ -260,40 +270,28 @@ def _init_gui(stop_cmd: Optional[str] = None, audit_cmd: Optional[str] = None) -
 
         def _on_stop_infobot():
             try:
-                gui["closed"] = True
-                gui["exit"] = True
-                root.destroy()
+                _gui_action_stop_infobot(gui)
             except Exception:
                 pass
 
         def _on_stop_system():
             try:
-                cmd = str(gui.get("stop_cmd") or "").strip()
-                if cmd:
-                    subprocess.Popen(f"\"{cmd}\"", shell=True)
-                gui["closed"] = True
-                gui["exit"] = True
-                root.destroy()
+                _gui_action_stop_system(gui)
             except Exception:
                 try:
-                    gui["closed"] = True
-                    gui["exit"] = True
-                    root.destroy()
+                    _gui_action_stop_infobot(gui)
                 except Exception:
                     pass
 
-        def _on_audit():
+        def _on_repair():
             try:
-                cmd = str(gui.get("audit_cmd") or "").strip()
-                if not cmd:
-                    return
-                subprocess.Popen(cmd, shell=True)
+                _gui_action_repair_now(gui)
             except Exception:
                 pass
 
         b1 = tk.Button(btns, text="WYLACZ INFOBOTA", command=_on_stop_infobot)
         b2 = tk.Button(btns, text="WYLACZ SYSTEM", command=_on_stop_system)
-        b3 = tk.Button(btns, text="AUDYT I NAPRAWA", command=_on_audit)
+        b3 = tk.Button(btns, text="NAPRAWA TERAZ", command=_on_repair)
         b1.pack(side="left", expand=True, padx=6)
         b2.pack(side="left", expand=True, padx=6)
         b3.pack(side="right", expand=True, padx=6)
@@ -324,6 +322,11 @@ def _gui_update(gui: Optional[Dict[str, object]], text: str, color: str) -> None
             label_status.config(text=text, fg=color)
         if label_time is not None:
             label_time.config(text=f"DATA I GODZINA {_ts_pl_hm()}", fg=color)
+        last_text = str(gui.get("last_status_text") or "")
+        if text != last_text:
+            logging.info(f"GUI_STATUS text={text}")
+            gui["last_status_text"] = text
+        _gui_status_emit(gui, text, color)
         if root is not None:
             try:
                 if not root.winfo_exists():
@@ -338,6 +341,21 @@ def _gui_update(gui: Optional[Dict[str, object]], text: str, color: str) -> None
         pass
 
 
+def _gui_status_emit(gui: Dict[str, object], text: str, color: str) -> None:
+    path_raw = str(gui.get("status_path") or "").strip()
+    if not path_raw:
+        return
+    payload = {
+        "ts_utc": _now_utc().isoformat().replace("+00:00", "Z"),
+        "text": text,
+        "color": color,
+    }
+    try:
+        _write_json_atomic(Path(path_raw), payload)
+    except Exception:
+        pass
+
+
 def _gui_pump(gui: Optional[Dict[str, object]]) -> None:
     if not gui or gui.get("closed"):
         return
@@ -347,6 +365,36 @@ def _gui_pump(gui: Optional[Dict[str, object]]) -> None:
             root.update()
     except Exception:
         pass
+
+
+def _gui_request_exit(gui: Dict[str, object]) -> None:
+    gui["closed"] = True
+    gui["exit"] = True
+    root = gui.get("root")
+    if root is None:
+        return
+    try:
+        root.destroy()
+    except Exception:
+        pass
+
+
+def _gui_action_stop_infobot(gui: Dict[str, object]) -> None:
+    _gui_request_exit(gui)
+
+
+def _gui_action_stop_system(gui: Dict[str, object]) -> None:
+    cmd = str(gui.get("stop_cmd") or "").strip()
+    if cmd:
+        subprocess.Popen(f"\"{cmd}\"", shell=True)
+    _gui_request_exit(gui)
+
+
+def _gui_action_repair_now(gui: Dict[str, object]) -> None:
+    cmd = _materialize_repair_command(str(gui.get("repair_cmd") or ""), event_prefix="MANUAL")
+    if not cmd:
+        return
+    subprocess.Popen(cmd, shell=True)
 
 
 def _parse_recipients(raw: str) -> list[str]:
@@ -471,7 +519,6 @@ def _acquire_lock(lock_path: Path) -> None:
             pid = int(raw) if raw.isdigit() else 0
             if pid and _pid_is_running(pid):
                 raise RuntimeError("ALREADY_RUNNING")
-            lock_path.unlink(missing_ok=True)
         except Exception:
             raise RuntimeError("ALREADY_RUNNING")
     lock_path.write_text(str(os.getpid()), encoding="utf-8")
@@ -481,7 +528,11 @@ def _release_lock(lock_path: Path) -> None:
     try:
         lock_path.unlink(missing_ok=True)
     except Exception:
-        pass
+        try:
+            # Fallback for ACL layouts that allow write but deny delete.
+            lock_path.write_text("", encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _log_mtime_ok(path: Path, stale_sec: int) -> bool:
@@ -676,6 +727,25 @@ def _trade_stats(root: Path, since_iso: str) -> Dict[str, object]:
     }
 
 
+def _default_repair_command(root: Path) -> str:
+    script = root / "RUN" / "CODEX_REPAIR_AUTOMATION.ps1"
+    if not script.exists():
+        return ""
+    return (
+        f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
+        f'-Root "{root}" -EventId "{{event_id}}"'
+    )
+
+
+def _materialize_repair_command(cmd_template: str, event_prefix: str = "MANUAL") -> str:
+    cmd = str(cmd_template or "").strip()
+    if not cmd:
+        return ""
+    if "{event_id}" in cmd:
+        return cmd.format(event_id=f"{event_prefix}-{uuid.uuid4().hex[:8]}")
+    return cmd
+
+
 def main() -> int:
     root = get_runtime_root(enforce=True)
     _setup_logging(root)
@@ -694,6 +764,7 @@ def main() -> int:
     heartbeat_path = run_dir / HEARTBEAT_FILE
     alert_path = run_dir / ALERT_FILE
     recover_path = run_dir / RECOVER_FILE
+    gui_status_path = run_dir / GUI_STATUS_FILE
 
     state = _read_json(state_path) or {}
     last_summary_date = str(state.get("last_summary_date") or "")
@@ -703,6 +774,7 @@ def main() -> int:
     last_daily_email_date = str(state.get("last_daily_email_date") or "")
     last_weekly_email_date = str(state.get("last_weekly_email_date") or "")
     last_alive_email_date = str(state.get("last_alive_email_date") or "")
+    last_weekly_repair_date = str(state.get("last_weekly_repair_date") or "")
 
     last_hb = 0.0
     last_hb_print = 0.0
@@ -711,29 +783,25 @@ def main() -> int:
     last_alert_reason = ""
     last_alert_ts = 0.0
     current_status = "alive"
-    audit_cmd = AUDIT_COMMAND.strip()
-    if not audit_cmd:
-        py = sys.executable or "python"
-        diag = root / "TOOLS" / "diag_bundle_v6.py"
-        gate = root / "TOOLS" / "gate_v6.py"
-        if shutil.which("code"):
-            audit_cmd = (
-                f'cmd /c ""{py}" -B "{diag}"'
-                f' & "{py}" -B "{gate}" --mode offline'
-                f' & start "" "code" "{root}""'
-            )
-        else:
-            audit_cmd = (
-                f'cmd /c ""{py}" -B "{diag}"'
-                f' & "{py}" -B "{gate}" --mode offline'
-                f' & start "" "{root}""'
-            )
+    repair_cmd = REPAIR_COMMAND.strip()
+    if not repair_cmd:
+        repair_cmd = AUDIT_COMMAND.strip()
+    if not repair_cmd:
+        repair_cmd = _default_repair_command(root)
 
-    stop_path = TOOLS_BAT_DIR / "stop.bat"
+    stop_path = root / "stop.bat"
     if not stop_path.exists():
-        stop_path = root / "stop.bat"
+        stop_path = TOOLS_BAT_DIR / "stop.bat"
 
-    gui = _init_gui(str(stop_path), audit_cmd)
+    gui = _init_gui(str(stop_path), repair_cmd, str(gui_status_path))
+    if not gui:
+        # Headless fallback: keep status file updates even when tkinter is unavailable.
+        gui = {
+            "closed": False,
+            "exit": False,
+            "hidden": False,
+            "status_path": str(gui_status_path),
+        }
     start_ts = time.time()
 
     try:
@@ -913,6 +981,26 @@ def main() -> int:
                             last_weekly_email_date = week_key
                             state["last_weekly_email_date"] = last_weekly_email_date
                             _write_json_atomic(state_path, state)
+
+            # Weekly repair schedule (defaults: Monday 01:00 PL)
+            if WEEKLY_REPAIR_ENABLED and repair_cmd:
+                day_cfg = min(6, max(0, int(WEEKLY_REPAIR_DAY)))
+                hour_cfg = min(23, max(0, int(WEEKLY_REPAIR_HOUR)))
+                min_cfg = min(59, max(0, int(WEEKLY_REPAIR_MIN)))
+                repair_key = pl.strftime("%Y-%m-%d")
+                if pl.weekday() == day_cfg and pl.hour == hour_cfg and pl.minute >= min_cfg:
+                    if repair_key != last_weekly_repair_date and current_status not in {"repairing", "repairing_codex"}:
+                        cmd = _materialize_repair_command(repair_cmd, event_prefix="WEEKLY")
+                        try:
+                            subprocess.Popen(cmd, shell=True)
+                            last_weekly_repair_date = repair_key
+                            state["last_weekly_repair_date"] = last_weekly_repair_date
+                            _write_json_atomic(state_path, state)
+                            logging.info("WEEKLY_REPAIR triggered")
+                            _gui_update(gui, _status_text("SYSTEM W NAPRAWIE", "NOCNA NAPRAWA"), "orange")
+                            current_status = "repairing_codex"
+                        except Exception as exc:
+                            logging.error(f"WEEKLY_REPAIR launch failed: {exc}")
 
             # Daily alive info at 05:00 PL (once per day)
             date_key_alive = pl.strftime("%Y-%m-%d")
