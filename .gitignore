@@ -1,11 +1,15 @@
 .venv/
 __pycache__/
+.pycache/
 *.pyc
 *.pyo
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 .coverage
+.tmp/
+.tmp_py/
+TMP_AUDIT_IO/
 
 # Editor/IDE
 .vs/
@@ -43,6 +47,12 @@ HOTFIX/
 LOCK/
 META/
 OANDAKEY/
+
+# Defensive ignore for accidental secret drops (DPAPI artifacts)
+LLM_SECRETS_DPAPI/
+SECRETS/
+*.dpapi
+*api_key*.dpapi
 
 # Checksums or generated lists
 CHECKSUMS_BINARIES_SHA256.txt
