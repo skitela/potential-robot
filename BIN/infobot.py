@@ -86,6 +86,7 @@ EMAIL2_FROM = os.environ.get("INFOBOT2_EMAIL_FROM", EMAIL2_SMTP_USER)
 WEEKLY_SUMMARY_DAY = 0  # Monday
 WEEKLY_SUMMARY_HOUR = 8
 WEEKLY_SUMMARY_MIN = 0
+SUMMARY_ON_SCREEN = os.environ.get("INFOBOT_SUMMARY_ON_SCREEN", "1") == "1"
 AUDIT_COMMAND = os.environ.get("INFOBOT_AUDIT_CMD", "")
 REPAIR_COMMAND = os.environ.get("INFOBOT_REPAIR_CMD", "")
 WEEKLY_REPAIR_ENABLED = os.environ.get("INFOBOT_WEEKLY_REPAIR_ENABLED", "1") == "1"
@@ -747,6 +748,55 @@ def _trade_stats(root: Path, since_iso: str) -> Dict[str, object]:
     }
 
 
+def _pnl_label(value: float) -> str:
+    try:
+        pnl = float(value)
+    except Exception:
+        pnl = 0.0
+    if pnl > 0.0:
+        return f"zysk:{round(pnl, 6)}"
+    if pnl < 0.0:
+        return f"strata:{round(abs(pnl), 6)}"
+    return "zero:0.0"
+
+
+def _repair_log_stats(root: Path, since_utc: datetime) -> Dict[str, int]:
+    out: Dict[str, int] = {
+        "alerts": 0,
+        "repairing": 0,
+        "recovered": 0,
+        "failed": 0,
+        "attempts": 0,
+    }
+    log_path = root / "LOGS" / "infobot" / "infobot.log"
+    if not log_path.exists():
+        return out
+    since_local = since_utc.astimezone().replace(tzinfo=None)
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if len(line) < 23:
+                    continue
+                try:
+                    ts = datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S,%f")
+                except Exception:
+                    continue
+                if ts < since_local:
+                    continue
+                if "ALARM krytyczny" in line:
+                    out["alerts"] += 1
+                if "GUI_STATUS text=SYSTEM W NAPRAWIE" in line:
+                    out["repairing"] += 1
+                if "ODZYSKANO system dziala" in line:
+                    out["recovered"] += 1
+                if "SYSTEM DOWN - operator intervention required" in line:
+                    out["failed"] += 1
+    except Exception:
+        return out
+    out["attempts"] = max(int(out["repairing"]), int(out["recovered"]) + int(out["failed"]))
+    return out
+
+
 def _default_repair_command(root: Path) -> str:
     script = root / "RUN" / "CODEX_REPAIR_AUTOMATION.ps1"
     if not script.exists():
@@ -947,6 +997,8 @@ def main() -> int:
 
                     stats = _trade_stats(root, since.isoformat().replace("+00:00", "Z"))
                     stats_24 = _trade_stats(root, (now_utc - timedelta(hours=24)).isoformat().replace("+00:00", "Z"))
+                    repairs_window = _repair_log_stats(root, since_utc=since)
+                    repairs_24 = _repair_log_stats(root, since_utc=(now_utc - timedelta(hours=24)))
 
                     summary = _daily_summary(root, status)
                     summary += f"\nczas_pracy_h_od_ostatniego_podsumowania={uptime_h}"
@@ -962,6 +1014,15 @@ def main() -> int:
                         f"sprzedaz={stats_24['sell']} wygrane={stats_24['wins']} przegrane={stats_24['losses']} "
                         f"pnl_net={stats_24['pnl_net']}"
                     )
+                    summary += f"\nostatnie_24h_wynik={_pnl_label(float(stats_24['pnl_net']))}"
+                    summary += (
+                        f"\nnaprawy_okno_alerty={repairs_window['alerts']} proby={repairs_window['attempts']} "
+                        f"sukces={repairs_window['recovered']} fail={repairs_window['failed']}"
+                    )
+                    summary += (
+                        f"\nnaprawy_24h_alerty={repairs_24['alerts']} proby={repairs_24['attempts']} "
+                        f"sukces={repairs_24['recovered']} fail={repairs_24['failed']}"
+                    )
                     summary += (
                         f"\nostatnie_7d_sygnaly_razem={stats_7d['signals_total']} kupno={stats_7d['buy']} "
                         f"sprzedaz={stats_7d['sell']} wygrane={stats_7d['wins']} przegrane={stats_7d['losses']} "
@@ -970,6 +1031,15 @@ def main() -> int:
                     logging.info(summary.replace("\n", " | "))
                     if CONSOLE_ENABLED:
                         print(summary)
+                    if SUMMARY_ON_SCREEN and current_status == "alive":
+                        _gui_update(
+                            gui,
+                            _status_text(
+                                "PODSUMOWANIE 20:30",
+                                f"{_pnl_label(float(stats_24['pnl_net']))} | naprawy_ok={repairs_24['recovered']} fail={repairs_24['failed']}",
+                            ),
+                            "red",
+                        )
                     last_summary_date = date_key
                     state["last_summary_date"] = last_summary_date
                     last_summary_ts = now_utc.isoformat().replace("+00:00", "Z")
@@ -989,6 +1059,7 @@ def main() -> int:
                     now_utc = _now_utc()
                     since_week = (now_utc - timedelta(days=7)).isoformat().replace("+00:00", "Z")
                     stats_7d = _trade_stats(root, since_week)
+                    repairs_7d = _repair_log_stats(root, since_utc=(now_utc - timedelta(days=7)))
                     weekly = _daily_summary(root, status)
                     weekly += f"\nzakres_tygodniowy_utc={since_week}..{now_utc.isoformat().replace('+00:00', 'Z')}"
                     weekly += (
@@ -996,6 +1067,20 @@ def main() -> int:
                         f"sprzedaz={stats_7d['sell']} wygrane={stats_7d['wins']} przegrane={stats_7d['losses']} "
                         f"pnl_net={stats_7d['pnl_net']}"
                     )
+                    weekly += f"\nostatnie_7d_wynik={_pnl_label(float(stats_7d['pnl_net']))}"
+                    weekly += (
+                        f"\nnaprawy_7d_alerty={repairs_7d['alerts']} proby={repairs_7d['attempts']} "
+                        f"sukces={repairs_7d['recovered']} fail={repairs_7d['failed']}"
+                    )
+                    if SUMMARY_ON_SCREEN and current_status == "alive":
+                        _gui_update(
+                            gui,
+                            _status_text(
+                                "PODSUMOWANIE TYGODNIA",
+                                f"{_pnl_label(float(stats_7d['pnl_net']))} | naprawy_ok={repairs_7d['recovered']} fail={repairs_7d['failed']}",
+                            ),
+                            "red",
+                        )
                     if EMAIL_WEEKLY_ENABLED:
                         if _send_email("INFOBOT PODSUMOWANIE TYGODNIOWE", weekly):
                             last_weekly_email_date = week_key
