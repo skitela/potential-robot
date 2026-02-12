@@ -208,6 +208,7 @@ def atomic_write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    last_exc: Optional[Exception] = None
     try:
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
@@ -215,15 +216,30 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             os.fsync(f.fileno())
         try:
             os.replace(tmp, path)
+            return
         except Exception as e:
+            last_exc = e
             cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        try:
             shutil.move(str(tmp), str(path))
+            return
+        except Exception as e:
+            last_exc = e
+            cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        # Fallback for environments where atomic rename/move is blocked.
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        return
     finally:
         try:
             if tmp.exists():
                 tmp.unlink(missing_ok=True)
         except Exception as e:
             cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+    if last_exc is not None:
+        raise last_exc
 
 def parse_ts_utc(s: str) -> Optional[dt.datetime]:
     if not s:

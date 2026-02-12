@@ -28,12 +28,18 @@ Write-Host "[SYNC_EVIDENCE] Source=$sourceResolved"
 Write-Host "[SYNC_EVIDENCE] Target=$targetResolved"
 Write-Host "[SYNC_EVIDENCE] Mode=$([string]::Join(' ', $args))"
 
-& robocopy $sourceResolved $targetResolved @args
+$robocopyOut = & robocopy $sourceResolved $targetResolved @args 2>&1
+$robocopyOut | ForEach-Object { $_ }
 $rc = $LASTEXITCODE
+$robocopyText = ($robocopyOut | Out-String)
+$fatalByLog = $false
+if ($robocopyText -match "ERROR 5") { $fatalByLog = $true }
+if ($robocopyText -match "RETRY LIMIT EXCEEDED") { $fatalByLog = $true }
+if ($robocopyText -match "Accessing Destination Directory") { $fatalByLog = $true }
 
-if ($rc -le 7) {
+if ($rc -le 7 -and -not $fatalByLog) {
     Write-Host "[SYNC_EVIDENCE] Result=PASS Code=$rc"
     exit 0
 }
 
-Write-Error "[SYNC_EVIDENCE] Result=FAIL Code=$rc"
+Write-Error "[SYNC_EVIDENCE] Result=FAIL Code=$rc FatalByLog=$fatalByLog"
