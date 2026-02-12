@@ -1017,11 +1017,11 @@ def main() -> int:
                     summary += f"\nostatnie_24h_wynik={_pnl_label(float(stats_24['pnl_net']))}"
                     summary += (
                         f"\nnaprawy_okno_alerty={repairs_window['alerts']} proby={repairs_window['attempts']} "
-                        f"sukces={repairs_window['recovered']} fail={repairs_window['failed']}"
+                        f"sukces={repairs_window['recovered']} porazki={repairs_window['failed']}"
                     )
                     summary += (
                         f"\nnaprawy_24h_alerty={repairs_24['alerts']} proby={repairs_24['attempts']} "
-                        f"sukces={repairs_24['recovered']} fail={repairs_24['failed']}"
+                        f"sukces={repairs_24['recovered']} porazki={repairs_24['failed']}"
                     )
                     summary += (
                         f"\nostatnie_7d_sygnaly_razem={stats_7d['signals_total']} kupno={stats_7d['buy']} "
@@ -1032,14 +1032,14 @@ def main() -> int:
                     if CONSOLE_ENABLED:
                         print(summary)
                     if SUMMARY_ON_SCREEN and current_status == "alive":
-                        _gui_update(
-                            gui,
-                            _status_text(
-                                "PODSUMOWANIE 20:30",
-                                f"{_pnl_label(float(stats_24['pnl_net']))} | naprawy_ok={repairs_24['recovered']} fail={repairs_24['failed']}",
-                            ),
-                            "red",
-                        )
+                            _gui_update(
+                                gui,
+                                _status_text(
+                                    "PODSUMOWANIE 20:30",
+                                    f"{_pnl_label(float(stats_24['pnl_net']))} | sukces={repairs_24['recovered']} porazki={repairs_24['failed']}",
+                                ),
+                                "red",
+                            )
                     last_summary_date = date_key
                     state["last_summary_date"] = last_summary_date
                     last_summary_ts = now_utc.isoformat().replace("+00:00", "Z")
@@ -1070,14 +1070,14 @@ def main() -> int:
                     weekly += f"\nostatnie_7d_wynik={_pnl_label(float(stats_7d['pnl_net']))}"
                     weekly += (
                         f"\nnaprawy_7d_alerty={repairs_7d['alerts']} proby={repairs_7d['attempts']} "
-                        f"sukces={repairs_7d['recovered']} fail={repairs_7d['failed']}"
+                        f"sukces={repairs_7d['recovered']} porazki={repairs_7d['failed']}"
                     )
                     if SUMMARY_ON_SCREEN and current_status == "alive":
                         _gui_update(
                             gui,
                             _status_text(
                                 "PODSUMOWANIE TYGODNIA",
-                                f"{_pnl_label(float(stats_7d['pnl_net']))} | naprawy_ok={repairs_7d['recovered']} fail={repairs_7d['failed']}",
+                                f"{_pnl_label(float(stats_7d['pnl_net']))} | sukces={repairs_7d['recovered']} porazki={repairs_7d['failed']}",
                             ),
                             "red",
                         )
