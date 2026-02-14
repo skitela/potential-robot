@@ -315,7 +315,13 @@ Invoke-Step -Name "02c_dependency_hygiene" -Command $cmdDeps -Outputs @($depende
 $env:TRAINING_EVID_DIR = (Join-Path $Evidence "learner")
 Invoke-Step -Name "03_learner_once" -Command "python BIN\\learner_offline.py once" -Outputs @($env:TRAINING_EVID_DIR)
 Clear-StaleLock -LockRelPath "RUN\\scudfab02.lock" -Component "SCUD"
-Invoke-Step -Name "04_scud_once" -Command "python BIN\\scudfab02.py once"
+$scudLockPath = Join-Path $Root "RUN\\scudfab02.lock"
+if (Test-Path $scudLockPath -PathType Leaf) {
+    Append-RunLog -Event "scud_step_optional_due_lock" -Fields @{ lock = (To-RelPath $scudLockPath) }
+    Invoke-Step -Name "04_scud_once" -Command "python BIN\\scudfab02.py once" -Optional
+} else {
+    Invoke-Step -Name "04_scud_once" -Command "python BIN\\scudfab02.py once"
+}
 Invoke-Step -Name "05_import_infobot_repair" -Command "python -c `"import BIN.infobot, BIN.repair_agent; print('IMPORT_OK')`""
 Invoke-Step -Name "06_gate_offline" -Command "python TOOLS\\gate_v6.py --mode offline" -Optional
 Invoke-Step -Name "07_diag_bundle" -Command "python TOOLS\\diag_bundle_v6.py"

@@ -64,12 +64,13 @@ for ($i = 1; $i -le [Math]::Max(1, $Loops); $i++) {
     $iterDir = Join-Path $Evidence $iter
     New-Item -ItemType Directory -Force -Path $iterDir | Out-Null
 
-    Invoke-Step -Name "compile" -LogPath (Join-Path $iterDir "01_compile.txt") -Command "python -X pycache_prefix=EVIDENCE\\preflight_safe\\compile_cache\\$iter -m py_compile DYRYGENT_EXTERNAL.py dyrygent_scan.py dyrygent_trace.py test_dyrygent_external.py TOOLS\\verify_api_contracts.py TOOLS\\offline_network_guard.py TOOLS\\runtime_housekeeping.py"
+    $compileReport = Join-Path $iterDir "01_compile_report.json"
+    Invoke-Step -Name "compile" -LogPath (Join-Path $iterDir "01_compile.txt") -Command "python TOOLS\\smoke_compile_v6_2.py --root `"$Root`" --out `"$compileReport`""
     Invoke-Step -Name "smoke" -LogPath (Join-Path $iterDir "02_smoke_dyrygent.txt") -Command "python test_dyrygent_external.py"
     Invoke-Step -Name "tests" -LogPath (Join-Path $iterDir "03_structural_contract_tests.txt") -Command "python -m unittest tests.test_structural_p0 tests.test_api_contracts tests.test_offline_network_guard tests.test_runtime_housekeeping -v"
 
     $auditEvidence = Join-Path $iterDir "audit_offline"
-    Invoke-Step -Name "audit_offline" -LogPath (Join-Path $iterDir "04_audit_offline.txt") -Command "powershell -ExecutionPolicy Bypass -File RUN\\AUDIT_OFFLINE.ps1 -Root `"$Root`" -Evidence `"$auditEvidence`" -PrintSummary"
+    Invoke-Step -Name "audit_offline" -LogPath (Join-Path $iterDir "04_audit_offline.txt") -Command "powershell -ExecutionPolicy Bypass -File RUN\\AUDIT_OFFLINE.ps1 -Root `"$Root`" -Evidence `"$auditEvidence`" -PrintSummary -NoSync"
 
     "$iter=PASS" | Add-Content -Encoding UTF8 $summaryPath
 }
