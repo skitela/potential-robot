@@ -167,6 +167,43 @@ function Is-StepCompleted {
     return ([int]$checkpoint.step_meta[$Name].exit_code -eq 0)
 }
 
+function Clear-StaleLock {
+    param(
+        [string]$LockRelPath,
+        [string]$Component = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($LockRelPath)) { return }
+    $lockPath = Join-Path $Root $LockRelPath
+    if (-not (Test-Path $lockPath -PathType Leaf)) { return }
+
+    $pidText = ""
+    try {
+        $pidText = (Get-Content -Path $lockPath -Raw -Encoding UTF8 -ErrorAction Stop).Trim()
+    } catch {
+        Append-RunLog -Event "stale_lock_read_failed" -Fields @{ component = $Component; lock = (To-RelPath $lockPath); error = $_.Exception.Message }
+        return
+    }
+
+    $isActive = $false
+    if ($pidText -match '^[0-9]+$') {
+        $procId = [int]$pidText
+        $isActive = @(Get-Process -Id $procId -ErrorAction SilentlyContinue).Count -gt 0
+    }
+
+    if ($isActive) {
+        Append-RunLog -Event "stale_lock_kept" -Fields @{ component = $Component; lock = (To-RelPath $lockPath); pid = $pidText }
+        return
+    }
+
+    try {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
+        Append-RunLog -Event "stale_lock_removed" -Fields @{ component = $Component; lock = (To-RelPath $lockPath); pid = $pidText }
+    } catch {
+        Append-RunLog -Event "stale_lock_remove_failed" -Fields @{ component = $Component; lock = (To-RelPath $lockPath); pid = $pidText; error = $_.Exception.Message }
+    }
+}
+
 function Mark-StepCompleted {
     param(
         [string]$Name,
@@ -277,6 +314,7 @@ Invoke-Step -Name "02c_dependency_hygiene" -Command $cmdDeps -Outputs @($depende
 
 $env:TRAINING_EVID_DIR = (Join-Path $Evidence "learner")
 Invoke-Step -Name "03_learner_once" -Command "python BIN\\learner_offline.py once" -Outputs @($env:TRAINING_EVID_DIR)
+Clear-StaleLock -LockRelPath "RUN\\scudfab02.lock" -Component "SCUD"
 Invoke-Step -Name "04_scud_once" -Command "python BIN\\scudfab02.py once"
 Invoke-Step -Name "05_import_infobot_repair" -Command "python -c `"import BIN.infobot, BIN.repair_agent; print('IMPORT_OK')`""
 Invoke-Step -Name "06_gate_offline" -Command "python TOOLS\\gate_v6.py --mode offline" -Optional
