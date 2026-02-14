@@ -1,0 +1,49 @@
+AUDIT REPORT V1.2 TEMPLATE (STRICT)
+
+Instrukcja:
+- Uzyj tego szablonu tylko jako punkt startowy.
+- Kazdy wpis musi miec realny dowod (sciezka do artefaktu).
+- Nie usuwaj ani nie zmieniaj identyfikatorow E0..E6 i C01..C18.
+- SYSTEM_STATUS = GOTOWY tylko gdy C01..C18 = PASS.
+
+Audit zakonczony.
+Run ID: audit_v12_live_YYYYMMDD_HHMMSS
+Root: C:\OANDA_MT5_SYSTEM
+Data UTC: YYYY-MM-DDTHH:MM:SSZ
+
+Etapy wykonane:
+- E0_PRECHECK_DISK: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/preflight/summary.txt
+- E1_PREFLIGHT_SAFE: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/preflight/summary.txt
+- E2_AUDIT_OFFLINE: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/offline/verdict.json
+- E3_AUDIT_TRAINING_OFFLINE: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/verdict.json
+- E4_OPTIONAL_ONLINE_PREFLIGHT: NIE_URUCHAMIANO | dowod: nie wymagano w tej iteracji
+- E5_OPTIONAL_ONLINE_SMOKE_MT5: NIE_URUCHAMIANO | dowod: nie wymagano w tej iteracji
+- E6_PODSUMOWANIE: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/validate_latest.json
+
+Checklista kontrolna (wymagana):
+- C01_ROOT_HARD: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/preflight/summary.txt | uwaga: root zgodny
+- C02_KANON_PLIKOW: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/preflight/iter_01/03_structural_contract_tests.txt | uwaga: kanon narzedzi dostepny
+- C03_OFFLINE_CONTRACT: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/runlog.jsonl | uwaga: audit training offline
+- C04_NO_TRADING_DURING_AUDIT: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/offline/verdict.json | uwaga: dry_run OFFLINE
+- C05_STRATEGY_UNCHANGED: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/offline/verdict.json | uwaga: strategy_touch=false
+- C06_GUARDS_NOT_WEAKENED: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/02_tests_training.txt | uwaga: runtime mines tests
+- C07_OANDA_LIMITS_CONSISTENT: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/02_tests_training.txt | uwaga: oanda limits tests
+- C08_RETCODE_PROTECTION: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/02_tests_training.txt | uwaga: retcode/cooldown contract tests
+- C09_SECRETS_POLICY: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/extras/secrets_scan_report_repo_only.json | uwaga: repo-only secrets scan
+- C10_EVIDENCE_REQUIRED: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/verdict.json | uwaga: evidence kompletne
+- C11_PREFLIGHT_PASS: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/preflight/summary.txt | uwaga: preflight status
+- C12_OFFLINE_AUDIT_PASS: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/offline/verdict.json | uwaga: offline verdict
+- C13_TRAINING_AUDIT_PASS: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/verdict.json | uwaga: training verdict
+- C14_API_CONTRACTS_PASS: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/api_contracts_report.json | uwaga: api contracts
+- C15_TESTS_PASS: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/02_tests_training.txt | uwaga: training tests
+- C16_HOUSEKEEPING_SAFE: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/housekeeping_report.json | uwaga: housekeeping status
+- C17_NO_EXTERNAL_CHANNELS: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/training/runlog.jsonl | uwaga: channels disabled in training script
+- C18_ONLINE_SMOKE_POLICY: PASS | dowod: EVIDENCE/audit_v12_live/RUN_ID/offline/quality_checks.json | uwaga: online smoke policy
+
+Ryzyka otwarte:
+- R1: wpisz ryzyko + wplyw + plan
+- R2: wpisz ryzyko + wplyw + plan
+
+Werdykt koncowy:
+- SYSTEM_STATUS: GOTOWY
+- REGULA: GOTOWY tylko gdy C01..C18 = PASS (bez wyjatkow wymaganych).

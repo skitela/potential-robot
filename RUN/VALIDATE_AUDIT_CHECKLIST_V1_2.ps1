@@ -14,7 +14,15 @@ if ([string]::IsNullOrWhiteSpace($Root)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
-    $EvidenceRoot = Join-Path $Root "EVIDENCE\audit_checklist_v1_2"
+    $preferred = Join-Path $Root "EVIDENCE\audit_v12_live"
+    $legacy = Join-Path $Root "EVIDENCE\audit_checklist_v1_2"
+    if (Test-Path $preferred -PathType Container) {
+        $EvidenceRoot = $preferred
+    } elseif (Test-Path $legacy -PathType Container) {
+        $EvidenceRoot = $legacy
+    } else {
+        $EvidenceRoot = $preferred
+    }
 } elseif (-not [System.IO.Path]::IsPathRooted($EvidenceRoot)) {
     $EvidenceRoot = [System.IO.Path]::GetFullPath((Join-Path $Root $EvidenceRoot))
 } else {
@@ -73,4 +81,3 @@ $rc = [int]$LASTEXITCODE
 
 Write-Host "[VALIDATE_AUDIT_CHECKLIST_V1_2] ExitCode=$rc"
 exit $rc
-
