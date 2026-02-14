@@ -44,6 +44,27 @@ class TestSecretsScan(unittest.TestCase):
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
+    def test_default_scan_skips_evidence_and_diag(self) -> None:
+        root = self._mkroot()
+        fake_sk = "sk-" + "TESTTOKEN1234567890"
+        try:
+            ev = root / "EVIDENCE"
+            dg = root / "DIAG"
+            ev.mkdir(parents=True, exist_ok=True)
+            dg.mkdir(parents=True, exist_ok=True)
+            (ev / "bad.txt").write_text(f"api_key={fake_sk}\n", encoding="utf-8")
+            (dg / "bad.txt").write_text(f"token={fake_sk}\n", encoding="utf-8")
+
+            report_default = secrets_scan.scan_roots([root])
+            self.assertEqual(report_default["status"], "PASS")
+            self.assertEqual(report_default["totals"]["findings"], 0)
+
+            report_evidence = secrets_scan.scan_roots([ev])
+            self.assertEqual(report_evidence["status"], "FAIL")
+            self.assertGreater(report_evidence["totals"]["findings"], 0)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

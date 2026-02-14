@@ -44,6 +44,8 @@ SKIP_DIRS = {
     ".tmp",
     ".tmp_py",
     "TMP_AUDIT_IO",
+    "EVIDENCE",
+    "DIAG",
     "DB",
     "DATA",
 }

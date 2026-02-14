@@ -1,6 +1,7 @@
 import unittest
 import sys
-import tempfile
+import shutil
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,17 +24,24 @@ class MemState:
 
 
 class TestOandaLimitsGuard(unittest.TestCase):
+    def _tmpdir(self) -> Path:
+        base = Path("TMP_AUDIT_IO") / "test_oanda_limits_guard"
+        path = base / f"case_{uuid.uuid4().hex}"
+        path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(path, ignore_errors=True))
+        return path
+
     def test_price_request_limits(self):
         db = MemState()
-        with tempfile.TemporaryDirectory() as tmp:
-            guard = OandaLimitsGuard(
-                db,
-                Path(tmp),
-                warn_day=3,
-                hard_stop_day=5,
-                orders_per_sec=2,
-                positions_pending_limit=4,
-            )
+        tmp = self._tmpdir()
+        guard = OandaLimitsGuard(
+            db,
+            tmp,
+            warn_day=3,
+            hard_stop_day=5,
+            orders_per_sec=2,
+            positions_pending_limit=4,
+        )
         now = 1_000_000
         self.assertTrue(guard.note_price_request(now_ts=now))
         self.assertTrue(guard.note_price_request(now_ts=now + 1))
@@ -46,15 +54,15 @@ class TestOandaLimitsGuard(unittest.TestCase):
 
     def test_order_rate_limit(self):
         db = MemState()
-        with tempfile.TemporaryDirectory() as tmp:
-            guard = OandaLimitsGuard(
-                db,
-                Path(tmp),
-                warn_day=3,
-                hard_stop_day=5,
-                orders_per_sec=2,
-                positions_pending_limit=4,
-            )
+        tmp = self._tmpdir()
+        guard = OandaLimitsGuard(
+            db,
+            tmp,
+            warn_day=3,
+            hard_stop_day=5,
+            orders_per_sec=2,
+            positions_pending_limit=4,
+        )
         t = 123.0
         self.assertTrue(guard.allow_order_submit(now_ts=t))
         self.assertTrue(guard.allow_order_submit(now_ts=t + 0.1))
@@ -62,15 +70,15 @@ class TestOandaLimitsGuard(unittest.TestCase):
 
     def test_positions_pending_limit(self):
         db = MemState()
-        with tempfile.TemporaryDirectory() as tmp:
-            guard = OandaLimitsGuard(
-                db,
-                Path(tmp),
-                warn_day=3,
-                hard_stop_day=5,
-                orders_per_sec=2,
-                positions_pending_limit=4,
-            )
+        tmp = self._tmpdir()
+        guard = OandaLimitsGuard(
+            db,
+            tmp,
+            warn_day=3,
+            hard_stop_day=5,
+            orders_per_sec=2,
+            positions_pending_limit=4,
+        )
         self.assertTrue(guard.allow_positions_pending(3))
         self.assertFalse(guard.allow_positions_pending(4))
 

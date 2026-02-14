@@ -81,8 +81,27 @@ class OandaLimitsGuard:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.evidence_dir / "oanda_limits_state.json.tmp"
         out = self.evidence_dir / "oanda_limits_state.json"
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(out)
+        payload = json.dumps(data, indent=2, sort_keys=True)
+        tmp.write_text(payload, encoding="utf-8")
+        # Windows can deny atomic replace on some filesystems/locks.
+        # Keep atomic path first, then degrade to direct write as best-effort state persistence.
+        for i in range(6):
+            try:
+                tmp.replace(out)
+                break
+            except PermissionError:
+                try:
+                    out.write_text(payload, encoding="utf-8")
+                    try:
+                        if tmp.exists():
+                            tmp.unlink()
+                    except Exception:
+                        pass
+                    break
+                except Exception:
+                    if i >= 5:
+                        raise
+                time.sleep(0.05 * (2 ** i))
 
     def write_state(self, now_ts: Optional[float] = None) -> None:
         self._write_state(now_ts)
