@@ -1,0 +1,47 @@
+MU HANDOFF 2026-02-13
+Status: AKTYWNY
+Cel: kontynuacja natychmiastowa bez ponownego odkrywania.
+
+[USTALENIA STALE]
+1) 17 zasad nienaruszalnych przyjete jako standard projektu.
+2) Docelowo: Dyrygent Zmiany + boty grupowe + osobna Warstwa Ryzyka.
+3) Offline-first: brak danych zewnetrznych w baseline.
+4) Refaktoryzacja bez zmiany strategii handlowej.
+
+[WYNIK AUDYTU C:\\OANDA_MT5_SYSTEM]
+ZGODNE:
+- twarde guardy limitow OANDA oraz trade_mode/stops/cooldowny retcode.
+- learner offline i artefakty price-free.
+- sekrety DPAPI + secrets_scan.
+- offline guard dla narzedzi dyrygenta technicznego.
+
+NIEZGODNE KRYTYCZNIE Z NOWA ARCHITEKTURA:
+- brak rzeczywistego Dyrygenta Zmiany (obecny DYRYGENT_EXTERNAL to narzedzie audytowe).
+- brak osobnej Warstwy Ryzyka z grant/veto.
+- brak kontraktow: ConductorDecision, RiskBudgetRequest, RiskBudgetGrant.
+- SafetyBot jest monolitem (nie zestawem botow grupowych sterowanych przez dyrygenta).
+- brak histerezy grupowej: T_decide, T_hold_min, N_confirm, T_cooldown.
+
+[NASTEPNY KROK - START OD RAZU]
+KROK 1 (obowiazkowy):
+- dodac kontrakty i szkielety modulow bez naruszania strategii:
+  - SCHEMAS/conductor_decision_v1.json
+  - SCHEMAS/risk_budget_request_v1.json
+  - SCHEMAS/risk_budget_grant_v1.json
+  - BIN/dyrygent_zmiany.py (selection only, no trading)
+  - BIN/risk_layer.py (grant/veto only)
+
+KROK 2:
+- dodac gate aktywnej grupy i gate grantu ryzyka w SafetyBot (fail-safe NONE).
+
+KROK 3:
+- uruchamianie instancji botow grupowych przez SYSTEM_CONTROL.
+
+KROK 4:
+- testy replay/determinism + veto path + stale input path.
+
+[UWAGA TECHNICZNA]
+Podczas ostatniej sesji brakowalo pytest (globalnie i w .venv).
+Przed testami sprawdz:
+  .venv\\Scripts\\python.exe -m pytest --version
+

@@ -77,7 +77,7 @@ Append-RunLog -Event "audit_offline_start" -Fields @{
 
 if (-not $SkipHousekeeping) {
     $housekeepingReport = Join-Path $Evidence "housekeeping_report.json"
-    & python (Join-Path $Root "TOOLS\runtime_housekeeping.py") --root $Root --evidence $housekeepingReport --apply --keep-runs 40 --max-single-log-mb 8
+    & python (Join-Path $Root "TOOLS\runtime_housekeeping.py") --root $Root --evidence $housekeepingReport --apply --keep-runs 10 --keep-audit-v12-runs 8 --keep-gates 200 --max-single-log-mb 8
     $hkExit = $LASTEXITCODE
     Append-RunLog -Event "housekeeping_done" -Fields @{ exit_code = $hkExit; report = $housekeepingReport }
     if ($hkExit -ne 0) {

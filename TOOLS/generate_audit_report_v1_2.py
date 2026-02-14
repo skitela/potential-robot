@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 CHECK_IDS = [
@@ -31,6 +31,38 @@ CHECK_IDS = [
     "C16_HOUSEKEEPING_SAFE",
     "C17_NO_EXTERNAL_CHANNELS",
     "C18_ONLINE_SMOKE_POLICY",
+    "C19_PIPELINE_VERDICT_PASS",
+    "C20_PIPELINE_RUNLOG_PRESENT",
+    "C21_PIPELINE_STEP_LOGS_PRESENT",
+    "C22_PREFLIGHT_ITER_LOGS_PRESENT",
+    "C23_PREFLIGHT_AUDIT_OFFLINE_PASS",
+    "C24_OFFLINE_MODE_DRY_RUN",
+    "C25_OFFLINE_REASONS_EMPTY",
+    "C26_OFFLINE_QUALITY_ALL_PASS",
+    "C27_OFFLINE_MANIFEST_COMPLETE",
+    "C28_OFFLINE_REDACTION_REPORT_PRESENT",
+    "C29_OFFLINE_BUNDLE_INTEGRITY_FILES",
+    "C30_OFFLINE_RUNLOG_PRESENT",
+    "C31_TRAINING_VERDICT_PASS",
+    "C32_TRAINING_CHECKPOINT_PRESENT",
+    "C33_TRAINING_LINEAGE_PRESENT",
+    "C34_TRAINING_REQUIRED_STEPS_OK",
+    "C35_TRAINING_TESTS_EXIT0",
+    "C36_TRAINING_TEST_SUITES_PRESENT",
+    "C37_TRAINING_API_CONTRACTS_CLEAN",
+    "C38_TRAINING_COMPILE_NO_FAILURES",
+    "C39_TRAINING_DEPENDENCY_REPORT_PASS",
+    "C40_TRAINING_HOUSEKEEPING_REPORT_PASS",
+    "C41_SECRETS_SCAN_NO_FINDINGS",
+    "C42_CHANNELS_DISABLED_IN_TRAINING_SCRIPT",
+    "C43_RUNTIME_ROOT_TOOL_PRESENT",
+    "C44_VALIDATOR_TOOL_PRESENT",
+    "C45_GENERATOR_TOOL_PRESENT",
+    "C46_HOUSEKEEPING_TOOL_PRESENT",
+    "C47_GATE_TOOL_PRESENT",
+    "C48_DIAG_BUNDLE_TOOL_PRESENT",
+    "C49_SAFETYBOT_TIMEZONE_POLICY_DEFINED",
+    "C50_SAFETYBOT_TIME_HELPERS_DEFINED",
 ]
 
 
@@ -106,15 +138,71 @@ def _rel(root: Path, p: Path) -> str:
         return str(p).replace("\\", "/")
 
 
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    for raw in _read_text(path).splitlines():
+        line = raw.strip().lstrip("\ufeff")
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(item, dict):
+            rows.append(item)
+    return rows
+
+
+def _file_nonempty(path: Path) -> bool:
+    try:
+        return path.exists() and path.is_file() and path.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def _as_int(value: Any, default: int = -1) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
 def generate_report(root: Path, run_dir: Path, out_path: Path) -> Tuple[Path, Path, int]:
+    pipeline_verdict = run_dir / "pipeline_verdict.json"
+    pipeline_runlog = run_dir / "pipeline_runlog.jsonl"
+    pipeline_step_00 = run_dir / "pipeline_00_housekeeping_global.txt"
+    pipeline_step_01 = run_dir / "pipeline_00_preflight_safe.txt"
+    pipeline_step_02 = run_dir / "pipeline_01_audit_offline.txt"
+    pipeline_step_03 = run_dir / "pipeline_02_audit_training_offline.txt"
+    pipeline_step_04 = run_dir / "pipeline_03_secrets_scan_repo_only.txt"
+    pipeline_step_05 = run_dir / "pipeline_04_generate_report_v1_2.txt"
+
+    preflight_iter = run_dir / "preflight" / "iter_01"
     preflight_summary = run_dir / "preflight" / "summary.txt"
     preflight_tests = run_dir / "preflight" / "iter_01" / "03_structural_contract_tests.txt"
+    preflight_compile = preflight_iter / "01_compile.txt"
+    preflight_smoke = preflight_iter / "02_smoke_dyrygent.txt"
+    preflight_audit_offline = preflight_iter / "04_audit_offline.txt"
+    preflight_offline_verdict = preflight_iter / "audit_offline" / "verdict.json"
+
     offline_verdict = run_dir / "offline" / "verdict.json"
     offline_quality = run_dir / "offline" / "quality_checks.json"
+    offline_manifest = run_dir / "offline" / "llm_payload_manifest.json"
+    offline_redaction = run_dir / "offline" / "llm_redaction_report.json"
+    offline_bundle = run_dir / "offline" / "evidence_bundle.zip"
+    offline_bundle_sha = run_dir / "offline" / "evidence_bundle.zip.sha256"
+    offline_runlog = run_dir / "offline" / "runlog.jsonl"
+    offline_house = run_dir / "offline" / "housekeeping_report.json"
+
     training_verdict = run_dir / "training" / "verdict.json"
     training_runlog = run_dir / "training" / "runlog.jsonl"
     training_tests = run_dir / "training" / "02_tests_training.txt"
     training_api = run_dir / "training" / "api_contracts_report.json"
+    training_compile = run_dir / "training" / "smoke_compile_report.json"
+    training_dependency = run_dir / "training" / "dependency_hygiene.json"
+    training_checkpoint = run_dir / "training" / "training_checkpoint.json"
     training_house = run_dir / "training" / "housekeeping_report.json"
     training_lineage = run_dir / "training" / "lineage_manifest.jsonl"
     secrets_report = _pick_secrets_report(run_dir)
@@ -124,11 +212,56 @@ def generate_report(root: Path, run_dir: Path, out_path: Path) -> Tuple[Path, Pa
     training_st = _status_from_verdict(training_verdict)
     tests_rc = _exit_code_from_step_log(training_tests)
     api_rc = _exit_code_from_step_log(run_dir / "training" / "01b_api_contracts.txt")
+    compile_rc = _exit_code_from_step_log(run_dir / "training" / "01_compile.txt")
+    dep_rc = _exit_code_from_step_log(run_dir / "training" / "02c_dependency_hygiene.txt")
+    house_rc = _exit_code_from_step_log(run_dir / "training" / "00_housekeeping.txt")
+    preflight_offline_rc = _exit_code_from_step_log(preflight_audit_offline)
 
+    pipeline_data = _read_json(pipeline_verdict)
+    pipeline_rows = _read_jsonl(pipeline_runlog)
+    preflight_offline_data = _read_json(preflight_offline_verdict)
     off_data = _read_json(offline_verdict)
+    off_quality_data = _read_json(offline_quality)
+    off_manifest_data = _read_json(offline_manifest)
+    off_redaction_data = _read_json(offline_redaction)
+    off_runlog_rows = _read_jsonl(offline_runlog)
+    training_data = _read_json(training_verdict)
+    training_checkpoint_data = _read_json(training_checkpoint)
+    training_lineage_rows = _read_jsonl(training_lineage)
+    training_api_data = _read_json(training_api)
+    training_compile_data = _read_json(training_compile)
+    training_dependency_data = _read_json(training_dependency)
+    training_house_data = _read_json(training_house)
     sec_data = _read_json(secrets_report)
-    house_data = _read_json(training_house)
     tests_txt = _read_text(training_tests)
+    training_script = root / "RUN" / "AUDIT_TRAINING_OFFLINE.ps1"
+    training_script_txt = _read_text(training_script)
+    safetybot_path = root / "BIN" / "safetybot.py"
+    safetybot_txt = _read_text(safetybot_path)
+    timezone_contract_path = root / "tests" / "test_safetybot_timezone_contract.py"
+    timezone_contract_txt = _read_text(timezone_contract_path)
+
+    off_mode = str(off_data.get("mode", "")).upper() if isinstance(off_data, dict) else ""
+    off_dry_run = bool(off_data.get("dry_run")) if isinstance(off_data, dict) else False
+    off_reasons = off_data.get("reasons", []) if isinstance(off_data, dict) else []
+    quality_all_pass = bool(off_quality_data.get("all_pass")) if isinstance(off_quality_data, dict) else False
+    quality_fail_reasons = off_quality_data.get("fail_reasons", []) if isinstance(off_quality_data, dict) else []
+    manifest_totals = off_manifest_data.get("totals", {}) if isinstance(off_manifest_data, dict) else {}
+    manifest_files = off_manifest_data.get("files", []) if isinstance(off_manifest_data, dict) else []
+    manifest_payload_id = str(off_manifest_data.get("payload_id", "")).strip() if isinstance(off_manifest_data, dict) else ""
+    pipeline_events = {str(item.get("event", "")) for item in pipeline_rows}
+    pipeline_step_ok_events = {
+        str(item.get("step", ""))
+        for item in pipeline_rows
+        if str(item.get("event", "")) == "step_ok"
+    }
+    offline_events = {str(item.get("event", "")) for item in off_runlog_rows}
+    training_checkpoint_steps = (
+        training_checkpoint_data.get("step_meta", {}) if isinstance(training_checkpoint_data, dict) else {}
+    )
+    training_completed_steps = (
+        training_checkpoint_data.get("completed_steps", []) if isinstance(training_checkpoint_data, dict) else []
+    )
 
     checks: Dict[str, Tuple[str, str, str]] = {}
     checks["C01_ROOT_HARD"] = (
@@ -211,7 +344,7 @@ def generate_report(root: Path, run_dir: Path, out_path: Path) -> Tuple[Path, Pa
         "training tests",
     )
     checks["C16_HOUSEKEEPING_SAFE"] = (
-        _bool_to_status(str(house_data.get("status", "")).upper() == "PASS"),
+        _bool_to_status(str(training_house_data.get("status", "")).upper() == "PASS"),
         _rel(root, training_house),
         "housekeeping status",
     )
@@ -224,6 +357,371 @@ def generate_report(root: Path, run_dir: Path, out_path: Path) -> Tuple[Path, Pa
         "PASS",
         _rel(root, offline_quality if offline_quality.exists() else offline_verdict),
         "online smoke nie wymagano",
+    )
+    checks["C19_PIPELINE_VERDICT_PASS"] = (
+        _bool_to_status(
+            (
+                ("audit_v12_live_end" in pipeline_events)
+                and pipeline_verdict.exists()
+                and isinstance(pipeline_data, dict)
+                and str(pipeline_data.get("status", "")).upper() == "PASS"
+                and _as_int(pipeline_data.get("final_exit_code", -1)) == 0
+            )
+            or (
+                ("audit_v12_live_end" not in pipeline_events)
+                and ("audit_v12_live_start" in pipeline_events)
+                and (_exit_code_from_step_log(pipeline_step_00) == 0)
+                and (_exit_code_from_step_log(pipeline_step_01) == 0)
+                and (_exit_code_from_step_log(pipeline_step_02) == 0)
+                and (_exit_code_from_step_log(pipeline_step_03) == 0)
+            )
+        ),
+        _rel(root, pipeline_verdict),
+        (
+            "pipeline status=PASS i final_exit_code=0"
+            if ("audit_v12_live_end" in pipeline_events)
+            else "pipeline pre-report kroki 00..03 maja EXIT_CODE=0"
+        ),
+    )
+    missing_pipeline_ok_steps = sorted(
+        {
+            "00_housekeeping_global",
+            "00_preflight_safe",
+            "01_audit_offline",
+            "02_audit_training_offline",
+            "03_secrets_scan_repo_only",
+        }
+        - pipeline_step_ok_events
+    )
+    checks["C20_PIPELINE_RUNLOG_PRESENT"] = (
+        _bool_to_status(
+            _file_nonempty(pipeline_runlog)
+            and (
+                (
+                    ("audit_v12_live_start" in pipeline_events)
+                    and ("audit_v12_live_end" in pipeline_events)
+                )
+                or (
+                    ("audit_v12_live_end" not in pipeline_events)
+                    and ("audit_v12_live_start" in pipeline_events)
+                    and len(missing_pipeline_ok_steps) == 0
+                )
+            )
+        ),
+        _rel(root, pipeline_runlog),
+        (
+            "runlog ma start/end"
+            if ("audit_v12_live_end" in pipeline_events)
+            else "runlog pre-report ma step_ok 00..03"
+        ),
+    )
+    required_pipeline_logs = [
+        pipeline_step_00,
+        pipeline_step_01,
+        pipeline_step_02,
+        pipeline_step_03,
+        pipeline_step_04,
+        pipeline_step_05,
+    ]
+    missing_pipeline_logs = [_rel(root, p) for p in required_pipeline_logs if not _file_nonempty(p)]
+    checks["C21_PIPELINE_STEP_LOGS_PRESENT"] = (
+        _bool_to_status(len(missing_pipeline_logs) == 0),
+        _rel(root, run_dir),
+        "brak logow: " + (", ".join(missing_pipeline_logs) if missing_pipeline_logs else "0"),
+    )
+    required_preflight_logs = [preflight_compile, preflight_smoke, preflight_tests, preflight_audit_offline]
+    missing_preflight_logs = [_rel(root, p) for p in required_preflight_logs if not _file_nonempty(p)]
+    checks["C22_PREFLIGHT_ITER_LOGS_PRESENT"] = (
+        _bool_to_status(preflight_iter.exists() and len(missing_preflight_logs) == 0),
+        _rel(root, preflight_iter),
+        "brak logow: " + (", ".join(missing_preflight_logs) if missing_preflight_logs else "0"),
+    )
+    checks["C23_PREFLIGHT_AUDIT_OFFLINE_PASS"] = (
+        _bool_to_status(
+            preflight_offline_verdict.exists()
+            and isinstance(preflight_offline_data, dict)
+            and str(preflight_offline_data.get("status", "")).upper() == "PASS"
+            and preflight_offline_rc == 0
+        ),
+        _rel(root, preflight_offline_verdict),
+        "preflight audit_offline PASS",
+    )
+    checks["C24_OFFLINE_MODE_DRY_RUN"] = (
+        _bool_to_status(off_mode == "OFFLINE" and off_dry_run),
+        _rel(root, offline_verdict),
+        "mode=OFFLINE i dry_run=true",
+    )
+    checks["C25_OFFLINE_REASONS_EMPTY"] = (
+        _bool_to_status(isinstance(off_reasons, list) and len(off_reasons) == 0),
+        _rel(root, offline_verdict),
+        f"reasons={len(off_reasons) if isinstance(off_reasons, list) else -1}",
+    )
+    checks["C26_OFFLINE_QUALITY_ALL_PASS"] = (
+        _bool_to_status(quality_all_pass and isinstance(quality_fail_reasons, list) and len(quality_fail_reasons) == 0),
+        _rel(root, offline_quality),
+        "quality all_pass=true",
+    )
+    checks["C27_OFFLINE_MANIFEST_COMPLETE"] = (
+        _bool_to_status(
+            isinstance(off_manifest_data, dict)
+            and bool(manifest_payload_id)
+            and isinstance(manifest_totals, dict)
+            and _as_int(manifest_totals.get("included_count", 0), 0) > 0
+            and isinstance(manifest_files, list)
+            and len(manifest_files) > 0
+        ),
+        _rel(root, offline_manifest),
+        "manifest payload/totals/files",
+    )
+    checks["C28_OFFLINE_REDACTION_REPORT_PRESENT"] = (
+        _bool_to_status(
+            _file_nonempty(offline_redaction)
+            and (
+                (isinstance(off_redaction_data, list) and len(off_redaction_data) > 0)
+                or (isinstance(off_redaction_data, dict) and len(off_redaction_data) > 0)
+            )
+        ),
+        _rel(root, offline_redaction),
+        "redaction report niepusty",
+    )
+    bundle_sha_txt = _read_text(offline_bundle_sha)
+    checks["C29_OFFLINE_BUNDLE_INTEGRITY_FILES"] = (
+        _bool_to_status(
+            _file_nonempty(offline_bundle)
+            and _file_nonempty(offline_bundle_sha)
+            and bool(re.search(r"\b[a-fA-F0-9]{64}\b", bundle_sha_txt))
+        ),
+        _rel(root, offline_bundle_sha),
+        "bundle + sha256",
+    )
+    checks["C30_OFFLINE_RUNLOG_PRESENT"] = (
+        _bool_to_status(
+            _file_nonempty(offline_runlog)
+            and ("audit_offline_start" in offline_events)
+            and ("audit_offline_end" in offline_events)
+        ),
+        _rel(root, offline_runlog),
+        "runlog ma start/end",
+    )
+    checks["C31_TRAINING_VERDICT_PASS"] = (
+        _bool_to_status(
+            training_verdict.exists()
+            and isinstance(training_data, dict)
+            and str(training_data.get("status", "")).upper() == "PASS"
+            and _as_int(training_data.get("final_exit_code", -1)) == 0
+        ),
+        _rel(root, training_verdict),
+        "training status=PASS i final_exit_code=0",
+    )
+    checks["C32_TRAINING_CHECKPOINT_PRESENT"] = (
+        _bool_to_status(
+            _file_nonempty(training_checkpoint)
+            and isinstance(training_checkpoint_data, dict)
+            and isinstance(training_completed_steps, list)
+            and len(training_completed_steps) > 0
+            and isinstance(training_checkpoint_steps, dict)
+            and len(training_checkpoint_steps) > 0
+        ),
+        _rel(root, training_checkpoint),
+        "checkpoint step_meta",
+    )
+    checks["C33_TRAINING_LINEAGE_PRESENT"] = (
+        _bool_to_status(
+            _file_nonempty(training_lineage)
+            and len(training_lineage_rows) > 0
+            and all(bool(str(row.get("step", "")).strip()) for row in training_lineage_rows)
+        ),
+        _rel(root, training_lineage),
+        f"lineage rows={len(training_lineage_rows)}",
+    )
+    required_training_steps = [
+        "00_housekeeping",
+        "01_compile",
+        "01b_api_contracts",
+        "02_tests_training",
+        "02c_dependency_hygiene",
+        "03_learner_once",
+        "05_import_infobot_repair",
+        "07_diag_bundle",
+    ]
+    missing_training_steps = []
+    for step in required_training_steps:
+        meta = training_checkpoint_steps.get(step) if isinstance(training_checkpoint_steps, dict) else None
+        if not isinstance(meta, dict):
+            missing_training_steps.append(step)
+            continue
+        if _as_int(meta.get("exit_code", -1)) != 0:
+            missing_training_steps.append(step)
+    checks["C34_TRAINING_REQUIRED_STEPS_OK"] = (
+        _bool_to_status(len(missing_training_steps) == 0),
+        _rel(root, training_checkpoint),
+        "brak krokow: " + (", ".join(missing_training_steps) if missing_training_steps else "0"),
+    )
+    checks["C35_TRAINING_TESTS_EXIT0"] = (
+        _bool_to_status(_file_nonempty(training_tests) and tests_rc == 0),
+        _rel(root, training_tests),
+        "EXIT_CODE=0",
+    )
+    required_test_suites = [
+        "tests.test_training_quality",
+        "tests.test_risk_policy_defaults",
+        "tests.test_oanda_limits_guard",
+        "tests.test_contract_run_v2",
+        "tests.test_runtime_mines_vF",
+        "tests.test_api_contracts",
+        "tests.test_offline_network_guard",
+        "tests.test_runtime_housekeeping",
+    ]
+    missing_test_suites = [suite for suite in required_test_suites if suite not in tests_txt]
+    checks["C36_TRAINING_TEST_SUITES_PRESENT"] = (
+        _bool_to_status(tests_rc == 0 and len(missing_test_suites) == 0),
+        _rel(root, training_tests),
+        "brak suites: " + (", ".join(missing_test_suites) if missing_test_suites else "0"),
+    )
+    api_issues = training_api_data.get("issues", []) if isinstance(training_api_data, dict) else []
+    checks["C37_TRAINING_API_CONTRACTS_CLEAN"] = (
+        _bool_to_status(
+            _file_nonempty(training_api)
+            and isinstance(training_api_data, dict)
+            and str(training_api_data.get("status", "")).upper() == "PASS"
+            and isinstance(api_issues, list)
+            and len(api_issues) == 0
+            and api_rc == 0
+        ),
+        _rel(root, training_api),
+        "api_contracts status=PASS issues=0",
+    )
+    compile_failures = training_compile_data.get("failures", []) if isinstance(training_compile_data, dict) else []
+    checks["C38_TRAINING_COMPILE_NO_FAILURES"] = (
+        _bool_to_status(
+            _file_nonempty(training_compile)
+            and isinstance(training_compile_data, dict)
+            and isinstance(compile_failures, list)
+            and len(compile_failures) == 0
+            and _as_int(training_compile_data.get("checked", 0), 0) > 0
+            and compile_rc == 0
+        ),
+        _rel(root, training_compile),
+        "compile failures=0",
+    )
+    checks["C39_TRAINING_DEPENDENCY_REPORT_PASS"] = (
+        _bool_to_status(
+            _file_nonempty(training_dependency)
+            and isinstance(training_dependency_data, dict)
+            and str(training_dependency_data.get("status", "")).upper() == "PASS"
+            and dep_rc == 0
+        ),
+        _rel(root, training_dependency),
+        "dependency status=PASS",
+    )
+    checks["C40_TRAINING_HOUSEKEEPING_REPORT_PASS"] = (
+        _bool_to_status(
+            _file_nonempty(training_house)
+            and isinstance(training_house_data, dict)
+            and str(training_house_data.get("status", "")).upper() == "PASS"
+            and house_rc == 0
+        ),
+        _rel(root, training_house),
+        "housekeeping report status=PASS",
+    )
+    sec_totals = sec_data.get("totals", {}) if isinstance(sec_data, dict) else {}
+    sec_findings = sec_data.get("findings", []) if isinstance(sec_data, dict) else []
+    checks["C41_SECRETS_SCAN_NO_FINDINGS"] = (
+        _bool_to_status(
+            isinstance(sec_data, dict)
+            and str(sec_data.get("status", "")).upper() == "PASS"
+            and isinstance(sec_totals, dict)
+            and _as_int(sec_totals.get("findings", -1), -1) == 0
+            and isinstance(sec_findings, list)
+            and len(sec_findings) == 0
+        ),
+        _rel(root, secrets_report),
+        "secrets findings=0",
+    )
+    channel_disable_patterns = [
+        r'\$env:OANDA_RUN_MODE\s*=\s*"OFFLINE"',
+        r'\$env:SCUD_ALLOW_RSS\s*=\s*"0"',
+        r'\$env:INFOBOT_EMAIL_ENABLED\s*=\s*"0"',
+        r'\$env:INFOBOT_EMAIL_DAILY_ENABLED\s*=\s*"0"',
+        r'\$env:INFOBOT_EMAIL_WEEKLY_ENABLED\s*=\s*"0"',
+        r'\$env:INFOBOT_EMAIL_ALIVE_ENABLED\s*=\s*"0"',
+        r'\$env:REPAIR_AUTO_HOTFIX\s*=\s*"0"',
+    ]
+    missing_channel_flags = [p for p in channel_disable_patterns if not re.search(p, training_script_txt, flags=re.IGNORECASE)]
+    checks["C42_CHANNELS_DISABLED_IN_TRAINING_SCRIPT"] = (
+        _bool_to_status(_file_nonempty(training_script) and len(missing_channel_flags) == 0),
+        _rel(root, training_script),
+        f"brak flag={len(missing_channel_flags)}",
+    )
+    runtime_root_tool = root / "BIN" / "runtime_root.py"
+    validator_tool = root / "TOOLS" / "validate_audit_checklist_v1_2.py"
+    generator_tool = root / "TOOLS" / "generate_audit_report_v1_2.py"
+    housekeeping_tool = root / "TOOLS" / "runtime_housekeeping.py"
+    gate_tool = root / "TOOLS" / "gate_v6.py"
+    diag_bundle_tool = root / "TOOLS" / "diag_bundle_v6.py"
+    checks["C43_RUNTIME_ROOT_TOOL_PRESENT"] = (
+        _bool_to_status(_file_nonempty(runtime_root_tool)),
+        _rel(root, runtime_root_tool),
+        "plik runtime_root obecny",
+    )
+    checks["C44_VALIDATOR_TOOL_PRESENT"] = (
+        _bool_to_status(_file_nonempty(validator_tool)),
+        _rel(root, validator_tool),
+        "validator obecny",
+    )
+    checks["C45_GENERATOR_TOOL_PRESENT"] = (
+        _bool_to_status(_file_nonempty(generator_tool)),
+        _rel(root, generator_tool),
+        "generator obecny",
+    )
+    checks["C46_HOUSEKEEPING_TOOL_PRESENT"] = (
+        _bool_to_status(_file_nonempty(housekeeping_tool)),
+        _rel(root, housekeeping_tool),
+        "housekeeping tool obecny",
+    )
+    checks["C47_GATE_TOOL_PRESENT"] = (
+        _bool_to_status(_file_nonempty(gate_tool)),
+        _rel(root, gate_tool),
+        "gate_v6 obecny",
+    )
+    checks["C48_DIAG_BUNDLE_TOOL_PRESENT"] = (
+        _bool_to_status(_file_nonempty(diag_bundle_tool)),
+        _rel(root, diag_bundle_tool),
+        "diag_bundle_v6 obecny",
+    )
+    tz_policy_ok = (
+        _file_nonempty(safetybot_path)
+        and bool(re.search(r'from\s+zoneinfo\s+import\s+ZoneInfo', safetybot_txt))
+        and bool(re.search(r'TZ_NY\s*=\s*ZoneInfo\("America/New_York"\)', safetybot_txt))
+        and bool(re.search(r'TZ_PL\s*=\s*ZoneInfo\("Europe/Warsaw"\)', safetybot_txt))
+        and bool(re.search(r'calendar_day_policy\s*:\s*str\s*=\s*"PL_WARSAW"', safetybot_txt))
+    )
+    checks["C49_SAFETYBOT_TIMEZONE_POLICY_DEFINED"] = (
+        _bool_to_status(tz_policy_ok),
+        _rel(root, safetybot_path),
+        "TZ_NY/TZ_PL + calendar_day_policy=PL_WARSAW",
+    )
+    helper_patterns = [
+        r"def\s+ny_day_hour_key\(",
+        r"def\s+utc_day_key\(",
+        r"def\s+pl_day_key\(",
+        r"def\s+pl_day_start_utc_ts\(",
+        r"def\s+_seconds_until_next_ny_midnight\(",
+        r"def\s+_seconds_until_next_utc_midnight\(",
+        r"def\s+_seconds_until_next_pl_midnight\(",
+    ]
+    helpers_ok = all(re.search(p, safetybot_txt) for p in helper_patterns)
+    timezone_contract_ok = (
+        _file_nonempty(timezone_contract_path)
+        and ("TestSafetyBotTimezoneContract" in timezone_contract_txt)
+        and ("test_day_keys_across_ny_utc_pl" in timezone_contract_txt)
+        and ("test_pl_day_start_utc_ts" in timezone_contract_txt)
+        and ("test_seconds_until_next_midnights" in timezone_contract_txt)
+    )
+    checks["C50_SAFETYBOT_TIME_HELPERS_DEFINED"] = (
+        _bool_to_status(helpers_ok and timezone_contract_ok),
+        _rel(root, timezone_contract_path),
+        "helpery czasu + test kontraktowy",
     )
 
     all_pass = all(checks[c][0] == "PASS" for c in CHECK_IDS)
@@ -269,7 +767,7 @@ def generate_report(root: Path, run_dir: Path, out_path: Path) -> Tuple[Path, Pa
             "",
             "Werdykt koncowy:",
             f"- SYSTEM_STATUS: {system_status}",
-            "- REGULA: GOTOWY tylko gdy C01..C18 = PASS (bez wyjatkow wymaganych).",
+            "- REGULA: GOTOWY tylko gdy C01..C50 = PASS (bez wyjatkow wymaganych).",
             "",
         ]
     )

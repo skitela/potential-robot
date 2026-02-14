@@ -5,6 +5,7 @@ param(
     [int]$PreflightLoops = 1,
     [string]$SyncTarget = "C:\agentkotweight\EVIDENCE",
     [switch]$NoSync,
+    [switch]$SkipHousekeeping,
     [switch]$SkipPreflight,
     [switch]$SkipOffline,
     [switch]$SkipTraining,
@@ -155,11 +156,19 @@ Append-RunLog -Event "audit_v12_live_start" -Fields @{
     run_dir = (To-RelPath $runDir)
 }
 
+if ($SkipHousekeeping) {
+    Mark-StepSkipped -Name "00_housekeeping_global" -Reason "switch SkipHousekeeping"
+} else {
+    $housekeepingGlobal = Join-Path $runDir "housekeeping_global_report.json"
+    $cmdHousekeepingGlobal = "python TOOLS\\runtime_housekeeping.py --root `"$Root`" --evidence `"$housekeepingGlobal`" --apply --keep-runs 10 --keep-audit-v12-runs 8 --keep-gates 200 --max-single-log-mb 8"
+    Invoke-Step -Name "00_housekeeping_global" -Command $cmdHousekeepingGlobal
+}
+
 if ($SkipPreflight) {
     Mark-StepSkipped -Name "00_preflight_safe" -Reason "switch SkipPreflight"
 } else {
     $preflightEvidence = Join-Path $runDir "preflight"
-    $cmdPreflight = "powershell -NoProfile -ExecutionPolicy Bypass -File RUN\\PREFLIGHT_SAFE.ps1 -Root `"$Root`" -Evidence `"$preflightEvidence`" -Loops $PreflightLoops -NoSync"
+    $cmdPreflight = "powershell -NoProfile -ExecutionPolicy Bypass -File RUN\\PREFLIGHT_SAFE.ps1 -Root `"$Root`" -Evidence `"$preflightEvidence`" -Loops $PreflightLoops -NoSync -SkipHousekeeping"
     Invoke-Step -Name "00_preflight_safe" -Command $cmdPreflight
 }
 

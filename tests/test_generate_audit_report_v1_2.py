@@ -6,7 +6,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from TOOLS.generate_audit_report_v1_2 import _find_latest_run, _status_from_verdict
+from TOOLS.generate_audit_report_v1_2 import CHECK_IDS, _find_latest_run, _status_from_verdict
 
 
 def _write_json(path: Path, payload: dict, encoding: str = "utf-8") -> None:
@@ -23,6 +23,11 @@ def _make_temp_root() -> Path:
 
 
 class TestGenerateAuditReportV12(unittest.TestCase):
+    def test_check_ids_contract_size_c01_c50(self) -> None:
+        self.assertEqual(len(CHECK_IDS), 50)
+        self.assertEqual(CHECK_IDS[0], "C01_ROOT_HARD")
+        self.assertEqual(CHECK_IDS[-1], "C50_SAFETYBOT_TIME_HELPERS_DEFINED")
+
     def test_status_from_verdict_accepts_utf16_json(self) -> None:
         root = _make_temp_root()
         try:

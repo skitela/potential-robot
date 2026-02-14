@@ -3,7 +3,8 @@
     [string]$Evidence = "",
     [int]$Loops = 1,
     [string]$SyncTarget = "C:\agentkotweight\EVIDENCE",
-    [switch]$NoSync
+    [switch]$NoSync,
+    [switch]$SkipHousekeeping
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,6 +60,16 @@ $summaryPath = Join-Path $Evidence "summary.txt"
 "LOOPS=$Loops" | Add-Content -Encoding UTF8 $summaryPath
 "START_UTC=$((Get-Date).ToUniversalTime().ToString('o'))" | Add-Content -Encoding UTF8 $summaryPath
 
+if (-not $SkipHousekeeping) {
+    $housekeepingReport = Join-Path $Evidence "00_housekeeping_report.json"
+    & python (Join-Path $Root "TOOLS\runtime_housekeeping.py") --root $Root --evidence $housekeepingReport --apply --keep-runs 10 --keep-audit-v12-runs 8 --keep-gates 200 --max-single-log-mb 8
+    $hkExit = $LASTEXITCODE
+    "HOUSEKEEPING_EXIT=$hkExit" | Add-Content -Encoding UTF8 $summaryPath
+    if ($hkExit -ne 0) {
+        Write-Warning "[PREFLIGHT_SAFE] Housekeeping failed with exit code $hkExit"
+    }
+}
+
 for ($i = 1; $i -le [Math]::Max(1, $Loops); $i++) {
     $iter = "iter_{0:D2}" -f $i
     $iterDir = Join-Path $Evidence $iter
@@ -87,3 +98,4 @@ if (-not $NoSync) {
 "END_UTC=$((Get-Date).ToUniversalTime().ToString('o'))" | Add-Content -Encoding UTF8 $summaryPath
 Write-Host "[PREFLIGHT_SAFE] PASS"
 exit 0
+

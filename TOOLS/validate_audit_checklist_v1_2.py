@@ -6,11 +6,11 @@ PROMPT_OANDA_MT5_SYSTEM_AUDYT.py
 
 Rules enforced:
 - Required stages E0..E6 must exist.
-- Required checklist points C01..C18 must exist.
+- Required checklist points C01..C50 must exist.
 - Evidence field is mandatory for every stage/check item.
 - Optional stages E4/E5 may be marked NIE_URUCHAMIANO.
 - SYSTEM_STATUS must match computed status from checklist:
-  * GOTOWY only when every C01..C18 == PASS.
+  * GOTOWY only when every C01..C50 == PASS.
   * otherwise NIEGOTOWY.
 """
 
@@ -57,6 +57,38 @@ CHECKLIST_IDS: List[str] = [
     "C16_HOUSEKEEPING_SAFE",
     "C17_NO_EXTERNAL_CHANNELS",
     "C18_ONLINE_SMOKE_POLICY",
+    "C19_PIPELINE_VERDICT_PASS",
+    "C20_PIPELINE_RUNLOG_PRESENT",
+    "C21_PIPELINE_STEP_LOGS_PRESENT",
+    "C22_PREFLIGHT_ITER_LOGS_PRESENT",
+    "C23_PREFLIGHT_AUDIT_OFFLINE_PASS",
+    "C24_OFFLINE_MODE_DRY_RUN",
+    "C25_OFFLINE_REASONS_EMPTY",
+    "C26_OFFLINE_QUALITY_ALL_PASS",
+    "C27_OFFLINE_MANIFEST_COMPLETE",
+    "C28_OFFLINE_REDACTION_REPORT_PRESENT",
+    "C29_OFFLINE_BUNDLE_INTEGRITY_FILES",
+    "C30_OFFLINE_RUNLOG_PRESENT",
+    "C31_TRAINING_VERDICT_PASS",
+    "C32_TRAINING_CHECKPOINT_PRESENT",
+    "C33_TRAINING_LINEAGE_PRESENT",
+    "C34_TRAINING_REQUIRED_STEPS_OK",
+    "C35_TRAINING_TESTS_EXIT0",
+    "C36_TRAINING_TEST_SUITES_PRESENT",
+    "C37_TRAINING_API_CONTRACTS_CLEAN",
+    "C38_TRAINING_COMPILE_NO_FAILURES",
+    "C39_TRAINING_DEPENDENCY_REPORT_PASS",
+    "C40_TRAINING_HOUSEKEEPING_REPORT_PASS",
+    "C41_SECRETS_SCAN_NO_FINDINGS",
+    "C42_CHANNELS_DISABLED_IN_TRAINING_SCRIPT",
+    "C43_RUNTIME_ROOT_TOOL_PRESENT",
+    "C44_VALIDATOR_TOOL_PRESENT",
+    "C45_GENERATOR_TOOL_PRESENT",
+    "C46_HOUSEKEEPING_TOOL_PRESENT",
+    "C47_GATE_TOOL_PRESENT",
+    "C48_DIAG_BUNDLE_TOOL_PRESENT",
+    "C49_SAFETYBOT_TIMEZONE_POLICY_DEFINED",
+    "C50_SAFETYBOT_TIME_HELPERS_DEFINED",
 ]
 
 _STAGE_RE = re.compile(
@@ -228,7 +260,7 @@ def evaluate_report(text: str, report_path: str = "") -> Dict[str, Any]:
         _add_finding(
             findings,
             "SYSTEM_STATUS_MISMATCH",
-            f"SYSTEM_STATUS={reported_status} but computed={computed_status} from C01..C18",
+            f"SYSTEM_STATUS={reported_status} but computed={computed_status} from C01..C50",
             line=int(system_status.get("line", 0)),
         )
 
@@ -257,7 +289,7 @@ def evaluate_report(text: str, report_path: str = "") -> Dict[str, Any]:
             "stages": STAGE_IDS,
             "optional_stages": sorted(OPTIONAL_STAGE_IDS),
             "checklist": CHECKLIST_IDS,
-            "system_status_rule": "GOTOWY iff C01..C18 are all PASS with non-placeholder evidence",
+            "system_status_rule": "GOTOWY iff C01..C50 are all PASS with non-placeholder evidence",
         },
         "parsed": {
             "stages": stages,

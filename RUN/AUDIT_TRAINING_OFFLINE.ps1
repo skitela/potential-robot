@@ -291,7 +291,7 @@ Write-Host "[AUDIT_TRAINING_OFFLINE] Evidence=$Evidence"
 Append-RunLog -Event "audit_training_start" -Fields @{ root = $Root; evidence = $Evidence }
 
 $housekeepingJson = Join-Path $Evidence "housekeeping_report.json"
-$cmdHousekeeping = "python TOOLS\\runtime_housekeeping.py --root `"$Root`" --evidence `"$housekeepingJson`" --apply --keep-runs 40 --max-single-log-mb 8"
+$cmdHousekeeping = "python TOOLS\\runtime_housekeeping.py --root `"$Root`" --evidence `"$housekeepingJson`" --apply --keep-runs 10 --keep-audit-v12-runs 8 --keep-gates 200 --max-single-log-mb 8"
 Invoke-Step -Name "00_housekeeping" -Command $cmdHousekeeping -Outputs @($housekeepingJson)
 
 $compileJson = Join-Path $Evidence "smoke_compile_report.json"

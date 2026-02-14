@@ -39,6 +39,11 @@ def _build_good_report() -> str:
 
 
 class TestValidateAuditChecklistV12(unittest.TestCase):
+    def test_checklist_contract_size_c01_c50(self) -> None:
+        self.assertEqual(len(CHECKLIST_IDS), 50)
+        self.assertEqual(CHECKLIST_IDS[0], "C01_ROOT_HARD")
+        self.assertEqual(CHECKLIST_IDS[-1], "C50_SAFETYBOT_TIME_HELPERS_DEFINED")
+
     def test_good_report_passes(self) -> None:
         report = _build_good_report()
         result = evaluate_report(report, report_path="sample_report.txt")
