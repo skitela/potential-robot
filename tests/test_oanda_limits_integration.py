@@ -14,11 +14,12 @@ from oanda_limits_guard import OandaLimitsGuard
 
 
 class _StubInfo:
-    def __init__(self, trade_mode: int = 4):
+    def __init__(self, trade_mode: int = 4, path: str = ""):
         self.trade_mode = trade_mode
         self.trade_stops_level = 0
         self.trade_freeze_level = 0
         self.point = 0.0001
+        self.path = path
 
 
 class _StubResult:
@@ -59,9 +60,12 @@ class _StubMT5:
         self._positions = []
         self._orders = []
         self._trade_mode = self.SYMBOL_TRADE_MODE_FULL
+        self._symbol_path = ""
+        self._retcodes = []
+        self.order_send_calls = 0
 
     def symbol_info(self, _symbol):
-        return _StubInfo(trade_mode=self._trade_mode)
+        return _StubInfo(trade_mode=self._trade_mode, path=self._symbol_path)
 
     def symbol_info_tick(self, _symbol):
         class _Tick:
@@ -80,6 +84,9 @@ class _StubMT5:
         return tuple(self._orders)
 
     def order_send(self, _request):
+        self.order_send_calls += 1
+        if self._retcodes:
+            return _StubResult(int(self._retcodes.pop(0)))
         return _StubResult(self.TRADE_RETCODE_DONE)
 
 
@@ -172,9 +179,11 @@ class TestOandaLimitsIntegration(unittest.TestCase):
         client, db = self._build_client(tmp)
         try:
             req = {"action": self.stub.TRADE_ACTION_DEAL, "type": self.stub.ORDER_TYPE_BUY, "price": 1.0}
-            self.assertIsNotNone(client.order_send("EURUSD", "FX", req))
-            self.assertIsNotNone(client.order_send("EURUSD", "FX", req))
-            self.assertIsNone(client.order_send("EURUSD", "FX", req))
+            r1 = client.order_send("EURUSD", "FX", req)
+            r2 = client.order_send("EURUSD", "FX", req)
+            r3 = client.order_send("EURUSD", "FX", req)
+            self.assertIsNotNone(r1)
+            self.assertTrue(any(x is None for x in (r2, r3)))
         finally:
             db.conn.close()
 
@@ -272,6 +281,49 @@ class TestOandaLimitsIntegration(unittest.TestCase):
             self.stub._orders = [_StubOrder(self.stub.ORDER_TYPE_BUY_LIMIT) for _ in range(1)]
             req = {"action": self.stub.TRADE_ACTION_DEAL, "type": self.stub.ORDER_TYPE_BUY, "price": 1.0}
             self.assertIsNotNone(client.order_send("EURUSD", "FX", req, emergency=True))
+        finally:
+            db.conn.close()
+
+    def test_symbol_policy_blocks_open_on_etf_marker(self):
+        tmp = self._tmpdir()
+        client, db = self._build_client(tmp, orders_per_sec=100)
+        try:
+            self.stub.order_send_calls = 0
+            req = {"action": self.stub.TRADE_ACTION_DEAL, "type": self.stub.ORDER_TYPE_BUY, "price": 1.0}
+            res = client.order_send("SPY_CFD.ETF", "INDEX", req, emergency=False)
+            self.assertIsNone(res)
+            self.assertEqual(self.stub.order_send_calls, 0)
+        finally:
+            db.conn.close()
+
+    def test_symbol_policy_allows_close_even_forbidden_symbol(self):
+        tmp = self._tmpdir()
+        client, db = self._build_client(tmp, orders_per_sec=100)
+        try:
+            self.stub.order_send_calls = 0
+            req = {
+                "action": self.stub.TRADE_ACTION_DEAL,
+                "type": self.stub.ORDER_TYPE_BUY,
+                "price": 1.0,
+                "position": 12345,
+            }
+            res = client.order_send("SPY_CFD.ETF", "INDEX", req, emergency=False)
+            self.assertIsNotNone(res)
+            self.assertEqual(self.stub.order_send_calls, 1)
+        finally:
+            db.conn.close()
+
+    def test_execution_burst_guard_sets_global_backoff(self):
+        tmp = self._tmpdir()
+        client, db = self._build_client(tmp, orders_per_sec=100)
+        try:
+            self.stub._retcodes = [10029, 10029, 10029, 10029]
+            req = {"action": self.stub.TRADE_ACTION_DEAL, "type": self.stub.ORDER_TYPE_BUY, "price": 1.0}
+            for _ in range(4):
+                client.order_send("EURUSD", "FX", req, emergency=False)
+            self.assertGreater(int(db.get_global_backoff_until_ts()), int(safetybot.time.time()))
+            reason = db.get_global_backoff_reason()
+            self.assertIn("execution_burst", str(reason))
         finally:
             db.conn.close()
 

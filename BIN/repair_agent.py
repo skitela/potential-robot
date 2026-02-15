@@ -86,8 +86,8 @@ def _write_json_atomic(path: Path, obj: Dict[str, object]) -> None:
         finally:
             try:
                 tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                cg.tlog(None, "WARN", "REPAIR_TMP_UNLINK_FAIL", "cannot cleanup temporary json file", exc)
     if not moved and last_exc is not None:
         raise last_exc
 
@@ -486,11 +486,12 @@ def main() -> int:
     finally:
         try:
             lock_path.unlink(missing_ok=True)
-        except Exception:
+        except Exception as exc:
+            logging.warning(f"Lock unlink failed ({lock_path}): {exc}")
             try:
                 lock_path.write_text("", encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as exc2:
+                logging.warning(f"Lock fallback write failed ({lock_path}): {exc2}")
 
 
 if __name__ == "__main__":

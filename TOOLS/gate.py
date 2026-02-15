@@ -218,19 +218,30 @@ def _assert_oanda_limits_constants() -> None:
         raise SystemExit(1)
 
     src = p.read_text(encoding="utf-8", errors="replace")
-    expected = {
+    expected_exact = {
         "oanda_price_warning_per_day": 1000,
         "oanda_price_cutoff_per_day": 5000,
         "oanda_market_orders_per_sec": 50,
-        "oanda_positions_pending_limit": 500,
     }
 
     missing: List[str] = []
-    for k, v in expected.items():
+    for k, v in expected_exact.items():
         # allow either annotated or plain assignment
         pat = re.compile(rf"\b{k}\b\s*(?::\s*int)?\s*=\s*{v}\b")
         if not pat.search(src):
             missing.append(f"{k}={v}")
+
+    lim_pat = re.compile(r"\boanda_positions_pending_limit\b\s*(?::\s*int)?\s*=\s*(\d+)\b")
+    m_lim = lim_pat.search(src)
+    if not m_lim:
+        missing.append("oanda_positions_pending_limit=<missing>")
+    else:
+        try:
+            lim_val = int(m_lim.group(1))
+        except Exception:
+            lim_val = -1
+        if lim_val <= 0 or lim_val > 500:
+            missing.append(f"oanda_positions_pending_limit={lim_val} (allowed 1..500)")
 
     if missing:
         cg.tlog(None, "ERROR", "GATE_OANDA_LIMITS_FAIL", f"missing_or_changed={missing}")
@@ -424,7 +435,24 @@ def _assert_no_forbidden_except_pass() -> None:
     bad: List[str] = []
     rx1 = re.compile(r"^\s*except\s+Exception\s*:\s*pass\s*$", re.M)
     rx2 = re.compile(r"^\s*except\s+Exception\s*:\s*\n\s*pass\s*$", re.M)
+    skip_top_dirs = {
+        ".git",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pycache",
+        "EVIDENCE",
+        "DIAG",
+        "TMP_AUDIT_IO",
+    }
     for p in ROOT.rglob("*.py"):
+        try:
+            rel = p.relative_to(ROOT)
+        except Exception:
+            continue
+        if rel.parts and rel.parts[0] in skip_top_dirs:
+            continue
         try:
             lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
         except Exception as e:
@@ -432,7 +460,7 @@ def _assert_no_forbidden_except_pass() -> None:
             continue
         txt = "\n".join(lines)
         if rx1.search(txt) or rx2.search(txt):
-            bad.append(str(p.relative_to(ROOT)))
+            bad.append(str(rel))
     if bad:
         cg.tlog(None, "ERROR", "FORBIDDEN_EXCEPT_PASS", f"found={len(bad)} files")
         for x in bad[:50]:

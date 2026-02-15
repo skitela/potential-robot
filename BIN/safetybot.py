@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import platform
 import getpass
+import re
 
 def sqlite_exec_retry(conn: sqlite3.Connection, query: str, params=None, *, tries: int = 6, base_sleep: float = 0.15):
     """
@@ -85,7 +86,7 @@ try:
     from .self_heal_guard import SelfHealGuard, SelfHealPolicy
     from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
     from .drift_guard import DriftGuard, DriftPolicy
-    from .incident_guard import IncidentJournal
+    from .incident_guard import IncidentJournal, classify_retcode
     from .oanda_limits_guard import OandaLimitsGuard
 except Exception:  # pragma: no cover
     import common_guards as cg
@@ -94,7 +95,7 @@ except Exception:  # pragma: no cover
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
     from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
     from drift_guard import DriftGuard, DriftPolicy
-    from incident_guard import IncidentJournal
+    from incident_guard import IncidentJournal, classify_retcode
     from oanda_limits_guard import OandaLimitsGuard
 from zoneinfo import ZoneInfo
 
@@ -218,6 +219,11 @@ class CFG:
     global_backoff_error_s: int = 60
     global_backoff_trade_disabled_s: int = 300
     global_backoff_locked_s: int = 30
+    execution_burst_guard_enabled: bool = True
+    execution_burst_lookback_sec: int = 120
+    execution_burst_error_threshold: int = 4
+    execution_burst_backoff_s: int = 180
+    execution_burst_symbol_cooldown_s: int = 180
 
     # --- Grupy i profile ---
     symbols_to_trade = ["EURUSD", "GBPUSD", "XAUUSD", "DAX40", "US500"]
@@ -232,6 +238,12 @@ class CFG:
         "SPX500": "INDEX",
     }
     index_profile_map = {"DAX40": "EU", "DE40": "EU", "US500": "US", "SPX500": "US"}
+    # OANDA MT5 policy guard: block accidental algo on equity/ETF/ETN symbols (non-close only).
+    symbol_policy_enabled: bool = True
+    symbol_policy_fail_on_other_group: bool = True
+    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX", "METAL", "INDEX")
+    symbol_policy_forbidden_symbol_markers: Tuple[str, ...] = (".ETF", "_CFD.ETF", ".ETN", "_CFD.ETN")
+    symbol_policy_forbidden_path_markers: Tuple[str, ...] = ("STOCK", "AKCJE", "EQUITY", "ETF", "ETN")
 
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
     group_price_shares = {"FX": 0.45, "METAL": 0.25, "INDEX": 0.30}
@@ -1096,6 +1108,47 @@ def guess_group(symbol: str) -> str:
 def index_profile(symbol: str) -> str:
     return CFG.index_profile_map.get(symbol_base(symbol), "GEN")
 
+def symbol_policy_block_reason(
+    symbol: str,
+    grp: str,
+    *,
+    info: Optional[object] = None,
+    is_close: bool = False,
+) -> Optional[str]:
+    """Fail-closed policy for symbol classes on OANDA MT5."""
+    if not bool(getattr(CFG, "symbol_policy_enabled", True)):
+        return None
+    if bool(is_close):
+        return None
+
+    grp_u = str(grp or "").strip().upper()
+    allowed_groups = {
+        str(x).strip().upper()
+        for x in (getattr(CFG, "symbol_policy_allowed_groups", ("FX", "METAL", "INDEX")) or ())
+        if str(x).strip()
+    }
+    if bool(getattr(CFG, "symbol_policy_fail_on_other_group", True)) and grp_u not in allowed_groups:
+        return f"group_blocked:{grp_u or 'UNKNOWN'}"
+
+    sym_u = str(symbol or "").upper()
+    for tok in (getattr(CFG, "symbol_policy_forbidden_symbol_markers", ()) or ()):
+        t = str(tok or "").strip().upper()
+        if t and t in sym_u:
+            return f"forbidden_symbol_marker:{t}"
+
+    info_path = ""
+    try:
+        info_path = str(getattr(info, "path", "") or "").upper()
+    except Exception as e:
+        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        info_path = ""
+    if info_path:
+        for tok in (getattr(CFG, "symbol_policy_forbidden_path_markers", ()) or ()):
+            t = str(tok or "").strip().upper()
+            if t and t in info_path:
+                return f"forbidden_path_marker:{t}"
+    return None
+
 # =============================================================================
 # SCOUT (read-only) — lokalnie (<HARD_ROOT>\META\scout_advice.json)
 # =============================================================================
@@ -1299,13 +1352,81 @@ def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
                 os.fsync(f.fileno())
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-        os.replace(tmp, path)
+        try:
+            os.replace(tmp, path)
+        except PermissionError as e:
+            # Windows can deny atomic replace under transient AV/ACL locks; fallback to direct overwrite.
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            with open(path, "w", encoding="utf-8", newline="\n") as f2:
+                f2.write(data)
+                f2.flush()
+                try:
+                    os.fsync(f2.fileno())
+                except Exception as e2:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e2)
     finally:
         try:
             if tmp.exists():
                 tmp.unlink(missing_ok=True)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+def build_runtime_boot_snapshot_payload(runtime_root: Path, universe: List[Tuple[str, str, str]]) -> Dict[str, Any]:
+    allowed_groups = [
+        str(x).strip().upper()
+        for x in (getattr(CFG, "symbol_policy_allowed_groups", ("FX", "METAL", "INDEX")) or ())
+        if str(x).strip()
+    ]
+    uni = []
+    for raw, canon, grp in (universe or []):
+        uni.append(
+            {
+                "raw": str(raw),
+                "canon": str(canon),
+                "group": str(grp),
+                "base": symbol_base(str(canon)),
+            }
+        )
+    return {
+        "ts_utc": dt.datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "runtime_root": str(Path(runtime_root)),
+        "bot_version": str(getattr(CFG, "BOT_VERSION", "")),
+        "limits": {
+            "house_price_warn_per_day": int(getattr(CFG, "house_price_warn_per_day", 0)),
+            "house_price_hard_stop_per_day": int(getattr(CFG, "house_price_hard_stop_per_day", 0)),
+            "house_orders_per_sec": int(getattr(CFG, "house_orders_per_sec", 0)),
+            "house_positions_pending_limit": int(getattr(CFG, "house_positions_pending_limit", 0)),
+            "price_budget_day": int(getattr(CFG, "price_budget_day", 0)),
+            "order_budget_day": int(getattr(CFG, "order_budget_day", 0)),
+            "sys_budget_day": int(getattr(CFG, "sys_budget_day", 0)),
+        },
+        "symbol_policy": {
+            "enabled": bool(getattr(CFG, "symbol_policy_enabled", True)),
+            "fail_on_other_group": bool(getattr(CFG, "symbol_policy_fail_on_other_group", True)),
+            "allowed_groups": allowed_groups,
+            "forbidden_symbol_markers": [str(x) for x in (getattr(CFG, "symbol_policy_forbidden_symbol_markers", ()) or ())],
+            "forbidden_path_markers": [str(x) for x in (getattr(CFG, "symbol_policy_forbidden_path_markers", ()) or ())],
+        },
+        "execution_burst_guard": {
+            "enabled": bool(getattr(CFG, "execution_burst_guard_enabled", True)),
+            "lookback_sec": int(getattr(CFG, "execution_burst_lookback_sec", 0)),
+            "error_threshold": int(getattr(CFG, "execution_burst_error_threshold", 0)),
+            "backoff_sec": int(getattr(CFG, "execution_burst_backoff_s", 0)),
+            "symbol_cooldown_sec": int(getattr(CFG, "execution_burst_symbol_cooldown_s", 0)),
+        },
+        "universe_count": int(len(uni)),
+        "universe": uni,
+    }
+
+def write_runtime_boot_snapshot(runtime_root: Path, universe: List[Tuple[str, str, str]]) -> Optional[Path]:
+    try:
+        payload = build_runtime_boot_snapshot_payload(runtime_root, universe)
+        out_path = Path(runtime_root) / "EVIDENCE" / "runtime_boot_snapshot.json"
+        atomic_write_json(out_path, payload)
+        return out_path
+    except Exception as e:
+        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return None
 
 def _contains_forbidden_price_keys(obj: Any) -> bool:
     """Recursive P0 guard: price-like tokens in keys OR string values.
@@ -2048,7 +2169,59 @@ class MT5Client:
         self._sym_info_cache: Dict[str, Tuple[float, object]] = {}
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
+        self._exec_error_ts: List[float] = []
         self.incident_journal: Optional[IncidentJournal] = None
+
+    def _check_execution_burst_guard(
+        self,
+        *,
+        symbol: str,
+        retcode_num: int,
+        retcode_name: str,
+        emergency: bool,
+    ) -> bool:
+        """Fast fail-safe: after burst of severe retcodes, activate global backoff."""
+        if emergency or (not bool(getattr(CFG, "execution_burst_guard_enabled", True))):
+            return False
+        cls, sev = classify_retcode(int(retcode_num), str(retcode_name))
+        if str(sev).upper() not in {"ERROR", "CRITICAL"}:
+            return False
+        if str(cls).lower() == "ok":
+            return False
+
+        now_ts = float(time.time())
+        lookback = max(1.0, float(getattr(CFG, "execution_burst_lookback_sec", 120)))
+        threshold = max(1, int(getattr(CFG, "execution_burst_error_threshold", 4)))
+        self._exec_error_ts = [t for t in self._exec_error_ts if (now_ts - float(t)) <= lookback]
+        self._exec_error_ts.append(now_ts)
+        if len(self._exec_error_ts) < threshold:
+            return False
+
+        backoff_s = max(1, int(getattr(CFG, "execution_burst_backoff_s", 180)))
+        until = int(now_ts) + int(backoff_s)
+        self.gov.db.set_global_backoff(until_ts=until, reason=f"execution_burst:{retcode_num}:{retcode_name}")
+        cd_s = max(1, int(getattr(CFG, "execution_burst_symbol_cooldown_s", backoff_s)))
+        cd = self.gov.db.set_cooldown(symbol, int(cd_s), "execution_burst")
+        logging.warning(
+            f"EXECUTION_BURST_GUARD symbol={symbol} errors={len(self._exec_error_ts)} "
+            f"threshold={threshold} lookback_s={int(lookback)} backoff_s={backoff_s} "
+            f"cooldown_until_ts={cd} retcode_num={int(retcode_num)} retcode_name={str(retcode_name)}"
+        )
+        try:
+            if self.incident_journal is not None:
+                self.incident_journal.note_guard(
+                    guard="execution_burst_guard",
+                    reason=f"retcode={int(retcode_num)}:{str(retcode_name)}",
+                    severity="ERROR",
+                    category="execution",
+                    symbol=str(symbol),
+                    extra={"errors": int(len(self._exec_error_ts)), "threshold": int(threshold), "lookback_sec": int(lookback)},
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        # Reset local burst window after arm to avoid repeated immediate triggers.
+        self._exec_error_ts = []
+        return True
 
     def connect(self) -> bool:
         if mt5 is None:
@@ -2304,6 +2477,26 @@ class MT5Client:
             logging.info(f"SKIP_TRADE_MODE symbol={symbol} trade_mode={tm_name} cooldown_until_ts={cd}")
             return None
 
+        block_reason = symbol_policy_block_reason(symbol, grp, info=info, is_close=bool(is_close))
+        if block_reason:
+            cd = self.gov.db.set_cooldown(symbol, int(CFG.cooldown_limit_s), "symbol_policy_blocked")
+            logging.warning(
+                f"SKIP_SYMBOL_POLICY symbol={symbol} group={grp} reason={block_reason} "
+                f"cooldown_until_ts={cd} emergency={int(bool(emergency))}"
+            )
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_guard(
+                        guard="symbol_policy",
+                        reason=str(block_reason),
+                        severity="ERROR",
+                        category="broker_policy",
+                        symbol=str(symbol),
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return None
+
         # Stops distance precheck (points) — only if SL/TP present
         # No guessing: if we cannot read stop/freeze/point, do not open new positions.
         try:
@@ -2527,6 +2720,14 @@ class MT5Client:
                     return res
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+            if self._check_execution_burst_guard(
+                symbol=symbol,
+                retcode_num=int(ret_num),
+                retcode_name=str(ret_name),
+                emergency=bool(emergency),
+            ):
+                return res
 
             # Retryable codes (deterministic)
             if ret_num in retry_left and int(retry_left[ret_num]) > 0:
@@ -3517,6 +3718,9 @@ class SafetyBot:
             raise SystemExit(1)
 
         # SafetyBot reads Scout outputs ONLY from local runtime (not from USB).
+        snap_path = write_runtime_boot_snapshot(self.runtime_root, self.universe)
+        if snap_path is not None:
+            logging.info(f"RUNTIME_BOOT_SNAPSHOT path={snap_path}")
         self.usb_root = str(self.runtime_root)
 
         # prime server time anchor (1 tick request)
@@ -3553,6 +3757,11 @@ class SafetyBot:
                 logging.warning(f"Nie znaleziono symbolu w MT5: {raw}")
                 continue
             grp = guess_group(sym)
+            info = self.mt.symbol_info_cached(sym, grp, self.db)
+            block_reason = symbol_policy_block_reason(sym, grp, info=info, is_close=False)
+            if block_reason:
+                logging.warning(f"UNIVERSE_SKIP_SYMBOL_POLICY raw={raw} symbol={sym} group={grp} reason={block_reason}")
+                continue
             # symbol_select jest SYS — robimy to jednorazowo
             self.mt.symbol_select(sym, grp)
             out.append((raw, sym, grp))

@@ -153,8 +153,8 @@ def _write_json_atomic(path: Path, obj: Dict[str, object]) -> None:
         finally:
             try:
                 tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                cg.tlog(None, "WARN", "INFOBOT_TMP_UNLINK_FAIL", "cannot cleanup temporary json file", exc)
     if not moved and last_exc is not None:
         raise last_exc
 
@@ -186,8 +186,8 @@ def _set_console_color(code: str) -> None:
         return
     try:
         os.system(f"color {code}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"Console color change failed: {exc}")
 
 
 def _print_banner(lines: list[str], color: str) -> None:
@@ -265,29 +265,30 @@ def _init_gui(
         def _on_close():
             try:
                 _gui_action_window_close(gui)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning(f"GUI action close failed: {exc}")
 
         def _on_stop_infobot():
             try:
                 _gui_action_stop_infobot(gui)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning(f"GUI action stop_infobot failed: {exc}")
 
         def _on_stop_system():
             try:
                 _gui_action_stop_system(gui)
-            except Exception:
+            except Exception as exc:
+                logging.warning(f"GUI action stop_system failed: {exc}")
                 try:
                     _gui_action_stop_infobot(gui)
-                except Exception:
-                    pass
+                except Exception as exc2:
+                    logging.warning(f"GUI fallback stop_infobot failed: {exc2}")
 
         def _on_repair():
             try:
                 _gui_action_repair_now(gui)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning(f"GUI action repair failed: {exc}")
 
         b1 = tk.Button(btns, text="WYLACZ INFOBOTA", command=_on_stop_infobot)
         b2 = tk.Button(btns, text="WYLACZ SYSTEM", command=_on_stop_system)
@@ -316,8 +317,8 @@ def _gui_update(gui: Optional[Dict[str, object]], text: str, color: str) -> None
                 root.deiconify()
                 root.lift()
                 gui["hidden"] = False
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug(f"GUI deiconify/lift failed: {exc}")
         if label_status is not None:
             label_status.config(text=text, fg=color)
         if label_time is not None:
@@ -334,11 +335,11 @@ def _gui_update(gui: Optional[Dict[str, object]], text: str, color: str) -> None
                 w = int(root.winfo_width() or 0)
                 if w > 0 and label_status is not None:
                     label_status.configure(wraplength=int(w * 0.9))
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug(f"GUI wraplength update failed: {exc}")
             root.update()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"GUI update failed: {exc}")
 
 
 def _gui_status_emit(gui: Dict[str, object], text: str, color: str) -> None:
@@ -352,8 +353,8 @@ def _gui_status_emit(gui: Dict[str, object], text: str, color: str) -> None:
     }
     try:
         _write_json_atomic(Path(path_raw), payload)
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.warning(f"GUI status emit failed: {exc}")
 
 
 def _gui_action_window_close(gui: Dict[str, object]) -> None:
@@ -363,8 +364,8 @@ def _gui_action_window_close(gui: Dict[str, object]) -> None:
         return
     try:
         root.withdraw()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"GUI withdraw failed: {exc}")
 
 
 def _gui_action_window_minimize(gui: Dict[str, object]) -> None:
@@ -373,8 +374,8 @@ def _gui_action_window_minimize(gui: Dict[str, object]) -> None:
         return
     try:
         root.iconify()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"GUI iconify failed: {exc}")
 
 
 def _gui_pump(gui: Optional[Dict[str, object]]) -> None:
@@ -384,8 +385,8 @@ def _gui_pump(gui: Optional[Dict[str, object]]) -> None:
         root = gui.get("root")
         if root is not None and root.winfo_exists():
             root.update()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"GUI pump failed: {exc}")
 
 
 def _gui_request_exit(gui: Dict[str, object]) -> None:
@@ -396,8 +397,8 @@ def _gui_request_exit(gui: Dict[str, object]) -> None:
         return
     try:
         root.destroy()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"GUI destroy failed: {exc}")
 
 
 def _gui_action_stop_infobot(gui: Dict[str, object]) -> None:
@@ -548,12 +549,13 @@ def _acquire_lock(lock_path: Path) -> None:
 def _release_lock(lock_path: Path) -> None:
     try:
         lock_path.unlink(missing_ok=True)
-    except Exception:
+    except Exception as exc:
+        logging.warning(f"Lock unlink failed ({lock_path}): {exc}")
         try:
             # Fallback for ACL layouts that allow write but deny delete.
             lock_path.write_text("", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc2:
+            logging.warning(f"Lock fallback write failed ({lock_path}): {exc2}")
 
 
 def _log_mtime_ok(path: Path, stale_sec: int) -> bool:
@@ -714,8 +716,8 @@ def _trade_stats(root: Path, since_iso: str) -> Dict[str, object]:
     finally:
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug(f"DB close failed in _recent_trade_stats: {exc}")
 
     buy = 0
     sell = 0

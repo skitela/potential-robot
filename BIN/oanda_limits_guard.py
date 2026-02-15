@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import time
 import datetime as dt
@@ -95,8 +96,8 @@ class OandaLimitsGuard:
                     try:
                         if tmp.exists():
                             tmp.unlink()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logging.warning(f"OANDA_LIMITS_TMP_UNLINK_FAIL path={tmp} exc={exc}")
                     break
                 except Exception:
                     if i >= 5:

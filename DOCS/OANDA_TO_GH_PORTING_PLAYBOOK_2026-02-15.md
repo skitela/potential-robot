@@ -86,3 +86,13 @@
 ## Jak zaczac kolejna sesje GH
 - Komenda startowa dla operatora:
   - "Przenies Etap A z `DOCS/OANDA_TO_GH_PORTING_PLAYBOOK_2026-02-15.md` do GH-FX."
+
+## Dodatki do zapamietania (2026-02-15, OANDA hardening)
+1. Symbol policy fail-closed
+   - blokada algorytmicznego otwierania na symbolach ETF/ETN/equity i na grupie `OTHER`
+   - zamkniecia awaryjne pozostaja dozwolone
+2. Execution burst guard
+   - po serii ciezkich retcode (ERROR/CRITICAL) automatyczny global backoff + cooldown symbolu
+3. Runtime boot snapshot
+   - zapis `EVIDENCE/runtime_boot_snapshot.json` na starcie (limity, polityki, universe)
+   - szybkie porownanie konfiguracji miedzy uruchomieniami i latwiejszy rollback

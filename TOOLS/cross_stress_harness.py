@@ -676,28 +676,31 @@ class FaultInjector:
             try:
                 if conn is not None:
                     conn.execute("ROLLBACK;")
-            except Exception:
-                pass
+            except Exception as rollback_exc:
+                self._event("fault_error", kind="sqlite_lock_rollback", error=f"{type(rollback_exc).__name__}:{rollback_exc}")
         finally:
             try:
                 if conn is not None:
                     conn.close()
-            except Exception:
-                pass
+            except Exception as close_exc:
+                self._event("fault_error", kind="sqlite_lock_close", error=f"{type(close_exc).__name__}:{close_exc}")
 
     def _inject_io_delay(self, path: Path, hold_sec: float = 0.40) -> None:
         self._backup_once(path)
         ensure_dir(path.parent)
         chunk = b"X" * (256 * 1024)
         deadline = time.time() + max(0.05, float(hold_sec))
+        fsync_error_logged = False
         with path.open("wb") as handle:
             while time.time() < deadline:
                 handle.write(chunk)
                 handle.flush()
                 try:
                     os.fsync(handle.fileno())
-                except Exception:
-                    pass
+                except Exception as fsync_exc:
+                    if not fsync_error_logged:
+                        self._event("fault_error", kind="io_delay_fsync", error=f"{type(fsync_exc).__name__}:{fsync_exc}")
+                        fsync_error_logged = True
         self._event("fault_injected", kind="io_delay", path=path.as_posix(), hold_sec=hold_sec)
 
     def run(self) -> None:

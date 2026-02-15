@@ -411,8 +411,8 @@ def _available_columns(db_path: Path, table: str) -> List[str]:
     finally:
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            cg.tlog(None, "WARN", "LEARN_EXC", "conn.close failed in fetch_columns", e)
 
 def fetch_closed_events(db_path: Path, since_iso_utc: str, limit: int = 20000) -> List[Dict[str, Any]]:
     """Rows ordered ASC by closed_ts_utc. Price-free fields only."""
