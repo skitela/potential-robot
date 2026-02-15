@@ -81,10 +81,20 @@ from typing import Dict, Optional, List, Tuple, Any
 try:
     from . import common_guards as cg
     from . import common_contract as cc
+    from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy
+    from .self_heal_guard import SelfHealGuard, SelfHealPolicy
+    from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
+    from .drift_guard import DriftGuard, DriftPolicy
+    from .incident_guard import IncidentJournal
     from .oanda_limits_guard import OandaLimitsGuard
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
+    from black_swan_guard import BlackSwanGuard, BlackSwanPolicy
+    from self_heal_guard import SelfHealGuard, SelfHealPolicy
+    from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
+    from drift_guard import DriftGuard, DriftPolicy
+    from incident_guard import IncidentJournal
     from oanda_limits_guard import OandaLimitsGuard
 from zoneinfo import ZoneInfo
 
@@ -228,9 +238,9 @@ class CFG:
     group_borrow_fraction: float = 0.15  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
 
     # --- Strategia ---
-    timeframe_trade = mt5.TIMEFRAME_M5
-    timeframe_trend_h4 = mt5.TIMEFRAME_H4
-    timeframe_trend_d1 = mt5.TIMEFRAME_D1
+    timeframe_trade = getattr(mt5, "TIMEFRAME_M5", 5)
+    timeframe_trend_h4 = getattr(mt5, "TIMEFRAME_H4", 16388)
+    timeframe_trend_d1 = getattr(mt5, "TIMEFRAME_D1", 16408)
 
     magic_number: int = 888123
 
@@ -263,6 +273,47 @@ class CFG:
     daily_loss_soft_pct: float = 0.02       # 2.0% => reduce risk + allow only HOT setups
     daily_loss_hard_pct: float = 0.03       # 3.0% => stop new entries
     daily_loss_soft_risk_factor: float = 0.5
+
+    # Black swan guard (ported from GLOBALNY HANDEL VER1 risk-layer semantics).
+    black_swan_threshold: float = 3.0
+    black_swan_precaution_fraction: float = 0.8
+    kill_switch_on_black_swan_stress: bool = True
+    kill_switch_black_swan_multiplier: float = 1.0
+
+    # Self-heal guard (fast pause after local degradation; does not alter risk % policy).
+    self_heal_enabled: bool = True
+    self_heal_lookback_sec: int = 10800
+    self_heal_min_deals_in_window: int = 3
+    self_heal_loss_streak_trigger: int = 3
+    self_heal_max_net_loss_abs: float = 0.0
+    self_heal_backoff_s: int = 900
+    self_heal_symbol_cooldown_s: int = 600
+    self_heal_recent_deals_limit: int = 64
+
+    # Canary rollout (P0): conservative live-small-cap progression.
+    canary_rollout_enabled: bool = True
+    canary_lookback_sec: int = 86400
+    canary_promote_min_deals: int = 15
+    canary_promote_min_net_pnl: float = 0.0
+    canary_pause_loss_streak: int = 3
+    canary_pause_net_loss_abs: float = 0.0
+    canary_max_error_incidents: int = 3
+    canary_max_symbols_per_iter: int = 1
+    canary_backoff_s: int = 900
+
+    # Drift guard (P2): online regime degradation detector.
+    drift_guard_enabled: bool = True
+    drift_min_samples: int = 30
+    drift_baseline_window: int = 30
+    drift_recent_window: int = 15
+    drift_mean_drop_fraction: float = 0.40
+    drift_zscore_threshold: float = 1.8
+    drift_backoff_s: int = 900
+
+    # Learner QA gate (P1): anti-overfit traffic-light from learner_offline.
+    learner_qa_gate_enabled: bool = True
+    learner_qa_red_to_eco: bool = True
+    learner_qa_yellow_symbol_cap: int = 1
 
     # Legacy/backward compatibility names (deprecated; do not use for sizing)
     risk_per_trade: float = risk_swing_pct
@@ -387,6 +438,10 @@ class TimeAnchor:
             return dt.datetime.now(UTC)
         delta = time.monotonic() - self._mono
         return self._server_utc + dt.timedelta(seconds=float(delta))
+
+    def server_now_utc(self) -> dt.datetime:
+        """Compatibility alias used by decision-event metadata paths."""
+        return self.now_utc()
 
     def sync_due(self) -> bool:
         if not self._have:
@@ -985,6 +1040,30 @@ class Persistence:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             return 0.0
+
+    def recent_deals_for_self_heal(self, limit: int = 64) -> List[Tuple[int, str, float]]:
+        """Newest deals as (time, symbol, pnl_net), descending by time."""
+        c = self.conn.cursor()
+        lim = int(max(1, limit))
+        c.execute(
+            """SELECT time, symbol, (profit + commission + swap) AS pnl_net
+               FROM deals_log
+               ORDER BY time DESC
+               LIMIT ?""",
+            (lim,),
+        )
+        rows = c.fetchall()
+        out: List[Tuple[int, str, float]] = []
+        for r in rows:
+            try:
+                t_i = int(r[0])
+                sym = str(r[1] or "")
+                pnl = float(r[2] or 0.0)
+                out.append((t_i, sym, pnl))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                continue
+        return out
 
     def pnl_net_for_hour(self, grp: str, symbol: str, ny_hour: int, lookback_days: int = 14) -> float:
         cutoff = (dt.datetime.now(TZ_NY) - dt.timedelta(days=lookback_days)).strftime("%Y-%m-%d")
@@ -1969,6 +2048,7 @@ class MT5Client:
         self._sym_info_cache: Dict[str, Tuple[float, object]] = {}
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
+        self.incident_journal: Optional[IncidentJournal] = None
 
     def connect(self) -> bool:
         if mt5 is None:
@@ -2426,6 +2506,18 @@ class MT5Client:
 
             # Required per-call log (P0)
             logging.info(f"ORDER_SEND symbol={symbol} attempt={attempt} retcode_num={ret_num} retcode_name={ret_name}")
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_retcode(
+                        symbol=str(symbol),
+                        retcode_num=int(ret_num),
+                        retcode_name=str(ret_name),
+                        emergency=bool(emergency),
+                        attempt=int(attempt),
+                        source="order_send",
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
             # Success codes
             try:
@@ -3351,6 +3443,48 @@ class SafetyBot:
             positions_pending_limit=int(CFG.house_positions_pending_limit),
         )
         self.limits.write_state()
+        self.black_swan_guard = BlackSwanGuard(
+            BlackSwanPolicy(
+                black_swan_threshold=float(CFG.black_swan_threshold),
+                precaution_fraction=float(CFG.black_swan_precaution_fraction),
+            )
+        )
+        self.self_heal_guard = SelfHealGuard(
+            SelfHealPolicy(
+                enabled=bool(CFG.self_heal_enabled),
+                lookback_sec=int(CFG.self_heal_lookback_sec),
+                min_deals_in_window=int(CFG.self_heal_min_deals_in_window),
+                loss_streak_trigger=int(CFG.self_heal_loss_streak_trigger),
+                max_net_loss_abs=float(CFG.self_heal_max_net_loss_abs),
+                backoff_seconds=int(CFG.self_heal_backoff_s),
+                symbol_cooldown_seconds=int(CFG.self_heal_symbol_cooldown_s),
+            )
+        )
+        self.canary_guard = CanaryRolloutGuard(
+            CanaryPolicy(
+                enabled=bool(CFG.canary_rollout_enabled),
+                lookback_sec=int(CFG.canary_lookback_sec),
+                promote_min_deals=int(CFG.canary_promote_min_deals),
+                promote_min_net_pnl=float(CFG.canary_promote_min_net_pnl),
+                pause_loss_streak=int(CFG.canary_pause_loss_streak),
+                pause_net_loss_abs=float(CFG.canary_pause_net_loss_abs),
+                max_error_incidents=int(CFG.canary_max_error_incidents),
+                canary_max_symbols=int(CFG.canary_max_symbols_per_iter),
+                backoff_seconds=int(CFG.canary_backoff_s),
+            )
+        )
+        self.drift_guard = DriftGuard(
+            DriftPolicy(
+                enabled=bool(CFG.drift_guard_enabled),
+                min_samples=int(CFG.drift_min_samples),
+                baseline_window=int(CFG.drift_baseline_window),
+                recent_window=int(CFG.drift_recent_window),
+                mean_drop_fraction=float(CFG.drift_mean_drop_fraction),
+                zscore_threshold=float(CFG.drift_zscore_threshold),
+                backoff_seconds=int(CFG.drift_backoff_s),
+            )
+        )
+        self.incident_journal = IncidentJournal(self.logs_dir)
 
         # --- time anchor ---
         global _TIME_ANCHOR
@@ -3359,6 +3493,7 @@ class SafetyBot:
 
         # --- MT5 client ---
         self.mt = MT5Client(self.mt5_config, self.gov, self.limits)
+        self.mt.incident_journal = self.incident_journal
         self.throttle = OrderThrottle()
 
         # --- stores for Scout ---
@@ -3553,6 +3688,184 @@ class SafetyBot:
 
         self._positions_cache = dict(m)
         return dict(self._positions_cache)
+
+    def _collect_black_swan_inputs(self) -> Tuple[Dict[str, float], Dict[str, float]]:
+        vols: Dict[str, float] = {}
+        spreads: Dict[str, float] = {}
+        for raw, sym, _grp in self.universe:
+            key = str(raw)
+            ind = self.strategy.last_indicators.get(key) if hasattr(self.strategy, "last_indicators") else None
+            if isinstance(ind, dict):
+                try:
+                    close = float(ind.get("close", 0.0))
+                    atr = float(ind.get("atr", 0.0))
+                    if np.isfinite(close) and np.isfinite(atr) and close > 0.0 and atr > 0.0:
+                        vols[key] = float(atr / close)
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+            try:
+                cached = self.mt._sym_info_cache.get(sym) if hasattr(self.mt, "_sym_info_cache") else None
+                info = cached[1] if isinstance(cached, tuple) and len(cached) == 2 else None
+                if info is not None:
+                    spread = float(getattr(info, "spread", 0.0) or 0.0)
+                    if np.isfinite(spread) and spread > 0.0:
+                        spreads[key] = float(spread)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return vols, spreads
+
+    def _evaluate_black_swan(self):
+        vols, spreads = self._collect_black_swan_inputs()
+        signal = self.black_swan_guard.evaluate(vols, spreads)
+        logging.info(
+            f"BLACK_SWAN stress={signal.stress_index:.3f} thr={signal.threshold:.3f} "
+            f"prec_thr={signal.precaution_threshold:.3f} black_swan={int(signal.black_swan)} "
+            f"precaution={int(signal.precaution)} n_vol={len(vols)} n_spread={len(spreads)} "
+            f"reason={','.join(signal.reasons)}"
+        )
+        return signal
+
+    def _evaluate_self_heal(self):
+        now_ts = int(time.time())
+        try:
+            limit = int(max(1, int(getattr(CFG, "self_heal_recent_deals_limit", 64))))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            limit = 64
+
+        deals_desc = self.db.recent_deals_for_self_heal(limit=limit)
+        signal = self.self_heal_guard.evaluate(deals_desc=deals_desc, now_ts=now_ts)
+
+        logging.info(
+            f"SELF_HEAL active={int(signal.active)} deals={signal.deals_in_window} "
+            f"streak={signal.loss_streak} net_pnl={signal.net_pnl:.2f} "
+            f"reasons={','.join(signal.reasons)}"
+        )
+
+        if not signal.active:
+            return signal
+
+        try:
+            current_until = int(self.db.get_global_backoff_until_ts())
+            backoff_until = int(now_ts + int(max(1, signal.backoff_seconds)))
+            if backoff_until > current_until:
+                reason = f"self_heal:{','.join(signal.reasons)}"
+                self.db.set_global_backoff(until_ts=backoff_until, reason=reason)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            cooldown_s = int(max(1, signal.symbol_cooldown_seconds))
+            for sym in signal.streak_symbols:
+                if not sym:
+                    continue
+                self.db.set_cooldown(str(sym), cooldown_s, "self_heal_streak")
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return signal
+
+    def _read_learner_qa_light(self) -> str:
+        """Read optional anti-overfit light from META/learner_advice.json."""
+        p = self.meta_dir / "learner_advice.json"
+        if not p.exists():
+            return "UNKNOWN"
+        try:
+            obj = json.loads(p.read_text(encoding="utf-8", errors="ignore") or "{}")
+            if not isinstance(obj, dict):
+                return "UNKNOWN"
+            ts_raw = str(obj.get("ts_utc") or "").strip()
+            if ts_raw.endswith("Z"):
+                ts_raw = ts_raw[:-1] + "+00:00"
+            ts = dt.datetime.fromisoformat(ts_raw) if ts_raw else None
+            if ts is not None and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            if ts is not None:
+                ts = ts.astimezone(UTC)
+            ttl = int(obj.get("ttl_sec") or 0)
+            if ts is None or ttl <= 0:
+                return "UNKNOWN"
+            age = (now_utc() - ts).total_seconds()
+            if age > float(ttl):
+                return "UNKNOWN"
+            qa = str(obj.get("qa_light") or "").strip().upper()
+            if qa in {"GREEN", "YELLOW", "RED"}:
+                return qa
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return "UNKNOWN"
+
+    def _evaluate_canary_rollout(self):
+        now_ts = int(time.time())
+        try:
+            promoted = str(self.db.state_get("canary_rollout_promoted", "0")).strip() == "1"
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            promoted = False
+        try:
+            recent_limit = max(64, int(CFG.canary_promote_min_deals) * 4)
+            deals_desc = self.db.recent_deals_for_self_heal(limit=recent_limit)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            deals_desc = []
+        err_cnt = 0
+        try:
+            if self.incident_journal is not None:
+                cnt = self.incident_journal.recent_counts(lookback_sec=int(CFG.canary_lookback_sec))
+                err_cnt = int(cnt.get("error_or_worse") or 0)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            err_cnt = 0
+
+        signal = self.canary_guard.evaluate(
+            deals_desc=deals_desc,
+            now_ts=now_ts,
+            promoted_state=bool(promoted),
+            incident_error_count=int(err_cnt),
+        )
+        if signal.promoted_now:
+            try:
+                self.db.state_set("canary_rollout_promoted", "1")
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        logging.info(
+            f"CANARY active={int(signal.canary_active)} promoted={int(signal.promoted)} "
+            f"pause={int(signal.pause)} deals={signal.deals_in_window} streak={signal.loss_streak} "
+            f"net_pnl={signal.net_pnl:.2f} errors={signal.error_incidents} reasons={','.join(signal.reasons)}"
+        )
+        if signal.pause and signal.backoff_seconds > 0:
+            try:
+                until = int(now_ts + int(signal.backoff_seconds))
+                self.db.set_global_backoff(until_ts=until, reason=f"canary:{','.join(signal.reasons)}")
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return signal
+
+    def _evaluate_drift(self):
+        try:
+            n = int(CFG.drift_baseline_window) + int(CFG.drift_recent_window) + 40
+            deals_desc = self.db.recent_deals_for_self_heal(limit=max(40, n))
+            vals = [float(pnl) for (_t, _s, pnl) in reversed(deals_desc)]
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            vals = []
+
+        signal = self.drift_guard.evaluate(vals)
+        logging.info(
+            f"DRIFT active={int(signal.active)} n={signal.samples} "
+            f"mu_base={signal.baseline_mean:.6f} mu_recent={signal.recent_mean:.6f} "
+            f"drop={signal.mean_drop:.6f} z={signal.zscore:.3f} reasons={','.join(signal.reasons)}"
+        )
+        if signal.active and signal.backoff_seconds > 0:
+            try:
+                now_ts = int(time.time())
+                until = int(now_ts + int(signal.backoff_seconds))
+                self.db.set_global_backoff(until_ts=until, reason=f"drift:{','.join(signal.reasons)}")
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return signal
+
     def scan_once(self):
         st = self.gov.day_state()
 
@@ -3605,6 +3918,10 @@ class SafetyBot:
 
         # deals (SYS)
         self.poll_deals()
+        self_heal_signal = self._evaluate_self_heal()
+        canary_signal = self._evaluate_canary_rollout()
+        drift_signal = self._evaluate_drift()
+        learner_qa_light = self._read_learner_qa_light()
 
         # rollover global
         rollover_safe = self.strategy.rollover_safe()
@@ -3615,6 +3932,67 @@ class SafetyBot:
             global_mode = "ECO"
         if eco_by_budget:
             global_mode = "ECO"
+        if self_heal_signal.active:
+            global_mode = "ECO"
+            logging.warning(
+                f"SELF_HEAL_PAUSE streak={self_heal_signal.loss_streak} "
+                f"net_pnl={self_heal_signal.net_pnl:.2f} reasons={','.join(self_heal_signal.reasons)}"
+            )
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_guard(
+                        guard="self_heal",
+                        reason=";".join(self_heal_signal.reasons),
+                        severity="WARN",
+                        category="model",
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        if canary_signal.pause:
+            global_mode = "ECO"
+            logging.warning(
+                f"CANARY_PAUSE streak={canary_signal.loss_streak} net_pnl={canary_signal.net_pnl:.2f} "
+                f"errors={canary_signal.error_incidents} reasons={','.join(canary_signal.reasons)}"
+            )
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_guard(
+                        guard="canary_rollout",
+                        reason=";".join(canary_signal.reasons),
+                        severity="ERROR",
+                        category="model",
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        if drift_signal.active:
+            global_mode = "ECO"
+            logging.warning(
+                f"DRIFT_PAUSE drop={drift_signal.mean_drop:.6f} z={drift_signal.zscore:.3f} "
+                f"reasons={','.join(drift_signal.reasons)}"
+            )
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_guard(
+                        guard="drift_guard",
+                        reason=";".join(drift_signal.reasons),
+                        severity="ERROR",
+                        category="regime",
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        if bool(getattr(CFG, "learner_qa_gate_enabled", True)) and learner_qa_light == "RED" and bool(getattr(CFG, "learner_qa_red_to_eco", True)):
+            global_mode = "ECO"
+            logging.warning("LEARNER_QA_RED => ECO")
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_guard(
+                        guard="learner_qa",
+                        reason="RED",
+                        severity="WARN",
+                        category="model",
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         # V1.10: okresowa synchronizacja czasu serwera (rzadko, tylko jeśli budżet pozwala)
         self._time_anchor_sync_if_due(st)
@@ -3632,6 +4010,36 @@ class SafetyBot:
             if not ok:
                 logging.critical("FORCE FLAT incomplete.")
             return
+
+        black_swan_signal = self._evaluate_black_swan()
+        if black_swan_signal.black_swan:
+            global_mode = "ECO"
+            threshold = float(getattr(CFG, "black_swan_threshold", black_swan_signal.threshold))
+            multiplier = float(getattr(CFG, "kill_switch_black_swan_multiplier", 1.0))
+            multiplier = max(0.0, min(multiplier, 10.0))
+            kill_threshold = threshold * multiplier
+            kill_switch_enabled = bool(getattr(CFG, "kill_switch_on_black_swan_stress", True))
+            if kill_switch_enabled and black_swan_signal.stress_index >= kill_threshold:
+                logging.critical(
+                    f"BLACK_SWAN_KILL_SWITCH stress={black_swan_signal.stress_index:.3f} "
+                    f"threshold={threshold:.3f} multiplier={multiplier:.3f} kill_threshold={kill_threshold:.3f}"
+                )
+                if open_syms:
+                    ok = self.mt.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
+                                                deviation=CFG.kill_close_deviation_points)
+                    if not ok:
+                        logging.critical("KILL SWITCH | FORCE FLAT incomplete.")
+                return
+            logging.warning(
+                f"BLACK_SWAN_STRESS stress={black_swan_signal.stress_index:.3f} "
+                f"threshold={threshold:.3f} => ECO/VETO_NEW_ENTRIES"
+            )
+        elif black_swan_signal.precaution:
+            global_mode = "ECO"
+            logging.warning(
+                f"STRESS_PRECAUTION stress={black_swan_signal.stress_index:.3f} "
+                f"threshold={black_swan_signal.precaution_threshold:.3f} => ECO"
+            )
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
         for raw, sym, grp in self.universe:
@@ -3675,6 +4083,21 @@ class SafetyBot:
 
         # V1.10: Spend-down — niewielki boost liczby symboli, jeśli i tak budżet by się zmarnował.
         n_limit = int(n_max) + (int(CFG.spenddown_extra_symbols) if spenddown_active else 0)
+        if canary_signal.canary_active:
+            n_limit = min(int(n_limit), int(max(0, canary_signal.allowed_symbols)))
+        if bool(getattr(CFG, "learner_qa_gate_enabled", True)) and learner_qa_light == "YELLOW":
+            n_limit = min(int(n_limit), int(max(0, int(getattr(CFG, "learner_qa_yellow_symbol_cap", 1)))))
+
+        if n_limit <= 0:
+            if open_syms:
+                for sym in sorted(open_syms):
+                    try:
+                        cnt_pos = len(positions_map.get(sym, []))
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        cnt_pos = 0
+                    logging.info(f"OPEN GUARD (P0/P1/P2) | {sym} | positions={cnt_pos}")
+            return
 
         # --- SCOUT read-only (tie-breaker rankingu shortlisty) ---
         verdict = load_verdict(self.meta_dir)
@@ -3708,6 +4131,22 @@ class SafetyBot:
                 "server_time_anchor": self.time_anchor.server_now_utc().replace(tzinfo=UTC).isoformat().replace("+00:00", "Z"),
                 "verdict_light": verdict_light,
                 "choice_shadowB": shadowB,
+                "black_swan_stress": float(black_swan_signal.stress_index),
+                "black_swan_flag": bool(black_swan_signal.black_swan),
+                "black_swan_precaution": bool(black_swan_signal.precaution),
+                "black_swan_reasons": list(black_swan_signal.reasons),
+                "self_heal_active": bool(self_heal_signal.active),
+                "self_heal_reasons": list(self_heal_signal.reasons),
+                "self_heal_loss_streak": int(self_heal_signal.loss_streak),
+                "self_heal_net_pnl": float(self_heal_signal.net_pnl),
+                "canary_active": bool(canary_signal.canary_active),
+                "canary_pause": bool(canary_signal.pause),
+                "canary_reasons": list(canary_signal.reasons),
+                "canary_allowed_symbols": int(canary_signal.allowed_symbols),
+                "drift_active": bool(drift_signal.active),
+                "drift_reasons": list(drift_signal.reasons),
+                "drift_zscore": float(drift_signal.zscore),
+                "learner_qa_light": str(learner_qa_light),
                 "topk_base": [{"prio": float(p), "raw": r, "sym": s, "grp": g} for (p, r, s, g) in base_topk],
                 "topk_final": [{"prio": float(p), "raw": r, "sym": s, "grp": g} for (p, r, s, g) in final_topk],
                 "proposals": {},
@@ -3761,6 +4200,17 @@ class SafetyBot:
                 'server_time_anchor': self.time_anchor.server_now_utc().replace(tzinfo=UTC).isoformat().replace('+00:00','Z'),
                 'global_mode': global_mode,
                 'verdict_light': (self.strategy._scan_meta.get('verdict_light') if hasattr(self.strategy, '_scan_meta') else None),
+                'black_swan_stress': (self.strategy._scan_meta.get('black_swan_stress') if hasattr(self.strategy, '_scan_meta') else None),
+                'black_swan_flag': (self.strategy._scan_meta.get('black_swan_flag') if hasattr(self.strategy, '_scan_meta') else None),
+                'black_swan_precaution': (self.strategy._scan_meta.get('black_swan_precaution') if hasattr(self.strategy, '_scan_meta') else None),
+                'self_heal_active': (self.strategy._scan_meta.get('self_heal_active') if hasattr(self.strategy, '_scan_meta') else None),
+                'self_heal_loss_streak': (self.strategy._scan_meta.get('self_heal_loss_streak') if hasattr(self.strategy, '_scan_meta') else None),
+                'self_heal_net_pnl': (self.strategy._scan_meta.get('self_heal_net_pnl') if hasattr(self.strategy, '_scan_meta') else None),
+                'canary_active': (self.strategy._scan_meta.get('canary_active') if hasattr(self.strategy, '_scan_meta') else None),
+                'canary_pause': (self.strategy._scan_meta.get('canary_pause') if hasattr(self.strategy, '_scan_meta') else None),
+                'drift_active': (self.strategy._scan_meta.get('drift_active') if hasattr(self.strategy, '_scan_meta') else None),
+                'drift_zscore': (self.strategy._scan_meta.get('drift_zscore') if hasattr(self.strategy, '_scan_meta') else None),
+                'learner_qa_light': (self.strategy._scan_meta.get('learner_qa_light') if hasattr(self.strategy, '_scan_meta') else None),
                 'topk': topk_for_snapshot,
             }
             # P0 numeric limits: truncate topk deterministically if needed

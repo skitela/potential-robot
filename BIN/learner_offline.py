@@ -22,6 +22,10 @@ from __future__ import annotations
 import os, sys, json, time, math, sqlite3, logging, shutil, ctypes
 import datetime as dt
 from pathlib import Path
+
+# Keep runtime/audit workspace clean when running learner from repo root.
+sys.dont_write_bytecode = True
+
 try:
     from .runtime_root import get_runtime_root
 except Exception:  # pragma: no cover
@@ -642,6 +646,44 @@ def _topk_hit_rates(topk_list: List[List[str]]) -> List[Dict[str, Any]]:
     out.sort(key=lambda d: (float(d.get("hit_rate", 0.0)), d.get("symbol", "")), reverse=True)
     return out
 
+
+def _anti_overfit_light(
+    *,
+    n_total: int,
+    rank_corr_half: Optional[float],
+    topk_churn: Optional[float],
+    loss_streak_p5: float,
+    stress_pnl_mean_2x: float,
+) -> Tuple[str, List[str]]:
+    """
+    Lightweight anti-overfit gate from stability proxies.
+
+    GREEN: stable ranks / acceptable churn / no severe stress degradation
+    YELLOW: single warning
+    RED: multiple warnings or very low sample
+    """
+    reasons: List[str] = []
+    n = int(max(0, n_total))
+    if n < 40:
+        return ("RED", ["N_TOO_LOW"])
+    if n < 80:
+        reasons.append("N_LOW")
+
+    if rank_corr_half is not None and float(rank_corr_half) < 0.05:
+        reasons.append("RANK_UNSTABLE")
+    if topk_churn is not None and float(topk_churn) < 0.25:
+        reasons.append("TOPK_CHURN_HIGH")
+    if float(loss_streak_p5) > 0.35:
+        reasons.append("LOSS_CLUSTER")
+    if float(stress_pnl_mean_2x) < 0.0:
+        reasons.append("COST_STRESS_NEG")
+
+    if len(reasons) >= 2:
+        return ("RED", reasons)
+    if len(reasons) == 1:
+        return ("YELLOW", reasons)
+    return ("GREEN", ["STABLE"])
+
 def build_advice(rows: List[Dict[str, Any]], window_days: int) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     per_sym_edges: Dict[str, List[float]] = {}
     per_sym_pnls: Dict[str, List[float]] = {}
@@ -754,6 +796,15 @@ def build_advice(rows: List[Dict[str, Any]], window_days: int) -> Tuple[Dict[str
         wf_corr = _rank_corr(r1, r2)
         score_delta = _score_delta_mean(r1, r2)
 
+    qa_light, qa_reasons = _anti_overfit_light(
+        n_total=int(len(edges_all)),
+        rank_corr_half=wf_corr,
+        topk_churn=topk_churn,
+        loss_streak_p5=float(streaks.get("loss_streak_p5", 0.0)),
+        stress_pnl_mean_2x=float(stress_pnl_mean_2x),
+    )
+    meta_advice["qa_light"] = str(qa_light)
+
     expanded_report = {
         "ts_utc": meta_advice["ts_utc"],
         "window_days": int(window_days),
@@ -772,6 +823,8 @@ def build_advice(rows: List[Dict[str, Any]], window_days: int) -> Tuple[Dict[str
         "chop_risk_bucket": chop_bucket,
         "rank_corr_half": None if wf_corr is None else round(float(wf_corr), 6),
         "score_delta_half": None if score_delta is None else round(float(score_delta), 8),
+        "anti_overfit_light": str(qa_light),
+        "anti_overfit_reasons": [str(x) for x in qa_reasons],
         "walk_forward": wf,
         "topk_churn": None if topk_churn is None else round(float(topk_churn), 6),
         "topk_hit_rates": topk_hits,
@@ -908,6 +961,9 @@ def main() -> None:
     ensure_dirs(root)
     setup_logging(root)
     mode = (sys.argv[1].strip().lower() if len(sys.argv) >= 2 else "once")
+    if mode in {"-h", "--help", "help"}:
+        print("Usage: python BIN/learner_offline.py [once|loop] [interval_sec]")
+        sys.exit(0)
     interval = int(float(sys.argv[2])) if len(sys.argv) >= 3 else 3600
     interval = max(30, interval)
     if mode == "once":

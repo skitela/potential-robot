@@ -1,8 +1,9 @@
 import datetime as dt
 import sys
-import tempfile
 import types
 import unittest
+import shutil
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,13 @@ import safetybot
 
 
 class TestSafetyBotTimezoneContract(unittest.TestCase):
+    def _tmpdir(self) -> Path:
+        base = ROOT / "TMP_AUDIT_IO" / "test_safetybot_timezone_contract"
+        path = base / f"case_{uuid.uuid4().hex}"
+        path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(path, ignore_errors=True))
+        return path
+
     def test_day_keys_across_ny_utc_pl(self) -> None:
         ts = dt.datetime(2026, 2, 14, 23, 30, 0, tzinfo=safetybot.UTC)
         ny_day, ny_hour = safetybot.ny_day_hour_key(ts)
@@ -42,26 +50,31 @@ class TestSafetyBotTimezoneContract(unittest.TestCase):
         self.assertEqual(safetybot._seconds_until_next_ny_midnight(ts), 21660)
 
     def test_order_actions_strict_guard_uses_max_across_day_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            db = safetybot.Persistence(Path(tmp) / "safetybot_time.db")
-            try:
-                now_dt = dt.datetime(2026, 2, 14, 23, 30, 0, tzinfo=safetybot.UTC)
-                day_ny, _ = safetybot.ny_day_hour_key(now_dt)
-                day_utc = safetybot.utc_day_key(now_dt)
-                day_pl = safetybot.pl_day_key(now_dt)
+        tmp = self._tmpdir()
+        orig_connect = safetybot.sqlite3.connect
+        def _connect_in_memory(_path, timeout=5, check_same_thread=False, **kwargs):
+            return orig_connect(":memory:", timeout=timeout, check_same_thread=check_same_thread, **kwargs)
+        safetybot.sqlite3.connect = _connect_in_memory
+        db = safetybot.Persistence(tmp / "safetybot_time.db")
+        try:
+            now_dt = dt.datetime(2026, 2, 14, 23, 30, 0, tzinfo=safetybot.UTC)
+            day_ny, _ = safetybot.ny_day_hour_key(now_dt)
+            day_utc = safetybot.utc_day_key(now_dt)
+            day_pl = safetybot.pl_day_key(now_dt)
 
-                db.state_set(f"order_actions_ny:{day_ny}", "2")
-                db.state_set(f"order_actions_utc:{day_utc}", "7")
-                db.state_set(f"order_actions_pl:{day_pl}", "5")
+            db.state_set(f"order_actions_ny:{day_ny}", "2")
+            db.state_set(f"order_actions_utc:{day_utc}", "7")
+            db.state_set(f"order_actions_pl:{day_pl}", "5")
 
-                state = db.get_order_actions_state(now_dt=now_dt)
-                self.assertEqual(state["ny"], 2)
-                self.assertEqual(state["utc"], 7)
-                self.assertEqual(state["pl"], 5)
-                self.assertEqual(state["used"], 7)
-                self.assertEqual(db.get_order_actions_day(now_dt=now_dt), 7)
-            finally:
-                db.conn.close()
+            state = db.get_order_actions_state(now_dt=now_dt)
+            self.assertEqual(state["ny"], 2)
+            self.assertEqual(state["utc"], 7)
+            self.assertEqual(state["pl"], 5)
+            self.assertEqual(state["used"], 7)
+            self.assertEqual(db.get_order_actions_day(now_dt=now_dt), 7)
+        finally:
+            db.conn.close()
+            safetybot.sqlite3.connect = orig_connect
 
 
 if __name__ == "__main__":

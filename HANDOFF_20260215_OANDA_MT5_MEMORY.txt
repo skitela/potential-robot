@@ -1,0 +1,19 @@
+﻿HANDOFF OANDA MT5 2026-02-15
+Status: AKTYWNY
+Cel: nie tracic kontekstu miedzy oknami/sesjami.
+
+SOURCE OF TRUTH:
+- DOCS/OANDA_MT5_MEMORY_LEDGER_2026-02-15_P2_UPDATE.md
+
+OSTATNI STAN:
+- P0/P1/P2 wdrozone.
+- Cold-start canary aktywny (manual flag).
+- Pelna regresja testow: 107/107 OK.
+- Audit offline: PASS.
+
+TRANSFER DO GH:
+- Gotowy playbook:
+  - DOCS/OANDA_TO_GH_PORTING_PLAYBOOK_2026-02-15.md
+
+NASTEPNY KROK:
+- Uruchomic online preflight na OANDA/MT5 albo przejsc do Etapu A w GH-FX wg playbooka.

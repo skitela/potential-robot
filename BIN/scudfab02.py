@@ -119,6 +119,7 @@ def read_learner_advice(meta_dir: Path) -> Optional[Dict[str, Any]]:
                 'mdd': float(metrics.get('mdd') or 0.0),
             },
             'ranks': ranks,
+            'qa_light': str(obj.get('qa_light') or "").strip().upper(),
             'source': 'offline_learner',
         }
     except Exception as e:
@@ -1035,12 +1036,20 @@ def compute_verdict(metrics: Dict[str, Any]) -> str:
     YELLOW: mixed
     RED: mean_edge <= 0 or strong negative tail
     """
+    qa_light = str(metrics.get("qa_light") or "").strip().upper()
+    if qa_light == "RED":
+        return "RED"
+
     n_i = int(metrics.get("n") or 0)
     if n_i < MIN_SAMPLE_N:
         return "YELLOW"
 
     mean_edge = float(metrics.get("mean_edge_fuel", 0.0))
     tail = float(metrics.get("es95", 0.0))
+    if qa_light == "YELLOW":
+        if mean_edge <= 0.0 or tail < -0.15:
+            return "RED"
+        return "YELLOW"
     if mean_edge > 0.0 and tail > -0.05:
         return "GREEN"
     if mean_edge <= 0.0 or tail < -0.15:
@@ -1169,6 +1178,9 @@ def run_once(root: Path) -> int:
     offline = read_learner_advice(meta)
     if offline is not None:
         metrics = offline.get('metrics') or {}
+        qa_light = str(offline.get('qa_light') or "").strip().upper()
+        if qa_light in {"GREEN", "YELLOW", "RED"}:
+            metrics["qa_light"] = qa_light
         verdict = compute_verdict(metrics)
         ranks = offline.get('ranks') or []
 
