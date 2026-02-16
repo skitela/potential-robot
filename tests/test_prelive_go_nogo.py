@@ -86,6 +86,25 @@ class TestPreliveGoNoGo(unittest.TestCase):
         self.assertFalse(bool(rep.get("go")))
         self.assertFalse(bool(rep.get("cold_start_override")))
 
+    def test_cold_start_flag_content_can_disable_override(self) -> None:
+        root = self._tmpdir()
+        learner = {
+            "ts_utc": "2099-01-01T00:00:00Z",
+            "ttl_sec": 3600,
+            "qa_light": "RED",
+            "metrics": {"n": 0},
+        }
+        report = {
+            "n_total": 0,
+            "anti_overfit_reasons": ["N_TOO_LOW"],
+        }
+        (root / "META" / "learner_advice.json").write_text(json.dumps(learner), encoding="utf-8")
+        (root / "LOGS" / "learner_offline_report.json").write_text(json.dumps(report), encoding="utf-8")
+        (root / "RUN" / "ALLOW_COLD_START_CANARY.flag").write_text("0\n", encoding="utf-8")
+        rep = prelive_go_nogo.evaluate_prelive(root)
+        self.assertFalse(bool(rep.get("go")))
+        self.assertFalse(bool(rep.get("cold_start_override")))
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

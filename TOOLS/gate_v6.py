@@ -226,12 +226,15 @@ BANNED_DIRS = {"__pycache__"}
 EXCLUDE_DIRS_CLEANLINESS = {
     ".venv",
     "_ZIP_AUDIT_",
+    "__pycache__",
     "LOGS",
     "RUN",
     "DIAG",
     "EVIDENCE",
     "DB",
     "DB_BACKUPS",
+    "TMP_AUDIT_IO",
+    "tests",
     ".git",
 }
 

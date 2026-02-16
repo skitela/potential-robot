@@ -43,6 +43,19 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _flag_enabled(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        raw = (path.read_text(encoding="utf-8", errors="ignore") or "").strip().lower()
+    except Exception:
+        # If the file exists but cannot be read, keep legacy conservative behavior.
+        return True
+    if raw in {"0", "false", "off", "no", "disable", "disabled"}:
+        return False
+    return True
+
+
 def _read_canary_promoted(db_path: Path) -> Optional[bool]:
     if not db_path.exists():
         return None
@@ -129,7 +142,7 @@ def evaluate_prelive(root: Path) -> Dict[str, Any]:
         qa_light == "RED" and int(n_total) < 40 and (("N_TOO_LOW" in reasons) or int(n_total) == 0)
     )
     cold_start_flag_path = run / "ALLOW_COLD_START_CANARY.flag"
-    cold_start_flag = bool(cold_start_flag_path.exists())
+    cold_start_flag = bool(_flag_enabled(cold_start_flag_path))
     cold_start_override = False
     if cold_start_candidate and cold_start_flag:
         crit = int(incidents.get("critical") or 0)

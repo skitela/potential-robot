@@ -101,7 +101,24 @@ except Exception:  # pragma: no cover
     from oanda_limits_guard import OandaLimitsGuard
     from config_manager import ConfigManager
     from risk_manager import RiskManager
-    from config_manager import ConfigManager
+try:
+    from runtime_root import (
+        REQUIRED_OANDA_MT5_EXE,
+        ensure_dirs,
+        get_run_mode,
+        get_runtime_root,
+        project_paths,
+        require_live_oanda_terminal,
+    )
+except Exception:  # pragma: no cover
+    from .runtime_root import (
+        REQUIRED_OANDA_MT5_EXE,
+        ensure_dirs,
+        get_run_mode,
+        get_runtime_root,
+        project_paths,
+        require_live_oanda_terminal,
+    )
 from zoneinfo import ZoneInfo
 
 TZ_NY = ZoneInfo("America/New_York")
@@ -143,6 +160,11 @@ class CFG:
     scan_interval_sec: int = 60
     # częstotliwość sprawdzania obecności klucza USB podczas uśpienia pętli
     usb_watch_check_interval_sec: int = 3
+    # Legacy pull cadence values still referenced in strategy hot/warm/eco path.
+    # Keep explicit defaults aligned with CONFIG/scheduler.json.
+    m5_pull_sec_hot: int = 60
+    m5_pull_sec_warm: int = 120
+    m5_pull_sec_eco: int = 300
 
     # --- V1.10: Time anchoring + open-position always-on guard ---
     open_positions_guard_sec: int = 60
@@ -282,6 +304,19 @@ class CFG:
 
     # --- Risk policy (defaults; no "on-feel") ---
     # Per-trade caps (as fraction of equity). Position sizing is based on SL distance and tick value.
+    risk_per_trade_max_pct: float = 0.015
+    risk_scalp_pct: float = 0.003
+    risk_scalp_min_pct: float = 0.002
+    risk_scalp_max_pct: float = 0.004
+    risk_swing_pct: float = 0.01
+    risk_swing_min_pct: float = 0.008
+    risk_swing_max_pct: float = 0.015
+    max_open_risk_pct: float = 0.018
+    max_positions_parallel: int = 5
+    max_positions_per_symbol: int = 1
+    daily_loss_soft_pct: float = 0.02
+    daily_loss_hard_pct: float = 0.03
+    self_heal_max_net_loss_abs: float = 0.0
 
     # Execution-quality gates (spread vs p80 from recent history).
     # Scalp (HOT) requires tighter spreads; WARM tolerates wider spreads.
@@ -317,6 +352,10 @@ class CFG:
     drift_mean_drop_fraction: float = 0.40
     drift_zscore_threshold: float = 1.8
     drift_backoff_s: int = 900
+    black_swan_threshold: float = 3.0
+    black_swan_precaution_fraction: float = 0.8
+    kill_switch_on_black_swan_stress: bool = True
+    kill_switch_black_swan_multiplier: float = 1.0
 
     # Learner QA gate (P1): anti-overfit traffic-light from learner_offline.
     learner_qa_gate_enabled: bool = True
@@ -707,16 +746,66 @@ class Persistence:
             db_path = Path(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(db_path)
-        self.conn = sqlite3.connect(self.db_path, timeout=5, check_same_thread=False)
-        # V1.10: SQLite performance + crash-safety (WAL)
+        self._db_dir = db_path.parent
+        self._db_delete_capable = self._probe_delete_capability(self._db_dir)
+        self.conn = self._connect()
         try:
-            self.conn.execute("PRAGMA journal_mode=WAL;")
-            self.conn.execute("PRAGMA synchronous=NORMAL;")
-            self.conn.execute("PRAGMA temp_store=MEMORY;")
-            self.conn.execute("PRAGMA busy_timeout=5000;")
+            self._init_db()
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if ("disk i/o" in msg) or ("database disk image is malformed" in msg):
+                logging.warning(f"DB_INIT_RECOVERY_TRIGGER path={self.db_path} err={type(e).__name__}:{e}")
+                try:
+                    self.conn.close()
+                except Exception as exc:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", exc)
+                self._recover_corrupt_sqlite_files()
+                self.conn = self._connect()
+                self._init_db()
+            else:
+                raise
+
+    def _probe_delete_capability(self, directory: Path) -> bool:
+        probe = Path(directory) / ".sqlite_delete_probe.tmp"
+        try:
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("1")
+            os.remove(probe)
+            return True
+        except Exception:
+            return False
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=5, check_same_thread=False)
+        # Some environments allow write but deny delete in DB dir.
+        # WAL/DELETE journaling then fails with "disk I/O error".
+        try:
+            if self._db_delete_capable:
+                conn.execute("PRAGMA journal_mode=WAL;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+            else:
+                conn.execute("PRAGMA journal_mode=OFF;")
+                conn.execute("PRAGMA synchronous=OFF;")
+                logging.warning(f"DB_JOURNAL_FALLBACK mode=OFF dir={self._db_dir}")
+            conn.execute("PRAGMA temp_store=MEMORY;")
+            conn.execute("PRAGMA busy_timeout=5000;")
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-        self._init_db()
+        return conn
+
+    def _recover_corrupt_sqlite_files(self) -> None:
+        base = Path(self.db_path)
+        stamp = now_utc().strftime("%Y%m%d_%H%M%S")
+        for suffix in ("", "-wal", "-shm"):
+            src = Path(str(base) + suffix)
+            if not src.exists():
+                continue
+            dst = src.parent / f"{src.name}.corrupt_{stamp}"
+            try:
+                os.replace(str(src), str(dst))
+                logging.warning(f"DB_RECOVERY_MOVE src={src} dst={dst}")
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _init_db(self):
         c = self.conn.cursor()
@@ -2821,6 +2910,13 @@ class ExecutionEngine:
             time.sleep(delay)
         return False
 
+
+class MT5Client(ExecutionEngine):
+    """Backward-compatible alias after extracting MT5 execution logic."""
+
+    def order_send(self, symbol: str, grp: str, request: dict, emergency: bool = False):
+        return super().order_send(symbol, grp, request, emergency=emergency)
+
 # =============================================================================
 # ACTIVITY CONTROLLER (profile + score + warunki)
 # =============================================================================
@@ -3568,6 +3664,12 @@ class SafetyBot:
     def resolve_canon_symbol(self, raw_sym: str) -> Optional[str]:
         if raw_sym in self.resolved_symbols:
             return self.resolved_symbols[raw_sym]
+        engine = getattr(self, "execution_engine", None)
+        if engine is None:
+            # Backward-compatible fallback for tests/stubs using old attribute name.
+            engine = getattr(self, "mt", None)
+        if engine is None or not hasattr(engine, "symbol_info_cached"):
+            return None
         suffixes = tuple(getattr(CFG, "symbol_suffixes", ("", ".pro", ".stp", ".pl")) or ("",))
         raw_norm = str(raw_sym or "").strip().upper()
         grp_default = CFG.symbol_group_map.get(raw_norm, "OTHER")
@@ -3575,7 +3677,7 @@ class SafetyBot:
             grp = CFG.symbol_group_map.get(base, grp_default)
             for suf in suffixes:
                 cand = f"{base}{suf}"
-                info = self.execution_engine.symbol_info_cached(cand, grp, self.db)
+                info = engine.symbol_info_cached(cand, grp, self.db)
                 if info is not None:
                     self.resolved_symbols[raw_sym] = cand
                     return cand
@@ -4208,8 +4310,17 @@ class SafetyBot:
                 logging.debug(f"SKIP NEW ENTRY (open position) | {sym}")
                 continue
 
-            mode = self.ctrl.calc_symbol_mode(global_mode, prio, st)
-            info = self.mt.symbol_info_cached(sym, grp, self.db)
+            mode = str(global_mode).upper()
+            try:
+                local_mode = str(self.ctrl.mode(grp, sym, rollover_safe)).upper()
+                mode_rank = {"ECO": 0, "WARM": 1, "HOT": 2}
+                if mode in mode_rank and local_mode in mode_rank:
+                    mode = local_mode if mode_rank[local_mode] <= mode_rank[mode] else mode
+                elif local_mode in mode_rank:
+                    mode = local_mode
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
             if info is None:
                 logging.warning(f"SYMBOL INFO missing | {sym} | skip")
                 cnt += 1
@@ -4227,7 +4338,7 @@ class SafetyBot:
             now_iso = now_utc().isoformat().replace('+00:00','Z')
             topk_for_snapshot = []
             for (p, raw, sym, grp) in candidates[:n_limit]:
-                info = self.mt.symbol_info_cached(sym, grp, self.db)
+                info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
                 ind = self.strategy.last_indicators.get(str(raw)) if hasattr(self.strategy, 'last_indicators') else None
                 topk_for_snapshot.append({
                     'raw': raw,
@@ -4312,7 +4423,7 @@ class SafetyBot:
         # --- STARTUP CHECK (jednorazowo): waluta rachunku / stabilność połączenia ---
         try:
             self.execution_engine.ensure_connected()
-            acc = self.engine.account_info()
+            acc = self.execution_engine.account_info()
             if acc is not None:
                 ccy = str(getattr(acc, "currency", "")).upper()
                 if ccy and ccy != "PLN":
@@ -4351,6 +4462,16 @@ if __name__ == "__main__":
     _paths = project_paths(runtime_root)
     
     config = ConfigManager(_paths["config"])
+    CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
+    CFG.black_swan_precaution_fraction = float(
+        config.risk.get("black_swan_precaution_fraction", config.risk.get("precaution_fraction", CFG.black_swan_precaution_fraction))
+    )
+    CFG.kill_switch_on_black_swan_stress = bool(
+        config.risk.get("kill_switch_on_black_swan_stress", CFG.kill_switch_on_black_swan_stress)
+    )
+    CFG.kill_switch_black_swan_multiplier = float(
+        config.risk.get("kill_switch_black_swan_multiplier", CFG.kill_switch_black_swan_multiplier)
+    )
     db = Persistence(_paths["db"] / DECISION_EVENTS_DB_NAME)
     gov = RequestGovernor(db)
     risk_manager = RiskManager(config, db)
@@ -4366,9 +4487,8 @@ if __name__ == "__main__":
     
     black_swan_guard = BlackSwanGuard(
         BlackSwanPolicy(
-            black_swan_threshold=float(config.risk["black_swan_threshold"]),
-            precaution_fraction=float(config.risk["precaution_fraction"]),
-            kill_switch_on_black_swan_stress=bool(config.risk["kill_switch_on_black_swan_stress"]),
+            black_swan_threshold=float(CFG.black_swan_threshold),
+            precaution_fraction=float(CFG.black_swan_precaution_fraction),
         )
     )
     
