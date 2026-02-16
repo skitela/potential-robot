@@ -80,14 +80,16 @@ import traceback
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
 try:
-    from . import common_guards as cg
-    from . import common_contract as cc
-    from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy
-    from .self_heal_guard import SelfHealGuard, SelfHealPolicy
-    from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
-    from .drift_guard import DriftGuard, DriftPolicy
-    from .incident_guard import IncidentJournal, classify_retcode
-    from .oanda_limits_guard import OandaLimitsGuard
+    import common_guards as cg
+    import common_contract as cc
+    from black_swan_guard import BlackSwanGuard, BlackSwanPolicy
+    from self_heal_guard import SelfHealGuard, SelfHealPolicy
+    from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
+    from drift_guard import DriftGuard, DriftPolicy
+    from incident_guard import IncidentJournal, classify_retcode
+    from oanda_limits_guard import OandaLimitsGuard
+    from config_manager import ConfigManager
+    from risk_manager import RiskManager
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
@@ -97,6 +99,9 @@ except Exception:  # pragma: no cover
     from drift_guard import DriftGuard, DriftPolicy
     from incident_guard import IncidentJournal, classify_retcode
     from oanda_limits_guard import OandaLimitsGuard
+    from config_manager import ConfigManager
+    from risk_manager import RiskManager
+    from config_manager import ConfigManager
 from zoneinfo import ZoneInfo
 
 TZ_NY = ZoneInfo("America/New_York")
@@ -163,10 +168,6 @@ class CFG:
     oanda_positions_pending_limit: int = 450  # house stop before 500 (positions + pending orders, excl. TP/SL)
 
     # --- House safety margins (do not loosen) ---
-    house_price_warn_per_day: int = 1000
-    house_price_hard_stop_per_day: int = 4500
-    house_orders_per_sec: int = 45
-    house_positions_pending_limit: int = 450
 
     # Calendar-day enforcement policy: PL (Europe/Warsaw) as primary "calendar day" boundary.
     # Scheduling and daily loss limits use PL day. NY/UTC keys are still tracked for diagnostics and as a hard guard.
@@ -281,17 +282,6 @@ class CFG:
 
     # --- Risk policy (defaults; no "on-feel") ---
     # Per-trade caps (as fraction of equity). Position sizing is based on SL distance and tick value.
-    risk_per_trade_max_pct: float = 0.015   # 1.5% hard ceiling
-
-    # Trade-style defaults (HOT => scalp, WARM => longer hold).
-    risk_scalp_pct: float = 0.003           # 0.3%
-    risk_scalp_min_pct: float = 0.002
-    risk_scalp_max_pct: float = 0.004
-
-    risk_swing_pct: float = 0.01           # 1.0%
-    risk_swing_min_pct: float = 0.008
-    risk_swing_max_pct: float = 0.015
-
 
     # Execution-quality gates (spread vs p80 from recent history).
     # Scalp (HOT) requires tighter spreads; WARM tolerates wider spreads.
@@ -299,28 +289,11 @@ class CFG:
     spread_gate_warm_factor: float = 1.75
     spread_gate_eco_factor: float = 2.00
 
-    # Portfolio heat (sum of open SL risks for our magic)
-    max_open_risk_pct: float = 0.018        # 1.8% total open risk
-    max_positions_parallel: int = 5
-    max_positions_per_symbol: int = 1
-
-    # Daily loss limits (PL day; equity drawdown vs day-start estimate)
-    daily_loss_soft_pct: float = 0.02       # 2.0% => reduce risk + allow only HOT setups
-    daily_loss_hard_pct: float = 0.03       # 3.0% => stop new entries
-    daily_loss_soft_risk_factor: float = 0.5
-
-    # Black swan guard (ported from GLOBALNY HANDEL VER1 risk-layer semantics).
-    black_swan_threshold: float = 3.0
-    black_swan_precaution_fraction: float = 0.8
-    kill_switch_on_black_swan_stress: bool = True
-    kill_switch_black_swan_multiplier: float = 1.0
-
     # Self-heal guard (fast pause after local degradation; does not alter risk % policy).
     self_heal_enabled: bool = True
     self_heal_lookback_sec: int = 10800
     self_heal_min_deals_in_window: int = 3
     self_heal_loss_streak_trigger: int = 3
-    self_heal_max_net_loss_abs: float = 0.0
     self_heal_backoff_s: int = 900
     self_heal_symbol_cooldown_s: int = 600
     self_heal_recent_deals_limit: int = 64
@@ -351,7 +324,6 @@ class CFG:
     learner_qa_yellow_symbol_cap: int = 1
 
     # Legacy/backward compatibility names (deprecated; do not use for sizing)
-    risk_per_trade: float = risk_swing_pct
     max_risk_cap_acct: float = 0.0
     max_risk_cap_pln: float = max_risk_cap_acct
 
@@ -384,15 +356,8 @@ class CFG:
     deals_poll_interval_sec = 600   # 10 min, bo to SYS request
 
     # --- Scheduler ---
-    # ile symboli maksymalnie rozpatrujemy "na serio" w jednej iteracji
-    max_symbols_per_iter_hot: int = 2
-    max_symbols_per_iter_warm: int = 1
-    max_symbols_per_iter_eco: int = 0  # w ECO: tylko monitoring pozycji / rollover
 
     # --- Pobór M5 (PRICE) ---
-    m5_pull_sec_hot = 60
-    m5_pull_sec_warm = 120
-    m5_pull_sec_eco = 300
 
     # --- Pobór tick (PRICE) ---
     # tick pobieramy dopiero gdy:
@@ -401,9 +366,6 @@ class CFG:
     # (nie pobieramy ticka rutynowo co minutę dla każdego symbolu)
 
     # --- Pozyskanie pozycji (SYS) ---
-    positions_poll_sec_hot = 60
-    positions_poll_sec_warm = 120
-    positions_poll_sec_eco = 300
 
     # --- Retry / kill ---
     close_retries: int = 5
@@ -2196,7 +2158,7 @@ class OrderThrottle:
 # MT5 CLIENT
 # =============================================================================
 
-class MT5Client:
+class ExecutionEngine:
     def __init__(self, config: Dict[str, str], gov: RequestGovernor, limits: Optional[OandaLimitsGuard] = None):
         self.login = int(config["MT5_LOGIN"])
         self.password = config["MT5_PASSWORD"]
@@ -2863,83 +2825,8 @@ class MT5Client:
 # ACTIVITY CONTROLLER (profile + score + warunki)
 # =============================================================================
 
-class ActivityController:
-    def __init__(self, db: Persistence):
-        self.db = db
+from scheduler import ActivityController
 
-    def time_weight(self, grp: str, symbol: str) -> float:
-        n = now_ny()
-        p = now_pl()
-        if grp == "FX":
-            if in_window(n, (8, 0), (12, 0)): return 1.0
-            if in_window(n, (3, 0), (8, 0)) or in_window(n, (12, 0), (16, 0)): return 0.6
-            return 0.25
-        if grp == "METAL":
-            if in_window(n, (7, 0), (13, 0)): return 1.0
-            if in_window(n, (3, 0), (7, 0)) or in_window(n, (13, 0), (16, 30)): return 0.6
-            return 0.25
-        if grp == "INDEX":
-            prof = index_profile(symbol)
-            if prof == "EU":
-                if in_window(p, (9, 0), (12, 0)): return 0.9
-                if in_window(p, (12, 0), (15, 0)): return 0.6
-                if in_window(p, (15, 0), (17, 35)): return 1.0
-                return 0.25
-            if prof == "US":
-                if in_window(n, (9, 30), (11, 0)) or in_window(n, (15, 0), (16, 0)): return 1.0
-                if in_window(n, (11, 0), (15, 0)): return 0.6
-                return 0.25
-            return 0.35
-        return 0.2
-
-    def score_factor(self, grp: str, symbol: str) -> float:
-        # Score_hour = PnL_net / PRICE_requests (lookback 14d)
-        ny_hour = now_ny().hour
-        req = self.db.price_req_for_hour(grp, symbol, ny_hour, lookback_days=14)
-        pnl = self.db.pnl_net_for_hour(grp, symbol, ny_hour, lookback_days=14)
-        if req < 50:
-            return 1.0
-        score = pnl / max(1.0, float(req))
-        x = np.tanh(score / 2.0)
-        return float(1.0 + 0.3 * x)
-
-    def mode(self, grp: str, symbol: str, rollover_safe: bool) -> str:
-        if not rollover_safe:
-            return "ECO"
-        w = self.time_weight(grp, symbol)
-        f = self.score_factor(grp, symbol)
-        base = w * f
-        if base >= 0.95:
-            return "HOT"
-        if base >= 0.55:
-            return "WARM"
-        return "ECO"
-
-    def max_symbols_per_iter(self, mode: str) -> int:
-        if mode == "HOT": return CFG.max_symbols_per_iter_hot
-        if mode == "WARM": return CFG.max_symbols_per_iter_warm
-        return CFG.max_symbols_per_iter_eco
-
-    def m5_pull_period(self, mode: str) -> int:
-        if mode == "HOT": return CFG.m5_pull_sec_hot
-        if mode == "WARM": return CFG.m5_pull_sec_warm
-        return CFG.m5_pull_sec_eco
-
-    def positions_poll_period(self, mode: str) -> int:
-        if mode == "HOT": return CFG.positions_poll_sec_hot
-        if mode == "WARM": return CFG.positions_poll_sec_warm
-        return CFG.positions_poll_sec_eco
-
-    def calc_symbol_mode(self, global_mode: str, prio: float, day_state: Dict[str, Any]) -> str:
-        """
-        Minimalne spięcie wstecz-kompatybilne:
-        - nie dotyka logiki strategii,
-        - utrzymuje tryb globalny HOT/WARM/ECO,
-        - argumenty prio/day_state zostawione pod przyszłe strojenie.
-        """
-        if global_mode in ("HOT", "WARM", "ECO"):
-            return global_mode
-        return "ECO"
 
 # =============================================================================
 # STRATEGY (H4 trend priority, tick on demand)
@@ -2952,11 +2839,13 @@ class StrategyCache:
         self.last_m5_bar_time: Dict[str, pd.Timestamp] = {}
 
 class StandardStrategy:
-    def __init__(self, mt: MT5Client, gov: RequestGovernor, throttle: OrderThrottle, db: Persistence):
-        self.mt = mt
+    def __init__(self, engine: ExecutionEngine, gov: RequestGovernor, throttle: OrderThrottle, db: Persistence, config: ConfigManager, risk_manager: RiskManager):
+        self.engine = engine
         self.gov = gov
         self.throttle = throttle
         self.db = db
+        self.config = config
+        self.risk_manager = risk_manager
         self.cache = StrategyCache()
         self.last_indicators: Dict[str, Dict[str, Any]] = {}
         self._scan_meta: Dict[str, Any] = {}
@@ -2983,8 +2872,8 @@ class StandardStrategy:
         if cached and (now_ts - cached[0] < CFG.trend_cache_ttl_sec):
             return cached[1], cached[2]
 
-        df_h4 = self.mt.copy_rates(symbol, grp, CFG.timeframe_trend_h4, 260)
-        df_d1 = self.mt.copy_rates(symbol, grp, CFG.timeframe_trend_d1, 260)
+        df_h4 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_h4, 260)
+        df_d1 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_d1, 260)
         if df_h4 is None or df_d1 is None or len(df_h4) < 220 or len(df_d1) < 220:
             return "NEUTRAL", "NEUTRAL"
 
@@ -3003,7 +2892,7 @@ class StandardStrategy:
         if now_ts - last < pull:
             return None
 
-        df = self.mt.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
+        df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
         if df is None or len(df) < 60:
             self.cache.last_m5_calc_ts[symbol] = now_ts
             return None
@@ -3045,7 +2934,7 @@ class StandardStrategy:
 
     def try_trade(self, symbol: str, grp: str, mode: str, info, signal: str, is_paper: bool):
         # tick na żądanie: spread + cena wykonania
-        tick = self.mt.tick(symbol, grp)
+        tick = self.engine.tick(symbol, grp)
         if not tick:
             return
 
@@ -3069,7 +2958,7 @@ class StandardStrategy:
         price = float(tick.ask if signal == "BUY" else tick.bid)
 
         # account/risk context (no guessing)
-        acc = self.mt.account_info()
+        acc = self.engine.account_info()
         if acc is None:
             return
         bal_now = float(getattr(acc, "balance", 0.0) or 0.0)
@@ -3097,96 +2986,42 @@ class StandardStrategy:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             return
 
-        if dd_pct >= float(CFG.daily_loss_hard_pct):
-            logging.info(f"SKIP_DAILY_LOSS_HARD {symbol} dd={dd_pct:.4f} lim={CFG.daily_loss_hard_pct}")
+        if not self.risk_manager.daily_loss_guard(symbol, mode, dd_pct):
             return
 
-        soft_loss = (dd_pct >= float(CFG.daily_loss_soft_pct))
-        if soft_loss and str(mode).upper() != "HOT":
-            logging.info(f"SKIP_DAILY_LOSS_SOFT {symbol} mode={mode} dd={dd_pct:.4f} lim={CFG.daily_loss_soft_pct}")
-            return
-
-        # Trade-style risk percent (HOT => scalp)
-        m_upper = str(mode).upper()
-        if m_upper == "HOT":
-            risk_pct = float(CFG.risk_scalp_pct)
-            risk_pct = max(float(CFG.risk_scalp_min_pct), min(float(CFG.risk_scalp_max_pct), risk_pct))
-        else:
-            risk_pct = float(CFG.risk_swing_pct)
-            risk_pct = max(float(CFG.risk_swing_min_pct), min(float(CFG.risk_swing_max_pct), risk_pct))
-        if soft_loss:
-            risk_pct *= float(CFG.daily_loss_soft_risk_factor)
-        risk_pct = min(float(CFG.risk_per_trade_max_pct), risk_pct)
+        soft_loss = (dd_pct >= float(self.config.risk['daily_loss_soft_pct']))
+        risk_pct = self.risk_manager.get_risk_pct(mode, soft_loss)
 
         risk_money = eq_now * risk_pct
         if risk_money <= 0:
             return
 
         # Portfolio heat + volume sizing from SL distance
-        positions = self.mt.positions_get(emergency=False)
-        if positions is None:
-            return
-        our_positions = [p for p in positions if int(getattr(p, "magic", 0) or 0) == int(CFG.magic_number)]
-        if len(our_positions) >= int(CFG.max_positions_parallel):
-            logging.info(f"SKIP_MAX_POSITIONS {symbol} n={len(our_positions)} cap={CFG.max_positions_parallel}")
-            return
-        if sum(1 for p in our_positions if str(getattr(p, "symbol", "")) == str(symbol)) >= int(CFG.max_positions_per_symbol):
-            logging.info(f"SKIP_POS_PER_SYMBOL {symbol} cap={CFG.max_positions_per_symbol}")
-            return
-
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
         tick_value = float(getattr(info, "trade_tick_value", 0.0) or 0.0)
-        if tick_size <= 0 or tick_value <= 0:
-            logging.info(f"SKIP_RISK_NO_TICKVAL {symbol} tick_size={tick_size} tick_value={tick_value}")
-            return
-
-        sl_dist = abs(float(price) - float(sl))
-        ticks = sl_dist / tick_size if tick_size > 0 else 0.0
-        per_lot_risk = ticks * tick_value
-        if per_lot_risk <= 0:
-            return
-
-        vol_raw = risk_money / per_lot_risk
         vol_min = float(getattr(info, "volume_min", 0.0) or 0.0)
         vol_max = float(getattr(info, "volume_max", 0.0) or 0.0)
         vol_step = float(getattr(info, "volume_step", 0.0) or 0.0)
-        if vol_min <= 0 or vol_max <= 0 or vol_step <= 0:
+
+        volume = self.risk_manager.get_sizing(
+            eq_now, risk_pct, price, sl,
+            tick_size, tick_value,
+            vol_min, vol_max, vol_step,
+            symbol
+        )
+
+        if volume is None:
+            return
+        
+        positions = self.engine.positions_get(emergency=False)
+        if positions is None:
+            return
+        
+        our_positions = [p for p in positions if int(getattr(p, "magic", 0) or 0) == int(CFG.magic_number)]
+        
+        if not self.risk_manager.check_portfolio_heat(our_positions, eq_now, symbol, risk_money, self.engine, self.db, grp):
             return
 
-        # floor to step
-        vol = (int(vol_raw / vol_step) * vol_step)
-        vol = max(vol_min, min(vol_max, vol))
-        vol = float(round(vol, 8))
-        if vol < vol_min:
-            logging.info(f"SKIP_RISK_VOL_BELOW_MIN {symbol} vol_raw={vol_raw:.6f} vol_min={vol_min}")
-            return
-
-        # Open risk (sum of SL risks) guard
-        open_risk_money = 0.0
-        for p in our_positions:
-            sl_p = float(getattr(p, "sl", 0.0) or 0.0)
-            if sl_p <= 0:
-                continue
-            sym = str(getattr(p, "symbol", ""))
-            info_p = info if sym == str(symbol) else self.mt.symbol_info_cached(sym, grp, self.db)
-            if info_p is None:
-                continue
-            ts = float(getattr(info_p, "trade_tick_size", 0.0) or 0.0)
-            tv = float(getattr(info_p, "trade_tick_value", 0.0) or 0.0)
-            if ts <= 0 or tv <= 0:
-                continue
-            price_open = float(getattr(p, "price_open", 0.0) or 0.0)
-            vol_p = float(getattr(p, "volume", 0.0) or 0.0)
-            if vol_p <= 0:
-                continue
-            open_risk_money += (abs(price_open - sl_p) / ts) * tv * vol_p
-
-        max_open_risk_money = eq_now * float(CFG.max_open_risk_pct)
-        if (open_risk_money + risk_money) > max_open_risk_money:
-            logging.info(f"SKIP_HEAT {symbol} open_risk={open_risk_money:.2f} new_risk={risk_money:.2f} max={max_open_risk_money:.2f}")
-            return
-
-        volume = vol
         cmd = mt5.ORDER_TYPE_BUY if signal == "BUY" else mt5.ORDER_TYPE_SELL
 
         # Decision event (do Scout) — zapis tylko, gdy realnie spełnione warunki wejścia
@@ -3300,7 +3135,7 @@ class StandardStrategy:
             logging.info(f"PAPER TRADE: {signal} {symbol} @ {price} | SL {sl} TP {tp}")
             return
 
-        res = self.mt.order_send(symbol, grp, req)
+        res = self.engine.order_send(symbol, grp, req)
         if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
             logging.error(f"Order failed: {getattr(res, 'retcode', None)} {getattr(res, 'comment', '')}")
             return
@@ -3613,8 +3448,19 @@ def ensure_db_ready(db_dir: Path, backups_dir: Path, release_id: str, log: loggi
         raise SystemExit(3)
 
 class SafetyBot:
-    def __init__(self):
+    def __init__(self, config, db, gov, risk_manager, limits, black_swan_guard, self_heal_guard, canary_guard, drift_guard, incident_journal):
         self.cfg = CFG
+        self.config = config
+        self.db = db
+        self.gov = gov
+        self.risk_manager = risk_manager
+        self.limits = limits
+        self.black_swan_guard = black_swan_guard
+        self.self_heal_guard = self_heal_guard
+        self.canary_guard = canary_guard
+        self.drift_guard = drift_guard
+        self.incident_journal = incident_journal
+
         # --- runtime root (V6.2 hard-root) ---
         self.run_mode = get_run_mode()
         self.runtime_root = get_runtime_root(enforce=True)
@@ -3622,6 +3468,7 @@ class SafetyBot:
         self.bin_dir = _paths["bin"]
         self.meta_dir = _paths["meta"]
         self.db_dir = _paths["db"]
+        self.config_dir = _paths["config"]
         self.logs_dir = _paths["logs"]
         self.run_dir = _paths["run"]
         self.backups_dir = _paths["backups"]
@@ -3670,61 +3517,7 @@ class SafetyBot:
         release_id = (str(meta.get('release_id')) if isinstance(meta, dict) and meta.get('release_id') else 'UNKNOWN')
         logging.info(f"Runtime root: {self.runtime_root}")
         ensure_db_ready(self.db_dir, self.backups_dir, release_id=release_id, log=logging.getLogger())
-
-        # --- local DBs / governor ---
-        self.db = Persistence(self.db_dir / DECISION_EVENTS_DB_NAME)
-        self.gov = RequestGovernor(self.db)
-        self.limits = OandaLimitsGuard(
-            self.db,
-            self.evidence_dir,
-            warn_day=int(CFG.house_price_warn_per_day),
-            hard_stop_day=int(CFG.house_price_hard_stop_per_day),
-            orders_per_sec=int(CFG.house_orders_per_sec),
-            positions_pending_limit=int(CFG.house_positions_pending_limit),
-        )
         self.limits.write_state()
-        self.black_swan_guard = BlackSwanGuard(
-            BlackSwanPolicy(
-                black_swan_threshold=float(CFG.black_swan_threshold),
-                precaution_fraction=float(CFG.black_swan_precaution_fraction),
-            )
-        )
-        self.self_heal_guard = SelfHealGuard(
-            SelfHealPolicy(
-                enabled=bool(CFG.self_heal_enabled),
-                lookback_sec=int(CFG.self_heal_lookback_sec),
-                min_deals_in_window=int(CFG.self_heal_min_deals_in_window),
-                loss_streak_trigger=int(CFG.self_heal_loss_streak_trigger),
-                max_net_loss_abs=float(CFG.self_heal_max_net_loss_abs),
-                backoff_seconds=int(CFG.self_heal_backoff_s),
-                symbol_cooldown_seconds=int(CFG.self_heal_symbol_cooldown_s),
-            )
-        )
-        self.canary_guard = CanaryRolloutGuard(
-            CanaryPolicy(
-                enabled=bool(CFG.canary_rollout_enabled),
-                lookback_sec=int(CFG.canary_lookback_sec),
-                promote_min_deals=int(CFG.canary_promote_min_deals),
-                promote_min_net_pnl=float(CFG.canary_promote_min_net_pnl),
-                pause_loss_streak=int(CFG.canary_pause_loss_streak),
-                pause_net_loss_abs=float(CFG.canary_pause_net_loss_abs),
-                max_error_incidents=int(CFG.canary_max_error_incidents),
-                canary_max_symbols=int(CFG.canary_max_symbols_per_iter),
-                backoff_seconds=int(CFG.canary_backoff_s),
-            )
-        )
-        self.drift_guard = DriftGuard(
-            DriftPolicy(
-                enabled=bool(CFG.drift_guard_enabled),
-                min_samples=int(CFG.drift_min_samples),
-                baseline_window=int(CFG.drift_baseline_window),
-                recent_window=int(CFG.drift_recent_window),
-                mean_drop_fraction=float(CFG.drift_mean_drop_fraction),
-                zscore_threshold=float(CFG.drift_zscore_threshold),
-                backoff_seconds=int(CFG.drift_backoff_s),
-            )
-        )
-        self.incident_journal = IncidentJournal(self.logs_dir)
 
         # --- time anchor ---
         global _TIME_ANCHOR
@@ -3732,23 +3525,23 @@ class SafetyBot:
         self.time_anchor = _TIME_ANCHOR
 
         # --- MT5 client ---
-        self.mt = MT5Client(self.mt5_config, self.gov, self.limits)
-        self.mt.incident_journal = self.incident_journal
+        self.execution_engine = ExecutionEngine(self.mt5_config, self.gov, self.limits)
+        self.execution_engine.incident_journal = self.incident_journal
         self.throttle = OrderThrottle()
 
         # --- stores for Scout ---
         self.decision_store = DecisionEventStore(self.db_dir)
         self.bars_store = M5BarsStore(self.db_dir)
-        self.mt.bars_store = self.bars_store
+        self.execution_engine.bars_store = self.bars_store
 
         # --- strategy / controller ---
-        self.ctrl = ActivityController(self.db)
-        self.strategy = StandardStrategy(self.mt, self.gov, self.throttle, self.db)
+        self.ctrl = ActivityController(self.db, self.config)
+        self.strategy = StandardStrategy(self.execution_engine, self.gov, self.throttle, self.db, self.config, self.risk_manager)
         self.strategy.decision_store = self.decision_store
         self.resolved_symbols = {}
 
         # --- connect + universe ---
-        if not self.mt.connect():
+        if not self.execution_engine.connect():
             logging.critical('Nie udało się połączyć z MT5. SafetyBot kończy pracę.')
             raise SystemExit(1)
         self.universe = self._build_universe()
@@ -3782,7 +3575,7 @@ class SafetyBot:
             grp = CFG.symbol_group_map.get(base, grp_default)
             for suf in suffixes:
                 cand = f"{base}{suf}"
-                info = self.mt.symbol_info_cached(cand, grp, self.db)
+                info = self.execution_engine.symbol_info_cached(cand, grp, self.db)
                 if info is not None:
                     self.resolved_symbols[raw_sym] = cand
                     return cand
@@ -3799,13 +3592,13 @@ class SafetyBot:
                 logging.warning(f"Nie znaleziono symbolu w MT5: {raw}")
                 continue
             grp = guess_group(sym)
-            info = self.mt.symbol_info_cached(sym, grp, self.db)
+            info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
             block_reason = symbol_policy_block_reason(sym, grp, info=info, is_close=False)
             if block_reason:
                 logging.warning(f"UNIVERSE_SKIP_SYMBOL_POLICY raw={raw} symbol={sym} group={grp} reason={block_reason}")
                 continue
             # symbol_select jest SYS — robimy to jednorazowo
-            self.mt.symbol_select(sym, grp)
+            self.execution_engine.symbol_select(sym, grp)
             out.append((raw, sym, grp))
         return out
 
@@ -3824,7 +3617,7 @@ class SafetyBot:
                 break
         if ref_sym is None:
             _, ref_sym, ref_grp = self.universe[0]
-        t = self.mt.tick(ref_sym, ref_grp)
+        t = self.execution_engine.tick(ref_sym, ref_grp)
         if t is not None:
             logging.info(f"TIME ANCHOR primed via tick: {ref_sym}")
 
@@ -3856,7 +3649,7 @@ class SafetyBot:
         if ref_sym is None:
             _, ref_sym, ref_grp = self.universe[0]
 
-        _ = self.mt.tick(ref_sym, ref_grp)  # tick() aktualizuje kotwicę
+        _ = self.execution_engine.tick(ref_sym, ref_grp)  # tick() aktualizuje kotwicę
 
     def poll_deals(self):
         # SYS — rzadziej (10 min)
@@ -3874,7 +3667,7 @@ class SafetyBot:
         from_dt = dt.datetime.fromtimestamp(from_ts, tz=UTC)
         to_dt = dt.datetime.fromtimestamp(now_ts, tz=UTC)
 
-        deals = self.mt.history_deals_get(from_dt, to_dt)
+        deals = self.execution_engine.history_deals_get(from_dt, to_dt)
         self.db.set_last_ts("last_deals_poll_ts", now_ts)
         if not deals:
             return
@@ -3925,7 +3718,7 @@ class SafetyBot:
         if now_ts - last < period:
             return dict(self._positions_cache)
 
-        pos = self.mt.positions_get(emergency=bool(force))
+        pos = self.execution_engine.positions_get(emergency=bool(force))
         if pos is None:
             # jeśli nie możemy pobrać (brak budżetu SYS), zwróć cache (lepsze to niż nic)
             return dict(self._positions_cache)
@@ -3956,7 +3749,7 @@ class SafetyBot:
                     cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
             try:
-                cached = self.mt._sym_info_cache.get(sym) if hasattr(self.mt, "_sym_info_cache") else None
+                cached = self.execution_engine._sym_info_cache.get(sym) if hasattr(self.execution_engine, "_sym_info_cache") else None
                 info = cached[1] if isinstance(cached, tuple) and len(cached) == 2 else None
                 if info is not None:
                     spread = float(getattr(info, "spread", 0.0) or 0.0)
@@ -4256,7 +4049,7 @@ class SafetyBot:
         # jeśli mamy pozycje i wchodzimy w force-close window => pilnuj (użyj rezerwy awaryjnej)
         if open_syms and in_force_close:
             logging.warning("ROLLOVER force-close window: zamykanie pozycji.")
-            ok = self.mt.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
+            ok = self.execution_engine.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
                                         deviation=CFG.kill_close_deviation_points)
             if not ok:
                 logging.critical("FORCE FLAT incomplete.")
@@ -4276,7 +4069,7 @@ class SafetyBot:
                     f"threshold={threshold:.3f} multiplier={multiplier:.3f} kill_threshold={kill_threshold:.3f}"
                 )
                 if open_syms:
-                    ok = self.mt.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
+                    ok = self.execution_engine.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
                                                 deviation=CFG.kill_close_deviation_points)
                     if not ok:
                         logging.critical("KILL SWITCH | FORCE FLAT incomplete.")
@@ -4507,7 +4300,7 @@ class SafetyBot:
             elapsed += wait_s
             if not usb_present():
                 logging.critical("USB MISSING | KILL SWITCH => FORCE FLAT + STOP")
-                ok = self.mt.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
+                ok = self.execution_engine.force_flat_all(self.db, retries=CFG.close_retries, delay=CFG.close_retry_delay_sec,
                                             deviation=CFG.kill_close_deviation_points)
                 if not ok:
                     logging.critical("KILL SWITCH | FORCE FLAT incomplete.")
@@ -4518,8 +4311,8 @@ class SafetyBot:
 
         # --- STARTUP CHECK (jednorazowo): waluta rachunku / stabilność połączenia ---
         try:
-            self.mt.ensure_connected()
-            acc = self.mt.account_info()
+            self.execution_engine.ensure_connected()
+            acc = self.engine.account_info()
             if acc is not None:
                 ccy = str(getattr(acc, "currency", "")).upper()
                 if ccy and ccy != "PLN":
@@ -4536,7 +4329,7 @@ class SafetyBot:
         # --- PĘTLA GŁÓWNA ---
         while True:
             try:
-                self.mt.ensure_connected()
+                self.execution_engine.ensure_connected()
                 self.scan_once()
                 self._idle_sleep_with_usb_watch(CFG.scan_interval_sec)
 
@@ -4551,5 +4344,84 @@ class SafetyBot:
                 self._idle_sleep_with_usb_watch(60)
 
 if __name__ == "__main__":
-    bot = SafetyBot()
+    
+    # --- Dependency Injection Container ---
+    run_mode = get_run_mode()
+    runtime_root = get_runtime_root(enforce=True)
+    _paths = project_paths(runtime_root)
+    
+    config = ConfigManager(_paths["config"])
+    db = Persistence(_paths["db"] / DECISION_EVENTS_DB_NAME)
+    gov = RequestGovernor(db)
+    risk_manager = RiskManager(config, db)
+    
+    limits = OandaLimitsGuard(
+        db,
+        _paths["evidence"],
+        warn_day=int(config.limits["house_price_warn_per_day"]),
+        hard_stop_day=int(config.limits["house_price_hard_stop_per_day"]),
+        orders_per_sec=int(config.limits["house_orders_per_sec"]),
+        positions_pending_limit=int(config.limits["house_positions_pending_limit"]),
+    )
+    
+    black_swan_guard = BlackSwanGuard(
+        BlackSwanPolicy(
+            black_swan_threshold=float(config.risk["black_swan_threshold"]),
+            precaution_fraction=float(config.risk["precaution_fraction"]),
+            kill_switch_on_black_swan_stress=bool(config.risk["kill_switch_on_black_swan_stress"]),
+        )
+    )
+    
+    self_heal_guard = SelfHealGuard(
+        SelfHealPolicy(
+            enabled=bool(CFG.self_heal_enabled),
+            lookback_sec=int(CFG.self_heal_lookback_sec),
+            min_deals_in_window=int(CFG.self_heal_min_deals_in_window),
+            loss_streak_trigger=int(CFG.self_heal_loss_streak_trigger),
+            max_net_loss_abs=float(config.risk["self_heal_max_net_loss_abs"]),
+            backoff_seconds=int(CFG.self_heal_backoff_s),
+            symbol_cooldown_seconds=int(CFG.self_heal_symbol_cooldown_s),
+        )
+    )
+
+    canary_guard = CanaryRolloutGuard(
+        CanaryPolicy(
+            enabled=bool(CFG.canary_rollout_enabled),
+            lookback_sec=int(CFG.canary_lookback_sec),
+            promote_min_deals=int(CFG.canary_promote_min_deals),
+            promote_min_net_pnl=float(CFG.canary_promote_min_net_pnl),
+            pause_loss_streak=int(CFG.canary_pause_loss_streak),
+            pause_net_loss_abs=float(CFG.canary_pause_net_loss_abs),
+            max_error_incidents=int(CFG.canary_max_error_incidents),
+            canary_max_symbols=int(CFG.canary_max_symbols_per_iter),
+            backoff_seconds=int(CFG.canary_backoff_s),
+        )
+    )
+
+    drift_guard = DriftGuard(
+        DriftPolicy(
+            enabled=bool(CFG.drift_guard_enabled),
+            min_samples=int(CFG.drift_min_samples),
+            baseline_window=int(CFG.drift_baseline_window),
+            recent_window=int(CFG.drift_recent_window),
+            mean_drop_fraction=float(CFG.drift_mean_drop_fraction),
+            zscore_threshold=float(CFG.drift_zscore_threshold),
+            backoff_seconds=int(CFG.drift_backoff_s),
+        )
+    )
+
+    incident_journal = IncidentJournal(_paths["logs"])
+
+    bot = SafetyBot(
+        config=config,
+        db=db,
+        gov=gov,
+        risk_manager=risk_manager,
+        limits=limits,
+        black_swan_guard=black_swan_guard,
+        self_heal_guard=self_heal_guard,
+        canary_guard=canary_guard,
+        drift_guard=drift_guard,
+        incident_journal=incident_journal,
+    )
     bot.run()

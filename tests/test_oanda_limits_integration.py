@@ -141,7 +141,7 @@ class TestOandaLimitsIntegration(unittest.TestCase):
             orders_per_sec=orders_per_sec,
             positions_pending_limit=positions_pending_limit,
         )
-        client = safetybot.MT5Client({"MT5_LOGIN": "1", "MT5_PASSWORD": "x", "MT5_SERVER": "y"}, gov, limits)
+        client = safetybot.ExecutionEngine({"MT5_LOGIN": "1", "MT5_PASSWORD": "x", "MT5_SERVER": "y"}, gov, limits)
         return client, db
 
     def _tmpdir(self) -> Path:

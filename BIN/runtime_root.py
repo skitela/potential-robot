@@ -90,6 +90,7 @@ def project_paths(root: Path) -> dict[str, Path]:
         "lock": root / "LOCK",
         "evidence": root / "EVIDENCE",
         "diag": root / "DIAG",
+        "config": root / "CONFIG",
     }
 
 def ensure_dirs(paths: dict[str, Path]) -> None:

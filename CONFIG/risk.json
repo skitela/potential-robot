@@ -1,0 +1,19 @@
+{
+  "risk_per_trade_max_pct": 0.015,
+  "risk_scalp_pct": 0.003,
+  "risk_scalp_min_pct": 0.002,
+  "risk_scalp_max_pct": 0.004,
+  "risk_swing_pct": 0.01,
+  "risk_swing_min_pct": 0.008,
+  "risk_swing_max_pct": 0.015,
+  "max_open_risk_pct": 0.018,
+  "max_positions_parallel": 5,
+  "max_positions_per_symbol": 1,
+  "daily_loss_soft_pct": 0.02,
+  "daily_loss_hard_pct": 0.03,
+  "daily_loss_soft_risk_factor": 0.5,
+  "black_swan_threshold": 3.0,
+  "black_swan_precaution_fraction": 0.8,
+  "kill_switch_on_black_swan_stress": true,
+  "self_heal_max_net_loss_abs": 0.0
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Risk Configuration v1",
+  "type": "object",
+  "properties": {
+    "risk_per_trade_max_pct": { "type": "number", "minimum": 0 },
+    "risk_scalp_pct": { "type": "number", "minimum": 0 },
+    "risk_scalp_min_pct": { "type": "number", "minimum": 0 },
+    "risk_scalp_max_pct": { "type": "number", "minimum": 0 },
+    "risk_swing_pct": { "type": "number", "minimum": 0 },
+    "risk_swing_min_pct": { "type": "number", "minimum": 0 },
+    "risk_swing_max_pct": { "type": "number", "minimum": 0 },
+    "max_open_risk_pct": { "type": "number", "minimum": 0 },
+    "max_positions_parallel": { "type": "integer", "minimum": 1 },
+    "max_positions_per_symbol": { "type": "integer", "minimum": 1 },
+    "daily_loss_soft_pct": { "type": "number", "minimum": 0 },
+    "daily_loss_hard_pct": { "type": "number", "minimum": 0 },
+    "daily_loss_soft_risk_factor": { "type": "number", "minimum": 0, "maximum": 1 },
+    "black_swan_threshold": { "type": "number", "minimum": 0 },
+    "black_swan_precaution_fraction": { "type": "number", "minimum": 0, "maximum": 1 },
+    "kill_switch_on_black_swan_stress": { "type": "boolean" },
+    "self_heal_max_net_loss_abs": { "type": "number", "minimum": 0 }
+  },
+  "required": [
+    "risk_per_trade_max_pct",
+    "risk_scalp_pct",
+    "risk_scalp_min_pct",
+    "risk_scalp_max_pct",
+    "risk_swing_pct",
+    "risk_swing_min_pct",
+    "risk_swing_max_pct",
+    "max_open_risk_pct",
+    "max_positions_parallel",
+    "max_positions_per_symbol",
+    "daily_loss_soft_pct",
+    "daily_loss_hard_pct",
+    "daily_loss_soft_risk_factor",
+    "black_swan_threshold",
+    "black_swan_precaution_fraction",
+    "kill_switch_on_black_swan_stress",
+    "self_heal_max_net_loss_abs"
+  ]
+}

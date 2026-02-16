@@ -1,0 +1,11 @@
+{
+  "max_symbols_per_iter_hot": 2,
+  "max_symbols_per_iter_warm": 1,
+  "max_symbols_per_iter_eco": 0,
+  "m5_pull_sec_hot": 60,
+  "m5_pull_sec_warm": 120,
+  "m5_pull_sec_eco": 300,
+  "positions_poll_sec_hot": 60,
+  "positions_poll_sec_warm": 120,
+  "positions_poll_sec_eco": 300
+}
