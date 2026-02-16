@@ -36,6 +36,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mt5-path", required=True, help="Path to terminal64.exe (OANDA TMS MT5 Terminal)")
     ap.add_argument("--out", default="", help="Optional explicit output JSON path")
+    ap.add_argument(
+        "--offline-sim",
+        action="store_true",
+        help="Offline simulation mode: return DO_WERYFIKACJI_ONLINE instead of FAIL when MT5 API/live attach is unavailable.",
+    )
     args = ap.parse_args()
 
     run_id = now_id()
@@ -66,6 +71,11 @@ def main() -> int:
         import MetaTrader5 as mt5
     except Exception as e:
         cg.tlog(None, "WARN", "SMOKE_EXC", "nonfatal exception swallowed", e)
+        if bool(args.offline_sim):
+            report["result"] = "DO_WERYFIKACJI_ONLINE"
+            report["error"] = f"Offline sim: MetaTrader5 unavailable: {e}"
+            out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            return 0
         report["result"] = "FAIL"
         report["error"] = f"Import MetaTrader5 failed: {e}"
         out.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -75,6 +85,11 @@ def main() -> int:
     try:
         ok = mt5.initialize(args.mt5_path)
         if not ok:
+            if bool(args.offline_sim):
+                report["result"] = "DO_WERYFIKACJI_ONLINE"
+                report["error"] = f"Offline sim: mt5.initialize=False, last_error={mt5.last_error()!r}"
+                out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                return 0
             report["result"] = "FAIL"
             report["error"] = f"mt5.initialize returned False, last_error={mt5.last_error()!r}"
             out.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -116,6 +116,11 @@ def main() -> int:
     ap.add_argument("--group", default="", help="Optional symbols_get(group=...) filter")
     ap.add_argument("--limit", type=int, default=0, help="Save only first N symbols in report (0 = all)")
     ap.add_argument("--strict", action="store_true", help="Return non-zero if any target base is missing")
+    ap.add_argument(
+        "--offline-sim",
+        action="store_true",
+        help="Offline simulation mode: return DO_WERYFIKACJI_ONLINE instead of FAIL when MT5 API/live attach is unavailable.",
+    )
     ap.add_argument("--out", default="", help="Optional explicit output JSON path")
     args = ap.parse_args()
 
@@ -146,6 +151,11 @@ def main() -> int:
         import MetaTrader5 as mt5
     except Exception as exc:
         cg.tlog(None, "WARN", "SYMAUD_EXC", "Import MetaTrader5 failed", exc)
+        if bool(args.offline_sim):
+            report["result"] = "DO_WERYFIKACJI_ONLINE"
+            report["error"] = f"Offline sim: MetaTrader5 unavailable: {exc}"
+            out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            return 0
         report["result"] = "FAIL"
         report["error"] = f"Import MetaTrader5 failed: {exc}"
         out.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -154,6 +164,11 @@ def main() -> int:
     try:
         ok = mt5.initialize(args.mt5_path)
         if not ok:
+            if bool(args.offline_sim):
+                report["result"] = "DO_WERYFIKACJI_ONLINE"
+                report["error"] = f"Offline sim: mt5.initialize=False, last_error={mt5.last_error()!r}"
+                out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                return 0
             report["result"] = "FAIL"
             report["error"] = f"mt5.initialize returned False, last_error={mt5.last_error()!r}"
             out.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -161,6 +176,11 @@ def main() -> int:
 
         symbols = mt5.symbols_get(group=args.group) if str(args.group or "").strip() else mt5.symbols_get()
         if symbols is None:
+            if bool(args.offline_sim):
+                report["result"] = "DO_WERYFIKACJI_ONLINE"
+                report["error"] = f"Offline sim: mt5.symbols_get=None, last_error={mt5.last_error()!r}"
+                out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                return 0
             report["result"] = "FAIL"
             report["error"] = f"mt5.symbols_get returned None, last_error={mt5.last_error()!r}"
             out.write_text(json.dumps(report, indent=2), encoding="utf-8")
