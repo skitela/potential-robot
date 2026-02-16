@@ -232,12 +232,35 @@ class CFG:
         "GBPUSD": "FX",
         "XAUUSD": "METAL",
         "XAGUSD": "METAL",
+        "GOLD": "METAL",
+        "SILVER": "METAL",
         "DAX40": "INDEX",
         "DE40": "INDEX",
+        "DE30": "INDEX",
+        "GER40": "INDEX",
+        "GER30": "INDEX",
         "US500": "INDEX",
         "SPX500": "INDEX",
     }
-    index_profile_map = {"DAX40": "EU", "DE40": "EU", "US500": "US", "SPX500": "US"}
+    index_profile_map = {
+        "DAX40": "EU",
+        "DE40": "EU",
+        "DE30": "EU",
+        "GER40": "EU",
+        "GER30": "EU",
+        "US500": "US",
+        "SPX500": "US",
+    }
+    # Broker-specific base aliases (OANDA TMS MT5 may expose DE30/GOLD names).
+    symbol_alias_map: Dict[str, Tuple[str, ...]] = {
+        "EURUSD": ("EURUSD",),
+        "GBPUSD": ("GBPUSD",),
+        "XAUUSD": ("XAUUSD", "GOLD"),
+        "XAGUSD": ("XAGUSD", "SILVER"),
+        "DAX40": ("DAX40", "DE40", "DE30", "GER40", "GER30"),
+        "US500": ("US500", "SPX500"),
+    }
+    symbol_suffixes: Tuple[str, ...] = ("", ".pro", ".stp", ".pl")
     # OANDA MT5 policy guard: block accidental algo on equity/ETF/ETN symbols (non-close only).
     symbol_policy_enabled: bool = True
     symbol_policy_fail_on_other_group: bool = True
@@ -1101,6 +1124,22 @@ class Persistence:
 
 def symbol_base(raw_symbol: str) -> str:
     return raw_symbol.split(".")[0]
+
+def symbol_alias_candidates(raw_symbol: str) -> List[str]:
+    raw = str(raw_symbol or "").strip().upper()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen = set()
+    alias_cfg = getattr(CFG, "symbol_alias_map", {}) or {}
+    for cand in alias_cfg.get(raw, (raw,)):
+        key = str(cand or "").strip().upper()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    if raw not in seen:
+        out.insert(0, raw)
+    return out
 
 def guess_group(symbol: str) -> str:
     return CFG.symbol_group_map.get(symbol_base(symbol), "OTHER")
@@ -3736,14 +3775,17 @@ class SafetyBot:
     def resolve_canon_symbol(self, raw_sym: str) -> Optional[str]:
         if raw_sym in self.resolved_symbols:
             return self.resolved_symbols[raw_sym]
-        suffixes = ["", ".pro", ".stp", ".pl"]
-        grp = CFG.symbol_group_map.get(raw_sym, "OTHER")
-        for suf in suffixes:
-            cand = f"{raw_sym}{suf}"
-            info = self.mt.symbol_info_cached(cand, grp, self.db)
-            if info is not None:
-                self.resolved_symbols[raw_sym] = cand
-                return cand
+        suffixes = tuple(getattr(CFG, "symbol_suffixes", ("", ".pro", ".stp", ".pl")) or ("",))
+        raw_norm = str(raw_sym or "").strip().upper()
+        grp_default = CFG.symbol_group_map.get(raw_norm, "OTHER")
+        for base in symbol_alias_candidates(raw_norm):
+            grp = CFG.symbol_group_map.get(base, grp_default)
+            for suf in suffixes:
+                cand = f"{base}{suf}"
+                info = self.mt.symbol_info_cached(cand, grp, self.db)
+                if info is not None:
+                    self.resolved_symbols[raw_sym] = cand
+                    return cand
         return None
 
     def _build_universe(self) -> List[Tuple[str, str, str]]:
