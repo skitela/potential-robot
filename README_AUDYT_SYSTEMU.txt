@@ -1,4 +1,4 @@
-README_AUDYT_SYSTEMU — instrukcja uruchomienia audytu (wrapper)
+﻿README_AUDYT_SYSTEMU — instrukcja uruchomienia audytu (wrapper)
 
 KANON / jedyne źródło prawdy audytorskiej:
 - AUDIT_POLICY.json
@@ -37,3 +37,11 @@ PRZYPOMINAJKA: PUSH DO GITHUB (device flow)
    Wklej kod i zatwierdź.
 4) Jeśli URL repo jest inny, ustaw go przed pushem:
    & "C:\ProgramData\skite\GitHubDesktop\app-3.5.4\resources\app\git\cmd\git.exe" remote set-url origin <URL>
+
+Benchmark / Ranking V1 (wspolna metodyka OANDA + GH):
+- Kontrakt: SCHEMAS/ranking_benchmark_metodyka_v1.json
+- Launcher: TOOLS/ranking_benchmark_v1.py
+- Komenda (ta sama w obu repo):
+  python -B TOOLS/ranking_benchmark_v1.py
+- Wymuszenie targetu:
+  python -B TOOLS/ranking_benchmark_v1.py --target-root "C:\GLOBALNY HANDEL VER1"

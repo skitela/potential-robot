@@ -1,0 +1,107 @@
+{
+  "method_id": "RANKING_BENCHMARK_V1",
+  "version": 1,
+  "description": "Unified benchmark and ranking contract used across OANDA_MT5_SYSTEM and GH_V1.",
+  "scale": {
+    "min": 0,
+    "max": 100,
+    "formula": "score_100 = sum(score_0_10 * weight_pct) / 10"
+  },
+  "segments": [
+    {
+      "name": "TOP",
+      "min_inclusive": 80.0,
+      "max_exclusive": 100.01
+    },
+    {
+      "name": "MID",
+      "min_inclusive": 65.0,
+      "max_exclusive": 80.0
+    },
+    {
+      "name": "LOW",
+      "min_inclusive": 0.0,
+      "max_exclusive": 65.0
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C01_RISK_CAPITAL_PROTECTION",
+      "name": "Ochrona kapitalu i ryzyko",
+      "weight_pct": 18
+    },
+    {
+      "id": "C02_OPERATIONAL_RESILIENCE",
+      "name": "Odpornosc operacyjna",
+      "weight_pct": 14
+    },
+    {
+      "id": "C03_EXECUTION_QUALITY",
+      "name": "Jakosc egzekucji",
+      "weight_pct": 12
+    },
+    {
+      "id": "C04_MONITORING_DIAGNOSTICS",
+      "name": "Monitoring i diagnostyka",
+      "weight_pct": 10
+    },
+    {
+      "id": "C05_MARKET_DATA_QUALITY",
+      "name": "Jakosc danych rynkowych",
+      "weight_pct": 10
+    },
+    {
+      "id": "C06_API_AUTOMATION",
+      "name": "API i automatyzacja",
+      "weight_pct": 10
+    },
+    {
+      "id": "C07_SCALABILITY_ARCHITECTURE",
+      "name": "Skalowalnosc i architektura",
+      "weight_pct": 8
+    },
+    {
+      "id": "C08_COMPLIANCE_AUDITABILITY",
+      "name": "Compliance i audit trail",
+      "weight_pct": 8
+    },
+    {
+      "id": "C09_TRAINING_ANTI_OVERFIT",
+      "name": "Trening i anty-przeuczenie",
+      "weight_pct": 6
+    },
+    {
+      "id": "C10_OPERATIONAL_READINESS",
+      "name": "Gotowosc operacyjna",
+      "weight_pct": 4
+    }
+  ],
+  "reference_basket": {
+    "semi_pro": [
+      "QUANTCONNECT_LEAN",
+      "IBKR_API",
+      "CTRADER_AUTOMATE_OPENAPI",
+      "TRADESTATION",
+      "NINJATRADER_8",
+      "METATRADER_5"
+    ],
+    "professional": [
+      "TRADING_TECHNOLOGIES_TT",
+      "FIDESSA_ION",
+      "BLOOMBERG_EMSX",
+      "FLEXTRADE",
+      "SAXO_OPENAPI_PRO",
+      "LMAX_EXCHANGE_API"
+    ]
+  },
+  "evidence_policy": {
+    "internal_system_score": "must be based on local artifacts (gate, prelive, smoke, tests, stress evidence)",
+    "external_reference_score": "must be based on official vendor docs and official product pages"
+  },
+  "aliases": [
+    "benchmark",
+    "ranking",
+    "test porownawczy",
+    "bechmark"
+  ]
+}

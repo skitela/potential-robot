@@ -96,3 +96,20 @@ Jesli kiedys zmieniamy kryteria lub wagi:
 - zwiekszyc wersje dokumentu (V2, V3...),
 - trzymac porownania historyczne osobno,
 - nie mieszac starych i nowych wag w jednej serii rankingow.
+
+## Staly launcher (w obu repo)
+
+Ta sama metodyka jest przypieta do:
+- `SCHEMAS/ranking_benchmark_metodyka_v1.json`
+- `TOOLS/ranking_benchmark_v1.py`
+- `RUN/RANKING_BENCHMARK_V1.ps1`
+
+Jednolita komenda:
+- `python -B TOOLS/ranking_benchmark_v1.py`
+
+Tryb uruchomienia:
+- z OANDA_MT5_SYSTEM: domyslnie ocenia GH V1 (`C:\GLOBALNY HANDEL VER1`) jesli istnieje,
+- z GH_V1: domyslnie ocenia biezacy root GH_V1.
+
+Wymuszenie targetu:
+- `python -B TOOLS/ranking_benchmark_v1.py --target-root "C:\GLOBALNY HANDEL VER1"`
