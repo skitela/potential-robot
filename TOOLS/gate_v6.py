@@ -486,21 +486,26 @@ def detect_key_volume_label(label: str = "OANDAKEY") -> tuple[bool, str]:
             f"$v = Get-Volume | Where-Object {{ $_.FileSystemLabel -eq '{safe_label}' }} | Select-Object -First 1;"
             "if ($v -and $v.DriveLetter) { Write-Output $v.DriveLetter }"
         )
-        out = subprocess.check_output(
+        proc = subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps],
-            stderr=subprocess.STDOUT,
+            capture_output=True,
             text=True,
             timeout=10,
-        ).strip()
-        if out:
+            check=False,
+        )
+        out = (proc.stdout or "").strip()
+        if proc.returncode == 0 and out:
             cand = out.strip()
             if re.fullmatch(r"[A-Za-z]", cand):
                 drive = cand.upper()
             else:
                 cg.tlog(None, "WARN", "GATE_EXC", f"detect_key_volume_label: unexpected drive '{cand}'")
+        elif proc.returncode != 0:
+            stderr_txt = (proc.stderr or "").strip().splitlines()
+            err_head = stderr_txt[0] if stderr_txt else "powershell_nonzero"
+            return False, f"NOT_FOUND label='{label}' rc={proc.returncode} err='{err_head[:120]}'"
     except subprocess.TimeoutExpired:
-        cg.tlog(None, "WARN", "GATE_EXC", "detect_key_volume_label: powershell Get-Volume timed out")
-        drive = None
+        return False, f"NOT_FOUND label='{label}' reason='powershell_timeout'"
     except Exception as e:
         cg.tlog(None, "WARN", "GATE_EXC", "detect_key_volume_label: powershell call failed", e)
         drive = None
