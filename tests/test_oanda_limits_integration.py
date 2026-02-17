@@ -14,12 +14,13 @@ from oanda_limits_guard import OandaLimitsGuard
 
 
 class _StubInfo:
-    def __init__(self, trade_mode: int = 4, path: str = ""):
+    def __init__(self, trade_mode: int = 4, path: str = "", filling_mode: int = 0):
         self.trade_mode = trade_mode
         self.trade_stops_level = 0
         self.trade_freeze_level = 0
         self.point = 0.0001
         self.path = path
+        self.filling_mode = int(filling_mode)
 
 
 class _StubResult:
@@ -50,6 +51,12 @@ class _StubMT5:
     ORDER_TYPE_SELL_STOP_LIMIT = 7
     TRADE_RETCODE_DONE = 10009
     TIMEFRAME_M5 = 5
+    ORDER_FILLING_FOK = 0
+    ORDER_FILLING_IOC = 1
+    ORDER_FILLING_RETURN = 2
+    SYMBOL_FILLING_FOK = 1
+    SYMBOL_FILLING_IOC = 2
+    SYMBOL_FILLING_RETURN = 4
     SYMBOL_TRADE_MODE_DISABLED = 0
     SYMBOL_TRADE_MODE_LONGONLY = 1
     SYMBOL_TRADE_MODE_SHORTONLY = 2
@@ -60,12 +67,14 @@ class _StubMT5:
         self._positions = []
         self._orders = []
         self._trade_mode = self.SYMBOL_TRADE_MODE_FULL
+        self._filling_mode = self.SYMBOL_FILLING_FOK | self.SYMBOL_FILLING_IOC | self.SYMBOL_FILLING_RETURN
         self._symbol_path = ""
         self._retcodes = []
         self.order_send_calls = 0
+        self.requests = []
 
     def symbol_info(self, _symbol):
-        return _StubInfo(trade_mode=self._trade_mode, path=self._symbol_path)
+        return _StubInfo(trade_mode=self._trade_mode, path=self._symbol_path, filling_mode=self._filling_mode)
 
     def symbol_info_tick(self, _symbol):
         class _Tick:
@@ -85,6 +94,7 @@ class _StubMT5:
 
     def order_send(self, _request):
         self.order_send_calls += 1
+        self.requests.append(dict(_request))
         if self._retcodes:
             return _StubResult(int(self._retcodes.pop(0)))
         return _StubResult(self.TRADE_RETCODE_DONE)
@@ -324,6 +334,28 @@ class TestOandaLimitsIntegration(unittest.TestCase):
             self.assertGreater(int(db.get_global_backoff_until_ts()), int(safetybot.time.time()))
             reason = db.get_global_backoff_reason()
             self.assertIn("execution_burst", str(reason))
+        finally:
+            db.conn.close()
+
+    def test_invalid_fill_retries_with_alternate_filling_mode(self):
+        tmp = self._tmpdir()
+        client, db = self._build_client(tmp, orders_per_sec=100)
+        try:
+            self.stub._retcodes = [10030, self.stub.TRADE_RETCODE_DONE]
+            self.stub._filling_mode = self.stub.SYMBOL_FILLING_FOK
+            req = {
+                "action": self.stub.TRADE_ACTION_DEAL,
+                "type": self.stub.ORDER_TYPE_BUY,
+                "price": 1.0,
+                "type_filling": self.stub.ORDER_FILLING_IOC,
+            }
+            res = client.order_send("EURUSD", "FX", req)
+            self.assertIsNotNone(res)
+            self.assertEqual(self.stub.order_send_calls, 2)
+            first_fill = self.stub.requests[0].get("type_filling")
+            second_fill = self.stub.requests[1].get("type_filling")
+            self.assertNotEqual(first_fill, second_fill)
+            self.assertEqual({first_fill, second_fill}, {self.stub.ORDER_FILLING_IOC, self.stub.ORDER_FILLING_FOK})
         finally:
             db.conn.close()
 

@@ -14,6 +14,8 @@
   "daily_loss_soft_risk_factor": 0.5,
   "black_swan_threshold": 3.0,
   "black_swan_precaution_fraction": 0.8,
+  "black_swan_min_vol_samples": 4,
   "kill_switch_on_black_swan_stress": true,
+  "kill_switch_black_swan_multiplier": 4.0,
   "self_heal_max_net_loss_abs": 0.0
 }

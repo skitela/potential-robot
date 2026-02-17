@@ -142,10 +142,13 @@ if ($null -ne $last) {
     $aliveCount = @($last.components | Where-Object { $_.running_heartbeat }).Count
 }
 
+$requiredAlive = [Math]::Min([int]$watch.Count, 2)
+if ($requiredAlive -lt 1) { $requiredAlive = 1 }
+
 $final = "ONLINE_HEARTBEAT_WEAK"
 if ($timedOut) {
     $final = "START_TIMEOUT"
-} elseif ($aliveCount -ge 2) {
+} elseif ($aliveCount -ge $requiredAlive) {
     $final = "ONLINE_HEARTBEAT_OK"
 }
 
@@ -159,6 +162,7 @@ $report = [ordered]@{
     exit_code = $exitCode
     final_status = $final
     alive_heartbeat_count = [int]$aliveCount
+    required_heartbeat_count = [int]$requiredAlive
     stdout_log = $out
     stderr_log = $err
     timeline = $timeline

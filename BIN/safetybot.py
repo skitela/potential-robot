@@ -2924,8 +2924,10 @@ class ExecutionEngine:
             10028: int(CFG.global_backoff_locked_s),  # only after max_retry_locked exhausted
         }
         symbol_cooldown_cfg = {
+            10016: (int(CFG.cooldown_stops_too_close_s), "invalid_stops"),
             10018: (int(CFG.cooldown_market_closed_s), "market_closed"),
             10021: (int(CFG.cooldown_no_quotes_s), "no_quotes"),
+            10030: (int(CFG.cooldown_trade_mode_s), "invalid_fill_mode"),
             10033: (int(CFG.cooldown_limit_s), "limit_orders"),
             10034: (int(CFG.cooldown_limit_s), "limit_volume"),
             10040: (int(CFG.cooldown_limit_s), "limit_positions"),
@@ -2935,6 +2937,58 @@ class ExecutionEngine:
             10045: (int(CFG.cooldown_trade_mode_s), "fifo_close"),
             10046: (int(CFG.cooldown_trade_mode_s), "hedge_prohibited"),
         }
+
+        # Invalid fill (10030) is commonly broker/symbol-policy specific.
+        # Build deterministic filling-mode fallback list for this symbol.
+        request = dict(request or {})
+        fill_candidates: List[int] = []
+        requested_fill = request.get("type_filling")
+
+        def _append_fill_candidate(v: Any) -> None:
+            if v is None:
+                return
+            try:
+                iv = int(v)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                return
+            if iv not in fill_candidates:
+                fill_candidates.append(iv)
+
+        try:
+            symbol_fill_mask = int(getattr(info, "filling_mode", 0) or 0)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            symbol_fill_mask = 0
+
+        order_fill_fok = getattr(mt5, "ORDER_FILLING_FOK", None)
+        order_fill_ioc = getattr(mt5, "ORDER_FILLING_IOC", None)
+        order_fill_return = getattr(mt5, "ORDER_FILLING_RETURN", None)
+
+        sym_fill_fok = int(getattr(mt5, "SYMBOL_FILLING_FOK", 1))
+        sym_fill_ioc = int(getattr(mt5, "SYMBOL_FILLING_IOC", 2))
+        sym_fill_return = int(getattr(mt5, "SYMBOL_FILLING_RETURN", 4))
+
+        if symbol_fill_mask > 0:
+            if (symbol_fill_mask & sym_fill_fok) != 0:
+                _append_fill_candidate(order_fill_fok)
+            if (symbol_fill_mask & sym_fill_ioc) != 0:
+                _append_fill_candidate(order_fill_ioc)
+            if (symbol_fill_mask & sym_fill_return) != 0:
+                _append_fill_candidate(order_fill_return)
+
+        # Keep requested fill as candidate, but prefer broker-supported modes first when known.
+        _append_fill_candidate(requested_fill)
+
+        # Safe fallback set when symbol flags are missing/inconclusive.
+        _append_fill_candidate(order_fill_ioc)
+        _append_fill_candidate(order_fill_fok)
+        _append_fill_candidate(order_fill_return)
+
+        fill_idx = 0
+        if fill_candidates:
+            request["type_filling"] = int(fill_candidates[0])
+
         attempt = 0
         last_res = None
         while True:
@@ -2990,6 +3044,17 @@ class ExecutionEngine:
                     )
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+            # Fallback filling-mode rotation on broker-side invalid fill.
+            if ret_num == 10030 and (fill_idx + 1) < len(fill_candidates):
+                prev_fill = request.get("type_filling")
+                fill_idx += 1
+                request["type_filling"] = int(fill_candidates[fill_idx])
+                logging.warning(
+                    f"ORDER_RETRY_FILLING_SWITCH symbol={symbol} "
+                    f"from={prev_fill} to={request['type_filling']} retcode_num={ret_num}"
+                )
+                continue
 
             # Success codes
             try:
@@ -3172,20 +3237,35 @@ class StandardStrategy:
 
     def m5_indicators_if_due(self, symbol: str, grp: str, mode: str) -> Optional[Dict]:
         now_ts = time.time()
-        pull = CFG.m5_pull_sec_eco if mode == "ECO" else (CFG.m5_pull_sec_warm if mode == "WARM" else CFG.m5_pull_sec_hot)
+        try:
+            sch = getattr(self.config, "scheduler", {}) or {}
+            if mode == "ECO":
+                pull = int(sch.get("m5_pull_sec_eco", CFG.m5_pull_sec_eco))
+            elif mode == "WARM":
+                pull = int(sch.get("m5_pull_sec_warm", CFG.m5_pull_sec_warm))
+            else:
+                pull = int(sch.get("m5_pull_sec_hot", CFG.m5_pull_sec_hot))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            pull = CFG.m5_pull_sec_eco if mode == "ECO" else (CFG.m5_pull_sec_warm if mode == "WARM" else CFG.m5_pull_sec_hot)
         last = self.cache.last_m5_calc_ts.get(symbol, 0.0)
         if now_ts - last < pull:
+            wait_s = int(max(0, float(pull) - (now_ts - last)))
+            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_PULL_WAIT wait_s={wait_s}")
             return None
 
         df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
         if df is None or len(df) < 60:
             self.cache.last_m5_calc_ts[symbol] = now_ts
+            rows = 0 if df is None else int(len(df))
+            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_DATA_SHORT rows={rows}")
             return None
 
         self.cache.last_m5_calc_ts[symbol] = now_ts
         last_bar = df["time"].iloc[-1]
         prev_bar = self.cache.last_m5_bar_time.get(symbol)
         if prev_bar is not None and last_bar == prev_bar :
+            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_SAME_BAR")
             return None
         self.cache.last_m5_bar_time[symbol] = last_bar
 
@@ -3215,6 +3295,11 @@ class StandardStrategy:
             self.last_indicators[symbol_base(symbol)] = dict(ind)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        logging.info(
+            f"ENTRY_READY symbol={symbol} grp={grp} mode={mode} "
+            f"adx={float(ind['adx']):.2f} close={float(ind['close']):.6f} "
+            f"sma={float(ind['sma']):.6f} open={float(ind['open']):.6f}"
+        )
         return ind
 
     def try_trade(self, symbol: str, grp: str, mode: str, info, signal: str, is_paper: bool):
@@ -3499,10 +3584,15 @@ class StandardStrategy:
         if not ind:
             return
         if ind["adx"] < CFG.adx_threshold:
+            logging.info(
+                f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} "
+                f"reason=ADX_LOW adx={float(ind['adx']):.2f} threshold={int(CFG.adx_threshold)}"
+            )
             return
 
         trend_h4, _trend_d1 = self.get_trend(symbol, grp)
         if trend_h4 == "NEUTRAL":
+            logging.info(f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=TREND_NEUTRAL")
             return
 
         signal = None
@@ -3512,6 +3602,10 @@ class StandardStrategy:
             signal = "SELL"
 
         if signal:
+            logging.info(
+                f"ENTRY_SIGNAL symbol={symbol} grp={grp} mode={mode} trend_h4={trend_h4} "
+                f"signal={signal} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} open={float(ind['open']):.6f}"
+            )
             try:
                 base = symbol_base(symbol)
                 mid = float(ind.get('close'))
@@ -3540,6 +3634,11 @@ class StandardStrategy:
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             self.try_trade(symbol, grp, mode, info, signal, is_paper)
+        else:
+            logging.info(
+                f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=NO_SIGNAL "
+                f"trend_h4={trend_h4} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} open={float(ind['open']):.6f}"
+            )
 
 # =============================================================================
 # BOT
@@ -3864,6 +3963,31 @@ class SafetyBot:
         suffixes = tuple(getattr(CFG, "symbol_suffixes", ("", ".pro", ".stp", ".pl")) or ("",))
         raw_norm = str(raw_sym or "").strip().upper()
         grp_default = CFG.symbol_group_map.get(raw_norm, "OTHER")
+
+        def _score_symbol_for_entries(info_obj: object) -> Tuple[int, str]:
+            """Prefer symbols that can accept new entries (FULL > directional > UNKNOWN)."""
+            tm_name = "UNKNOWN"
+            try:
+                tm_name = _trade_mode_name(int(getattr(info_obj, "trade_mode", -1)))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                tm_name = "UNKNOWN"
+            if tm_name == "FULL":
+                return 3, tm_name
+            if tm_name in ("LONGONLY", "SHORTONLY"):
+                return 2, tm_name
+            if tm_name == "UNKNOWN":
+                return 1, tm_name
+            if tm_name == "CLOSEONLY":
+                return 0, tm_name
+            return -1, tm_name
+
+        best_score = -2
+        best_cand: Optional[str] = None
+        best_info: Optional[object] = None
+        best_tm = "UNKNOWN"
+        saw_disabled = False
+
         for base in symbol_alias_candidates(raw_norm):
             grp = CFG.symbol_group_map.get(base, grp_default)
             for suf in suffixes:
@@ -3887,14 +4011,34 @@ class SafetyBot:
                 if info is None:
                     info = engine.symbol_info_cached(cand, grp, self.db)
                 if info is not None:
-                    try:
-                        if hasattr(engine, "_sym_info_cache"):
-                            engine._sym_info_cache[cand] = (time.time(), info)
-                    except Exception as e:
-                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                    self.resolved_symbols[raw_sym] = cand
-                    return cand
-        return None
+                    score, tm_name = _score_symbol_for_entries(info)
+                    if score < 0:
+                        saw_disabled = True
+                        continue
+                    if score > best_score:
+                        best_score = score
+                        best_cand = cand
+                        best_info = info
+                        best_tm = tm_name
+                    if best_score >= 3:
+                        break
+            if best_score >= 3:
+                break
+
+        if best_cand is None:
+            if saw_disabled:
+                logging.warning(f"RESOLVE_SYMBOL_DISABLED_ONLY raw={raw_norm}")
+            return None
+
+        try:
+            if hasattr(engine, "_sym_info_cache") and best_info is not None:
+                engine._sym_info_cache[best_cand] = (time.time(), best_info)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        self.resolved_symbols[raw_sym] = best_cand
+        logging.info(f"RESOLVE_SYMBOL raw={raw_norm} canon={best_cand} trade_mode={best_tm}")
+        return best_cand
 
     def _build_universe(self) -> List[Tuple[str, str, str]]:
         """Buduje listę instrumentów (raw, canon, grp) i dodaje je do MarketWatch tylko raz.
@@ -4484,6 +4628,11 @@ class SafetyBot:
                     logging.info(f"OPEN GUARD (P0/P1/P2) | {sym} | positions={cnt_pos}")
             return
 
+        logging.info(
+            f"SCAN_LIMIT global_mode={global_mode} n_max={int(n_max)} n_limit={int(n_limit)} "
+            f"canary_active={int(canary_signal.canary_active)} learner_qa={learner_qa_light}"
+        )
+
         # --- SCOUT read-only (tie-breaker rankingu shortlisty) ---
         verdict = load_verdict(self.meta_dir)
         scout = load_scout_advice(self.meta_dir)
@@ -4729,6 +4878,15 @@ if __name__ == "__main__":
     CFG.paper_trading = _cfg_bool("paper_trading", CFG.paper_trading)
     CFG.eco_probe_symbols_when_flat = _cfg_int("eco_probe_symbols_when_flat", CFG.eco_probe_symbols_when_flat)
     CFG.sys_budget_day = _cfg_int("sys_budget_day", CFG.sys_budget_day)
+    CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
+    CFG.usb_watch_check_interval_sec = _cfg_int(
+        "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
+    )
+    CFG.adx_threshold = _cfg_int("adx_threshold", CFG.adx_threshold)
+    CFG.learner_qa_gate_enabled = _cfg_bool("learner_qa_gate_enabled", CFG.learner_qa_gate_enabled)
+    CFG.learner_qa_red_to_eco = _cfg_bool("learner_qa_red_to_eco", CFG.learner_qa_red_to_eco)
+    CFG.canary_rollout_enabled = _cfg_bool("canary_rollout_enabled", CFG.canary_rollout_enabled)
+    CFG.canary_max_symbols_per_iter = _cfg_int("canary_max_symbols_per_iter", CFG.canary_max_symbols_per_iter)
 
     CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
     CFG.black_swan_precaution_fraction = float(

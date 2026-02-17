@@ -29,6 +29,31 @@ class _MtStub:
         return object() if key in self.available else None
 
 
+class _Info:
+    def __init__(self, trade_mode: int):
+        self.trade_mode = int(trade_mode)
+
+
+class _Mt5Probe:
+    SYMBOL_TRADE_MODE_DISABLED = 0
+    SYMBOL_TRADE_MODE_LONGONLY = 1
+    SYMBOL_TRADE_MODE_SHORTONLY = 2
+    SYMBOL_TRADE_MODE_CLOSEONLY = 3
+    SYMBOL_TRADE_MODE_FULL = 4
+
+    def __init__(self, mode_map):
+        self.mode_map = {str(k).upper(): int(v) for k, v in dict(mode_map).items()}
+
+    def symbol_info(self, symbol):
+        mode = self.mode_map.get(str(symbol).upper())
+        if mode is None:
+            return None
+        return _Info(mode)
+
+    def symbol_select(self, _symbol, _enabled):
+        return True
+
+
 class TestSymbolAliasesOandaMt5Pl(unittest.TestCase):
     def test_alias_candidates_cover_oanda_tms_names(self):
         dax = safetybot.symbol_alias_candidates("DAX40")
@@ -56,6 +81,27 @@ class TestSymbolAliasesOandaMt5Pl(unittest.TestCase):
         self.assertEqual(got_xau, "GOLD.pro")
         self.assertEqual(bot.resolved_symbols.get("DAX40"), "DE30.pro")
         self.assertEqual(bot.resolved_symbols.get("XAUUSD"), "GOLD.pro")
+
+    def test_resolve_canon_symbol_prefers_tradeable_over_disabled_base(self):
+        bot = types.SimpleNamespace()
+        bot.resolved_symbols = {}
+        bot.db = object()
+        bot.mt = _MtStub({"GBPUSD", "GBPUSD.PRO"})
+
+        prev_mt5 = safetybot.mt5
+        safetybot.mt5 = _Mt5Probe(
+            {
+                "GBPUSD": _Mt5Probe.SYMBOL_TRADE_MODE_DISABLED,
+                "GBPUSD.PRO": _Mt5Probe.SYMBOL_TRADE_MODE_FULL,
+            }
+        )
+        try:
+            got = safetybot.SafetyBot.resolve_canon_symbol(bot, "GBPUSD")
+        finally:
+            safetybot.mt5 = prev_mt5
+
+        self.assertEqual(got, "GBPUSD.pro")
+        self.assertEqual(bot.resolved_symbols.get("GBPUSD"), "GBPUSD.pro")
 
 
 if __name__ == "__main__":
