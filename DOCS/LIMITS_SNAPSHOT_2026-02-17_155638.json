@@ -1,0 +1,126 @@
+{
+  "generated_local": "2026-02-17T15:56:38.749744",
+  "latest_budget": {
+    "ts": "2026-02-17T15:56:24",
+    "price_requests_day": 435,
+    "order_actions_day": 7,
+    "sys_requests_day": 1059,
+    "price_budget": 900,
+    "order_budget": 400,
+    "sys_budget": 2000
+  },
+  "window_deltas": {
+    "15m": {
+      "from": "2026-02-17T15:41:41",
+      "to": "2026-02-17T15:56:24",
+      "delta_price_requests": 49,
+      "delta_order_actions": 3,
+      "delta_sys_requests": 32
+    },
+    "30m": {
+      "from": "2026-02-17T15:26:37",
+      "to": "2026-02-17T15:56:24",
+      "delta_price_requests": 97,
+      "delta_order_actions": 3,
+      "delta_sys_requests": 65
+    },
+    "60m": {
+      "from": "2026-02-17T14:56:47",
+      "to": "2026-02-17T15:56:24",
+      "delta_price_requests": 187,
+      "delta_order_actions": 3,
+      "delta_sys_requests": 140
+    }
+  },
+  "limits": {
+    "strategy": {
+      "fixed_sl_points": 250,
+      "fixed_tp_points": 500,
+      "atr_period": 14,
+      "cooldown_stops_s": 120,
+      "price_budget_day": 900,
+      "order_budget_day": 400,
+      "sys_budget_day": 2000,
+      "eco_threshold_pct": 0.9,
+      "price_soft_fraction": 0.99,
+      "scan_interval_sec": 30,
+      "usb_watch_check_interval_sec": 30,
+      "adx_threshold": 14,
+      "learner_qa_gate_enabled": false,
+      "canary_rollout_enabled": false,
+      "paper_trading": false,
+      "eco_probe_symbols_when_flat": 1
+    },
+    "broker_guard_house": {
+      "house_price_warn_per_day": 1000,
+      "house_price_hard_stop_per_day": 4500,
+      "house_orders_per_sec": 45,
+      "house_positions_pending_limit": 450
+    }
+  },
+  "oanda_limits_state": {
+    "last_safe_mode_reason": "",
+    "orders_per_sec_window": 1,
+    "rolling_24h_count": 1243,
+    "safe_mode_active": false,
+    "updated_ts": 1771340154,
+    "utc_day_count": 1243,
+    "utc_day_id": "20260217"
+  },
+  "usage_pct": {
+    "price_vs_strategy_budget_pct": 48.33,
+    "order_vs_strategy_budget_pct": 1.75,
+    "sys_vs_strategy_budget_pct": 52.95,
+    "price_vs_house_warn_pct": 124.3,
+    "price_vs_house_hard_pct": 27.62,
+    "orders_per_sec_peak_vs_house_pct": 4.44
+  },
+  "order_send_peak": {
+    "max_order_send_per_second_observed": 2,
+    "house_orders_per_sec_limit": 45
+  },
+  "trading": {
+    "decision_events_total": 7,
+    "decision_events_with_order": 4,
+    "by_symbol": [
+      {
+        "symbol": "GBPUSD",
+        "events": 4,
+        "orders": 1
+      },
+      {
+        "symbol": "US500",
+        "events": 1,
+        "orders": 1
+      },
+      {
+        "symbol": "EURUSD",
+        "events": 1,
+        "orders": 1
+      },
+      {
+        "symbol": "DE30",
+        "events": 1,
+        "orders": 1
+      }
+    ],
+    "deals_log_count": 1,
+    "deals_last": [
+      {
+        "deal_ticket": 93237255,
+        "ny_date": "2026-02-17",
+        "ny_hour": 9,
+        "grp": "FX",
+        "symbol": "GBPUSD.pro",
+        "profit": 0.0,
+        "commission": 0.0,
+        "swap": 0.0
+      }
+    ]
+  },
+  "notes": [
+    "safe_mode_active false at snapshot",
+    "No SKIP_POSITIONS_PENDING found in log at snapshot",
+    "Persistent nonfatal PermissionError on META/market_snapshot.json atomic replace"
+  ]
+}

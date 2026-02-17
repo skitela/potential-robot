@@ -4870,6 +4870,13 @@ if __name__ == "__main__":
             return False
         raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be bool (got {raw!r})")
 
+    def _cfg_float(key: str, fallback: float | None = None) -> float:
+        raw = strategy_cfg.get(key, fallback)
+        try:
+            return float(raw)
+        except Exception:
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be float (got {raw!r})")
+
     # Required runtime fields (previously declared-only) are now sourced from CONFIG/strategy.json.
     CFG.fixed_sl_points = _cfg_int("fixed_sl_points", CFG.fixed_sl_points)
     CFG.fixed_tp_points = _cfg_int("fixed_tp_points", CFG.fixed_tp_points)
@@ -4878,10 +4885,14 @@ if __name__ == "__main__":
     CFG.paper_trading = _cfg_bool("paper_trading", CFG.paper_trading)
     CFG.eco_probe_symbols_when_flat = _cfg_int("eco_probe_symbols_when_flat", CFG.eco_probe_symbols_when_flat)
     CFG.sys_budget_day = _cfg_int("sys_budget_day", CFG.sys_budget_day)
+    CFG.price_budget_day = _cfg_int("price_budget_day", CFG.price_budget_day)
+    CFG.order_budget_day = _cfg_int("order_budget_day", CFG.order_budget_day)
     CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
     CFG.usb_watch_check_interval_sec = _cfg_int(
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
+    CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
+    CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)
     CFG.adx_threshold = _cfg_int("adx_threshold", CFG.adx_threshold)
     CFG.learner_qa_gate_enabled = _cfg_bool("learner_qa_gate_enabled", CFG.learner_qa_gate_enabled)
     CFG.learner_qa_red_to_eco = _cfg_bool("learner_qa_red_to_eco", CFG.learner_qa_red_to_eco)

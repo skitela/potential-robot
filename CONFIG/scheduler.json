@@ -1,7 +1,7 @@
 {
-  "max_symbols_per_iter_hot": 3,
-  "max_symbols_per_iter_warm": 3,
-  "max_symbols_per_iter_eco": 2,
+  "max_symbols_per_iter_hot": 5,
+  "max_symbols_per_iter_warm": 5,
+  "max_symbols_per_iter_eco": 5,
   "m5_pull_sec_hot": 60,
   "m5_pull_sec_warm": 60,
   "m5_pull_sec_eco": 60,
