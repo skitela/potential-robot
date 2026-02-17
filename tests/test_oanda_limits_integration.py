@@ -161,6 +161,15 @@ class TestOandaLimitsIntegration(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(path, ignore_errors=True))
         return path
 
+    @staticmethod
+    def _oanda_price_utc_count(client, db) -> int:
+        day = str(client.limits._utc_day_id())
+        key = f"oanda_limits:price:utc:{day}"
+        try:
+            return int(float(db.state_get(key, "0")))
+        except Exception:
+            return 0
+
     def test_price_guard_blocks_copy_rates(self):
         tmp = self._tmpdir()
         client, db = self._build_client(tmp)
@@ -357,6 +366,25 @@ class TestOandaLimitsIntegration(unittest.TestCase):
             self.assertNotEqual(first_fill, second_fill)
             self.assertEqual({first_fill, second_fill}, {self.stub.ORDER_FILLING_IOC, self.stub.ORDER_FILLING_FOK})
         finally:
+            db.conn.close()
+
+    def test_price_counter_not_incremented_when_governor_blocks(self):
+        tmp = self._tmpdir()
+        client, db = self._build_client(tmp, orders_per_sec=100)
+        orig_consume = client.gov.consume
+        try:
+            before = self._oanda_price_utc_count(client, db)
+            client.gov.consume = lambda *args, **kwargs: False
+
+            rates = client.copy_rates("EURUSD", "FX", safetybot.mt5.TIMEFRAME_M5 if safetybot.mt5 else 0, 2)
+            tick = client.tick("EURUSD", "FX", emergency=False)
+
+            self.assertIsNone(rates)
+            self.assertIsNone(tick)
+            after = self._oanda_price_utc_count(client, db)
+            self.assertEqual(before, after)
+        finally:
+            client.gov.consume = orig_consume
             db.conn.close()
 
 

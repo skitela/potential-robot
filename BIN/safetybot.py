@@ -2551,10 +2551,6 @@ class ExecutionEngine:
         cached = self._sym_info_cache.get(symbol)
         if cached and (now - cached[0] < CFG.symbol_info_cache_ttl_sec):
             return cached[1]
-        if self.limits is not None:
-            if not self.limits.note_price_request(now_ts=now, emergency=False):
-                logging.info(f"SKIP_PRICE_LIMIT kind=symbol_info symbol={symbol}")
-                return None
         if not self.gov.consume(grp, symbol, "symbol_info", 1, emergency=False):
             return None
         info = mt5.symbol_info(symbol)
@@ -2599,12 +2595,15 @@ class ExecutionEngine:
     def copy_rates(self, symbol: str, grp: str, timeframe, n: int):
         kind = f"rates_{timeframe}"
         if self.limits is not None:
-            if not self.limits.note_price_request(now_ts=time.time(), emergency=False):
+            if not self.limits.allow_price_request(emergency=False):
                 logging.info(f"SKIP_PRICE_LIMIT kind=copy_rates symbol={symbol}")
                 return None
         if not self.gov.consume(grp, symbol, kind, 1, emergency=False):
             return None
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, n)
+        if self.limits is not None:
+            # Count OANDA PRICE only after real MT5 request attempt.
+            self.limits.note_price_request(now_ts=time.time(), emergency=False)
         if rates is None:
             return None
         df = pd.DataFrame(rates)
@@ -2626,12 +2625,15 @@ class ExecutionEngine:
 
     def tick(self, symbol: str, grp: str, emergency: bool = False):
         if self.limits is not None:
-            if not self.limits.note_price_request(now_ts=time.time(), emergency=bool(emergency)):
+            if not self.limits.allow_price_request(emergency=bool(emergency)):
                 logging.info(f"SKIP_PRICE_LIMIT kind=tick symbol={symbol} emergency={int(bool(emergency))}")
                 return None
         if not self.gov.consume(grp, symbol, "tick", 1, emergency=bool(emergency)):
             return None
         t = mt5.symbol_info_tick(symbol)
+        if self.limits is not None:
+            # Count OANDA PRICE only after real MT5 request attempt.
+            self.limits.note_price_request(now_ts=time.time(), emergency=bool(emergency))
         # V1.10: time anchor update (server tick time)
         if t is not None and _TIME_ANCHOR is not None:
             try:
@@ -2677,25 +2679,21 @@ class ExecutionEngine:
         utc_day = utc_day_key(now_dt)
         pl_day = pl_day_key(now_dt)
         # ORDER actions are tracked for NY/UTC/PL; strict-guard used=max(ny,utc,pl)
-        now_ts = int(time.time())
+        now_ts = float(time.time())
 
         # GLOBAL_BACKOFF gate (allow emergency closes to attempt, but still log state)
         backoff_until = int(self.gov.db.get_global_backoff_until_ts())
-        if (not emergency) and backoff_until and now_ts < backoff_until:
+        if (not emergency) and backoff_until and now_ts < float(backoff_until):
             reason = self.gov.db.get_global_backoff_reason()
             logging.info(f"SKIP_GLOBAL_BACKOFF symbol={symbol} until_ts={backoff_until} reason={reason}")
             return None
 
         if self.limits is not None:
-            if not self.limits.allow_order_submit(now_ts=float(now_ts), emergency=bool(emergency)):
+            if not self.limits.allow_order_submit(now_ts=now_ts, emergency=bool(emergency)):
                 logging.info(f"SKIP_ORDER_RATE_LIMIT symbol={symbol} emergency={int(bool(emergency))}")
                 return None
 
-        # SYS: fresh symbol_info right before order_send
-        if self.limits is not None:
-            if not self.limits.note_price_request(now_ts=time.time(), emergency=bool(emergency)):
-                logging.info(f"SKIP_PRICE_LIMIT kind=symbol_info symbol={symbol} emergency={int(bool(emergency))}")
-                return None
+        # SYS: fresh symbol_info right before order_send (not counted as PRICE request)
         if not self.gov.consume("SYS", symbol, "symbol_info", 1, emergency=bool(emergency)):
             logging.info(f"SKIP_SYS_BUDGET symbol={symbol} kind=symbol_info emergency={int(bool(emergency))}")
             return None
