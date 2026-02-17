@@ -71,6 +71,21 @@ function Is-PlaceholderValue {
     ) -contains $v
 }
 
+function Normalize-Mt5Server {
+    param([string]$Server = "")
+    $raw = [string]$Server
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $DEFAULT_MT5_SERVER
+    }
+    $trim = $raw.Trim()
+    $compact = ($trim -replace "\s+", "")
+    $up = $compact.ToUpperInvariant()
+    if ($up -eq "OANDATMS-MT5" -or $up -eq "OANDA-TMS-MT5" -or $up -eq "OANDATMSMT5") {
+        return $DEFAULT_MT5_SERVER
+    }
+    return $trim
+}
+
 function Get-RemovableDrives {
     try {
         return @(
@@ -381,6 +396,7 @@ function Ensure-KeyEnvReady {
     if ([string]::IsNullOrWhiteSpace($server)) {
         $server = $DEFAULT_MT5_SERVER
     }
+    $server = Normalize-Mt5Server -Server $server
     if ([string]::IsNullOrWhiteSpace($mt5Path)) {
         $mt5Path = $DEFAULT_MT5_PATH
     }
@@ -392,9 +408,16 @@ function Ensure-KeyEnvReady {
 
     $needsPrompt = (Is-PlaceholderValue $login) -or (-not $hasPassword)
     if (-not $needsPrompt) {
+        $passwordModeResolved = "PLAINTEXT"
+        if (-not (Is-PlaceholderValue $pwdDpapi)) {
+            $passwordModeResolved = "DPAPI_CURRENT_USER"
+        } elseif (-not (Is-PlaceholderValue $pwdDpapiB64)) {
+            $passwordModeResolved = "DPAPI_B64_CURRENT_USER"
+        }
+
         $outValues = [ordered]@{
             MT5_LOGIN = $login
-            MT5_PASSWORD_MODE = (if (-not (Is-PlaceholderValue $pwdDpapi)) { "DPAPI_CURRENT_USER" } elseif (-not (Is-PlaceholderValue $pwdDpapiB64)) { "DPAPI_B64_CURRENT_USER" } else { "PLAINTEXT" })
+            MT5_PASSWORD_MODE = $passwordModeResolved
             MT5_PASSWORD_DPAPI = $pwdDpapi
             MT5_SERVER = $server
             MT5_PATH = $mt5Path
@@ -447,6 +470,7 @@ function Ensure-KeyEnvReady {
     $srvPrompt = Read-Host ("Podaj MT5_SERVER (Enter = {0})" -f $server)
     $srvFinal = if ([string]::IsNullOrWhiteSpace($srvPrompt)) { $server } else { $srvPrompt.Trim() }
     if ([string]::IsNullOrWhiteSpace($srvFinal)) { $srvFinal = $DEFAULT_MT5_SERVER }
+    $srvFinal = Normalize-Mt5Server -Server $srvFinal
 
     $pathPrompt = Read-Host ("Podaj MT5_PATH (Enter = {0})" -f $mt5Path)
     $pathFinal = if ([string]::IsNullOrWhiteSpace($pathPrompt)) { $mt5Path } else { $pathPrompt.Trim() }

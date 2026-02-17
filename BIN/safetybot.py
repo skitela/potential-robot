@@ -548,27 +548,55 @@ def get_usb_path(label: Optional[str] = None) -> Optional[Path]:
 
     timeout_s = 8
 
-    # Prefer PowerShell Get-Volume (Windows 10/11)
+    # Fallback 0: PowerShell .NET DriveInfo (works in locked-down environments).
     try:
-        ps = (
-            "$v = Get-Volume | Where-Object { $_.FileSystemLabel -eq '%s' } | Select-Object -First 1;"
-            "if ($v -and $v.DriveLetter) { Write-Output $v.DriveLetter }"
+        ps_di = (
+            "$d = [System.IO.DriveInfo]::GetDrives() | "
+            "Where-Object { $_.IsReady -and $_.VolumeLabel -eq '%s' } | "
+            "Select-Object -First 1; "
+            "if ($d -and $d.Name) { Write-Output $d.Name }"
         ) % label.replace("'", "''")
         out = subprocess.check_output(
-            ["powershell", "-NoProfile", "-Command", ps],
+            ["powershell", "-NoProfile", "-Command", ps_di],
             stderr=subprocess.STDOUT,
             text=True,
             errors="ignore",
             timeout=timeout_s,
         ).strip()
         if out:
-            drive_letter = out.strip()
+            # Expected like "D:\"
+            cand = out.strip()
+            if len(cand) >= 1 and cand[0].isalpha():
+                drive_letter = cand[0].upper()
     except subprocess.TimeoutExpired:
         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed")
         drive_letter = None
     except Exception as e:
         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         drive_letter = None
+
+    # Prefer PowerShell Get-Volume (Windows 10/11)
+    if not drive_letter:
+        try:
+            ps = (
+                "$v = Get-Volume | Where-Object { $_.FileSystemLabel -eq '%s' } | Select-Object -First 1;"
+                "if ($v -and $v.DriveLetter) { Write-Output $v.DriveLetter }"
+            ) % label.replace("'", "''")
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps],
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="ignore",
+                timeout=timeout_s,
+            ).strip()
+            if out:
+                drive_letter = out.strip()
+        except subprocess.TimeoutExpired:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed")
+            drive_letter = None
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            drive_letter = None
 
     # Fallback: WMIC (still label-based)
     if not drive_letter:
@@ -4559,6 +4587,33 @@ if __name__ == "__main__":
     _paths = project_paths(runtime_root)
     
     config = ConfigManager(_paths["config"])
+    strategy_cfg = getattr(config, "strategy", {}) or {}
+
+    def _cfg_int(key: str, fallback: int | None = None) -> int:
+        raw = strategy_cfg.get(key, fallback)
+        try:
+            return int(raw)
+        except Exception:
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be int (got {raw!r})")
+
+    def _cfg_bool(key: str, fallback: bool | None = None) -> bool:
+        raw = strategy_cfg.get(key, fallback)
+        if isinstance(raw, bool):
+            return raw
+        txt = str(raw).strip().lower()
+        if txt in {"1", "true", "yes", "y", "on"}:
+            return True
+        if txt in {"0", "false", "no", "n", "off"}:
+            return False
+        raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be bool (got {raw!r})")
+
+    # Required runtime fields (previously declared-only) are now sourced from CONFIG/strategy.json.
+    CFG.fixed_sl_points = _cfg_int("fixed_sl_points", CFG.fixed_sl_points)
+    CFG.fixed_tp_points = _cfg_int("fixed_tp_points", CFG.fixed_tp_points)
+    CFG.atr_period = _cfg_int("atr_period", CFG.atr_period)
+    CFG.cooldown_stops_s = _cfg_int("cooldown_stops_s", CFG.cooldown_stops_s)
+    CFG.paper_trading = _cfg_bool("paper_trading", CFG.paper_trading)
+
     CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
     CFG.black_swan_precaution_fraction = float(
         config.risk.get("black_swan_precaution_fraction", config.risk.get("precaution_fraction", CFG.black_swan_precaution_fraction))

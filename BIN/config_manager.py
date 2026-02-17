@@ -16,6 +16,7 @@ class ConfigManager:
         self.risk: Dict[str, Any] = self._load_config("risk.json")
         self.limits: Dict[str, Any] = self._load_config("limits.json")
         self.scheduler: Dict[str, Any] = self._load_config("scheduler.json")
+        self.strategy: Dict[str, Any] = self._load_optional_config("strategy.json")
         # In the future, other configs would be loaded here:
         # self.strategy: Dict[str, Any] = self._load_config("strategy.json")
 
@@ -24,6 +25,14 @@ class ConfigManager:
         config_path = self.config_dir / filename
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
+        with config_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _load_optional_config(self, filename: str) -> Dict[str, Any]:
+        """Loads optional JSON config. Missing file returns empty dict."""
+        config_path = self.config_dir / filename
+        if not config_path.exists():
+            return {}
         with config_path.open("r", encoding="utf-8") as f:
             return json.load(f)
 

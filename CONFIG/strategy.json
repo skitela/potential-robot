@@ -1,0 +1,7 @@
+{
+  "fixed_sl_points": 250,
+  "fixed_tp_points": 500,
+  "atr_period": 14,
+  "cooldown_stops_s": 120,
+  "paper_trading": true
+}

@@ -31,6 +31,21 @@ function ConvertTo-DpapiCipher {
     return (ConvertFrom-SecureString -SecureString $Secret)
 }
 
+function Normalize-Mt5Server {
+    param([string]$Server = "")
+    $raw = [string]$Server
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return "OANDATMS-MT5"
+    }
+    $trim = $raw.Trim()
+    $compact = ($trim -replace "\s+", "")
+    $up = $compact.ToUpperInvariant()
+    if ($up -eq "OANDATMS-MT5" -or $up -eq "OANDA-TMS-MT5" -or $up -eq "OANDATMSMT5") {
+        return "OANDATMS-MT5"
+    }
+    return $trim
+}
+
 function Resolve-UsbDriveLetter {
     param([string]$InputLetter = "")
     if (-not [string]::IsNullOrWhiteSpace($InputLetter)) {
@@ -172,6 +187,7 @@ if (-not (Test-Path $driveRoot)) {
 if ([string]::IsNullOrWhiteSpace($Mt5Server)) {
     $Mt5Server = "OANDATMS-MT5"
 }
+$Mt5Server = Normalize-Mt5Server -Server $Mt5Server
 $plainPassword = ""
 $passwordMode = "PROMPT_ON_FIRST_START"
 $passwordLine = "MT5_PASSWORD_DPAPI="
@@ -187,6 +203,7 @@ if (-not $BootstrapOnly) {
             $Mt5Server = $srvIn.Trim()
         }
     }
+    $Mt5Server = Normalize-Mt5Server -Server $Mt5Server
     if ($null -eq $Mt5Password) {
         $Mt5Password = Read-Host -AsSecureString "Podaj MT5_PASSWORD"
     }
