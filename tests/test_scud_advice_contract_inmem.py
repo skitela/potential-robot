@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+import datetime as dt
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from BIN import scudfab02 as s
@@ -49,6 +53,41 @@ class TestSCUDAdviceContractInMemory(unittest.TestCase):
 
         s.guard_obj_no_price_like(obj)
         s.guard_obj_limits(obj)
+
+    def test_read_learner_advice_retries_transient_invalid_json(self):
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        valid = {
+            "schema": "oanda_mt5.learner_advice.v1",
+            "ts_utc": now,
+            "ttl_sec": 3600,
+            "metrics": {"n": 120, "mean_edge_fuel": 0.02, "es95": -0.01, "mdd": -0.2},
+            "ranks": [{"symbol": "EURUSD.PRO", "score": 0.1, "es95": -0.01, "mdd": -0.2, "n": 120}],
+            "qa_light": "GREEN",
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            meta_dir = Path(td)
+            advice_path = meta_dir / "learner_advice.json"
+            advice_path.write_text("{}", encoding="utf-8")
+
+            state = {"n": 0}
+            orig_read = Path.read_text
+
+            def _read_text_retry_once(self, *args, **kwargs):
+                if self == advice_path and state["n"] == 0:
+                    state["n"] += 1
+                    return "{"
+                if self == advice_path:
+                    return json.dumps(valid)
+                return orig_read(self, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", new=_read_text_retry_once), \
+                 mock.patch("BIN.scudfab02.time.sleep", return_value=None):
+                out = s.read_learner_advice(meta_dir)
+
+        self.assertIsInstance(out, dict)
+        self.assertEqual(str((out or {}).get("source")), "offline_learner")
+        self.assertEqual(int(((out or {}).get("metrics") or {}).get("n") or 0), 120)
 
 
 if __name__ == "__main__":

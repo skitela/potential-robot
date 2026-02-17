@@ -178,6 +178,8 @@ def effective_scan_params(
 
 MAX_NUMERIC_TOKENS = 50
 MAX_NUMERIC_LIST_LEN = 50
+ATOMIC_REPLACE_RETRIES = 6
+ATOMIC_REPLACE_RETRY_SLEEP_S = 0.05
 
 BANNED_KEY_TOKENS = {
     "bid","ask","ohlc","open","high","low","close","price","prices","rate","rates","tick","ticks","quote","quotes","spread"
@@ -218,18 +220,20 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        try:
-            os.replace(tmp, path)
-            return
-        except Exception as e:
-            last_exc = e
-            cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
-        try:
-            shutil.move(str(tmp), str(path))
-            return
-        except Exception as e:
-            last_exc = e
-            cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
+            try:
+                os.replace(tmp, path)
+                return
+            except Exception as e:
+                last_exc = e
+                time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
+        for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
+            try:
+                shutil.move(str(tmp), str(path))
+                return
+            except Exception as e:
+                last_exc = e
+                time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
         # Fallback for environments where atomic rename/move is blocked.
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
@@ -382,6 +386,8 @@ def sqlite_connect_ro(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(uri, uri=True, timeout=5)
     try:
         conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA query_only=ON;")
+        conn.execute("PRAGMA temp_store=MEMORY;")
     except Exception as e:
         cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
     return conn

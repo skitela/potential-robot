@@ -61,6 +61,10 @@ MAX_NUMERIC_TOKENS = 50
 MAX_NUMERIC_LIST_LEN = 50
 
 MIN_SAMPLE_N = 50  # minimum sample size for stable stats / tie-break
+JSON_READ_RETRIES = 5
+JSON_READ_RETRY_SLEEP_S = 0.04
+ATOMIC_REPLACE_RETRIES = 6
+ATOMIC_REPLACE_RETRY_SLEEP_S = 0.05
 
 # Cached stats for fast tiebreak responses
 LAST_RANKS: List[Dict[str, Any]] = []
@@ -83,6 +87,36 @@ def parse_ts_utc(s: str) -> Optional[dt.datetime]:
         cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
         return None
 
+def _read_json_file_retry(path: Path, *, retries: int = JSON_READ_RETRIES, sleep_s: float = JSON_READ_RETRY_SLEEP_S) -> Optional[Dict[str, Any]]:
+    """Best-effort JSON reader for files concurrently written by other processes."""
+    attempts = max(1, int(retries))
+    for i in range(attempts):
+        try:
+            raw = path.read_text(encoding='utf-8', errors='ignore')
+            raw_s = str(raw or "").strip()
+            if not raw_s:
+                return None
+            obj = json.loads(raw_s)
+            if isinstance(obj, dict):
+                return obj
+            return None
+        except json.JSONDecodeError:
+            if i + 1 >= attempts:
+                return None
+            time.sleep(float(sleep_s))
+            continue
+        except PermissionError:
+            if i + 1 >= attempts:
+                return None
+            time.sleep(float(sleep_s))
+            continue
+        except OSError:
+            if i + 1 >= attempts:
+                return None
+            time.sleep(float(sleep_s))
+            continue
+    return None
+
 def read_learner_advice(meta_dir: Path) -> Optional[Dict[str, Any]]:
     """Read optional offline learner advice from META/learner_advice.json.
 
@@ -93,7 +127,9 @@ def read_learner_advice(meta_dir: Path) -> Optional[Dict[str, Any]]:
     if not p.exists():
         return None
     try:
-        obj = json.loads(p.read_text(encoding='utf-8', errors='ignore') or '{}')
+        obj = _read_json_file_retry(p)
+        if obj is None:
+            return None
         if not isinstance(obj, dict):
             return None
         guard_obj_no_price_like(obj)
@@ -293,18 +329,20 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        try:
-            os.replace(tmp, path)
-            return
-        except Exception as e:
-            last_exc = e
-            cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
-        try:
-            shutil.move(str(tmp), str(path))
-            return
-        except Exception as e:
-            last_exc = e
-            cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+        for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
+            try:
+                os.replace(tmp, path)
+                return
+            except Exception as e:
+                last_exc = e
+                time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
+        for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
+            try:
+                shutil.move(str(tmp), str(path))
+                return
+            except Exception as e:
+                last_exc = e
+                time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
         # Fallback for environments where atomic rename/move is blocked.
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
@@ -836,7 +874,9 @@ def load_tiebreak_request(run_dir: Path) -> Optional[Dict[str, Any]]:
             return None
         if path.stat().st_size <= 0 or path.stat().st_size > 50_000:
             return None
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        data = _read_json_file_retry(path)
+        if data is None:
+            return None
         if not isinstance(data, dict):
             return None
 
