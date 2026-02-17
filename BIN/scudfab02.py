@@ -65,11 +65,13 @@ JSON_READ_RETRIES = 5
 JSON_READ_RETRY_SLEEP_S = 0.04
 ATOMIC_REPLACE_RETRIES = 6
 ATOMIC_REPLACE_RETRY_SLEEP_S = 0.05
+RESEARCH_WRITE_WARN_COOLDOWN_S = 300.0
 
 # Cached stats for fast tiebreak responses
 LAST_RANKS: List[Dict[str, Any]] = []
 LAST_VERDICT_LIGHT = "INSUFFICIENT_DATA"
 LAST_METRICS_N = 0
+_RESEARCH_WRITE_LAST_WARN_TS = 0.0
 
 def parse_ts_utc(s: str) -> Optional[dt.datetime]:
     """Parse ISO timestamp in UTC. Accepts 'Z' suffix or '+00:00'."""
@@ -332,6 +334,20 @@ def atomic_write_json(path: Path, obj: Any) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             wrote_tmp = True
+        except PermissionError as e:
+            # Hosts with restrictive ACLs may block creating *.tmp files in META.
+            # Fall back to direct write and keep SCUD loop alive.
+            last_exc = e
+            try:
+                with open(path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                return
+            except Exception as e2:
+                last_exc = e2
+                time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
+                continue
         except Exception as e:
             last_exc = e
             time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
@@ -350,8 +366,8 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             if wrote_tmp:
                 try:
                     tmp.unlink(missing_ok=True)
-                except Exception as e:
-                    cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+                except Exception:
+                    pass
         time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
     # Fallback for environments where atomic rename/move is blocked.
     try:
@@ -1227,10 +1243,19 @@ def write_advice(meta_dir: Path, verdict: str, metrics: Dict[str, Any], research
     atomic_write_json(meta_dir / "scout_advice.json", obj)
 
 def write_research(meta_dir: Path, research: Dict[str, Any]) -> None:
+    global _RESEARCH_WRITE_LAST_WARN_TS
     path = meta_dir / "research_signals.json"
     guard_obj_no_price_like(research)
     guard_obj_limits(research)
-    atomic_write_json(path, research)
+    try:
+        atomic_write_json(path, research)
+    except PermissionError as e:
+        now = time.time()
+        if (now - float(_RESEARCH_WRITE_LAST_WARN_TS)) >= float(RESEARCH_WRITE_WARN_COOLDOWN_S):
+            logging.warning(f"RESEARCH_WRITE_SKIP permission_denied path={path} exc={e}")
+            _RESEARCH_WRITE_LAST_WARN_TS = now
+    except Exception as e:
+        cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
 
 # -------------------------
 # Main loop
