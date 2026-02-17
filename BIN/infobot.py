@@ -604,12 +604,14 @@ def _should_alert(status: Dict[str, Dict[str, object]]) -> Optional[str]:
     for name, st in status.items():
         if name not in ("safetybot", "scudfab02"):
             continue
-        if (not st.get("lock")) and (not st.get("log_ok")):
-            return "critical"
-        if not st.get("lock"):
-            return "critical"
-        if not st.get("log_ok"):
-            return "critical"
+        lock_ok = bool(st.get("lock"))
+        log_ok = bool(st.get("log_ok"))
+        # Critical = component has stale/missing log (real stop).
+        # Missing lock alone is treated as degraded, not hard-down.
+        if not log_ok:
+            if not lock_ok:
+                return f"{name}:no_lock_and_log_stale"
+            return f"{name}:log_stale"
     return None
 
 

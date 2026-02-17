@@ -166,8 +166,11 @@ def _component_ok(root: Path) -> bool:
     sb_pid = _parse_lock_pid(run_dir / "safetybot.lock")
     sc_pid = _parse_lock_pid(run_dir / "scudfab02.lock")
 
-    sb_ok = bool(sb_pid and _pid_is_running(sb_pid)) and _log_mtime_ok(logs_dir / "safetybot.log", 180)
-    sc_ok = bool(sc_pid and _pid_is_running(sc_pid)) and _log_mtime_ok(logs_dir / "scudfab02.log", 180)
+    sb_log_ok = _log_mtime_ok(logs_dir / "safetybot.log", 180)
+    sc_log_ok = _log_mtime_ok(logs_dir / "scudfab02.log", 180)
+    # Lock/PID check is best-effort; fresh log is authoritative for liveness.
+    sb_ok = bool((sb_pid and _pid_is_running(sb_pid)) or sb_log_ok)
+    sc_ok = bool((sc_pid and _pid_is_running(sc_pid)) or sc_log_ok)
     lr_ok = _log_mtime_ok(logs_dir / "learner_offline.log", 300)
 
     return bool(sb_ok and sc_ok and lr_ok)

@@ -167,6 +167,8 @@ class CFG:
     m5_pull_sec_hot: int = 60
     m5_pull_sec_warm: int = 120
     m5_pull_sec_eco: int = 300
+    # If ECO limits collapse to zero while flat, keep at least minimal market probing alive.
+    eco_probe_symbols_when_flat: int = 1
 
     # --- V1.10: Time anchoring + open-position always-on guard ---
     open_positions_guard_sec: int = 60
@@ -4410,6 +4412,12 @@ class SafetyBot:
         if bool(getattr(CFG, "learner_qa_gate_enabled", True)) and learner_qa_light == "YELLOW":
             n_limit = min(int(n_limit), int(max(0, int(getattr(CFG, "learner_qa_yellow_symbol_cap", 1)))))
 
+        if n_limit <= 0 and (not open_syms):
+            probe_min = max(0, int(getattr(CFG, "eco_probe_symbols_when_flat", 1)))
+            if probe_min > 0:
+                n_limit = int(probe_min)
+                logging.warning(f"ECO_PROBE_ENABLE symbols={n_limit} reason=flat_book")
+
         if n_limit <= 0:
             if open_syms:
                 for sym in sorted(open_syms):
@@ -4664,6 +4672,7 @@ if __name__ == "__main__":
     CFG.atr_period = _cfg_int("atr_period", CFG.atr_period)
     CFG.cooldown_stops_s = _cfg_int("cooldown_stops_s", CFG.cooldown_stops_s)
     CFG.paper_trading = _cfg_bool("paper_trading", CFG.paper_trading)
+    CFG.eco_probe_symbols_when_flat = _cfg_int("eco_probe_symbols_when_flat", CFG.eco_probe_symbols_when_flat)
 
     CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
     CFG.black_swan_precaution_fraction = float(

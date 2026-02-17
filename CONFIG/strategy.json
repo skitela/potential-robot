@@ -3,5 +3,6 @@
   "fixed_tp_points": 500,
   "atr_period": 14,
   "cooldown_stops_s": 120,
-  "paper_trading": true
+  "paper_trading": false,
+  "eco_probe_symbols_when_flat": 1
 }

@@ -220,6 +220,30 @@ function Start-Component {
 
     $lockInfo = Cleanup-StaleLock -LockPath $LockPath -Dry:$Dry
     if ($lockInfo.status -eq "active_lock") {
+        # Guard against stale PID reuse: lock pid is alive, but target script is not.
+        if ((@($existing).Count -eq 0) -and (Test-Path $LockPath) -and (-not $Dry)) {
+            try {
+                Remove-Item -Force $LockPath -ErrorAction Stop
+                $lockInfo = @{
+                    status = "stale_removed_pid_reuse"
+                    pid = $lockInfo.pid
+                }
+            } catch {
+                return @{
+                    status = "blocked_active_lock"
+                    lock = $LockPath
+                    pid = $lockInfo.pid
+                    error = ("stale_pid_reuse_remove_failed: " + $_.Exception.Message)
+                }
+            }
+        } elseif ((@($existing).Count -eq 0) -and (Test-Path $LockPath) -and $Dry) {
+            $lockInfo = @{
+                status = "dry_run_stale_pid_reuse"
+                pid = $lockInfo.pid
+            }
+        }
+    }
+    if ($lockInfo.status -eq "active_lock") {
         return @{
             status = "blocked_active_lock"
             lock = $LockPath
