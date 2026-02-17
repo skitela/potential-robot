@@ -709,10 +709,38 @@ def acquire_lockfile(lock_path: Path) -> None:
                         pid = 0
                 else:
                     pid = int(raw) if raw.isdigit() else 0
+                # Empty/invalid lock payload should never block startup.
+                if pid <= 0:
+                    try:
+                        lock_path.unlink(missing_ok=True)
+                        time.sleep(0.05)
+                        continue
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        # ACL fallback: overwrite stale lock in place and claim ownership.
+                        try:
+                            payload = json.dumps({"pid": os.getpid(), "ts_utc": now_utc().isoformat().replace('+00:00','Z')}, separators=(",", ":"))
+                            lock_path.write_text(payload, encoding="utf-8")
+                            return
+                        except Exception as e:
+                            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                            time.sleep(0.1)
+                            continue
                 if pid and (not pid_exists(pid)):
-                    lock_path.unlink(missing_ok=True)
-                    time.sleep(0.05)
-                    continue
+                    try:
+                        lock_path.unlink(missing_ok=True)
+                        time.sleep(0.05)
+                        continue
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        try:
+                            payload = json.dumps({"pid": os.getpid(), "ts_utc": now_utc().isoformat().replace('+00:00','Z')}, separators=(",", ":"))
+                            lock_path.write_text(payload, encoding="utf-8")
+                            return
+                        except Exception as e:
+                            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                            time.sleep(0.1)
+                            continue
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             time.sleep(0.1)
@@ -3835,8 +3863,30 @@ class SafetyBot:
             grp = CFG.symbol_group_map.get(base, grp_default)
             for suf in suffixes:
                 cand = f"{base}{suf}"
-                info = engine.symbol_info_cached(cand, grp, self.db)
+                # Startup discovery path: do not consume SYS budget.
+                info = None
+                if mt5 is not None:
+                    try:
+                        info = mt5.symbol_info(cand)
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        info = None
+                    if info is None:
+                        try:
+                            mt5.symbol_select(cand, True)
+                            info = mt5.symbol_info(cand)
+                        except Exception as e:
+                            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                            info = None
+                # Fallback to budget-aware path if direct probe is unavailable.
+                if info is None:
+                    info = engine.symbol_info_cached(cand, grp, self.db)
                 if info is not None:
+                    try:
+                        if hasattr(engine, "_sym_info_cache"):
+                            engine._sym_info_cache[cand] = (time.time(), info)
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                     self.resolved_symbols[raw_sym] = cand
                     return cand
         return None
@@ -4673,6 +4723,7 @@ if __name__ == "__main__":
     CFG.cooldown_stops_s = _cfg_int("cooldown_stops_s", CFG.cooldown_stops_s)
     CFG.paper_trading = _cfg_bool("paper_trading", CFG.paper_trading)
     CFG.eco_probe_symbols_when_flat = _cfg_int("eco_probe_symbols_when_flat", CFG.eco_probe_symbols_when_flat)
+    CFG.sys_budget_day = _cfg_int("sys_budget_day", CFG.sys_budget_day)
 
     CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
     CFG.black_swan_precaution_fraction = float(
