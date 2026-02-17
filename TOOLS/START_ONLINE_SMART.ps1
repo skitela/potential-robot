@@ -3,7 +3,9 @@ param(
     [int]$StartTimeoutSec = 45,
     [int]$ObserveSec = 20,
     [int]$PollSec = 2,
-    [switch]$StopFirst
+    [switch]$StopFirst,
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "full"
 )
 
 Set-StrictMode -Version Latest
@@ -59,7 +61,7 @@ $runDir = Join-Path $runtimeRoot "RUN"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
 if ($StopFirst) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $systemControl -Action stop -Root $runtimeRoot | Out-Null
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $systemControl -Action stop -Root $runtimeRoot -Profile $Profile | Out-Null
 }
 
 $out = Join-Path $bootDir "system_control_online_out.log"
@@ -71,7 +73,8 @@ $proc = Start-Process -FilePath powershell -ArgumentList @(
     "-NoProfile", "-ExecutionPolicy", "Bypass",
     "-File", $systemControl,
     "-Action", "start",
-    "-Root", $runtimeRoot
+    "-Root", $runtimeRoot,
+    "-Profile", $Profile
 ) -WorkingDirectory $runtimeRoot -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
 
 $deadline = (Get-Date).AddSeconds([Math]::Max(5, $StartTimeoutSec))
@@ -96,6 +99,11 @@ $watch = @(
     @{ name = "RepairAgent"; lock = "RUN\repair_agent.lock"; log = "LOGS\repair_agent\repair_agent.log"; ttl = 300 },
     @{ name = "Learner"; lock = ""; log = "LOGS\learner_offline.log"; ttl = 900 }
 )
+if ($Profile -eq "safety_only") {
+    $watch = @(
+        @{ name = "SafetyBot"; lock = "RUN\safetybot.lock"; log = "LOGS\safetybot.log"; ttl = 240 }
+    )
+}
 
 $timeline = @()
 $obsUntil = (Get-Date).AddSeconds([Math]::Max(2, $ObserveSec))
@@ -144,7 +152,8 @@ if ($timedOut) {
 $report = [ordered]@{
     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
     root = $runtimeRoot
-    command = ".\TOOLS\SYSTEM_CONTROL.ps1 -Action start -Root $runtimeRoot"
+    profile = $Profile
+    command = ".\TOOLS\SYSTEM_CONTROL.ps1 -Action start -Root $runtimeRoot -Profile $Profile"
     elapsed_ms = [int]$sw.ElapsedMilliseconds
     timed_out = [bool]$timedOut
     exit_code = $exitCode

@@ -3,7 +3,9 @@ param(
     [ValidateSet("start", "stop", "status")]
     [string]$Action,
     [string]$Root = "",
-    [switch]$DryRun
+    [switch]$DryRun,
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "full"
 )
 
 Set-StrictMode -Version Latest
@@ -401,7 +403,7 @@ if (-not (Test-Path (Join-Path $runtimeRoot "BIN"))) {
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $runtimeRoot "RUN") | Out-Null
 
-$components = @(
+$allComponents = @(
     @{ Name = "SafetyBot"; Script = "safetybot.py"; Args = @(); Lock = "RUN\safetybot.lock" },
     @{ Name = "SCUD"; Script = "scudfab02.py"; Args = @("loop", "10"); Lock = "RUN\scudfab02.lock" },
     @{ Name = "Learner"; Script = "learner_offline.py"; Args = @("loop", "3600"); Lock = "" },
@@ -409,11 +411,19 @@ $components = @(
     @{ Name = "RepairAgent"; Script = "repair_agent.py"; Args = @(); Lock = "RUN\repair_agent.lock" }
 )
 
+$components = @($allComponents)
+if ($Profile -eq "safety_only") {
+    $components = @(
+        $allComponents | Where-Object { [string]$_.Name -eq "SafetyBot" }
+    )
+}
+
 $pythonPath = Get-PythonPath -RuntimeRoot $runtimeRoot
 $result = [ordered]@{
     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
     action = $Action
     dry_run = [bool]$DryRun
+    profile = $Profile
     root = $runtimeRoot
     python = $pythonPath
     components = @()
