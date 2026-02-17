@@ -781,7 +781,8 @@ def setup_logging(runtime_root: Path) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=handlers
+        handlers=handlers,
+        force=True,
     )
 
 def _decrypt_dpapi_b64(cipher_b64: str) -> str:
@@ -1619,8 +1620,8 @@ def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
         try:
             if tmp.exists():
                 tmp.unlink(missing_ok=True)
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        except Exception:
+            pass
 
 def build_runtime_boot_snapshot_payload(runtime_root: Path, universe: List[Tuple[str, str, str]]) -> Dict[str, Any]:
     allowed_groups = [
