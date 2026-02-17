@@ -1492,6 +1492,10 @@ TIEBREAK_REQ_TTL_SEC = 30
 TIEBREAK_RES_MAX_AGE_SEC = 30
 TIEBREAK_WAIT_SEC = 0.35
 TIEBREAK_POLL_SEC = 0.05
+JSON_READ_RETRIES = 5
+JSON_READ_RETRY_SLEEP_S = 0.04
+ATOMIC_WRITE_RETRIES = 6
+ATOMIC_WRITE_RETRY_SLEEP_S = 0.05
 
 def _now_utc_iso() -> str:
     return dt.datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -1592,23 +1596,35 @@ def _parse_iso_utc(s: str) -> Optional[dt.datetime]:
         return None
 
 def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
-    """Atomic JSON write (best-effort fsync): write to .tmp in same dir then os.replace()."""
+    """Atomic JSON write with retry/backoff and direct-write fallback for transient WinError 5 locks."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            f.write(data)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+    tries = max(1, int(ATOMIC_WRITE_RETRIES))
+    sleep_s = max(0.0, float(ATOMIC_WRITE_RETRY_SLEEP_S))
+    last_exc: Optional[Exception] = None
+    for i in range(tries):
+        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{i}")
         try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(data)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             os.replace(tmp, path)
-        except PermissionError as e:
-            # Windows can deny atomic replace under transient AV/ACL locks; fallback to direct overwrite.
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return
+        except Exception as e:
+            last_exc = e
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        # Fallback: direct overwrite (still with fsync).
+        try:
             with open(path, "w", encoding="utf-8", newline="\n") as f2:
                 f2.write(data)
                 f2.flush()
@@ -1616,12 +1632,15 @@ def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
                     os.fsync(f2.fileno())
                 except Exception as e2:
                     cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e2)
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+            return
+        except Exception as e:
+            last_exc = e
+            if i + 1 < tries:
+                time.sleep(sleep_s)
+
+    if last_exc is not None:
+        raise last_exc
+    raise IOError(f"atomic_write_json_failed:{path}")
 
 def build_runtime_boot_snapshot_payload(runtime_root: Path, universe: List[Tuple[str, str, str]]) -> Dict[str, Any]:
     allowed_groups = [
@@ -1687,20 +1706,39 @@ def _contains_forbidden_price_keys(obj: Any) -> bool:
     return cg.contains_price_like(obj)
 
 def _safe_read_json(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
     try:
-        if not path.exists():
-            return None
         sz = path.stat().st_size
-        if sz <= 0 or sz > SCOUT_MAX_BYTES:
-            return None
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        obj = json.loads(raw)
-        if not isinstance(obj, dict):
-            return None
-        return obj
     except Exception as e:
         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return None
+    if sz <= 0 or sz > SCOUT_MAX_BYTES:
+        return None
+    tries = max(1, int(JSON_READ_RETRIES))
+    for i in range(tries):
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            obj = json.loads(raw)
+            if not isinstance(obj, dict):
+                return None
+            return obj
+        except json.JSONDecodeError:
+            if i + 1 >= tries:
+                return None
+            time.sleep(float(JSON_READ_RETRY_SLEEP_S))
+        except PermissionError:
+            if i + 1 >= tries:
+                return None
+            time.sleep(float(JSON_READ_RETRY_SLEEP_S))
+        except OSError:
+            if i + 1 >= tries:
+                return None
+            time.sleep(float(JSON_READ_RETRY_SLEEP_S))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return None
+    return None
 
 def load_verdict(meta_dir: Path) -> Optional[Dict[str, Any]]:
     """Read META/verdict.json (Scout v1.1) with TTL guard (48h default)."""
@@ -1716,9 +1754,11 @@ def load_verdict(meta_dir: Path) -> Optional[Dict[str, Any]]:
         if ts is None:
             return None
         ttl = int(data.get("ttl_sec") or CFG.verdict_ttl_sec)
-        age = (now_utc() - ts).total_seconds()
-        if age < 0 or age > ttl:
+        wall_now_utc = dt.datetime.now(tz=UTC)
+        age = (wall_now_utc - ts).total_seconds()
+        if age < -5.0 or age > ttl:
             return None
+        age = max(0.0, float(age))
         light = str(data.get("light") or "").upper()
         if light not in ("GREEN","YELLOW","RED","INSUFFICIENT_DATA"):
             return None
@@ -1747,9 +1787,11 @@ def load_scout_advice(meta_dir: Path) -> Optional[Dict[str, Any]]:
         if ts is None:
             return None
         ttl = min(int(data.get("ttl_sec") or SCOUT_MAX_AGE_SEC), SCOUT_MAX_AGE_SEC)
-        age = (now_utc() - ts).total_seconds()
-        if age < 0:
+        wall_now_utc = dt.datetime.now(tz=UTC)
+        age = (wall_now_utc - ts).total_seconds()
+        if age < -5.0:
             return None
+        age = max(0.0, float(age))
         if age > ttl:
             logging.info(f"SCOUT STALE | age_sec={int(age)} > ttl_sec={ttl}")
             return None
@@ -2702,6 +2744,56 @@ class ExecutionEngine:
             logging.info(f"SKIP_SYMBOL_INFO_NONE symbol={symbol} emergency={int(bool(emergency))}")
             return None
 
+        # Account/terminal permission precheck before any order attempt.
+        # This prevents repeated broker-side 10017 bursts when trading is disabled.
+        account_trade_allowed = True
+        account_trade_expert = True
+        terminal_trade_allowed = True
+        account_balance = None
+        account_login = ""
+        try:
+            if not self.gov.consume("SYS", "__ACCOUNT__", "account_info", 1, emergency=bool(emergency)):
+                logging.info(f"SKIP_SYS_BUDGET symbol={symbol} kind=account_info emergency={int(bool(emergency))}")
+                return None
+            acc_info = mt5.account_info()
+            if acc_info is None:
+                cd = self.gov.db.set_cooldown(symbol, int(CFG.cooldown_trade_mode_s), "account_info_none")
+                logging.warning(f"SKIP_ACCOUNT_INFO_NONE symbol={symbol} cooldown_until_ts={cd}")
+                return None
+            account_trade_allowed = bool(getattr(acc_info, "trade_allowed", True))
+            account_trade_expert = bool(getattr(acc_info, "trade_expert", True))
+            account_balance = float(getattr(acc_info, "balance", 0.0) or 0.0)
+            account_login = str(getattr(acc_info, "login", "") or "")
+            try:
+                tinfo = mt5.terminal_info()
+                if tinfo is not None:
+                    terminal_trade_allowed = bool(getattr(tinfo, "trade_allowed", True))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                terminal_trade_allowed = True
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            account_trade_allowed = True
+            account_trade_expert = True
+            terminal_trade_allowed = True
+
+        if (not emergency) and ((not account_trade_allowed) or (not account_trade_expert) or (not terminal_trade_allowed)):
+            cd = self.gov.db.set_cooldown(symbol, int(CFG.cooldown_trade_mode_s), "trade_flags_disabled")
+            backoff_s = int(max(1, CFG.global_backoff_trade_disabled_s))
+            until = int(time.time()) + backoff_s
+            reason = (
+                f"trade_flags:acc_allowed={int(account_trade_allowed)}:"
+                f"acc_expert={int(account_trade_expert)}:term_allowed={int(terminal_trade_allowed)}"
+            )
+            self.gov.db.set_global_backoff(until_ts=until, reason=reason)
+            logging.warning(
+                f"SKIP_TRADE_FLAGS symbol={symbol} login={account_login} "
+                f"acc_trade_allowed={int(account_trade_allowed)} acc_trade_expert={int(account_trade_expert)} "
+                f"term_trade_allowed={int(terminal_trade_allowed)} account_balance={account_balance} "
+                f"cooldown_until_ts={cd} backoff_until_ts={until}"
+            )
+            return None
+
         # Trade mode precheck (closing ops allowed)
         tm_num = int(getattr(info, "trade_mode", -1))
         tm_name = _trade_mode_name(tm_num)
@@ -3069,6 +3161,20 @@ class ExecutionEngine:
                 retcode_name=str(ret_name),
                 emergency=bool(emergency),
             ):
+                return res
+
+            # Broker/server disabled trading (10017): enforce symbol cooldown + global backoff immediately.
+            if ret_num == 10017:
+                backoff_s = int(max(1, CFG.global_backoff_trade_disabled_s))
+                until = int(time.time()) + backoff_s
+                self.gov.db.set_global_backoff(until_ts=until, reason=f"{ret_num}:{ret_name}")
+                cd = self.gov.db.set_cooldown(symbol, int(max(1, CFG.cooldown_trade_mode_s)), "trade_disabled")
+                logging.warning(
+                    f"TRADE_DISABLED_GUARD symbol={symbol} retcode_num={ret_num} retcode_name={ret_name} "
+                    f"acc_trade_allowed={int(account_trade_allowed)} acc_trade_expert={int(account_trade_expert)} "
+                    f"term_trade_allowed={int(terminal_trade_allowed)} account_balance={account_balance} "
+                    f"cooldown_until_ts={cd} backoff_until_ts={until}"
+                )
                 return res
 
             # Retryable codes (deterministic)
@@ -4292,7 +4398,7 @@ class SafetyBot:
         if not p.exists():
             return "UNKNOWN"
         try:
-            obj = json.loads(p.read_text(encoding="utf-8", errors="ignore") or "{}")
+            obj = _safe_read_json(p)
             if not isinstance(obj, dict):
                 return "UNKNOWN"
             ts_raw = str(obj.get("ts_utc") or "").strip()
@@ -4306,7 +4412,11 @@ class SafetyBot:
             ttl = int(obj.get("ttl_sec") or 0)
             if ts is None or ttl <= 0:
                 return "UNKNOWN"
-            age = (now_utc() - ts).total_seconds()
+            wall_now_utc = dt.datetime.now(tz=UTC)
+            age = (wall_now_utc - ts).total_seconds()
+            if age < -5.0:
+                return "UNKNOWN"
+            age = max(0.0, float(age))
             if age > float(ttl):
                 return "UNKNOWN"
             qa = str(obj.get("qa_light") or "").strip().upper()

@@ -216,10 +216,19 @@ def atomic_write_json(path: Path, obj: Any) -> None:
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     last_exc: Optional[Exception] = None
     try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as e:
+            # Some hosts deny creating *.tmp in selected directories; fallback to direct write.
+            last_exc = e
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            return
         for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
             try:
                 os.replace(tmp, path)

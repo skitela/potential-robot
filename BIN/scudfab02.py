@@ -325,10 +325,19 @@ def atomic_write_json(path: Path, obj: Any) -> None:
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     last_exc: Optional[Exception] = None
     try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as e:
+            # Some hosts deny creating *.tmp in selected directories; fallback to direct write.
+            last_exc = e
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            return
         for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
             try:
                 os.replace(tmp, path)
@@ -706,7 +715,6 @@ def _impact_class(source_id: str, freshness: str) -> str:
 def _fetch_one_rss_source(source: Dict[str, Any], timeout_sec: float) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
-        import requests
         import feedparser
 
         source_id = str(source.get("source_id") or "").strip().lower()
@@ -716,20 +724,34 @@ def _fetch_one_rss_source(source: Dict[str, Any], timeout_sec: float) -> List[Di
         if not source_id or not url:
             return out
 
-        resp = requests.get(url, timeout=timeout_sec, headers={"User-Agent": "scudfab02"}, stream=True)
         buf = bytearray()
+        # Primary transport: requests (if installed). Fallback: urllib (stdlib).
         try:
-            for chunk in resp.iter_content(chunk_size=16384):
-                if not chunk:
-                    break
-                buf.extend(chunk)
-                if len(buf) >= RSS_MAX_BYTES:
-                    break
-        finally:
+            import requests
+            resp = requests.get(url, timeout=timeout_sec, headers={"User-Agent": "scudfab02"}, stream=True)
             try:
-                resp.close()
-            except Exception as e:
-                cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+                for chunk in resp.iter_content(chunk_size=16384):
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    if len(buf) >= RSS_MAX_BYTES:
+                        break
+            finally:
+                try:
+                    resp.close()
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+        except Exception:
+            from urllib.request import Request, urlopen
+            req = Request(url, headers={"User-Agent": "scudfab02"})
+            with urlopen(req, timeout=float(timeout_sec)) as resp:
+                while True:
+                    chunk = resp.read(16384)
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    if len(buf) >= RSS_MAX_BYTES:
+                        break
 
         txt = bytes(buf).decode("utf-8", errors="ignore")
         feed = feedparser.parse(txt)
