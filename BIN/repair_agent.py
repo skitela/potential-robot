@@ -37,6 +37,10 @@ UTC = timezone.utc
 CHECK_SEC = 10
 RESTART_WAIT_SEC = 15
 MAX_RETRY_PER_ALERT = 3
+REPAIRING_STALE_SEC = 90
+ALERT_STALE_RESOLVE_SEC = 21600
+LEARNER_LOG_STALE_SEC = int(os.environ.get("REPAIR_LEARNER_LOG_STALE_SEC", "7200"))
+REQUIRE_LEARNER_OK = os.environ.get("REPAIR_REQUIRE_LEARNER_OK", "0") == "1"
 AUTO_HOTFIX = os.environ.get("REPAIR_AUTO_HOTFIX", "0") == "1"
 CODEX_ESCALATE_ENABLED = os.environ.get("REPAIR_CODEX_ENABLED", "1") == "1"
 CODEX_TIMEOUT_SEC = int(os.environ.get("REPAIR_CODEX_TIMEOUT_SEC", "21600"))
@@ -58,37 +62,46 @@ def _ensure_dir(p: Path) -> None:
 
 def _write_json_atomic(path: Path, obj: Dict[str, object]) -> None:
     _ensure_dir(path.parent)
-    tmp = path.with_suffix(path.suffix + ".tmp")
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    moved = False
     last_exc: Optional[Exception] = None
-    try:
-        os.replace(tmp, path)
-        moved = True
-    except Exception as exc:
-        last_exc = exc
+    for i in range(3):
+        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{int(time.time() * 1_000_000)}.{i}")
+        wrote_tmp = False
         try:
-            shutil.move(str(tmp), str(path))
-            moved = True
-        except Exception as exc2:
-            last_exc = exc2
-    if not moved:
-        try:
-            with open(path, "w", encoding="utf-8", newline="\n") as f:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
-            moved = True
-        finally:
+            wrote_tmp = True
+        except Exception as exc:
+            last_exc = exc
+            continue
+        try:
             try:
-                tmp.unlink(missing_ok=True)
+                os.replace(tmp, path)
+                return
             except Exception as exc:
-                cg.tlog(None, "WARN", "REPAIR_TMP_UNLINK_FAIL", "cannot cleanup temporary json file", exc)
-    if not moved and last_exc is not None:
+                last_exc = exc
+                try:
+                    shutil.move(str(tmp), str(path))
+                    return
+                except Exception as exc2:
+                    last_exc = exc2
+        finally:
+            if wrote_tmp:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        return
+    except Exception as exc:
+        last_exc = exc
+    if last_exc is not None:
         raise last_exc
 
 
@@ -171,9 +184,10 @@ def _component_ok(root: Path) -> bool:
     # Lock/PID check is best-effort; fresh log is authoritative for liveness.
     sb_ok = bool((sb_pid and _pid_is_running(sb_pid)) or sb_log_ok)
     sc_ok = bool((sc_pid and _pid_is_running(sc_pid)) or sc_log_ok)
-    lr_ok = _log_mtime_ok(logs_dir / "learner_offline.log", 300)
-
-    return bool(sb_ok and sc_ok and lr_ok)
+    lr_ok = _log_mtime_ok(logs_dir / "learner_offline.log", max(60, int(LEARNER_LOG_STALE_SEC)))
+    if REQUIRE_LEARNER_OK:
+        return bool(sb_ok and sc_ok and lr_ok)
+    return bool(sb_ok and sc_ok)
 
 
 def _run_cmd(cmd: str) -> Tuple[int, str]:
@@ -182,6 +196,44 @@ def _run_cmd(cmd: str) -> Tuple[int, str]:
         return int(cp.returncode), (cp.stdout or "") + (cp.stderr or "")
     except Exception as e:
         return 1, f"EXC:{type(e).__name__}:{e}"
+
+
+def _kill_pid(pid: int) -> None:
+    try:
+        pid = int(pid)
+    except Exception:
+        return
+    if pid <= 0:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            return
+        except Exception:
+            return
+    try:
+        os.kill(pid, 9)
+    except Exception:
+        return
+
+
+def _stop_targeted_components(root: Path) -> None:
+    run_dir = root / "RUN"
+    for lock_name in ("safetybot.lock", "scudfab02.lock"):
+        lock_path = run_dir / lock_name
+        pid = _parse_lock_pid(lock_path)
+        if pid > 0:
+            _kill_pid(pid)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _spawn_cmd(cmd: str) -> Tuple[bool, str]:
@@ -204,14 +256,19 @@ def _run_diag(root: Path) -> None:
 
 
 def _restart_all(root: Path) -> None:
-    stop_bat = root / "stop.bat"
+    # Do not call stop.bat here: it kills RepairAgent itself and leaves "repairing" stuck.
+    # Instead, restart only trading-critical components and then invoke SYSTEM_CONTROL start.
+    _stop_targeted_components(root)
+    system_control = root / "TOOLS" / "SYSTEM_CONTROL.ps1"
+    if system_control.exists():
+        _run_cmd(
+            f"powershell -NoProfile -ExecutionPolicy Bypass -File \"{system_control}\" "
+            f"-Action start -Root \"{root}\" -Profile full"
+        )
+        return
     start_bat = root / "start.bat"
-    if not stop_bat.exists():
-        stop_bat = TOOLS_BAT_DIR / "stop.bat"
     if not start_bat.exists():
         start_bat = TOOLS_BAT_DIR / "start.bat"
-    if stop_bat.exists():
-        _run_cmd(f"\"{stop_bat}\"")
     if start_bat.exists():
         _run_cmd(f"\"{start_bat}\"")
 
@@ -358,6 +415,33 @@ def main() -> int:
         while True:
             status_obj = _read_json(status_path) or {}
             status_name = str(status_obj.get("status") or "")
+
+            if status_name == "repairing":
+                ts_ref = str(status_obj.get("ts_utc") or "")
+                age_sec = _iso_age_sec(ts_ref)
+                if age_sec is not None and age_sec > float(REPAIRING_STALE_SEC):
+                    if _component_ok(root):
+                        event_id = str(status_obj.get("event_id") or "")
+                        _write_json_atomic(
+                            status_path,
+                            _status_payload(
+                                {
+                                    "event_id": event_id,
+                                    "ts_utc": _now_utc(),
+                                    "status": "recovered",
+                                    "source": "repairing_stale_recheck",
+                                }
+                            ),
+                        )
+                        alert_fix = _read_json(alert_path) or {}
+                        if (
+                            bool(alert_fix)
+                            and (not bool(alert_fix.get("resolved")))
+                            and str(alert_fix.get("event_id") or "") == event_id
+                        ):
+                            alert_fix["resolved"] = True
+                            _write_json_atomic(alert_path, alert_fix)
+
             if status_name.startswith("repairing_codex"):
                 ts_ref = str(status_obj.get("codex_started_ts_utc") or status_obj.get("ts_utc") or "")
                 age_sec = _iso_age_sec(ts_ref)
@@ -396,6 +480,27 @@ def main() -> int:
 
             alert = _read_json(alert_path)
             if alert and not bool(alert.get("resolved")):
+                try:
+                    alert_age = _iso_age_sec(str(alert.get("ts_utc") or ""))
+                except Exception:
+                    alert_age = None
+                if alert_age is not None and alert_age > float(ALERT_STALE_RESOLVE_SEC) and _component_ok(root):
+                    alert["resolved"] = True
+                    _write_json_atomic(alert_path, alert)
+                    _write_json_atomic(
+                        status_path,
+                        _status_payload(
+                            {
+                                "event_id": str(alert.get("event_id") or ""),
+                                "ts_utc": _now_utc(),
+                                "status": "recovered",
+                                "source": "stale_alert_autoresolve",
+                            }
+                        ),
+                    )
+                    time.sleep(CHECK_SEC)
+                    continue
+
                 event_id = str(alert.get("event_id") or "")
                 if event_id and event_id != last_event:
                     last_event = event_id

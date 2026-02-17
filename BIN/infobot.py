@@ -43,6 +43,7 @@ HEARTBEAT_SEC = 60
 HEARTBEAT_MODE = "quiet"  # quiet|verbose
 HEARTBEAT_PRINT_EVERY_SEC = 7200
 WATCHDOG_SEC = 20
+STATUS_PULSE_SEC = 60
 SUMMARY_HOUR = 20
 SUMMARY_MIN = 30
 DAILY_ALIVE_HOUR = 5
@@ -50,6 +51,7 @@ DAILY_ALIVE_MIN = 0
 LOG_STALE_SEC = 180
 GRACE_SEC = 900
 ALERT_REPEAT_SEC = 3600
+REPAIRING_STALE_RECOVER_SEC = int(os.environ.get("INFOBOT_REPAIRING_STALE_RECOVER_SEC", "180"))
 CONSOLE_ENABLED = False
 STATE_FILE = "infobot_state.json"
 HEARTBEAT_FILE = "infobot_heartbeat.json"
@@ -125,37 +127,48 @@ def _ensure_dir(p: Path) -> None:
 
 def _write_json_atomic(path: Path, obj: Dict[str, object]) -> None:
     _ensure_dir(path.parent)
-    tmp = path.with_suffix(path.suffix + ".tmp")
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    moved = False
     last_exc: Optional[Exception] = None
-    try:
-        os.replace(tmp, path)
-        moved = True
-    except Exception as exc:
-        last_exc = exc
+    for i in range(3):
+        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{int(time.time() * 1_000_000)}.{i}")
+        wrote_tmp = False
         try:
-            shutil.move(str(tmp), str(path))
-            moved = True
-        except Exception as exc2:
-            last_exc = exc2
-    if not moved:
-        try:
-            with open(path, "w", encoding="utf-8", newline="\n") as f:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
-            moved = True
-        finally:
+            wrote_tmp = True
+        except Exception as exc:
+            last_exc = exc
+            time.sleep(0.01 * (i + 1))
+            continue
+        try:
             try:
-                tmp.unlink(missing_ok=True)
+                os.replace(tmp, path)
+                return
             except Exception as exc:
-                cg.tlog(None, "WARN", "INFOBOT_TMP_UNLINK_FAIL", "cannot cleanup temporary json file", exc)
-    if not moved and last_exc is not None:
+                last_exc = exc
+                try:
+                    shutil.move(str(tmp), str(path))
+                    return
+                except Exception as exc2:
+                    last_exc = exc2
+        finally:
+            if wrote_tmp:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        time.sleep(0.01 * (i + 1))
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        return
+    except Exception as exc:
+        last_exc = exc
+    if last_exc is not None:
         raise last_exc
 
 
@@ -709,6 +722,17 @@ def _reason_pl(reason: str) -> str:
     return f"{comp}:{code_pl}" if comp else code_pl
 
 
+def _iso_age_sec(ts_utc: str) -> Optional[float]:
+    raw = str(ts_utc or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return max(0.0, float((_now_utc() - dt).total_seconds()))
+    except Exception:
+        return None
+
+
 def _repair_view(status: str, attempt: int) -> tuple[str, str]:
     st = str(status or "")
     if st in CODEX_REPAIR_STATES:
@@ -883,6 +907,7 @@ def main() -> int:
     last_alert_reason = ""
     last_alert_ts = 0.0
     current_status = "alive"
+    last_status_pulse = 0.0
     repair_cmd = REPAIR_COMMAND.strip()
     if not repair_cmd:
         repair_cmd = AUDIT_COMMAND.strip()
@@ -965,6 +990,31 @@ def main() -> int:
 
             # Recovery notification
             rec = _read_json(recover_path)
+            rec_status = str((rec or {}).get("status") or "")
+            if rec and rec_status in ({"repairing"} | CODEX_REPAIR_STATES):
+                rec_age = _iso_age_sec(str(rec.get("ts_utc") or ""))
+                if rec_age is not None and rec_age >= float(REPAIRING_STALE_RECOVER_SEC):
+                    status_probe = _component_status(root)
+                    reason_probe = _should_alert(status_probe)
+                    if not reason_probe:
+                        fixed = {
+                            "event_id": str(rec.get("event_id") or ""),
+                            "ts_utc": _now_utc().isoformat().replace("+00:00", "Z"),
+                            "status": "recovered",
+                            "source": "infobot_stale_repairing_recheck",
+                        }
+                        _write_json_atomic(recover_path, fixed)
+                        alert_fix = _read_json(alert_path) or {}
+                        if (
+                            bool(alert_fix)
+                            and (not bool(alert_fix.get("resolved")))
+                            and str(alert_fix.get("event_id") or "") == str(fixed.get("event_id") or "")
+                        ):
+                            alert_fix["resolved"] = True
+                            _write_json_atomic(alert_path, alert_fix)
+                        rec = fixed
+                        rec_status = "recovered"
+                        logging.info("AUTO_RECOVER stale_repairing->recovered")
             if rec and str(rec.get("status")) == "recovered":
                 rid = str(rec.get("event_id") or "")
                 if rid and rid != last_recover_id:
@@ -1152,6 +1202,21 @@ def main() -> int:
                             last_alive_email_date = date_key_alive
                             state["last_alive_email_date"] = last_alive_email_date
                             _write_json_atomic(state_path, state)
+
+            if now - last_status_pulse >= float(STATUS_PULSE_SEC):
+                pulse_mark = f"MONITOR AKTYWNY {_ts_pl_hm()}"
+                if current_status in {"repairing", "repairing_codex"}:
+                    rec_now = _read_json(recover_path) or {}
+                    rec_now_status = str(rec_now.get("status") or "repairing")
+                    attempt = int(rec_now.get("attempt") or 0)
+                    txt, color = _repair_view(rec_now_status, attempt)
+                    _gui_update(gui, f"{txt}\n{pulse_mark}", color)
+                elif current_status in {"alert", "down"}:
+                    _gui_update(gui, _status_text("SYSTEM NIE DZIALA", pulse_mark), "red")
+                else:
+                    _gui_update(gui, _status_text("SYSTEM ZYJE", pulse_mark), "red")
+                logging.info(f"STATUS_PULSE status={current_status}")
+                last_status_pulse = now
 
             if gui and gui.get("exit"):
                 break

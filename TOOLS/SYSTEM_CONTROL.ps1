@@ -437,6 +437,23 @@ switch ($Action) {
             $ids = Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
             $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
             $lockExists = if ($lockPath) { Test-Path $lockPath } else { $false }
+            $lockPid = $null
+            $lockPidRunning = $false
+            if ($lockPath -and $lockExists) {
+                try {
+                    $lockPid = Get-LockPid -LockPath $lockPath
+                    if ($null -ne $lockPid) {
+                        $lockPidRunning = Test-PidRunning -ProcessId ([int]$lockPid)
+                        if ($lockPidRunning -and ((@($ids) -notcontains [int]$lockPid))) {
+                            $ids += [int]$lockPid
+                            $ids = @($ids | Sort-Object -Unique)
+                        }
+                    }
+                } catch {
+                    $lockPid = $null
+                    $lockPidRunning = $false
+                }
+            }
             $logPath = Get-ComponentLogPath -RuntimeRoot $runtimeRoot -CompName ([string]$c.Name)
             $logAgeSec = if ($logPath) { Get-FileAgeSec -Path $logPath } else { $null }
             $ttl = Get-ComponentLogTtlSec -CompName ([string]$c.Name)
@@ -444,7 +461,7 @@ switch ($Action) {
             if ($null -ne $logAgeSec) {
                 $logFresh = ([double]$logAgeSec -le [double]$ttl)
             }
-            $runningByPid = [bool](@($ids).Count -gt 0)
+            $runningByPid = [bool]((@($ids).Count -gt 0) -or $lockPidRunning)
             # WMI can be restricted on some hosts; lock+fresh-log is accepted heartbeat fallback.
             $runningByHeartbeat = $false
             if ($lockPath) {
@@ -461,6 +478,8 @@ switch ($Action) {
                 pids = @($ids)
                 lock = $lockPath
                 lock_exists = [bool]$lockExists
+                lock_pid = $lockPid
+                lock_pid_running = [bool]$lockPidRunning
                 log_path = $logPath
                 log_age_sec = $logAgeSec
                 log_ttl_sec = [int]$ttl

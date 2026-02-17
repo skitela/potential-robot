@@ -212,49 +212,47 @@ def setup_logging(root: Path) -> None:
 
 def atomic_write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     last_exc: Optional[Exception] = None
-    try:
+    for i in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
+        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{int(time.time() * 1_000_000)}.{i}")
+        wrote_tmp = False
         try:
             with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
+            wrote_tmp = True
         except Exception as e:
-            # Some hosts deny creating *.tmp in selected directories; fallback to direct write.
             last_exc = e
-            with open(path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(data)
-                f.flush()
-                os.fsync(f.fileno())
+            time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
+            continue
+        try:
+            os.replace(tmp, path)
             return
-        for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
-            try:
-                os.replace(tmp, path)
-                return
-            except Exception as e:
-                last_exc = e
-                time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
-        for _ in range(max(1, int(ATOMIC_REPLACE_RETRIES))):
+        except Exception as e:
+            last_exc = e
             try:
                 shutil.move(str(tmp), str(path))
                 return
-            except Exception as e:
-                last_exc = e
-                time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
-        # Fallback for environments where atomic rename/move is blocked.
+            except Exception as e2:
+                last_exc = e2
+        finally:
+            if wrote_tmp:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception as e:
+                    cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
+    # Fallback for environments where atomic rename/move is blocked.
+    try:
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
         return
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
-        except Exception as e:
-            cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+    except Exception as e:
+        last_exc = e
     if last_exc is not None:
         raise last_exc
 
