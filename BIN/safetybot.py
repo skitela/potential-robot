@@ -43,6 +43,8 @@ import subprocess
 import platform
 import getpass
 import re
+import base64
+import ctypes
 
 def sqlite_exec_retry(conn: sqlite3.Connection, query: str, params=None, *, tries: int = 6, base_sleep: float = 0.15):
     """
@@ -718,6 +720,90 @@ def setup_logging(runtime_root: Path) -> None:
         handlers=handlers
     )
 
+def _decrypt_dpapi_b64(cipher_b64: str) -> str:
+    """Decrypt base64-encoded DPAPI blob (CurrentUser scope)."""
+    if os.name != "nt":
+        raise RuntimeError("DPAPI decrypt is supported only on Windows.")
+
+    raw = base64.b64decode((cipher_b64 or "").strip(), validate=True)
+    if not raw:
+        raise RuntimeError("MT5_PASSWORD_DPAPI_B64 is empty.")
+
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", ctypes.POINTER(ctypes.c_byte)),
+        ]
+
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    crypt32.CryptUnprotectData.argtypes = [
+        ctypes.POINTER(DATA_BLOB),
+        ctypes.POINTER(wintypes.LPWSTR),
+        ctypes.POINTER(DATA_BLOB),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(DATA_BLOB),
+    ]
+    crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+
+    in_buf = ctypes.create_string_buffer(raw, len(raw))
+    in_blob = DATA_BLOB(len(raw), ctypes.cast(in_buf, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = DATA_BLOB()
+
+    ok = crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob),
+        None,
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(out_blob),
+    )
+    if not ok:
+        raise ctypes.WinError()
+
+    try:
+        dec_bytes = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        return dec_bytes.decode("utf-8")
+    finally:
+        if out_blob.pbData:
+            kernel32.LocalFree(out_blob.pbData)
+
+def _decrypt_dpapi_secure_string(cipher_text: str) -> str:
+    """Decrypt PowerShell ConvertFrom-SecureString DPAPI payload."""
+    if os.name != "nt":
+        raise RuntimeError("DPAPI decrypt is supported only on Windows.")
+    raw = (cipher_text or "").strip()
+    if not raw:
+        raise RuntimeError("MT5_PASSWORD_DPAPI is empty.")
+
+    ps = (
+        "$ErrorActionPreference='Stop'\n"
+        "$c = [Console]::In.ReadToEnd().Trim()\n"
+        "$s = ConvertTo-SecureString -String $c\n"
+        "$b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)\n"
+        "try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) }\n"
+        "finally { if ($b -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) } }\n"
+    )
+    out = subprocess.check_output(
+        ["powershell", "-NoProfile", "-Command", ps],
+        input=raw,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="ignore",
+        timeout=10,
+    )
+    plain = (out or "").strip()
+    if not plain:
+        raise RuntimeError("DPAPI secure string decryption returned empty value.")
+    return plain
+
 def load_env(usb_root: Path) -> Dict[str, str]:
     env_path = usb_root / "TOKEN" / "BotKey.env"
     if not env_path.exists():
@@ -731,6 +817,17 @@ def load_env(usb_root: Path) -> Dict[str, str]:
             if "=" in line:
                 k, v = line.split("=", 1)
                 cfg[k.strip()] = v.strip()
+    if "MT5_PASSWORD" not in cfg:
+        if "MT5_PASSWORD_DPAPI_B64" in cfg:
+            try:
+                cfg["MT5_PASSWORD"] = _decrypt_dpapi_b64(cfg["MT5_PASSWORD_DPAPI_B64"])
+            except Exception as e:
+                raise RuntimeError("Nie mozna odszyfrowac MT5_PASSWORD_DPAPI_B64 dla tego uzytkownika Windows.") from e
+        elif "MT5_PASSWORD_DPAPI" in cfg:
+            try:
+                cfg["MT5_PASSWORD"] = _decrypt_dpapi_secure_string(cfg["MT5_PASSWORD_DPAPI"])
+            except Exception as e:
+                raise RuntimeError("Nie mozna odszyfrowac MT5_PASSWORD_DPAPI dla tego uzytkownika Windows.") from e
     return cfg
 
 # =============================================================================

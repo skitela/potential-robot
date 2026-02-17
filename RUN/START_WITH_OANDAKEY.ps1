@@ -7,6 +7,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$DEFAULT_MT5_SERVER = "OANDATMS-MT5"
+$DEFAULT_MT5_PATH = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe"
+$ALLOWED_FILESYSTEMS = @("NTFS", "FAT32", "EXFAT", "FAT")
+
 function Resolve-Root {
     param([string]$InputRoot = "")
     if ([string]::IsNullOrWhiteSpace($InputRoot)) {
@@ -39,6 +43,43 @@ function Write-JsonAtomic {
         } finally {
             try { Remove-Item -Force $tmp -ErrorAction SilentlyContinue } catch {}
         }
+    }
+}
+
+function ConvertTo-PlainText {
+    param([SecureString]$Secret)
+    if ($null -eq $Secret) { return "" }
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secret)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+function Is-PlaceholderValue {
+    param([string]$Value = "")
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $true
+    }
+    $v = $Value.Trim().ToUpperInvariant()
+    return @(
+        "<UZUPELNIJ_PRZY_PIERWSZYM_STARCIE>",
+        "PROMPT_ON_FIRST_START",
+        "TODO",
+        "CHANGE_ME"
+    ) -contains $v
+}
+
+function Get-RemovableDrives {
+    try {
+        return @(
+            Get-CimInstance Win32_LogicalDisk -ErrorAction Stop |
+            Where-Object { $_.DriveType -eq 2 -and $_.DeviceID } |
+            Select-Object DeviceID, VolumeName, FileSystem
+        )
+    } catch {
+        return @()
     }
 }
 
@@ -84,6 +125,328 @@ function Get-KeyDriveByLabel {
     return ("{0}:" -f $drive.TrimEnd(":"))
 }
 
+function Set-VolumeLabelSafe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Drive,
+        [Parameter(Mandatory = $true)][string]$NewLabel
+    )
+    $letter = $Drive.Trim().TrimEnd(":")
+    try {
+        Set-Volume -DriveLetter $letter -NewFileSystemLabel $NewLabel -ErrorAction Stop | Out-Null
+        return "set_volume"
+    } catch {
+        $null = cmd.exe /c ("label {0}: {1}" -f $letter, $NewLabel)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Nie udalo sie ustawic etykiety woluminu."
+        }
+        return "cmd_label"
+    }
+}
+
+function Resolve-KeyDrive {
+    param(
+        [string]$ExpectedLabel = "OANDAKEY",
+        [switch]$Dry
+    )
+    $drive = Get-KeyDriveByLabel -ExpectedLabel $ExpectedLabel
+    if (-not [string]::IsNullOrWhiteSpace($drive)) {
+        return [ordered]@{
+            ok = $true
+            drive = $drive
+            label_state = "label_ok"
+        }
+    }
+
+    $rem = @(Get-RemovableDrives)
+    if ($rem.Count -eq 0) {
+        return [ordered]@{
+            ok = $false
+            reason = "no_removable_drive"
+        }
+    }
+    if ($rem.Count -gt 1) {
+        $cands = @($rem | ForEach-Object { [string]$_.DeviceID })
+        return [ordered]@{
+            ok = $false
+            reason = "multiple_removable_no_label"
+            candidates = $cands
+        }
+    }
+
+    $single = [string]$rem[0].DeviceID
+    if ([string]::IsNullOrWhiteSpace($single)) {
+        return [ordered]@{
+            ok = $false
+            reason = "removable_drive_unknown"
+        }
+    }
+    if ($Dry) {
+        return [ordered]@{
+            ok = $true
+            drive = ($single.Trim().TrimEnd(":") + ":")
+            label_state = "dry_run_label_assign"
+            label_method = "dry_run"
+        }
+    }
+
+    $method = Set-VolumeLabelSafe -Drive $single -NewLabel $ExpectedLabel
+    return [ordered]@{
+        ok = $true
+        drive = ($single.Trim().TrimEnd(":") + ":")
+        label_state = "label_assigned"
+        label_method = $method
+    }
+}
+
+function Get-DriveFileSystem {
+    param([Parameter(Mandatory = $true)][string]$Drive)
+    $letterNorm = $Drive.Trim().TrimEnd(":").ToUpperInvariant()
+    if ([string]::IsNullOrWhiteSpace($letterNorm)) { return "" }
+    $dev = $letterNorm + ":"
+
+    try {
+        $vol = Get-Volume -DriveLetter $letterNorm -ErrorAction Stop | Select-Object -First 1
+        if ($null -ne $vol -and -not [string]::IsNullOrWhiteSpace([string]$vol.FileSystem)) {
+            return [string]$vol.FileSystem
+        }
+    } catch {
+        # ignore
+    }
+
+    try {
+        $d = Get-CimInstance Win32_LogicalDisk -ErrorAction Stop | Where-Object { [string]$_.DeviceID -eq $dev } | Select-Object -First 1
+    } catch {
+        $d = $null
+    }
+    if ($null -ne $d -and -not [string]::IsNullOrWhiteSpace([string]$d.FileSystem)) {
+        return [string]$d.FileSystem
+    }
+
+    try {
+        $wmic = & wmic logicaldisk where "DeviceID='$dev'" get FileSystem /value 2>$null
+        foreach ($line in $wmic) {
+            $s = [string]$line
+            if ($s -match "^FileSystem=(.+)$") {
+                $fs = [string]$Matches[1]
+                if (-not [string]::IsNullOrWhiteSpace($fs)) {
+                    return $fs.Trim()
+                }
+            }
+        }
+    } catch {
+        # ignore
+    }
+
+    try {
+        $out = & fsutil fsinfo volumeinfo $dev 2>$null
+        foreach ($line in $out) {
+            $s = [string]$line
+            if ($s -match "File System Name\s*:\s*(.+)$") {
+                $fs = [string]$Matches[1]
+                if (-not [string]::IsNullOrWhiteSpace($fs)) {
+                    return $fs.Trim()
+                }
+            }
+        }
+    } catch {
+        # ignore
+    }
+
+    return ""
+}
+
+function Assert-DriveFormatReady {
+    param(
+        [Parameter(Mandatory = $true)][string]$Drive,
+        [string[]]$AllowedFs = @("NTFS", "FAT32", "EXFAT", "FAT")
+    )
+    $fs = (Get-DriveFileSystem -Drive $Drive).Trim()
+    if ([string]::IsNullOrWhiteSpace($fs)) {
+        return [ordered]@{
+            ok = $true
+            reason = "filesystem_unknown"
+            filesystem = "UNKNOWN"
+            verification = "UNVERIFIED"
+        }
+    }
+    $fsUp = $fs.ToUpperInvariant()
+    if ($fsUp -eq "RAW") {
+        return [ordered]@{
+            ok = $false
+            reason = "drive_not_formatted_raw"
+            filesystem = $fs
+            verification = "VERIFIED"
+        }
+    }
+    if (-not ($AllowedFs -contains $fsUp)) {
+        return [ordered]@{
+            ok = $false
+            reason = "unsupported_filesystem"
+            filesystem = $fs
+            verification = "VERIFIED"
+        }
+    }
+    return [ordered]@{
+        ok = $true
+        filesystem = $fs
+        verification = "VERIFIED"
+        reason = ""
+    }
+}
+
+function Read-KeyEnv {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $cfg = [ordered]@{}
+    if (-not (Test-Path $Path)) {
+        return $cfg
+    }
+    foreach ($line in (Get-Content -Encoding UTF8 -Path $Path)) {
+        $s = [string]$line
+        if ([string]::IsNullOrWhiteSpace($s)) { continue }
+        $t = $s.Trim()
+        if ($t.StartsWith("#")) { continue }
+        if ($t -notmatch "=") { continue }
+        $parts = $t.Split("=", 2)
+        $k = [string]$parts[0]
+        $v = [string]$parts[1]
+        $cfg[$k.Trim()] = $v.Trim()
+    }
+    return $cfg
+}
+
+function Write-KeyEnv {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][hashtable]$Values
+    )
+    $parent = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $lines = @(
+        "# OANDA MT5 key file (USB only)",
+        "# Uwaga: DPAPI_CURRENT_USER dziala tylko na tym samym laptopie i koncie Windows",
+        ("MT5_LOGIN={0}" -f ([string]$Values["MT5_LOGIN"])),
+        ("MT5_PASSWORD_MODE={0}" -f ([string]$Values["MT5_PASSWORD_MODE"])),
+        ("MT5_PASSWORD_DPAPI={0}" -f ([string]$Values["MT5_PASSWORD_DPAPI"])),
+        ("MT5_SERVER={0}" -f ([string]$Values["MT5_SERVER"])),
+        ("MT5_PATH={0}" -f ([string]$Values["MT5_PATH"]))
+    )
+    Set-Content -Encoding UTF8 -Path $Path -Value ($lines -join [Environment]::NewLine)
+}
+
+function Ensure-KeyEnvReady {
+    param(
+        [Parameter(Mandatory = $true)][string]$KeyEnvPath,
+        [switch]$Dry
+    )
+    $cfg = Read-KeyEnv -Path $KeyEnvPath
+
+    $login = [string]($cfg["MT5_LOGIN"])
+    $server = [string]($cfg["MT5_SERVER"])
+    $mt5Path = [string]($cfg["MT5_PATH"])
+    $pwdPlain = [string]($cfg["MT5_PASSWORD"])
+    $pwdDpapi = [string]($cfg["MT5_PASSWORD_DPAPI"])
+    $pwdDpapiB64 = [string]($cfg["MT5_PASSWORD_DPAPI_B64"])
+
+    if (Is-PlaceholderValue $server) { $server = "" }
+    if (Is-PlaceholderValue $mt5Path) { $mt5Path = "" }
+
+    if ([string]::IsNullOrWhiteSpace($server)) {
+        $server = $DEFAULT_MT5_SERVER
+    }
+    if ([string]::IsNullOrWhiteSpace($mt5Path)) {
+        $mt5Path = $DEFAULT_MT5_PATH
+    }
+
+    $hasPassword = $false
+    if (-not (Is-PlaceholderValue $pwdPlain)) { $hasPassword = $true }
+    if (-not (Is-PlaceholderValue $pwdDpapi)) { $hasPassword = $true }
+    if (-not (Is-PlaceholderValue $pwdDpapiB64)) { $hasPassword = $true }
+
+    $needsPrompt = (Is-PlaceholderValue $login) -or (-not $hasPassword)
+    if (-not $needsPrompt) {
+        $outValues = [ordered]@{
+            MT5_LOGIN = $login
+            MT5_PASSWORD_MODE = (if (-not (Is-PlaceholderValue $pwdDpapi)) { "DPAPI_CURRENT_USER" } elseif (-not (Is-PlaceholderValue $pwdDpapiB64)) { "DPAPI_B64_CURRENT_USER" } else { "PLAINTEXT" })
+            MT5_PASSWORD_DPAPI = $pwdDpapi
+            MT5_SERVER = $server
+            MT5_PATH = $mt5Path
+        }
+        if ($Dry) {
+            return [ordered]@{
+                ready = $true
+                prompted = $false
+                wrote_env = $false
+                prompt_required = $false
+                server = $server
+            }
+        }
+        Write-KeyEnv -Path $KeyEnvPath -Values $outValues
+        if (-not (Is-PlaceholderValue $pwdDpapiB64) -and (Is-PlaceholderValue $pwdDpapi)) {
+            # Preserve compatibility payload when only legacy DPAPI_B64 exists.
+            Add-Content -Encoding UTF8 -Path $KeyEnvPath -Value ([Environment]::NewLine + ("MT5_PASSWORD_DPAPI_B64={0}" -f $pwdDpapiB64))
+        }
+        if (-not (Is-PlaceholderValue $pwdPlain) -and (Is-PlaceholderValue $pwdDpapi) -and (Is-PlaceholderValue $pwdDpapiB64)) {
+            Add-Content -Encoding UTF8 -Path $KeyEnvPath -Value ([Environment]::NewLine + ("MT5_PASSWORD={0}" -f $pwdPlain))
+        }
+        return [ordered]@{
+            ready = $true
+            prompted = $false
+            wrote_env = $true
+            prompt_required = $false
+            server = $server
+        }
+    }
+
+    if ($Dry) {
+        return [ordered]@{
+            ready = $false
+            prompted = $false
+            wrote_env = $false
+            prompt_required = $true
+            server = $server
+        }
+    }
+
+    $loginIn = Read-Host "Podaj MT5_LOGIN (numer konta)"
+    while ([string]::IsNullOrWhiteSpace($loginIn)) {
+        $loginIn = Read-Host "MT5_LOGIN nie moze byc pusty. Podaj MT5_LOGIN"
+    }
+    $pwdSecure = Read-Host -AsSecureString "Podaj MT5_PASSWORD"
+    $pwdPlainLocal = ConvertTo-PlainText -Secret $pwdSecure
+    if ([string]::IsNullOrWhiteSpace($pwdPlainLocal)) {
+        throw "MT5_PASSWORD nie moze byc pusty."
+    }
+    $srvPrompt = Read-Host ("Podaj MT5_SERVER (Enter = {0})" -f $server)
+    $srvFinal = if ([string]::IsNullOrWhiteSpace($srvPrompt)) { $server } else { $srvPrompt.Trim() }
+    if ([string]::IsNullOrWhiteSpace($srvFinal)) { $srvFinal = $DEFAULT_MT5_SERVER }
+
+    $pathPrompt = Read-Host ("Podaj MT5_PATH (Enter = {0})" -f $mt5Path)
+    $pathFinal = if ([string]::IsNullOrWhiteSpace($pathPrompt)) { $mt5Path } else { $pathPrompt.Trim() }
+    if ([string]::IsNullOrWhiteSpace($pathFinal)) { $pathFinal = $DEFAULT_MT5_PATH }
+
+    $cipher = ConvertFrom-SecureString -SecureString $pwdSecure
+    $outValues = [ordered]@{
+        MT5_LOGIN = $loginIn.Trim()
+        MT5_PASSWORD_MODE = "DPAPI_CURRENT_USER"
+        MT5_PASSWORD_DPAPI = $cipher
+        MT5_SERVER = $srvFinal
+        MT5_PATH = $pathFinal
+    }
+    Write-KeyEnv -Path $KeyEnvPath -Values $outValues
+
+    $cipher = ""
+    $pwdPlainLocal = ""
+    Remove-Variable cipher, pwdPlainLocal -ErrorAction SilentlyContinue
+
+    return [ordered]@{
+        ready = $true
+        prompted = $true
+        wrote_env = $true
+        prompt_required = $false
+        server = $srvFinal
+    }
+}
+
 $runtimeRoot = Resolve-Root -InputRoot $Root
 $statusPath = Join-Path $runtimeRoot "RUN\start_with_key_status.json"
 $status = [ordered]@{
@@ -94,26 +457,72 @@ $status = [ordered]@{
     status = "FAIL"
 }
 
-$drive = Get-KeyDriveByLabel -ExpectedLabel $Label
-if ([string]::IsNullOrWhiteSpace($drive)) {
-    $status.reason = "key_label_not_found"
+$driveInfo = Resolve-KeyDrive -ExpectedLabel $Label -Dry:$DryRun
+if (-not [bool]$driveInfo.ok) {
+    $status.reason = [string]$driveInfo.reason
+    if ($driveInfo.Contains("candidates")) {
+        $status.candidates = @($driveInfo.candidates)
+    }
     [void](Write-JsonAtomic -Path $statusPath -Object $status)
-    Write-Output ("KEY FAIL: Nie znaleziono woluminu o etykiecie '{0}'." -f $Label)
+    if ($status.reason -eq "multiple_removable_no_label") {
+        Write-Output ("KEY FAIL: Brak etykiety '{0}' i wykryto wiele pendrive. Oznacz docelowy pendrive etykieta '{0}'." -f $Label)
+    } else {
+        Write-Output ("KEY FAIL: Nie znaleziono pendrive gotowego pod etykiete '{0}'." -f $Label)
+    }
     exit 2
 }
-
-$keyEnv = Join-Path ($drive + "\") "TOKEN\BotKey.env"
-if (-not (Test-Path $keyEnv)) {
-    $status.reason = "key_file_missing"
-    $status.detected_drive = $drive
-    $status.expected_rel = "TOKEN\\BotKey.env"
-    [void](Write-JsonAtomic -Path $statusPath -Object $status)
-    Write-Output ("KEY FAIL: Wolumin '{0}' znaleziony, ale brakuje TOKEN\\BotKey.env." -f $drive)
-    exit 3
+$drive = [string]$driveInfo.drive
+$status.detected_drive = $drive
+$status.label_state = [string]$driveInfo.label_state
+if ($driveInfo.Contains("label_method")) {
+    $status.label_method = [string]$driveInfo.label_method
 }
 
+$fmt = Assert-DriveFormatReady -Drive $drive -AllowedFs $ALLOWED_FILESYSTEMS
+if (-not [bool]$fmt.ok) {
+    $status.reason = [string]$fmt.reason
+    $status.filesystem = [string]$fmt.filesystem
+    [void](Write-JsonAtomic -Path $statusPath -Object $status)
+    if ($status.reason -eq "drive_not_formatted_raw") {
+        Write-Output ("KEY FAIL: Pendrive {0} ma format RAW. Sformatuj go na NTFS/FAT32/exFAT i sprobuj ponownie." -f $drive)
+    } elseif ($status.reason -eq "unsupported_filesystem") {
+        Write-Output ("KEY FAIL: Pendrive {0} ma nieobslugiwany format '{1}'. Uzyj NTFS/FAT32/exFAT." -f $drive, $status.filesystem)
+    } else {
+        Write-Output ("KEY FAIL: Nie mozna potwierdzic formatu systemu plikow dla {0}." -f $drive)
+    }
+    exit 5
+}
+$status.filesystem = [string]$fmt.filesystem
+$status.format_check = [string]$fmt.verification
+$status.format_reason = [string]$fmt.reason
+
+$tokenDir = Join-Path ($drive + "\") "TOKEN"
+if (-not (Test-Path $tokenDir)) {
+    if (-not $DryRun) {
+        New-Item -ItemType Directory -Force -Path $tokenDir | Out-Null
+    }
+    $status.token_dir_created = (-not $DryRun)
+}
+
+$keyEnv = Join-Path $tokenDir "BotKey.env"
+if ((-not (Test-Path $keyEnv)) -and (-not $DryRun)) {
+    Write-KeyEnv -Path $keyEnv -Values @{
+        MT5_LOGIN = "<UZUPELNIJ_PRZY_PIERWSZYM_STARCIE>"
+        MT5_PASSWORD_MODE = "PROMPT_ON_FIRST_START"
+        MT5_PASSWORD_DPAPI = ""
+        MT5_SERVER = $DEFAULT_MT5_SERVER
+        MT5_PATH = $DEFAULT_MT5_PATH
+    }
+    $status.key_bootstrap_created = $true
+}
+
+$envReady = Ensure-KeyEnvReady -KeyEnvPath $keyEnv -Dry:$DryRun
+$status.prompt_required = [bool]$envReady.prompt_required
+$status.prompted = [bool]$envReady.prompted
+$status.key_env_written = [bool]$envReady.wrote_env
+$status.server = [string]$envReady.server
+
 $status.status = "PASS_PRECHECK"
-$status.detected_drive = $drive
 $status.key_file_rel = "TOKEN\\BotKey.env"
 
 $systemControl = Join-Path $runtimeRoot "TOOLS\SYSTEM_CONTROL.ps1"

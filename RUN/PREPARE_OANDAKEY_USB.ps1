@@ -4,8 +4,10 @@ param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$Mt5Login = "",
     [SecureString]$Mt5Password = $null,
-    [string]$Mt5Server = "",
+    [string]$Mt5Server = "OANDATMS-MT5",
     [string]$Mt5Path = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe",
+    [switch]$PlaintextPassword,
+    [switch]$BootstrapOnly,
     [switch]$SkipLabelChange,
     [switch]$DryRun
 )
@@ -22,6 +24,11 @@ function ConvertTo-PlainText {
     } finally {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
+}
+
+function ConvertTo-DpapiCipher {
+    param([Parameter(Mandatory = $true)][SecureString]$Secret)
+    return (ConvertFrom-SecureString -SecureString $Secret)
 }
 
 function Resolve-UsbDriveLetter {
@@ -62,6 +69,89 @@ function Set-VolumeLabelSafe {
     }
 }
 
+function Get-DriveFileSystem {
+    param([string]$Letter)
+    $letterNorm = $Letter.Trim().TrimEnd(":").ToUpperInvariant()
+    if ([string]::IsNullOrWhiteSpace($letterNorm)) { return "" }
+    $dev = ($letterNorm + ":")
+
+    try {
+        $vol = Get-Volume -DriveLetter $letterNorm -ErrorAction Stop | Select-Object -First 1
+        if ($null -ne $vol -and -not [string]::IsNullOrWhiteSpace([string]$vol.FileSystem)) {
+            return [string]$vol.FileSystem
+        }
+    } catch {
+        # ignore
+    }
+
+    try {
+        $d = Get-CimInstance Win32_LogicalDisk -ErrorAction Stop | Where-Object { ([string]$_.DeviceID).ToUpperInvariant() -eq $dev } | Select-Object -First 1
+    } catch {
+        $d = $null
+    }
+    if ($null -ne $d -and -not [string]::IsNullOrWhiteSpace([string]$d.FileSystem)) {
+        return [string]$d.FileSystem
+    }
+
+    try {
+        $wmic = & wmic logicaldisk where "DeviceID='$dev'" get FileSystem /value 2>$null
+        foreach ($line in $wmic) {
+            $s = [string]$line
+            if ($s -match "^FileSystem=(.+)$") {
+                $fs = [string]$Matches[1]
+                if (-not [string]::IsNullOrWhiteSpace($fs)) {
+                    return $fs.Trim()
+                }
+            }
+        }
+    } catch {
+        # ignore
+    }
+
+    try {
+        $out = & fsutil fsinfo volumeinfo $dev 2>$null
+        foreach ($line in $out) {
+            $s = [string]$line
+            if ($s -match "File System Name\s*:\s*(.+)$") {
+                $fs = [string]$Matches[1]
+                if (-not [string]::IsNullOrWhiteSpace($fs)) {
+                    return $fs.Trim()
+                }
+            }
+        }
+    } catch {
+        # ignore
+    }
+
+    return ""
+}
+
+function Assert-DriveFormatReady {
+    param([string]$Letter)
+    $fs = (Get-DriveFileSystem -Letter $Letter).Trim()
+    if ([string]::IsNullOrWhiteSpace($fs)) {
+        return [ordered]@{
+            ok = $true
+            filesystem = "UNKNOWN"
+            verification = "UNVERIFIED"
+            reason = "filesystem_unknown"
+        }
+    }
+    $fsUp = $fs.ToUpperInvariant()
+    if ($fsUp -eq "RAW") {
+        throw ("Pendrive {0}: ma format RAW. Sformatuj go na NTFS/FAT32/exFAT." -f $Letter)
+    }
+    if (@("NTFS", "FAT32", "EXFAT", "FAT") -notcontains $fsUp) {
+        throw ("Pendrive {0}: ma nieobslugiwany format '{1}'. Uzyj NTFS/FAT32/exFAT." -f $Letter, $fs)
+    }
+    return [ordered]@{
+        ok = $true
+        filesystem = $fs
+        verification = "VERIFIED"
+        reason = ""
+    }
+}
+
 $drive = Resolve-UsbDriveLetter -InputLetter $DriveLetter
 $driveRoot = "{0}:\\" -f $drive
 
@@ -69,19 +159,47 @@ if (-not (Test-Path $driveRoot)) {
     throw ("Dysk nie istnieje: {0}" -f $driveRoot)
 }
 
-if ([string]::IsNullOrWhiteSpace($Mt5Login)) {
-    $Mt5Login = Read-Host "Podaj MT5_LOGIN (numer konta)"
-}
 if ([string]::IsNullOrWhiteSpace($Mt5Server)) {
-    $Mt5Server = Read-Host "Podaj MT5_SERVER"
+    $Mt5Server = "OANDATMS-MT5"
 }
-if ($null -eq $Mt5Password) {
-    $Mt5Password = Read-Host -AsSecureString "Podaj MT5_PASSWORD"
-}
+$plainPassword = ""
+$passwordMode = "PROMPT_ON_FIRST_START"
+$passwordLine = "MT5_PASSWORD_DPAPI="
+$dpapiCipher = ""
 
-$plainPassword = ConvertTo-PlainText -Secret $Mt5Password
-if ([string]::IsNullOrWhiteSpace($plainPassword)) {
-    throw "MT5_PASSWORD nie moze byc pusty."
+if (-not $BootstrapOnly) {
+    if ([string]::IsNullOrWhiteSpace($Mt5Login)) {
+        $Mt5Login = Read-Host "Podaj MT5_LOGIN (numer konta)"
+    }
+    if ([string]::IsNullOrWhiteSpace($Mt5Server)) {
+        $srvIn = Read-Host "Podaj MT5_SERVER (Enter = OANDATMS-MT5)"
+        if (-not [string]::IsNullOrWhiteSpace($srvIn)) {
+            $Mt5Server = $srvIn.Trim()
+        }
+    }
+    if ($null -eq $Mt5Password) {
+        $Mt5Password = Read-Host -AsSecureString "Podaj MT5_PASSWORD"
+    }
+
+    $plainPassword = ConvertTo-PlainText -Secret $Mt5Password
+    if ([string]::IsNullOrWhiteSpace($plainPassword)) {
+        throw "MT5_PASSWORD nie moze byc pusty."
+    }
+    if ($PlaintextPassword) {
+        $passwordMode = "PLAINTEXT"
+        $passwordLine = ("MT5_PASSWORD={0}" -f $plainPassword)
+    } else {
+        $passwordMode = "DPAPI_CURRENT_USER"
+        $dpapiCipher = ConvertTo-DpapiCipher -Secret $Mt5Password
+        if ([string]::IsNullOrWhiteSpace($dpapiCipher)) {
+            throw "Nie udalo sie zaszyfrowac MT5_PASSWORD przez DPAPI."
+        }
+        $passwordLine = ("MT5_PASSWORD_DPAPI={0}" -f $dpapiCipher)
+    }
+} else {
+    if ([string]::IsNullOrWhiteSpace($Mt5Login)) {
+        $Mt5Login = "<UZUPELNIJ_PRZY_PIERWSZYM_STARCIE>"
+    }
 }
 
 $tokenDir = Join-Path $driveRoot "TOKEN"
@@ -92,8 +210,10 @@ $launcherPs1 = Join-Path $driveRoot "START_OANDA_SYSTEM.ps1"
 $envText = @(
     "# OANDA MT5 key file (USB only)",
     "# Wymagane przez BIN/safetybot.py",
+    "# Uwaga: DPAPI_CURRENT_USER dziala tylko na tym samym laptopie i koncie Windows",
     ("MT5_LOGIN={0}" -f $Mt5Login),
-    ("MT5_PASSWORD={0}" -f $plainPassword),
+    ("MT5_PASSWORD_MODE={0}" -f $passwordMode),
+    $passwordLine,
     ("MT5_SERVER={0}" -f $Mt5Server),
     ("MT5_PATH={0}" -f $Mt5Path)
 ) -join [Environment]::NewLine
@@ -124,6 +244,11 @@ $result = [ordered]@{
     label_target = $Label
     label_changed = $false
     label_method = ""
+    filesystem = ""
+    bootstrap_only = [bool]$BootstrapOnly
+    password_mode = $passwordMode
+    format_check = ""
+    format_reason = ""
     wrote_env = $false
     wrote_launcher_cmd = $false
     wrote_launcher_ps1 = $false
@@ -144,6 +269,11 @@ try {
         $result.label_method = "skipped"
     }
 
+    $fmt = Assert-DriveFormatReady -Letter $drive
+    $result.filesystem = [string]$fmt.filesystem
+    $result.format_check = [string]$fmt.verification
+    $result.format_reason = [string]$fmt.reason
+
     if ($DryRun) {
         $result.wrote_env = $true
         $result.wrote_launcher_cmd = $true
@@ -163,6 +293,7 @@ try {
     Write-Output $json
     exit 0
 } finally {
+    $dpapiCipher = ""
     $plainPassword = ""
-    Remove-Variable plainPassword -ErrorAction SilentlyContinue
+    Remove-Variable dpapiCipher, plainPassword -ErrorAction SilentlyContinue
 }

@@ -5,6 +5,7 @@ set "ROOT=%~dp0.."
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 set "DRIVE=%~1"
+set "MODE=%~2"
 if "%DRIVE%"=="" (
     set /P DRIVE=Podaj litere pendrive (np. E): 
 )
@@ -14,7 +15,10 @@ if "%DRIVE%"=="" (
     endlocal & exit /b 2
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\RUN\PREPARE_OANDAKEY_USB.ps1" -Root "%ROOT%" -DriveLetter "%DRIVE%"
+set "EXTRA="
+if /I "%MODE%"=="bootstrap" set "EXTRA=-BootstrapOnly"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\RUN\PREPARE_OANDAKEY_USB.ps1" -Root "%ROOT%" -DriveLetter "%DRIVE%" %EXTRA%
 set "RC=%ERRORLEVEL%"
 
 if "%RC%"=="0" (
