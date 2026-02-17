@@ -84,7 +84,7 @@ from typing import Dict, Optional, List, Tuple, Any
 try:
     import common_guards as cg
     import common_contract as cc
-    from black_swan_guard import BlackSwanGuard, BlackSwanPolicy
+    from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
     from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
     from drift_guard import DriftGuard, DriftPolicy
@@ -95,7 +95,7 @@ try:
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
-    from black_swan_guard import BlackSwanGuard, BlackSwanPolicy
+    from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
     from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
     from drift_guard import DriftGuard, DriftPolicy
@@ -356,6 +356,8 @@ class CFG:
     drift_backoff_s: int = 900
     black_swan_threshold: float = 3.0
     black_swan_precaution_fraction: float = 0.8
+    # Warm-up guard: do not trigger black-swan kill-switch with no volatility samples.
+    black_swan_min_vol_samples: int = 1
     kill_switch_on_black_swan_stress: bool = True
     kill_switch_black_swan_multiplier: float = 1.0
 
@@ -2305,6 +2307,33 @@ class RequestGovernor:
             "sys_em_used_utc": int(utc_sys_em),
             "sys_em_used_pl": int(pl_sys_em),
         }
+
+    def price_soft_mode(self) -> bool:
+        """
+        Soft mode for PRICE budget.
+        True means: stop opening new entries and keep budget for safety/maintenance.
+        """
+        try:
+            st = self.day_state()
+            # Soft threshold translated to "remaining budget" guard.
+            # Example: soft=96% of trade budget => trigger when <=4% remains.
+            soft_remaining = max(0, int(self.price_trade_budget) - int(self.price_soft))
+            return int(st.get("price_remaining", 0)) <= int(soft_remaining)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            # Fail-safe: if we cannot determine budget state, prefer soft mode.
+            return True
+
+    def sys_soft_mode(self) -> bool:
+        """Soft mode for SYS budget (limit non-critical system requests)."""
+        try:
+            st = self.day_state()
+            soft_remaining = max(0, int(self.sys_trade_budget) - int(self.sys_soft))
+            return int(st.get("sys_remaining", 0)) <= int(soft_remaining)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return True
+
     def can_consume(self, grp: str, symbol: str, kind: str, cost: int = 1, emergency: bool = False) -> bool:
         cat = "PRICE" if is_price_kind(kind) else "SYS"
         st = self.day_state()
@@ -3760,6 +3789,8 @@ class SafetyBot:
         self.strategy = StandardStrategy(self.execution_engine, self.gov, self.throttle, self.db, self.config, self.risk_manager)
         self.strategy.decision_store = self.decision_store
         self.resolved_symbols = {}
+        # Cache of last known open positions; used by guard polling cadence.
+        self._positions_cache: Dict[str, List] = {}
 
         # --- connect + universe ---
         if not self.execution_engine.connect():
@@ -3988,6 +4019,26 @@ class SafetyBot:
 
     def _evaluate_black_swan(self):
         vols, spreads = self._collect_black_swan_inputs()
+        min_vol = max(0, int(getattr(CFG, "black_swan_min_vol_samples", 1)))
+        if len(vols) < min_vol:
+            thr = max(0.0, float(getattr(CFG, "black_swan_threshold", 0.0)))
+            prec = max(0.0, float(thr * float(getattr(CFG, "black_swan_precaution_fraction", 0.8))))
+            signal = BlackSwanSignal(
+                stress_index=0.0,
+                threshold=float(thr),
+                precaution_threshold=float(prec),
+                precaution=False,
+                black_swan=False,
+                reasons=("INSUFFICIENT_VOL_DATA",),
+            )
+            logging.info(
+                f"BLACK_SWAN stress={signal.stress_index:.3f} thr={signal.threshold:.3f} "
+                f"prec_thr={signal.precaution_threshold:.3f} black_swan={int(signal.black_swan)} "
+                f"precaution={int(signal.precaution)} n_vol={len(vols)} n_spread={len(spreads)} "
+                f"reason={','.join(signal.reasons)}"
+            )
+            return signal
+
         signal = self.black_swan_guard.evaluate(vols, spreads)
         logging.info(
             f"BLACK_SWAN stress={signal.stress_index:.3f} thr={signal.threshold:.3f} "
@@ -4618,6 +4669,7 @@ if __name__ == "__main__":
     CFG.black_swan_precaution_fraction = float(
         config.risk.get("black_swan_precaution_fraction", config.risk.get("precaution_fraction", CFG.black_swan_precaution_fraction))
     )
+    CFG.black_swan_min_vol_samples = int(config.risk.get("black_swan_min_vol_samples", CFG.black_swan_min_vol_samples))
     CFG.kill_switch_on_black_swan_stress = bool(
         config.risk.get("kill_switch_on_black_swan_stress", CFG.kill_switch_on_black_swan_stress)
     )

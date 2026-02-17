@@ -17,6 +17,18 @@ class ConfigManager:
         self.limits: Dict[str, Any] = self._load_config("limits.json")
         self.scheduler: Dict[str, Any] = self._load_config("scheduler.json")
         self.strategy: Dict[str, Any] = self._load_optional_config("strategy.json")
+        profiles = self._load_optional_config("profiles.json")
+        self.index_profile_map: Dict[str, str] = dict(
+            profiles.get("index_profile_map", {
+                "DAX40": "EU",
+                "DE40": "EU",
+                "DE30": "EU",
+                "GER40": "EU",
+                "GER30": "EU",
+                "US500": "US",
+                "SPX500": "US",
+            })
+        )
         # In the future, other configs would be loaded here:
         # self.strategy: Dict[str, Any] = self._load_config("strategy.json")
 
