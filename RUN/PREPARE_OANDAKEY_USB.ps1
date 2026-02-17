@@ -76,6 +76,16 @@ function Get-DriveFileSystem {
     $dev = ($letterNorm + ":")
 
     try {
+        $all = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and ([string]$_.Name).StartsWith($letterNorm + ":\") }
+        $one = $all | Select-Object -First 1
+        if ($null -ne $one -and -not [string]::IsNullOrWhiteSpace([string]$one.DriveFormat)) {
+            return [string]$one.DriveFormat
+        }
+    } catch {
+        # ignore
+    }
+
+    try {
         $vol = Get-Volume -DriveLetter $letterNorm -ErrorAction Stop | Select-Object -First 1
         if ($null -ne $vol -and -not [string]::IsNullOrWhiteSpace([string]$vol.FileSystem)) {
             return [string]$vol.FileSystem

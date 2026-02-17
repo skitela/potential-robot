@@ -100,6 +100,24 @@ function Get-KeyDriveByLabel {
 
     if ([string]::IsNullOrWhiteSpace($drive)) {
         try {
+            $all = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady }
+            foreach ($d in $all) {
+                $lbl = [string]$d.VolumeLabel
+                if ($lbl.Trim().ToUpperInvariant() -eq $ExpectedLabel.Trim().ToUpperInvariant()) {
+                    $name = [string]$d.Name
+                    if (-not [string]::IsNullOrWhiteSpace($name)) {
+                        $drive = $name.Substring(0, 1)
+                        break
+                    }
+                }
+            }
+        } catch {
+            $drive = ""
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($drive)) {
+        try {
             $wmic = & wmic logicaldisk get DeviceID,VolumeName 2>$null
             foreach ($line in $wmic) {
                 $s = [string]$line
@@ -203,6 +221,16 @@ function Get-DriveFileSystem {
     $letterNorm = $Drive.Trim().TrimEnd(":").ToUpperInvariant()
     if ([string]::IsNullOrWhiteSpace($letterNorm)) { return "" }
     $dev = $letterNorm + ":"
+
+    try {
+        $all = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and ([string]$_.Name).StartsWith($letterNorm + ":\") }
+        $one = $all | Select-Object -First 1
+        if ($null -ne $one -and -not [string]::IsNullOrWhiteSpace([string]$one.DriveFormat)) {
+            return [string]$one.DriveFormat
+        }
+    } catch {
+        # ignore
+    }
 
     try {
         $vol = Get-Volume -DriveLetter $letterNorm -ErrorAction Stop | Select-Object -First 1
