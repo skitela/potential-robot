@@ -93,6 +93,42 @@ function Get-ComponentProcessIds {
     return @($ids)
 }
 
+function Get-FileAgeSec {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) {
+        return $null
+    }
+    try {
+        $it = Get-Item $Path -ErrorAction Stop
+        return [double]((Get-Date) - $it.LastWriteTime).TotalSeconds
+    } catch {
+        return $null
+    }
+}
+
+function Get-ComponentLogPath {
+    param(
+        [string]$RuntimeRoot,
+        [string]$CompName
+    )
+    switch ($CompName) {
+        "SafetyBot" { return (Join-Path $RuntimeRoot "LOGS\safetybot.log") }
+        "SCUD" { return (Join-Path $RuntimeRoot "LOGS\scudfab02.log") }
+        "Learner" { return (Join-Path $RuntimeRoot "LOGS\learner_offline.log") }
+        "InfoBot" { return (Join-Path $RuntimeRoot "LOGS\infobot\infobot.log") }
+        "RepairAgent" { return (Join-Path $RuntimeRoot "LOGS\repair_agent\repair_agent.log") }
+        default { return "" }
+    }
+}
+
+function Get-ComponentLogTtlSec {
+    param([string]$CompName)
+    switch ($CompName) {
+        "Learner" { return 600 }
+        default { return 240 }
+    }
+}
+
 function Stop-PidSafely {
     param(
         [int]$ProcessId,
@@ -174,7 +210,7 @@ function Cleanup-StaleLock {
         }
     } catch {
         try {
-            Set-Content -Encoding UTF8 -Path $LockPath -Value ""
+            [System.IO.File]::WriteAllText($LockPath, "")
             return @{
                 status = "stale_truncated"
                 pid = $lockPidNum
@@ -321,7 +357,7 @@ function Remove-LockSafe {
         return "removed"
     } catch {
         try {
-            Set-Content -Encoding UTF8 -Path $LockPath -Value ""
+            [System.IO.File]::WriteAllText($LockPath, "")
             return "truncated"
         } catch {
             return "remove_failed"
@@ -389,11 +425,35 @@ switch ($Action) {
     "status" {
         foreach ($c in $components) {
             $ids = Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
+            $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
+            $lockExists = if ($lockPath) { Test-Path $lockPath } else { $false }
+            $logPath = Get-ComponentLogPath -RuntimeRoot $runtimeRoot -CompName ([string]$c.Name)
+            $logAgeSec = if ($logPath) { Get-FileAgeSec -Path $logPath } else { $null }
+            $ttl = Get-ComponentLogTtlSec -CompName ([string]$c.Name)
+            $logFresh = $false
+            if ($null -ne $logAgeSec) {
+                $logFresh = ([double]$logAgeSec -le [double]$ttl)
+            }
+            $runningByPid = [bool](@($ids).Count -gt 0)
+            # WMI can be restricted on some hosts; lock+fresh-log is accepted heartbeat fallback.
+            $runningByHeartbeat = $false
+            if ($lockPath) {
+                $runningByHeartbeat = ([bool]$lockExists -and [bool]$logFresh)
+            } else {
+                $runningByHeartbeat = [bool]$logFresh
+            }
             $result.components += [ordered]@{
                 name = [string]$c.Name
                 script = [string]$c.Script
-                running = [bool](@($ids).Count -gt 0)
+                running = ([bool]$runningByPid -or [bool]$runningByHeartbeat)
+                running_by_pid = [bool]$runningByPid
+                running_by_heartbeat = [bool]$runningByHeartbeat
                 pids = @($ids)
+                lock = $lockPath
+                lock_exists = [bool]$lockExists
+                log_path = $logPath
+                log_age_sec = $logAgeSec
+                log_ttl_sec = [int]$ttl
             }
         }
     }

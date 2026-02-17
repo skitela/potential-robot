@@ -536,13 +536,39 @@ def _pid_is_running(pid: int) -> bool:
 def _acquire_lock(lock_path: Path) -> None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     if lock_path.exists():
+        pid = 0
         try:
             raw = lock_path.read_text(encoding="utf-8", errors="ignore").strip()
             pid = int(raw) if raw.isdigit() else 0
             if pid and _pid_is_running(pid):
                 raise RuntimeError("ALREADY_RUNNING")
+            # Empty/invalid lock payload is stale and should not block startup.
+            if pid <= 0:
+                try:
+                    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+                    return
+                except Exception:
+                    pass
+            # Dead PID lock: reclaim even when unlink is denied.
+            if pid > 0 and (not _pid_is_running(pid)):
+                try:
+                    lock_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                try:
+                    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+                    return
+                except Exception:
+                    pass
+        except RuntimeError:
+            raise
         except Exception:
-            raise RuntimeError("ALREADY_RUNNING")
+            # Lock unreadable/malformed -> try in-place reclaim.
+            try:
+                lock_path.write_text(str(os.getpid()), encoding="utf-8")
+                return
+            except Exception:
+                raise RuntimeError("ALREADY_RUNNING")
     lock_path.write_text(str(os.getpid()), encoding="utf-8")
 
 

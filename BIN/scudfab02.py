@@ -203,11 +203,12 @@ def acquire_lock(lock_path: Path, *, timeout_s: float = LOCK_ACQUIRE_MAX_SECONDS
     """Exclusive lock with stale-PID cleanup. Hard timeout: timeout_s."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     my_pid = os.getpid()
+    my_pid_txt = str(my_pid)
     t0 = time.time()
     while (time.time() - t0) <= float(timeout_s):
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(my_pid).encode("utf-8", errors="ignore"))
+            os.write(fd, my_pid_txt.encode("utf-8", errors="ignore"))
             os.close(fd)
             return
         except FileExistsError:
@@ -218,11 +219,24 @@ def acquire_lock(lock_path: Path, *, timeout_s: float = LOCK_ACQUIRE_MAX_SECONDS
             except Exception as e:
                 cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
                 old_pid = 0
+            if old_pid <= 0:
+                # Empty/invalid lock payload must not block startup.
+                try:
+                    lock_path.write_text(my_pid_txt, encoding="utf-8")
+                    return
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
             if old_pid and not pid_is_running(old_pid):
                 try:
                     lock_path.unlink(missing_ok=True)
                 except Exception as e:
                     cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+                    # ACL fallback: claim stale lock by in-place overwrite.
+                    try:
+                        lock_path.write_text(my_pid_txt, encoding="utf-8")
+                        return
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
                 time.sleep(0.05 + random.random() * 0.05)
                 continue
             time.sleep(0.05 + random.random() * 0.10)
@@ -238,6 +252,10 @@ def release_lock(lock_path: Path) -> None:
         lock_path.unlink(missing_ok=True)
     except Exception as e:
         cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+        try:
+            lock_path.write_text("", encoding="utf-8")
+        except Exception as e:
+            cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
 
 # -------------------------
 # Logging

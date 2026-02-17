@@ -712,31 +712,31 @@ def acquire_lockfile(lock_path: Path) -> None:
                 # Empty/invalid lock payload should never block startup.
                 if pid <= 0:
                     try:
-                        lock_path.unlink(missing_ok=True)
-                        time.sleep(0.05)
-                        continue
+                        payload = json.dumps({"pid": os.getpid(), "ts_utc": now_utc().isoformat().replace('+00:00','Z')}, separators=(",", ":"))
+                        lock_path.write_text(payload, encoding="utf-8")
+                        return
                     except Exception as e:
                         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                        # ACL fallback: overwrite stale lock in place and claim ownership.
+                        # Fallback: remove stale file and retry.
                         try:
-                            payload = json.dumps({"pid": os.getpid(), "ts_utc": now_utc().isoformat().replace('+00:00','Z')}, separators=(",", ":"))
-                            lock_path.write_text(payload, encoding="utf-8")
-                            return
+                            lock_path.unlink(missing_ok=True)
+                            time.sleep(0.05)
+                            continue
                         except Exception as e:
                             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                             time.sleep(0.1)
                             continue
                 if pid and (not pid_exists(pid)):
                     try:
-                        lock_path.unlink(missing_ok=True)
-                        time.sleep(0.05)
-                        continue
+                        payload = json.dumps({"pid": os.getpid(), "ts_utc": now_utc().isoformat().replace('+00:00','Z')}, separators=(",", ":"))
+                        lock_path.write_text(payload, encoding="utf-8")
+                        return
                     except Exception as e:
                         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                         try:
-                            payload = json.dumps({"pid": os.getpid(), "ts_utc": now_utc().isoformat().replace('+00:00','Z')}, separators=(",", ":"))
-                            lock_path.write_text(payload, encoding="utf-8")
-                            return
+                            lock_path.unlink(missing_ok=True)
+                            time.sleep(0.05)
+                            continue
                         except Exception as e:
                             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                             time.sleep(0.1)
@@ -756,6 +756,10 @@ def release_lockfile(lock_path: Path) -> None:
         lock_path.unlink(missing_ok=True)
     except Exception as e:
         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        try:
+            lock_path.write_text("", encoding="utf-8")
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
 def setup_logging(runtime_root: Path) -> None:
     r"""

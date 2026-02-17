@@ -311,15 +311,40 @@ def main() -> int:
     lock_path = run_dir / "repair_agent.lock"
 
     if lock_path.exists():
+        pid = 0
         try:
             raw = lock_path.read_text(encoding="utf-8", errors="ignore").strip()
             pid = int(raw) if raw.isdigit() else 0
             if pid and _pid_is_running(pid):
                 print("REPAIR_AGENT juz dziala.")
                 return 1
+            # Empty/invalid lock payload is stale and should not block startup.
+            if pid <= 0:
+                try:
+                    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+                    pid = 0
+                except Exception:
+                    pass
+            # Dead PID lock: reclaim with overwrite fallback.
+            if pid > 0 and (not _pid_is_running(pid)):
+                try:
+                    lock_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                try:
+                    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+                    pid = 0
+                except Exception:
+                    pass
+            if pid > 0 and _pid_is_running(pid):
+                print("REPAIR_AGENT juz dziala.")
+                return 1
         except Exception:
-            print("REPAIR_AGENT juz dziala.")
-            return 1
+            try:
+                lock_path.write_text(str(os.getpid()), encoding="utf-8")
+            except Exception:
+                print("REPAIR_AGENT juz dziala.")
+                return 1
     lock_path.write_text(str(os.getpid()), encoding="utf-8")
 
     status_path = run_dir / STATUS_FILE

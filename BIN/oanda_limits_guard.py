@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import threading
 import time
 import datetime as dt
@@ -80,8 +81,9 @@ class OandaLimitsGuard:
             "updated_ts": int(now_ts),
         }
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.evidence_dir / "oanda_limits_state.json.tmp"
         out = self.evidence_dir / "oanda_limits_state.json"
+        # Use per-process/per-thread temp file to avoid cross-process lock contention on Windows.
+        tmp = self.evidence_dir / f"oanda_limits_state.json.{os.getpid()}.{threading.get_ident()}.tmp"
         payload = json.dumps(data, indent=2, sort_keys=True)
         tmp.write_text(payload, encoding="utf-8")
         # Windows can deny atomic replace on some filesystems/locks.
@@ -93,11 +95,6 @@ class OandaLimitsGuard:
             except PermissionError:
                 try:
                     out.write_text(payload, encoding="utf-8")
-                    try:
-                        if tmp.exists():
-                            tmp.unlink()
-                    except Exception as exc:
-                        logging.warning(f"OANDA_LIMITS_TMP_UNLINK_FAIL path={tmp} exc={exc}")
                     break
                 except Exception:
                     if i >= 5:
