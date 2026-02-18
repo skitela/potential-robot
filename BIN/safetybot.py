@@ -5725,6 +5725,24 @@ class SafetyBot:
             f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
         )
 
+        # OANDA warning threshold (price requests/day): emit one warning per primary day key.
+        try:
+            if self.limits.warn_level_reached():
+                day_key = str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or "")
+                state_key = "oanda_limits:last_warn_logged_day"
+                last_warn_day = str(self.db.state_get(state_key, ""))
+                if day_key and day_key != last_warn_day:
+                    price_used = int(st.get("price_requests_day_guard") or st.get("price_requests_day") or 0)
+                    price_budget = int(st.get("price_budget") or 0)
+                    warn_level = int(getattr(self.limits, "warn_day", 0) or 0)
+                    logging.warning(
+                        f"OANDA_PRICE_WARN day={day_key} used={price_used} warn_level={warn_level} "
+                        f"price_budget={price_budget} safe_mode={int(bool(self.limits.safe_mode_active()))}"
+                    )
+                    self.db.state_set(state_key, day_key)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
         if eco_by_budget:
             logging.warning(
                 f"ECO_MODE reason={eco_reason} price_pct={price_pct:.3f} sys_pct={sys_pct:.3f} order_pct={order_pct:.3f}"
