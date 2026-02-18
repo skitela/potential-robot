@@ -377,6 +377,15 @@ class CFG:
     adx_period: int = 14
     adx_threshold: int = 22
 
+    # Position lifecycle guard (scalp discipline): prevent stale multi-hour holds.
+    position_time_stop_enabled: bool = True
+    position_time_stop_only_magic: bool = True
+    position_time_stop_hot_min: int = 45
+    position_time_stop_warm_min: int = 120
+    position_time_stop_eco_min: int = 240
+    position_time_stop_retry_sec: int = 120
+    position_time_stop_deviation_points: int = 30
+
     # --- Rollover (NY 17:00) ---
     rollover_block_minutes_before: int = 30
     rollover_block_minutes_after: int = 15
@@ -532,6 +541,56 @@ def pl_day_start_utc_ts(ts_utc: Optional[dt.datetime] = None) -> int:
     start_pl = p.replace(hour=0, minute=0, second=0, microsecond=0)
     start_utc = start_pl.astimezone(UTC)
     return int(start_utc.timestamp())
+
+
+def position_open_ts_utc(pos: Any) -> Optional[int]:
+    """Best-effort extraction of MT5 position open timestamp (UTC epoch seconds)."""
+    now_ts = int(time.time())
+    candidates: List[int] = []
+    fields = (
+        ("time", 1),
+        ("time_msc", 1000),
+        ("time_update", 1),
+        ("time_update_msc", 1000),
+    )
+    for field, div in fields:
+        raw = getattr(pos, field, None)
+        if raw is None:
+            continue
+        try:
+            ts = int(float(raw))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            continue
+        if div > 1:
+            ts //= int(div)
+        if ts > 0:
+            candidates.append(int(ts))
+    if not candidates:
+        return None
+    valid = [t for t in candidates if (t >= 946684800 and t <= now_ts + 300)]
+    if not valid:
+        return None
+    return int(min(valid))
+
+
+def position_age_sec(pos: Any, now_ts: Optional[int] = None) -> Optional[int]:
+    """Return position age in seconds, or None if timestamp is unavailable."""
+    if now_ts is None:
+        now_ts = int(time.time())
+    ts_open = position_open_ts_utc(pos)
+    if ts_open is None:
+        return None
+    return int(max(0, int(now_ts) - int(ts_open)))
+
+
+def position_time_stop_minutes_for_mode(mode: str) -> int:
+    m = str(mode).upper()
+    if m == "HOT":
+        return int(max(0, int(getattr(CFG, "position_time_stop_hot_min", 0))))
+    if m == "WARM":
+        return int(max(0, int(getattr(CFG, "position_time_stop_warm_min", 0))))
+    return int(max(0, int(getattr(CFG, "position_time_stop_eco_min", 0))))
 
 def in_window(local_dt: dt.datetime, start_hm: Tuple[int, int], end_hm: Tuple[int, int]) -> bool:
     s = local_dt.replace(hour=start_hm[0], minute=start_hm[1], second=0, microsecond=0)
@@ -4032,6 +4091,8 @@ class SafetyBot:
         self.resolved_symbols = {}
         # Cache of last known open positions; used by guard polling cadence.
         self._positions_cache: Dict[str, List] = {}
+        # Last close-attempt timestamp per ticket for position time-stop retries.
+        self._position_close_attempt_ts: Dict[int, int] = {}
 
         # --- connect + universe ---
         if not self.execution_engine.connect():
@@ -4298,6 +4359,123 @@ class SafetyBot:
 
         self._positions_cache = dict(m)
         return dict(self._positions_cache)
+
+    def _effective_mode_for_symbol(self, grp: str, sym: str, global_mode: str, rollover_safe: bool) -> str:
+        mode = str(global_mode).upper()
+        try:
+            local_mode = str(self.ctrl.mode(grp, sym, rollover_safe)).upper()
+            mode_rank = {"ECO": 0, "WARM": 1, "HOT": 2}
+            if mode in mode_rank and local_mode in mode_rank:
+                mode = local_mode if mode_rank[local_mode] <= mode_rank[mode] else mode
+            elif local_mode in mode_rank:
+                mode = local_mode
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return str(mode).upper()
+
+    def _close_stale_positions(self, positions_map: Dict[str, List], global_mode: str, rollover_safe: bool) -> None:
+        if mt5 is None:
+            return
+        if not bool(getattr(CFG, "position_time_stop_enabled", True)):
+            return
+        if not positions_map:
+            return
+
+        now_ts = int(time.time())
+        retry_sec = max(1, int(getattr(CFG, "position_time_stop_retry_sec", 120)))
+        only_magic = bool(getattr(CFG, "position_time_stop_only_magic", True))
+        deviation = int(
+            max(
+                1,
+                int(
+                    getattr(
+                        CFG,
+                        "position_time_stop_deviation_points",
+                        getattr(CFG, "kill_close_deviation_points", 30),
+                    )
+                ),
+            )
+        )
+        for sym, positions in positions_map.items():
+            if not positions:
+                continue
+            grp = guess_group(sym)
+            mode = self._effective_mode_for_symbol(grp, symbol_base(sym), global_mode, rollover_safe)
+            max_hold_min = position_time_stop_minutes_for_mode(mode)
+            if max_hold_min <= 0:
+                continue
+            max_hold_sec = int(max_hold_min) * 60
+
+            for pos in positions:
+                try:
+                    ticket = int(getattr(pos, "ticket", 0) or 0)
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    ticket = 0
+                if ticket > 0:
+                    last_try = int(self._position_close_attempt_ts.get(ticket, 0) or 0)
+                    if (now_ts - last_try) < retry_sec:
+                        continue
+
+                if only_magic:
+                    try:
+                        magic = int(getattr(pos, "magic", 0) or 0)
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        magic = 0
+                    if magic != int(CFG.magic_number):
+                        continue
+
+                age_s = position_age_sec(pos, now_ts=now_ts)
+                if age_s is None or int(age_s) < int(max_hold_sec):
+                    continue
+
+                pos_type = int(getattr(pos, "type", -1) or -1)
+                if pos_type == getattr(mt5, "ORDER_TYPE_BUY", -999):
+                    close_type = getattr(mt5, "ORDER_TYPE_SELL", None)
+                    side_price = float(getattr(self.execution_engine.tick(sym, grp, emergency=False), "bid", 0.0) or 0.0)
+                elif pos_type == getattr(mt5, "ORDER_TYPE_SELL", -999):
+                    close_type = getattr(mt5, "ORDER_TYPE_BUY", None)
+                    side_price = float(getattr(self.execution_engine.tick(sym, grp, emergency=False), "ask", 0.0) or 0.0)
+                else:
+                    continue
+                if close_type is None or side_price <= 0.0:
+                    logging.warning(
+                        f"TIME_STOP_CLOSE_SKIP symbol={sym} ticket={ticket} reason=NO_TICK_OR_TYPE age_s={int(age_s)}"
+                    )
+                    continue
+
+                vol = float(getattr(pos, "volume", 0.0) or 0.0)
+                if vol <= 0.0:
+                    continue
+
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": sym,
+                    "volume": float(vol),
+                    "type": int(close_type),
+                    "position": int(ticket),
+                    "price": float(side_price),
+                    "deviation": int(deviation),
+                    "magic": CFG.magic_number,
+                    "comment": f"TIME_STOP_{mode}",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC,
+                }
+
+                if ticket > 0:
+                    self._position_close_attempt_ts[ticket] = now_ts
+                res = self.execution_engine.order_send(sym, grp, req, emergency=False)
+                ok = bool(res and getattr(res, "retcode", None) == mt5.TRADE_RETCODE_DONE)
+                if ok:
+                    logging.warning(
+                        f"TIME_STOP_CLOSE_DONE symbol={sym} ticket={ticket} age_s={int(age_s)} mode={mode} hold_min={int(max_hold_min)}"
+                    )
+                else:
+                    logging.warning(
+                        f"TIME_STOP_CLOSE_FAIL symbol={sym} ticket={ticket} age_s={int(age_s)} mode={mode} "
+                        f"retcode={getattr(res, 'retcode', None)} comment={getattr(res, 'comment', '')}"
+                    )
 
     def _collect_black_swan_inputs(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         vols: Dict[str, float] = {}
@@ -4644,6 +4822,9 @@ class SafetyBot:
             if not ok:
                 logging.critical("FORCE FLAT incomplete.")
             return
+
+        # Position time-stop guard (scalp discipline): close stale positions deterministically.
+        self._close_stale_positions(positions_map, global_mode=global_mode, rollover_safe=rollover_safe)
 
         black_swan_signal = self._evaluate_black_swan()
         if black_swan_signal.black_swan:
@@ -5009,6 +5190,15 @@ if __name__ == "__main__":
     CFG.learner_qa_red_to_eco = _cfg_bool("learner_qa_red_to_eco", CFG.learner_qa_red_to_eco)
     CFG.canary_rollout_enabled = _cfg_bool("canary_rollout_enabled", CFG.canary_rollout_enabled)
     CFG.canary_max_symbols_per_iter = _cfg_int("canary_max_symbols_per_iter", CFG.canary_max_symbols_per_iter)
+    CFG.position_time_stop_enabled = _cfg_bool("position_time_stop_enabled", CFG.position_time_stop_enabled)
+    CFG.position_time_stop_only_magic = _cfg_bool("position_time_stop_only_magic", CFG.position_time_stop_only_magic)
+    CFG.position_time_stop_hot_min = _cfg_int("position_time_stop_hot_min", CFG.position_time_stop_hot_min)
+    CFG.position_time_stop_warm_min = _cfg_int("position_time_stop_warm_min", CFG.position_time_stop_warm_min)
+    CFG.position_time_stop_eco_min = _cfg_int("position_time_stop_eco_min", CFG.position_time_stop_eco_min)
+    CFG.position_time_stop_retry_sec = _cfg_int("position_time_stop_retry_sec", CFG.position_time_stop_retry_sec)
+    CFG.position_time_stop_deviation_points = _cfg_int(
+        "position_time_stop_deviation_points", CFG.position_time_stop_deviation_points
+    )
 
     CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
     CFG.black_swan_precaution_fraction = float(
