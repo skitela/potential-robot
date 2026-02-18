@@ -3795,6 +3795,7 @@ class StrategyCache:
         self.trend_cache: Dict[str, Tuple[float, str, str, str]] = {}
         self.last_m5_calc_ts: Dict[str, float] = {}
         self.last_m5_bar_time: Dict[str, pd.Timestamp] = {}
+        self.last_soft_skip_log_ts: Dict[str, float] = {}
 
 class StandardStrategy:
     def __init__(self, engine: ExecutionEngine, gov: RequestGovernor, throttle: OrderThrottle, db: Persistence, config: ConfigManager, risk_manager: RiskManager):
@@ -4423,6 +4424,23 @@ class StandardStrategy:
 
         # soft-mode price: żadnych nowych wejść
         if self.gov.price_soft_mode():
+            # Emit once per minute per symbol to avoid "silent stall" perception.
+            try:
+                last_soft = float(self.cache.last_soft_skip_log_ts.get(symbol, 0.0))
+                if (now_ts - last_soft) >= 60:
+                    st_soft = self.gov.day_state()
+                    logging.info(
+                        "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=PRICE_SOFT_MODE price_used=%s price_soft=%s price_trade_budget=%s",
+                        symbol,
+                        grp,
+                        mode,
+                        int(st_soft.get("price_used", 0)),
+                        int(getattr(self.gov, "price_soft", 0)),
+                        int(getattr(self.gov, "price_trade_budget", 0)),
+                    )
+                    self.cache.last_soft_skip_log_ts[symbol] = float(now_ts)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             return
         if not self.throttle.can_trade():
             return
