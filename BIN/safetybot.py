@@ -3039,8 +3039,52 @@ class ExecutionEngine:
         if self.limits is not None:
             # Count OANDA PRICE only after real MT5 request attempt.
             self.limits.note_price_request(now_ts=time.time(), emergency=False)
-        if rates is None:
-            return None
+        if rates is None or len(rates) == 0:
+            err1 = None
+            try:
+                err1 = mt5.last_error()
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+            # Recovery path: symbol can transiently drop from MarketWatch sync.
+            selected = False
+            try:
+                selected = bool(self.symbol_select(symbol, grp))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                selected = False
+
+            rates2 = None
+            err2 = None
+            if selected and self.gov.consume(grp, symbol, kind, 1, emergency=False):
+                rates2 = mt5.copy_rates_from_pos(symbol, timeframe, 0, n)
+                if self.limits is not None:
+                    self.limits.note_price_request(now_ts=time.time(), emergency=False)
+                try:
+                    err2 = mt5.last_error()
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+            if rates2 is None or len(rates2) == 0:
+                logging.info(
+                    "COPY_RATES_EMPTY symbol=%s tf=%s n=%s err1=%s selected=%s err2=%s",
+                    symbol,
+                    timeframe,
+                    n,
+                    err1,
+                    int(bool(selected)),
+                    err2,
+                )
+                return None
+            rates = rates2
+            logging.info(
+                "COPY_RATES_RECOVERED symbol=%s tf=%s n=%s rows=%s err1=%s",
+                symbol,
+                timeframe,
+                n,
+                int(len(rates)),
+                err1,
+            )
         df = pd.DataFrame(rates)
         t_series = pd.to_datetime(df["time"], unit="s", utc=True)
         # V1.10: time anchor update (server bar time)
