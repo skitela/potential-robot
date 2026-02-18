@@ -4990,16 +4990,7 @@ class SafetyBot:
                 logging.debug(f"SKIP NEW ENTRY (open position) | {sym}")
                 continue
 
-            mode = str(global_mode).upper()
-            try:
-                local_mode = str(self.ctrl.mode(grp, sym, rollover_safe)).upper()
-                mode_rank = {"ECO": 0, "WARM": 1, "HOT": 2}
-                if mode in mode_rank and local_mode in mode_rank:
-                    mode = local_mode if mode_rank[local_mode] <= mode_rank[mode] else mode
-                elif local_mode in mode_rank:
-                    mode = local_mode
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            mode = self._effective_mode_for_symbol(grp, sym, global_mode, rollover_safe)
             info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
             if info is None:
                 logging.warning(f"SYMBOL INFO missing | {sym} | skip")
