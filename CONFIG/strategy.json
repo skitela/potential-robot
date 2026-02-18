@@ -107,6 +107,24 @@
       "order_deviation_points": 30
     }
   },
+  "per_symbol": {
+    "XAUUSD": {
+      "position_time_stop_hot_min": 15,
+      "position_time_stop_warm_min": 25,
+      "partial_tp_r": 0.68,
+      "trailing_activation_r": 0.5
+    },
+    "US500": {
+      "m5_pull_sec_hot": 120,
+      "m5_pull_sec_warm": 180,
+      "order_deviation_points": 40
+    },
+    "DAX40": {
+      "m5_pull_sec_hot": 120,
+      "m5_pull_sec_warm": 180,
+      "order_deviation_points": 40
+    }
+  },
   "learner_qa_gate_enabled": false,
   "canary_rollout_enabled": false,
   "canary_max_symbols_per_iter": 1,

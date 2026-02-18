@@ -301,6 +301,7 @@ class CFG:
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
     group_price_shares = {"FX": 0.45, "METAL": 0.25, "INDEX": 0.30}
     per_group: Dict[str, Dict[str, Any]] = {}
+    per_symbol: Dict[str, Dict[str, Any]] = {}
     group_borrow_fraction: float = 0.15  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
 
     # --- Strategia ---
@@ -716,8 +717,25 @@ def _group_key(group: Optional[str]) -> str:
     return g
 
 
-def _cfg_group_value(group: Optional[str], key: str, default: Any) -> Any:
+def _symbol_key(symbol: Optional[str]) -> str:
+    s = str(symbol or "").strip()
+    if not s:
+        return ""
     try:
+        return str(symbol_base(s)).upper()
+    except Exception:
+        return str(s).split(".", 1)[0].upper()
+
+
+def _cfg_group_value(group: Optional[str], key: str, default: Any, symbol: Optional[str] = None) -> Any:
+    try:
+        s = _symbol_key(symbol)
+        if s:
+            per_symbol = getattr(CFG, "per_symbol", {}) or {}
+            if isinstance(per_symbol, dict):
+                sym_node = per_symbol.get(s, {})
+                if isinstance(sym_node, dict) and key in sym_node:
+                    return sym_node.get(key, default)
         per_group = getattr(CFG, "per_group", {}) or {}
         if not isinstance(per_group, dict):
             return default
@@ -730,24 +748,24 @@ def _cfg_group_value(group: Optional[str], key: str, default: Any) -> Any:
         return default
 
 
-def _cfg_group_int(group: Optional[str], key: str, default: int) -> int:
-    raw = _cfg_group_value(group, key, default)
+def _cfg_group_int(group: Optional[str], key: str, default: int, symbol: Optional[str] = None) -> int:
+    raw = _cfg_group_value(group, key, default, symbol=symbol)
     try:
         return int(raw)
     except Exception:
         return int(default)
 
 
-def _cfg_group_float(group: Optional[str], key: str, default: float) -> float:
-    raw = _cfg_group_value(group, key, default)
+def _cfg_group_float(group: Optional[str], key: str, default: float, symbol: Optional[str] = None) -> float:
+    raw = _cfg_group_value(group, key, default, symbol=symbol)
     try:
         return float(raw)
     except Exception:
         return float(default)
 
 
-def _cfg_group_bool(group: Optional[str], key: str, default: bool) -> bool:
-    raw = _cfg_group_value(group, key, default)
+def _cfg_group_bool(group: Optional[str], key: str, default: bool, symbol: Optional[str] = None) -> bool:
+    raw = _cfg_group_value(group, key, default, symbol=symbol)
     if isinstance(raw, bool):
         return bool(raw)
     txt = str(raw).strip().lower()
@@ -758,16 +776,16 @@ def _cfg_group_bool(group: Optional[str], key: str, default: bool) -> bool:
     return bool(default)
 
 
-def position_time_stop_minutes_for_mode(mode: str, grp: Optional[str] = None) -> int:
+def position_time_stop_minutes_for_mode(mode: str, grp: Optional[str] = None, symbol: Optional[str] = None) -> int:
     m = str(mode).upper()
     if m == "HOT":
         base = int(max(0, int(getattr(CFG, "position_time_stop_hot_min", 0))))
-        return int(max(0, _cfg_group_int(grp, "position_time_stop_hot_min", base)))
+        return int(max(0, _cfg_group_int(grp, "position_time_stop_hot_min", base, symbol=symbol)))
     if m == "WARM":
         base = int(max(0, int(getattr(CFG, "position_time_stop_warm_min", 0))))
-        return int(max(0, _cfg_group_int(grp, "position_time_stop_warm_min", base)))
+        return int(max(0, _cfg_group_int(grp, "position_time_stop_warm_min", base, symbol=symbol)))
     base = int(max(0, int(getattr(CFG, "position_time_stop_eco_min", 0))))
-    return int(max(0, _cfg_group_int(grp, "position_time_stop_eco_min", base)))
+    return int(max(0, _cfg_group_int(grp, "position_time_stop_eco_min", base, symbol=symbol)))
 
 
 def resolve_adx_regime(adx_value: float, trend_min: float, range_max: float) -> str:
@@ -789,10 +807,20 @@ def resolve_adx_regime(adx_value: float, trend_min: float, range_max: float) -> 
     return "TRANSITION"
 
 
-def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float], grp: Optional[str] = None) -> Tuple[int, int]:
+def adaptive_exit_points(
+    mode: str,
+    point: float,
+    atr_value: Optional[float],
+    grp: Optional[str] = None,
+    symbol: Optional[str] = None,
+) -> Tuple[int, int]:
     """Compute SL/TP in points using fixed or ATR-based exits."""
-    sl_pts = int(max(1, _cfg_group_int(grp, "fixed_sl_points", int(getattr(CFG, "fixed_sl_points", 1) or 1))))
-    tp_pts = int(max(1, _cfg_group_int(grp, "fixed_tp_points", int(getattr(CFG, "fixed_tp_points", 1) or 1))))
+    sl_pts = int(
+        max(1, _cfg_group_int(grp, "fixed_sl_points", int(getattr(CFG, "fixed_sl_points", 1) or 1), symbol=symbol))
+    )
+    tp_pts = int(
+        max(1, _cfg_group_int(grp, "fixed_tp_points", int(getattr(CFG, "fixed_tp_points", 1) or 1), symbol=symbol))
+    )
     if (not bool(getattr(CFG, "atr_exit_enabled", True))) or point <= 0.0 or atr_value is None:
         return sl_pts, tp_pts
     try:
@@ -804,14 +832,14 @@ def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float], gr
 
     m = str(mode).upper()
     if m == "HOT":
-        sl_mult = _cfg_group_float(grp, "atr_sl_mult_hot", float(getattr(CFG, "atr_sl_mult_hot", 1.2)))
-        tp_mult = _cfg_group_float(grp, "atr_tp_mult_hot", float(getattr(CFG, "atr_tp_mult_hot", 1.8)))
+        sl_mult = _cfg_group_float(grp, "atr_sl_mult_hot", float(getattr(CFG, "atr_sl_mult_hot", 1.2)), symbol=symbol)
+        tp_mult = _cfg_group_float(grp, "atr_tp_mult_hot", float(getattr(CFG, "atr_tp_mult_hot", 1.8)), symbol=symbol)
     elif m == "WARM":
-        sl_mult = _cfg_group_float(grp, "atr_sl_mult_warm", float(getattr(CFG, "atr_sl_mult_warm", 1.5)))
-        tp_mult = _cfg_group_float(grp, "atr_tp_mult_warm", float(getattr(CFG, "atr_tp_mult_warm", 2.2)))
+        sl_mult = _cfg_group_float(grp, "atr_sl_mult_warm", float(getattr(CFG, "atr_sl_mult_warm", 1.5)), symbol=symbol)
+        tp_mult = _cfg_group_float(grp, "atr_tp_mult_warm", float(getattr(CFG, "atr_tp_mult_warm", 2.2)), symbol=symbol)
     else:
-        sl_mult = _cfg_group_float(grp, "atr_sl_mult_eco", float(getattr(CFG, "atr_sl_mult_eco", 1.8)))
-        tp_mult = _cfg_group_float(grp, "atr_tp_mult_eco", float(getattr(CFG, "atr_tp_mult_eco", 2.6)))
+        sl_mult = _cfg_group_float(grp, "atr_sl_mult_eco", float(getattr(CFG, "atr_sl_mult_eco", 1.8)), symbol=symbol)
+        tp_mult = _cfg_group_float(grp, "atr_tp_mult_eco", float(getattr(CFG, "atr_tp_mult_eco", 2.6)), symbol=symbol)
 
     atr_pts = float(atr) / float(point)
     if (not np.isfinite(atr_pts)) or atr_pts <= 0.0:
@@ -819,8 +847,12 @@ def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float], gr
 
     calc_sl = int(max(1, round(atr_pts * sl_mult)))
     calc_tp = int(max(1, round(atr_pts * tp_mult)))
-    min_sl = int(max(1, _cfg_group_int(grp, "atr_sl_min_points", int(getattr(CFG, "atr_sl_min_points", 1) or 1))))
-    min_tp = int(max(1, _cfg_group_int(grp, "atr_tp_min_points", int(getattr(CFG, "atr_tp_min_points", 1) or 1))))
+    min_sl = int(
+        max(1, _cfg_group_int(grp, "atr_sl_min_points", int(getattr(CFG, "atr_sl_min_points", 1) or 1), symbol=symbol))
+    )
+    min_tp = int(
+        max(1, _cfg_group_int(grp, "atr_tp_min_points", int(getattr(CFG, "atr_tp_min_points", 1) or 1), symbol=symbol))
+    )
 
     if bool(getattr(CFG, "atr_exit_use_override", True)):
         sl_pts = max(min_sl, calc_sl)
@@ -3937,9 +3969,15 @@ class StandardStrategy:
         if cached and (now_ts - cached[0] < CFG.trend_cache_ttl_sec):
             return cached[1], cached[2], cached[3]
 
-        sma_trend_win = max(2, _cfg_group_int(grp, "sma_trend", int(getattr(CFG, "sma_trend", 200))))
-        sma_struct_fast_win = max(2, _cfg_group_int(grp, "sma_structure_fast", int(getattr(CFG, "sma_structure_fast", 55))))
-        sma_struct_slow_win = max(sma_struct_fast_win + 1, _cfg_group_int(grp, "sma_structure_slow", int(getattr(CFG, "sma_structure_slow", 200))))
+        sma_trend_win = max(2, _cfg_group_int(grp, "sma_trend", int(getattr(CFG, "sma_trend", 200)), symbol=symbol))
+        sma_struct_fast_win = max(
+            2,
+            _cfg_group_int(grp, "sma_structure_fast", int(getattr(CFG, "sma_structure_fast", 55)), symbol=symbol),
+        )
+        sma_struct_slow_win = max(
+            sma_struct_fast_win + 1,
+            _cfg_group_int(grp, "sma_structure_slow", int(getattr(CFG, "sma_structure_slow", 200)), symbol=symbol),
+        )
 
         df_h4 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_h4, 260)
         df_d1 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_d1, 260)
@@ -3976,7 +4014,7 @@ class StandardStrategy:
                 pull = int(sch.get("m5_pull_sec_warm", CFG.m5_pull_sec_warm))
             else:
                 pull = int(sch.get("m5_pull_sec_hot", CFG.m5_pull_sec_hot))
-            pull = max(1, _cfg_group_int(grp, f"m5_pull_sec_{str(mode).lower()}", int(pull)))
+            pull = max(1, _cfg_group_int(grp, f"m5_pull_sec_{str(mode).lower()}", int(pull), symbol=symbol))
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             pull = CFG.m5_pull_sec_eco if mode == "ECO" else (CFG.m5_pull_sec_warm if mode == "WARM" else CFG.m5_pull_sec_hot)
@@ -4001,9 +4039,9 @@ class StandardStrategy:
             return None
         self.cache.last_m5_bar_time[symbol] = last_bar
 
-        sma_fast_win = max(2, _cfg_group_int(grp, "sma_fast", int(getattr(CFG, "sma_fast", 20))))
-        adx_period = max(2, _cfg_group_int(grp, "adx_period", int(getattr(CFG, "adx_period", 14))))
-        atr_period = max(2, _cfg_group_int(grp, "atr_period", int(getattr(CFG, "atr_period", 14))))
+        sma_fast_win = max(2, _cfg_group_int(grp, "sma_fast", int(getattr(CFG, "sma_fast", 20)), symbol=symbol))
+        adx_period = max(2, _cfg_group_int(grp, "adx_period", int(getattr(CFG, "adx_period", 14)), symbol=symbol))
+        atr_period = max(2, _cfg_group_int(grp, "atr_period", int(getattr(CFG, "atr_period", 14)), symbol=symbol))
 
         df["sma_fast"] = ta.trend.sma_indicator(df["close"], window=sma_fast_win)
         adx = ta.trend.ADXIndicator(df["high"], df["low"], df["close"], window=adx_period)
@@ -4056,9 +4094,15 @@ class StandardStrategy:
         spread_pts = (tick.ask - tick.bid) / float(info.point)
         self.db.log_spread(symbol, spread_pts)
         p80 = self.db.get_p80_spread(symbol)
-        spread_gate_hot = _cfg_group_float(grp, "spread_gate_hot_factor", float(getattr(CFG, "spread_gate_hot_factor", 1.25)))
-        spread_gate_warm = _cfg_group_float(grp, "spread_gate_warm_factor", float(getattr(CFG, "spread_gate_warm_factor", 1.75)))
-        spread_gate_eco = _cfg_group_float(grp, "spread_gate_eco_factor", float(getattr(CFG, "spread_gate_eco_factor", 2.00)))
+        spread_gate_hot = _cfg_group_float(
+            grp, "spread_gate_hot_factor", float(getattr(CFG, "spread_gate_hot_factor", 1.25)), symbol=symbol
+        )
+        spread_gate_warm = _cfg_group_float(
+            grp, "spread_gate_warm_factor", float(getattr(CFG, "spread_gate_warm_factor", 1.75)), symbol=symbol
+        )
+        spread_gate_eco = _cfg_group_float(
+            grp, "spread_gate_eco_factor", float(getattr(CFG, "spread_gate_eco_factor", 2.00)), symbol=symbol
+        )
         # Execution green gate: scalp (HOT) is only allowed on tight spreads; if spread widens,
         # we either downgrade HOT->WARM (if still acceptable) or skip.
         if p80 > 0:
@@ -4091,7 +4135,7 @@ class StandardStrategy:
                 atr_value = float(ind.get("atr", 0.0))
             except Exception:
                 atr_value = None
-        sl_points, tp_points = adaptive_exit_points(mode, point, atr_value, grp=grp)
+        sl_points, tp_points = adaptive_exit_points(mode, point, atr_value, grp=grp, symbol=symbol)
         sl = price - sl_points * point if signal == "BUY" else price + sl_points * point
         tp = price + tp_points * point if signal == "BUY" else price - tp_points * point
 
@@ -4136,7 +4180,7 @@ class StandardStrategy:
         if volume is None:
             return
         try:
-            vol_cap = float(_cfg_group_float(grp, "volume_cap_lots", 0.0))
+            vol_cap = float(_cfg_group_float(grp, "volume_cap_lots", 0.0, symbol=symbol))
         except Exception:
             vol_cap = 0.0
         if vol_cap > 0.0:
@@ -4254,7 +4298,7 @@ class StandardStrategy:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         comment = f"SBOT-EVT-{event_id}" if event_id else f"MT5_SAFETY_BOT_{CFG.BOT_VERSION}"
-        order_dev = int(max(1, _cfg_group_int(grp, "order_deviation_points", 20)))
+        order_dev = int(max(1, _cfg_group_int(grp, "order_deviation_points", 20, symbol=symbol)))
 
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -4361,8 +4405,12 @@ class StandardStrategy:
 
         regime = "TREND"
         if bool(getattr(CFG, "regime_switch_enabled", True)):
-            adx_threshold = _cfg_group_float(grp, "adx_threshold", float(getattr(CFG, "adx_threshold", 22)))
-            adx_range_max = _cfg_group_float(grp, "adx_range_max", float(getattr(CFG, "adx_range_max", 18)))
+            adx_threshold = _cfg_group_float(
+                grp, "adx_threshold", float(getattr(CFG, "adx_threshold", 22)), symbol=symbol
+            )
+            adx_range_max = _cfg_group_float(
+                grp, "adx_range_max", float(getattr(CFG, "adx_range_max", 18)), symbol=symbol
+            )
             regime = resolve_adx_regime(
                 adx_value,
                 adx_threshold,
@@ -4393,7 +4441,9 @@ class StandardStrategy:
                 point = float(getattr(info, 'point', 0.0) or 0.0)
                 if point == 0.0:
                     point = 1e-5
-                sl_points, tp_points = adaptive_exit_points(mode, point, float(ind.get("atr", 0.0) or 0.0), grp=grp)
+                sl_points, tp_points = adaptive_exit_points(
+                    mode, point, float(ind.get("atr", 0.0) or 0.0), grp=grp, symbol=symbol
+                )
                 if signal == 'BUY':
                     sl = mid - sl_points * point
                     tp = mid + tp_points * point
@@ -5020,16 +5070,24 @@ class SafetyBot:
             if not positions:
                 continue
             grp = guess_group(sym)
-            trail_retry_sec = max(1, _cfg_group_int(grp, "trailing_update_retry_sec", trail_retry_sec_base))
-            partial_retry_sec = max(1, _cfg_group_int(grp, "partial_tp_retry_sec", partial_retry_sec_base))
-            trailing_activation_r = float(max(0.0, _cfg_group_float(grp, "trailing_activation_r", trailing_activation_r_base)))
-            trailing_atr_mult = float(max(0.1, _cfg_group_float(grp, "trailing_atr_mult", trailing_atr_mult_base)))
-            partial_tp_r = float(max(0.1, _cfg_group_float(grp, "partial_tp_r", partial_tp_r_base)))
-            partial_fraction = float(
-                min(0.95, max(0.05, _cfg_group_float(grp, "partial_tp_fraction", partial_fraction_base)))
+            trail_retry_sec = max(1, _cfg_group_int(grp, "trailing_update_retry_sec", trail_retry_sec_base, symbol=sym))
+            partial_retry_sec = max(1, _cfg_group_int(grp, "partial_tp_retry_sec", partial_retry_sec_base, symbol=sym))
+            trailing_activation_r = float(
+                max(0.0, _cfg_group_float(grp, "trailing_activation_r", trailing_activation_r_base, symbol=sym))
             )
-            trailing_enabled = _cfg_group_bool(grp, "trailing_stop_enabled", bool(getattr(CFG, "trailing_stop_enabled", True)))
-            partial_enabled = _cfg_group_bool(grp, "partial_tp_enabled", bool(getattr(CFG, "partial_tp_enabled", True)))
+            trailing_atr_mult = float(
+                max(0.1, _cfg_group_float(grp, "trailing_atr_mult", trailing_atr_mult_base, symbol=sym))
+            )
+            partial_tp_r = float(max(0.1, _cfg_group_float(grp, "partial_tp_r", partial_tp_r_base, symbol=sym)))
+            partial_fraction = float(
+                min(0.95, max(0.05, _cfg_group_float(grp, "partial_tp_fraction", partial_fraction_base, symbol=sym)))
+            )
+            trailing_enabled = _cfg_group_bool(
+                grp, "trailing_stop_enabled", bool(getattr(CFG, "trailing_stop_enabled", True)), symbol=sym
+            )
+            partial_enabled = _cfg_group_bool(
+                grp, "partial_tp_enabled", bool(getattr(CFG, "partial_tp_enabled", True)), symbol=sym
+            )
             close_dev = int(
                 max(
                     1,
@@ -5037,6 +5095,7 @@ class SafetyBot:
                         grp,
                         "position_time_stop_deviation_points",
                         int(getattr(CFG, "position_time_stop_deviation_points", 30)),
+                        symbol=sym,
                     ),
                 )
             )
@@ -5234,11 +5293,12 @@ class SafetyBot:
                                 getattr(CFG, "kill_close_deviation_points", 30),
                             )
                         ),
+                        symbol=sym,
                     ),
                 )
             )
             mode = self._effective_mode_for_symbol(grp, symbol_base(sym), global_mode, rollover_safe)
-            max_hold_min = position_time_stop_minutes_for_mode(mode, grp=grp)
+            max_hold_min = position_time_stop_minutes_for_mode(mode, grp=grp, symbol=sym)
             if max_hold_min <= 0:
                 continue
             max_hold_sec = int(max_hold_min) * 60
@@ -6062,6 +6122,23 @@ if __name__ == "__main__":
             raise SystemExit(f"CONFIG_STRATEGY_FAIL: per_group.{g} must be object")
         norm_per_group[g] = dict(gv)
     CFG.per_group = norm_per_group
+
+    raw_per_symbol = strategy_cfg.get("per_symbol", {}) if isinstance(strategy_cfg, dict) else {}
+    if raw_per_symbol is None:
+        raw_per_symbol = {}
+    if not isinstance(raw_per_symbol, dict):
+        raise SystemExit("CONFIG_STRATEGY_FAIL: per_symbol must be object")
+    norm_per_symbol: Dict[str, Dict[str, Any]] = {}
+    for sk, sv in raw_per_symbol.items():
+        if sv is None:
+            continue
+        if not isinstance(sv, dict):
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: per_symbol.{sk} must be object")
+        base = _symbol_key(str(sk))
+        if not base:
+            continue
+        norm_per_symbol[base] = dict(sv)
+    CFG.per_symbol = norm_per_symbol
 
     def _cfg_int(key: str, fallback: int | None = None) -> int:
         raw = strategy_cfg.get(key, fallback)
