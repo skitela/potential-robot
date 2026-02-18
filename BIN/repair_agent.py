@@ -15,12 +15,14 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from .runtime_root import get_runtime_root
@@ -48,6 +50,75 @@ CODEX_TIMEOUT_SEC = int(os.environ.get("REPAIR_CODEX_TIMEOUT_SEC", "21600"))
 ALERT_FILE = "infobot_alert.json"
 STATUS_FILE = "repair_status.json"
 CODEX_REQUEST_FILE = "codex_repair_request.json"
+CHECKLIST_FILE = "repair_checklist_v1.json"
+
+# Trading-functional watchdog (system is "alive" only when it effectively trades).
+TRADE_IDLE_ALERT_SEC = int(os.environ.get("REPAIR_TRADE_IDLE_ALERT_SEC", "3600"))
+TRADE_LOSS_WINDOW_SEC = int(os.environ.get("REPAIR_TRADE_LOSS_WINDOW_SEC", "172800"))  # 48h
+TRADE_HEALTH_CHECK_SEC = int(os.environ.get("REPAIR_TRADE_HEALTH_CHECK_SEC", "30"))
+TRADE_LOSS_MIN_DEALS_PER_SYMBOL = int(os.environ.get("REPAIR_TRADE_LOSS_MIN_DEALS_PER_SYMBOL", "6"))
+TRADE_LOSS_RATIO_TRIGGER = float(os.environ.get("REPAIR_TRADE_LOSS_RATIO_TRIGGER", "0.70"))
+TRADE_GLOBAL_MIN_SYMBOLS = int(os.environ.get("REPAIR_TRADE_GLOBAL_MIN_SYMBOLS", "3"))
+TRADE_SYMBOL_SHADOW_SEC = int(os.environ.get("REPAIR_TRADE_SYMBOL_SHADOW_SEC", "172800"))  # 48h
+TRADE_SYMBOL_SHADOW_REASON = "shadow_loss_48h"
+
+DEFAULT_TARGET_SYMBOLS = ["EURUSD", "GBPUSD", "XAUUSD", "DAX40", "US500"]
+SYMBOL_BASE_ALIASES = {
+    "GOLD": "XAUUSD",
+    "DE30": "DAX40",
+    "DE40": "DAX40",
+    "GER30": "DAX40",
+    "GER40": "DAX40",
+    "SPX500": "US500",
+}
+
+REPAIR_CHECKLIST_V1: List[Dict[str, str]] = [
+    {
+        "id": "C1_TRIGGER_CLASSIFY",
+        "title": "Classify incident trigger",
+        "description": "Distinguish crash/down, trade-idle, global-loss, and per-symbol-loss conditions.",
+    },
+    {
+        "id": "C2_CAPITAL_PROTECT",
+        "title": "Apply immediate capital protection",
+        "description": "For persistent single-symbol loss activate shadow mode cooldown; for global loss prepare hard backoff.",
+    },
+    {
+        "id": "C3_DIAG_CAPTURE",
+        "title": "Collect diagnostics",
+        "description": "Run DIAG bundle and persist context for deterministic postmortem and Codex escalation.",
+    },
+    {
+        "id": "C4_TARGETED_RESTART",
+        "title": "Restart critical components",
+        "description": "Restart SafetyBot/SCUD execution path without killing RepairAgent itself.",
+    },
+    {
+        "id": "C5_VERIFY_LIVENESS",
+        "title": "Verify recovery liveness",
+        "description": "Validate process/log heartbeat and functional trading-health checks after restart.",
+    },
+    {
+        "id": "C6_EXTENDED_SELF_CHECK",
+        "title": "Run extended self-checks when retries persist",
+        "description": "Execute prelive/dependency checks before escalating to Codex.",
+    },
+    {
+        "id": "C7_HOTFIX_APPLY_OPTIONAL",
+        "title": "Apply latest approved hotfix",
+        "description": "Use incoming hotfix only when enabled and retry path still failing.",
+    },
+    {
+        "id": "C8_CODEX_ESCALATE",
+        "title": "Escalate to Codex with full context",
+        "description": "Create codex_repair_request with machine-readable context and run codex automation command.",
+    },
+    {
+        "id": "C9_PERSIST_STATE",
+        "title": "Persist repair state and lessons",
+        "description": "Write status, resolutions and next actions into RUN files for traceability and future sessions.",
+    },
+]
 
 TOOLS_BAT_DIR = Path(r"C:\OANDA_MT5_SYSTEM_STAGING\TOOLS_BAT")
 
@@ -114,6 +185,326 @@ def _read_json(path: Path) -> Optional[Dict[str, object]]:
         return obj if isinstance(obj, dict) else None
     except Exception:
         return None
+
+
+def _symbol_base(raw_symbol: str) -> str:
+    raw = str(raw_symbol or "").strip().upper()
+    if not raw:
+        return ""
+    base = raw.split(".", 1)[0]
+    return str(SYMBOL_BASE_ALIASES.get(base, base))
+
+
+def _load_target_symbols(root: Path) -> List[str]:
+    cfg_path = root / "CONFIG" / "strategy.json"
+    cfg = _read_json(cfg_path)
+    raw = cfg.get("symbols_to_trade") if isinstance(cfg, dict) else None
+    out: List[str] = []
+    if isinstance(raw, list):
+        for s in raw:
+            base = _symbol_base(str(s or ""))
+            if base and base not in out:
+                out.append(base)
+    if out:
+        return out
+    return list(DEFAULT_TARGET_SYMBOLS)
+
+
+def _db_path(root: Path) -> Path:
+    return root / "DB" / "decision_events.sqlite"
+
+
+def _checklist_payload() -> Dict[str, object]:
+    return {
+        "schema": "oanda_mt5.repair_checklist.v1",
+        "version": "repair.v1",
+        "ts_utc": _now_utc(),
+        "steps": list(REPAIR_CHECKLIST_V1),
+    }
+
+
+def _write_checklist_file(run_dir: Path) -> None:
+    path = run_dir / CHECKLIST_FILE
+    if path.exists():
+        return
+    _write_json_atomic(path, _checklist_payload())
+
+
+def _ensure_system_state_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS system_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )"""
+    )
+
+
+def _open_state_db(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), timeout=5)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+    except sqlite3.Error:
+        pass
+    # Defensive fallback for environments where file-journal writes can fail.
+    try:
+        conn.execute("PRAGMA journal_mode=MEMORY")
+    except sqlite3.Error:
+        pass
+    return conn
+
+
+def _db_set_state(db_path: Path, key: str, value: str) -> None:
+    conn = _open_state_db(db_path)
+    try:
+        _ensure_system_state_table(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)",
+            (str(key), str(value)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_get_state_int(db_path: Path, key: str, default: int = 0) -> int:
+    if not db_path.exists():
+        return int(default)
+    conn = _open_state_db(db_path)
+    try:
+        _ensure_system_state_table(conn)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM system_state WHERE key=?", (str(key),))
+        row = cur.fetchone()
+        if not row:
+            return int(default)
+        try:
+            return int(float(row[0]))
+        except Exception:
+            return int(default)
+    finally:
+        conn.close()
+
+
+def _apply_symbol_shadow_mode(root: Path, symbol_base: str, seconds: int, reason: str) -> bool:
+    dbp = _db_path(root)
+    if not dbp.exists():
+        return False
+    sym = _symbol_base(symbol_base)
+    if not sym:
+        return False
+    now_ts = int(time.time())
+    until_ts = int(now_ts + max(1, int(seconds)))
+    key_until = f"cooldown_until_ts:{sym}"
+    key_reason = f"cooldown_reason:{sym}"
+    prev_until = _db_get_state_int(dbp, key_until, 0)
+    if int(prev_until) >= int(until_ts - 60):
+        return False
+    _db_set_state(dbp, key_until, str(int(until_ts)))
+    _db_set_state(dbp, key_reason, str(reason or TRADE_SYMBOL_SHADOW_REASON))
+    return True
+
+
+def _trade_health_snapshot(root: Path) -> Dict[str, object]:
+    dbp = _db_path(root)
+    out: Dict[str, object] = {
+        "ok": True,
+        "ts_utc": _now_utc(),
+        "db_path": str(dbp),
+        "reason": "",
+        "last_trade_ts": None,
+        "trade_idle_sec": None,
+        "window_sec": int(max(60, TRADE_LOSS_WINDOW_SEC)),
+        "window_start_ts": None,
+        "target_symbols": _load_target_symbols(root),
+        "symbol_stats": {},
+        "global_pnl_net": 0.0,
+        "global_deals": 0,
+        "global_loss_all_active": False,
+        "global_loss_active_symbols": [],
+        "symbol_shadow_candidates": [],
+    }
+    if not dbp.exists():
+        out["ok"] = False
+        out["reason"] = "db_missing"
+        return out
+    now_ts = int(time.time())
+    window_sec = int(max(60, TRADE_LOSS_WINDOW_SEC))
+    start_ts = int(now_ts - window_sec)
+    out["window_start_ts"] = int(start_ts)
+
+    conn = sqlite3.connect(str(dbp), timeout=5)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(time) FROM deals_log")
+        row = cur.fetchone()
+        last_trade_ts = int(row[0]) if row and row[0] is not None else 0
+        if last_trade_ts > 0:
+            out["last_trade_ts"] = int(last_trade_ts)
+            out["trade_idle_sec"] = int(max(0, now_ts - int(last_trade_ts)))
+        else:
+            out["last_trade_ts"] = None
+            out["trade_idle_sec"] = None
+
+        cur.execute(
+            """SELECT symbol,
+                      COUNT(*) AS deals_n,
+                      COALESCE(SUM(profit + commission + swap), 0.0) AS pnl_net,
+                      COALESCE(SUM(CASE WHEN (profit + commission + swap) < 0 THEN 1 ELSE 0 END), 0) AS loss_n,
+                      MAX(time) AS last_ts
+               FROM deals_log
+               WHERE time >= ?
+               GROUP BY symbol""",
+            (int(start_ts),),
+        )
+        rows = cur.fetchall()
+    except sqlite3.Error as exc:
+        out["ok"] = False
+        out["reason"] = f"db_error:{type(exc).__name__}"
+        return out
+    finally:
+        conn.close()
+
+    stats_by_base: Dict[str, Dict[str, object]] = {}
+    total_pnl = 0.0
+    total_deals = 0
+    for row in rows:
+        try:
+            sym_raw = str(row[0] or "")
+            deals_n = int(row[1] or 0)
+            pnl = float(row[2] or 0.0)
+            loss_n = int(row[3] or 0)
+            lts = int(row[4] or 0)
+        except Exception:
+            continue
+        base = _symbol_base(sym_raw)
+        if not base:
+            continue
+        slot = stats_by_base.setdefault(
+            base,
+            {"deals": 0, "pnl_net": 0.0, "loss_deals": 0, "last_trade_ts": 0, "loss_ratio": 0.0},
+        )
+        slot["deals"] = int(slot["deals"]) + int(deals_n)
+        slot["pnl_net"] = float(slot["pnl_net"]) + float(pnl)
+        slot["loss_deals"] = int(slot["loss_deals"]) + int(loss_n)
+        slot["last_trade_ts"] = max(int(slot["last_trade_ts"]), int(lts))
+        total_pnl += float(pnl)
+        total_deals += int(deals_n)
+
+    for base, slot in stats_by_base.items():
+        deals_n = int(slot["deals"])
+        loss_n = int(slot["loss_deals"])
+        slot["loss_ratio"] = (float(loss_n) / float(max(1, deals_n)))
+        stats_by_base[base] = slot
+
+    out["symbol_stats"] = stats_by_base
+    out["global_pnl_net"] = float(total_pnl)
+    out["global_deals"] = int(total_deals)
+
+    min_deals = int(max(1, TRADE_LOSS_MIN_DEALS_PER_SYMBOL))
+    loss_ratio_thr = float(max(0.0, min(1.0, TRADE_LOSS_RATIO_TRIGGER)))
+    target_symbols = [str(x) for x in (out.get("target_symbols") or []) if str(x)]
+    active_loss_symbols: List[str] = []
+    shadow_candidates: List[str] = []
+
+    for sym in target_symbols:
+        st = stats_by_base.get(sym) or {}
+        deals_n = int(st.get("deals") or 0)
+        pnl = float(st.get("pnl_net") or 0.0)
+        loss_ratio = float(st.get("loss_ratio") or 0.0)
+        if deals_n >= min_deals and pnl < 0.0:
+            active_loss_symbols.append(sym)
+            if loss_ratio >= loss_ratio_thr:
+                shadow_candidates.append(sym)
+
+    out["global_loss_active_symbols"] = sorted(active_loss_symbols)
+    out["symbol_shadow_candidates"] = sorted(shadow_candidates)
+    out["global_loss_all_active"] = bool(
+        len(active_loss_symbols) >= int(max(1, TRADE_GLOBAL_MIN_SYMBOLS))
+        and len(active_loss_symbols) == len([s for s in target_symbols if int((stats_by_base.get(s) or {}).get("deals") or 0) >= min_deals])
+        and float(total_pnl) < 0.0
+    )
+    return out
+
+
+def _emit_synthetic_alert(root: Path, reason: str, severity: str, details: Dict[str, object]) -> str:
+    run_dir = root / "RUN"
+    alert_path = run_dir / ALERT_FILE
+    now_local = datetime.now().astimezone()
+    event_id = f"AUTO-{uuid.uuid4().hex[:10]}"
+    alert = {
+        "event_id": event_id,
+        "ts_utc": _now_utc(),
+        "ts_pl": now_local.isoformat(),
+        "reason": str(reason),
+        "severity": str(severity or "CRITICAL"),
+        "resolved": False,
+        "source": "repair_agent_health_watchdog",
+        "details": details,
+    }
+    _write_json_atomic(alert_path, alert)
+    return str(event_id)
+
+
+def _health_watchdog_actions(root: Path) -> Dict[str, object]:
+    out: Dict[str, object] = {
+        "snapshot": {},
+        "shadow_applied": [],
+        "synthetic_alert_event_id": "",
+        "synthetic_alert_reason": "",
+    }
+    health = _trade_health_snapshot(root)
+    out["snapshot"] = health
+    if not bool(health.get("ok")):
+        return out
+
+    # Per-symbol 48h loss protection -> shadow mode / cooldown.
+    for sym in list(health.get("symbol_shadow_candidates") or []):
+        try:
+            if _apply_symbol_shadow_mode(root, str(sym), TRADE_SYMBOL_SHADOW_SEC, TRADE_SYMBOL_SHADOW_REASON):
+                out["shadow_applied"].append(str(sym))
+                logging.warning(
+                    f"REPAIR_SHADOW_APPLY symbol={sym} sec={int(TRADE_SYMBOL_SHADOW_SEC)} reason={TRADE_SYMBOL_SHADOW_REASON}"
+                )
+        except Exception as exc:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", exc)
+
+    run_dir = root / "RUN"
+    alert_path = run_dir / ALERT_FILE
+    cur_alert = _read_json(alert_path) or {}
+    unresolved_active = bool(cur_alert) and (not bool(cur_alert.get("resolved")))
+    if unresolved_active:
+        return out
+
+    # Strict liveness: if system previously traded and became idle too long -> trigger repair alert.
+    idle_sec = health.get("trade_idle_sec")
+    last_trade_ts = health.get("last_trade_ts")
+    if last_trade_ts and idle_sec is not None and float(idle_sec) >= float(max(60, TRADE_IDLE_ALERT_SEC)):
+        reason = f"critical:trade_idle_sec>{int(TRADE_IDLE_ALERT_SEC)}"
+        eid = _emit_synthetic_alert(root, reason, "CRITICAL", {"trade_idle_sec": int(idle_sec)})
+        out["synthetic_alert_event_id"] = str(eid)
+        out["synthetic_alert_reason"] = str(reason)
+        logging.warning(f"REPAIR_SYNTH_ALERT event_id={eid} reason={reason}")
+        return out
+
+    # If all active symbols are losing for 48h window -> critical repair alert.
+    if bool(health.get("global_loss_all_active")):
+        reason = "critical:loss_all_active_symbols_48h"
+        eid = _emit_synthetic_alert(
+            root,
+            reason,
+            "CRITICAL",
+            {
+                "symbols": list(health.get("global_loss_active_symbols") or []),
+                "window_sec": int(health.get("window_sec") or TRADE_LOSS_WINDOW_SEC),
+                "global_pnl_net": float(health.get("global_pnl_net") or 0.0),
+            },
+        )
+        out["synthetic_alert_event_id"] = str(eid)
+        out["synthetic_alert_reason"] = str(reason)
+        logging.warning(f"REPAIR_SYNTH_ALERT event_id={eid} reason={reason}")
+        return out
+
+    return out
 
 
 def _setup_logging(root: Path) -> None:
@@ -255,6 +646,29 @@ def _run_diag(root: Path) -> None:
         _run_cmd(f"\"{sys.executable}\" \"{diag}\"")
 
 
+def _run_extended_self_checks(root: Path) -> Dict[str, object]:
+    checks: Dict[str, object] = {"ts_utc": _now_utc(), "steps": []}
+    commands = [
+        ("prelive_go_nogo", f"\"{sys.executable}\" -B \"{root / 'TOOLS' / 'prelive_go_nogo.py'}\" --root \"{root}\""),
+        (
+            "dependency_hygiene",
+            f"\"{sys.executable}\" \"{root / 'TOOLS' / 'dependency_hygiene.py'}\" --root \"{root}\" "
+            "--fail-on-missing-requirements --fail-on-local-unresolved",
+        ),
+        ("secrets_scan", f"\"{sys.executable}\" \"{root / 'TOOLS' / 'secrets_scan.py'}\" --root \"{root}\""),
+    ]
+    for name, cmd in commands:
+        rc, out = _run_cmd(cmd)
+        checks["steps"].append(
+            {
+                "name": str(name),
+                "rc": int(rc),
+                "output_tail": str(out or "")[-1200:],
+            }
+        )
+    return checks
+
+
 def _restart_all(root: Path) -> None:
     # Do not call stop.bat here: it kills RepairAgent itself and leaves "repairing" stuck.
     # Instead, restart only trading-critical components and then invoke SYSTEM_CONTROL start.
@@ -357,6 +771,8 @@ def _llm_keys_status() -> Dict[str, Dict[str, object]]:
 def _status_payload(base: Dict[str, object]) -> Dict[str, object]:
     payload = dict(base)
     payload["llm_keys"] = _llm_keys_status()
+    payload["repair_checklist_version"] = "repair.v1"
+    payload["repair_checklist_step_ids"] = [str(x.get("id")) for x in REPAIR_CHECKLIST_V1]
     return payload
 
 
@@ -407,12 +823,24 @@ def main() -> int:
     status_path = run_dir / STATUS_FILE
     alert_path = run_dir / ALERT_FILE
     codex_request_path = run_dir / CODEX_REQUEST_FILE
+    _write_checklist_file(run_dir)
 
     last_event = ""
     retry_count = 0
+    last_health_watch: Dict[str, object] = {}
+    last_health_watch_ts = 0.0
 
     try:
         while True:
+            now_loop = time.time()
+            if (now_loop - float(last_health_watch_ts)) >= float(max(5, TRADE_HEALTH_CHECK_SEC)):
+                try:
+                    last_health_watch = _health_watchdog_actions(root)
+                except Exception as exc:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", exc)
+                    last_health_watch = {"snapshot": {"ok": False, "reason": f"watchdog_error:{type(exc).__name__}"}}
+                last_health_watch_ts = now_loop
+
             status_obj = _read_json(status_path) or {}
             status_name = str(status_obj.get("status") or "")
 
@@ -430,6 +858,7 @@ def main() -> int:
                                     "ts_utc": _now_utc(),
                                     "status": "recovered",
                                     "source": "repairing_stale_recheck",
+                                    "health_watchdog": last_health_watch,
                                 }
                             ),
                         )
@@ -455,6 +884,7 @@ def main() -> int:
                                     "ts_utc": _now_utc(),
                                     "status": "recovered",
                                     "source": "codex_timeout_recheck",
+                                    "health_watchdog": last_health_watch,
                                 }
                             ),
                         )
@@ -469,6 +899,7 @@ def main() -> int:
                                     "reason": "codex_timeout",
                                     "attempt": int(status_obj.get("attempt") or MAX_RETRY_PER_ALERT),
                                     "action_required": True,
+                                    "health_watchdog": last_health_watch,
                                     "next_steps": [
                                         "Sprawdz RUN/codex_repair_request.json i LOGS/repair_agent/repair_agent.log",
                                         "Uruchom recznie: powershell -ExecutionPolicy Bypass -File RUN/CODEX_REPAIR_AUTOMATION.ps1",
@@ -495,6 +926,7 @@ def main() -> int:
                                 "ts_utc": _now_utc(),
                                 "status": "recovered",
                                 "source": "stale_alert_autoresolve",
+                                "health_watchdog": last_health_watch,
                             }
                         ),
                     )
@@ -514,6 +946,7 @@ def main() -> int:
                         "ts_utc": _now_utc(),
                         "status": "repairing",
                         "attempt": retry_count,
+                        "health_watchdog": last_health_watch,
                     }))
 
                     _run_diag(root)
@@ -526,6 +959,7 @@ def main() -> int:
                             "ts_utc": _now_utc(),
                             "status": "recovered",
                             "attempt": retry_count,
+                            "health_watchdog": last_health_watch,
                         }))
                         alert["resolved"] = True
                         _write_json_atomic(alert_path, alert)
@@ -544,18 +978,31 @@ def main() -> int:
                                         "status": "recovered",
                                         "attempt": retry_count,
                                         "hotfix": "applied",
+                                        "health_watchdog": last_health_watch,
                                     }))
                                     alert["resolved"] = True
                                     _write_json_atomic(alert_path, alert)
                                     logging.info("ODZYSKANO po hotfix")
                                     continue
-
+                        extended_checks = None
+                        if retry_count >= 2:
+                            try:
+                                extended_checks = _run_extended_self_checks(root)
+                            except Exception as exc:
+                                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", exc)
+                                extended_checks = {
+                                    "ts_utc": _now_utc(),
+                                    "steps": [],
+                                    "error": f"{type(exc).__name__}:{exc}",
+                                }
                         _write_json_atomic(status_path, _status_payload({
                             "event_id": event_id,
                             "ts_utc": _now_utc(),
                             "status": "failed",
                             "attempt": retry_count,
                             "action_required": True,
+                            "health_watchdog": last_health_watch,
+                            "extended_self_checks": extended_checks,
                             "next_steps": [
                                 "Uruchom DIAG: python TOOLS\\diag_bundle_v6.py",
                                 "Sprawdz LOGS\\safetybot.log i LOGS\\scudfab02.log",
@@ -585,6 +1032,7 @@ def main() -> int:
                                     "codex_timeout_sec": int(CODEX_TIMEOUT_SEC),
                                     "codex_command": cmd,
                                     "action_required": False,
+                                    "health_watchdog": last_health_watch,
                                 }))
                                 logging.warning(f"ESCALATE CODEX | started=1 pid={pid_or_err}")
                             else:
@@ -596,6 +1044,7 @@ def main() -> int:
                                     "reason": "codex_launch_failed",
                                     "codex_error": pid_or_err,
                                     "action_required": True,
+                                    "health_watchdog": last_health_watch,
                                     "next_steps": [
                                         "Sprawdz REPAIR_CODEX_COMMAND w ENV",
                                         "Uruchom recznie RUN/CODEX_REPAIR_AUTOMATION.ps1",
