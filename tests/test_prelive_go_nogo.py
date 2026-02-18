@@ -140,6 +140,25 @@ class TestPreliveGoNoGo(unittest.TestCase):
         self.assertIn("DEPENDENCY_REQUIREMENTS", ids)
         self.assertIn("DEPENDENCY_LOCAL_LINKS", ids)
 
+    def test_no_go_when_dependency_links_are_unresolved(self) -> None:
+        root = self._tmpdir()
+        learner = {
+            "ts_utc": "2099-01-01T00:00:00Z",
+            "ttl_sec": 3600,
+            "qa_light": "GREEN",
+        }
+        (root / "META" / "learner_advice.json").write_text(json.dumps(learner), encoding="utf-8")
+        (root / "requirements.txt").write_text("requests>=0\n", encoding="utf-8")
+        (root / "BIN").mkdir(parents=True, exist_ok=True)
+        (root / "BIN" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "BIN" / "broken.py").write_text("import BIN.nonexistent_module\n", encoding="utf-8")
+
+        rep = prelive_go_nogo.evaluate_prelive(root)
+        self.assertFalse(bool(rep.get("go")))
+        checks = list(rep.get("checks") or [])
+        chk = {str(c.get("id")): bool(c.get("ok")) for c in checks if isinstance(c, dict)}
+        self.assertFalse(chk.get("DEPENDENCY_LOCAL_LINKS", True))
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
