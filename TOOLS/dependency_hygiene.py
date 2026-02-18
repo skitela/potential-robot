@@ -325,7 +325,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", default="")
     parser.add_argument("--requirements", nargs="*", default=REQUIREMENT_FILES_DEFAULT)
     parser.add_argument("--include-tooling", action="store_true")
+    parser.add_argument("--fail-on-missing-requirements", action="store_true")
+    parser.add_argument("--fail-on-local-unresolved", action="store_true")
     return parser.parse_args()
+
+
+def evaluate_failures(
+    report: Dict[str, object],
+    *,
+    fail_on_missing_requirements: bool,
+    fail_on_local_unresolved: bool,
+) -> List[str]:
+    failures: List[str] = []
+    missing = list(report.get("missing_requirements") or [])
+    unresolved = int(report.get("local_unresolved_total") or 0)
+    if fail_on_missing_requirements and missing:
+        failures.append(f"MISSING_REQUIREMENTS:{len(missing)}")
+    if fail_on_local_unresolved and unresolved > 0:
+        failures.append(f"LOCAL_UNRESOLVED:{unresolved}")
+    return failures
 
 
 def main() -> int:
@@ -339,6 +357,12 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+    failures = evaluate_failures(
+        report,
+        fail_on_missing_requirements=bool(args.fail_on_missing_requirements),
+        fail_on_local_unresolved=bool(args.fail_on_local_unresolved),
+    )
+
     print(
         "DEPENDENCY_HYGIENE_OK "
         f"unused={len(report['unused_requirements'])} "
@@ -346,6 +370,9 @@ def main() -> int:
         f"tooling_unused={len(report['unused_tooling_requirements'])} "
         f"indirect_unused={len(report['unused_indirect_requirements'])}"
     )
+    if failures:
+        print("DEPENDENCY_HYGIENE_FAIL " + ",".join(failures))
+        return 2
     return 0
 
 
