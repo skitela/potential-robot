@@ -1,0 +1,36 @@
+{
+  "enabled": true,
+  "auto_index_quarterly": true,
+  "quarter_months": [3, 6, 9, 12],
+  "quarter_roll_offset_days": -2,
+  "index_anchor_ny_hour": 17,
+  "index_anchor_ny_minute": 0,
+  "quarter_block_minutes_before": 45,
+  "quarter_block_minutes_after": 30,
+  "quarter_force_close_before_min": 10,
+  "index_symbols": [
+    "US30",
+    "US100",
+    "US500",
+    "US2000",
+    "SPX500",
+    "NAS100",
+    "DE30",
+    "DE40",
+    "DAX40",
+    "GER30",
+    "GER40"
+  ],
+  "events": [
+    {
+      "date": "2026-03-18",
+      "time": "17:00",
+      "tz": "America/New_York",
+      "symbols": ["US30", "US100", "US500", "US2000", "SPX500", "NAS100"],
+      "block_before_min": 45,
+      "block_after_min": 30,
+      "force_close_before_min": 10,
+      "source": "https://www.oanda.com/eu-en/rollover-lists"
+    }
+  ]
+}

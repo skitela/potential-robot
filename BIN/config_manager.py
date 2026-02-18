@@ -17,6 +17,7 @@ class ConfigManager:
         self.limits: Dict[str, Any] = self._load_config("limits.json")
         self.scheduler: Dict[str, Any] = self._load_config("scheduler.json")
         self.strategy: Dict[str, Any] = self._load_optional_config("strategy.json")
+        self.rollover: Dict[str, Any] = self._load_optional_config("rollover_events.json")
         profiles = self._load_optional_config("profiles.json")
         self.index_profile_map: Dict[str, str] = dict(
             profiles.get("index_profile_map", {

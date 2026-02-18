@@ -588,6 +588,56 @@ def pl_day_start_utc_ts(ts_utc: Optional[dt.datetime] = None) -> int:
     return int(start_utc.timestamp())
 
 
+def _parse_hhmm(value: Any, default_hour: int = 17, default_minute: int = 0) -> Tuple[int, int]:
+    text = str(value or "").strip()
+    if not text:
+        return int(default_hour), int(default_minute)
+    parts = text.split(":", 1)
+    if len(parts) != 2:
+        return int(default_hour), int(default_minute)
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except Exception:
+        return int(default_hour), int(default_minute)
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return int(default_hour), int(default_minute)
+    return int(hour), int(minute)
+
+
+def third_friday_date(year: int, month: int) -> dt.date:
+    if month < 1 or month > 12:
+        raise ValueError(f"invalid month: {month}")
+    first = dt.date(int(year), int(month), 1)
+    # Monday=0 ... Friday=4
+    days_to_first_friday = (4 - int(first.weekday())) % 7
+    return first + dt.timedelta(days=int(days_to_first_friday + 14))
+
+
+def quarterly_rollover_date(year: int, month: int, offset_days: int = -2) -> dt.date:
+    third_friday = third_friday_date(int(year), int(month))
+    return third_friday + dt.timedelta(days=int(offset_days))
+
+
+def quarterly_rollover_dates(
+    year: int,
+    months: Optional[List[int]] = None,
+    offset_days: int = -2,
+) -> Dict[int, dt.date]:
+    if not months:
+        months = [3, 6, 9, 12]
+    out: Dict[int, dt.date] = {}
+    for raw in months:
+        try:
+            mm = int(raw)
+        except Exception:
+            continue
+        if mm < 1 or mm > 12:
+            continue
+        out[mm] = quarterly_rollover_date(int(year), int(mm), offset_days=int(offset_days))
+    return out
+
+
 def position_open_ts_utc(pos: Any) -> Optional[int]:
     """Best-effort extraction of MT5 position open timestamp (UTC epoch seconds)."""
     now_ts = int(time.time())
@@ -3540,17 +3590,200 @@ class StandardStrategy:
         self._last_eval_sys_before: Optional[int] = None
         self._last_event_id: Optional[str] = None
 
-    def rollover_safe(self) -> bool:
-        n = now_ny()
-        start = n.replace(hour=17, minute=0, second=0, microsecond=0) - dt.timedelta(minutes=CFG.rollover_block_minutes_before)
-        end = n.replace(hour=17, minute=0, second=0, microsecond=0) + dt.timedelta(minutes=CFG.rollover_block_minutes_after)
-        return not (start <= n <= end)
+    def _rollover_cfg(self) -> Dict[str, Any]:
+        raw = getattr(self.config, "rollover", {}) or {}
+        if isinstance(raw, dict):
+            return dict(raw)
+        return {}
 
-    def force_close_window(self) -> bool:
-        n = now_ny()
-        start = n.replace(hour=17, minute=0, second=0, microsecond=0) - dt.timedelta(minutes=CFG.force_close_before_rollover_min)
-        end = n.replace(hour=17, minute=0, second=0, microsecond=0)
-        return start <= n <= end
+    def _rollover_cfg_bool(self, key: str, default: bool) -> bool:
+        cfg = self._rollover_cfg()
+        raw = cfg.get(key, default)
+        if isinstance(raw, bool):
+            return raw
+        text = str(raw).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+
+    def _rollover_cfg_int(self, key: str, default: int) -> int:
+        cfg = self._rollover_cfg()
+        raw = cfg.get(key, default)
+        try:
+            return int(raw)
+        except Exception:
+            return int(default)
+
+    def _index_rollover_symbol_set(self) -> set[str]:
+        cfg = self._rollover_cfg()
+        raw = cfg.get("index_symbols")
+        out: set[str] = set()
+        if isinstance(raw, list):
+            for item in raw:
+                for cand in symbol_alias_candidates(str(item or "")):
+                    out.add(cand)
+        if out:
+            return out
+        fallback = set()
+        for sym, grp in (getattr(CFG, "symbol_group_map", {}) or {}).items():
+            if str(grp or "").upper() == "INDEX":
+                for cand in symbol_alias_candidates(str(sym or "")):
+                    fallback.add(cand)
+        return fallback
+
+    def _is_index_rollover_symbol(self, symbol: Optional[str]) -> bool:
+        if not symbol:
+            return True
+        cands = set(symbol_alias_candidates(symbol_base(symbol)))
+        allowed = self._index_rollover_symbol_set()
+        return not cands.isdisjoint(allowed)
+
+    def _quarterly_months(self) -> List[int]:
+        cfg = self._rollover_cfg()
+        raw = cfg.get("quarter_months", [3, 6, 9, 12])
+        if not isinstance(raw, list):
+            return [3, 6, 9, 12]
+        out: List[int] = []
+        for item in raw:
+            try:
+                mm = int(item)
+            except Exception:
+                continue
+            if 1 <= mm <= 12 and mm not in out:
+                out.append(mm)
+        return out or [3, 6, 9, 12]
+
+    def _quarterly_rollover_anchor_ny(self, now_ny_dt: dt.datetime) -> Optional[dt.datetime]:
+        if not self._rollover_cfg_bool("auto_index_quarterly", True):
+            return None
+        months = self._quarterly_months()
+        offset_days = self._rollover_cfg_int("quarter_roll_offset_days", -2)
+        schedule = quarterly_rollover_dates(int(now_ny_dt.year), months=months, offset_days=offset_days)
+        expected = schedule.get(int(now_ny_dt.month))
+        if expected is None:
+            return None
+        if now_ny_dt.date() != expected:
+            return None
+        hh = self._rollover_cfg_int("index_anchor_ny_hour", 17)
+        mm = self._rollover_cfg_int("index_anchor_ny_minute", 0)
+        hh = max(0, min(23, int(hh)))
+        mm = max(0, min(59, int(mm)))
+        return now_ny_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+    def _manual_rollover_anchors_ny(self, symbol: Optional[str]) -> List[Tuple[dt.datetime, Dict[str, Any]]]:
+        cfg = self._rollover_cfg()
+        raw = cfg.get("events")
+        if not isinstance(raw, list):
+            return []
+        symbol_cands = set(symbol_alias_candidates(symbol_base(symbol or ""))) if symbol else set()
+        out: List[Tuple[dt.datetime, Dict[str, Any]]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            symbols = item.get("symbols")
+            if isinstance(symbols, list) and symbols:
+                allowed: set[str] = set()
+                for s in symbols:
+                    allowed.update(symbol_alias_candidates(str(s or "")))
+                if symbol and symbol_cands.isdisjoint(allowed):
+                    continue
+            date_raw = str(item.get("date", "") or "").strip()
+            if not date_raw:
+                continue
+            try:
+                d = dt.date.fromisoformat(date_raw)
+            except Exception:
+                continue
+            hh, mm = _parse_hhmm(item.get("time", "17:00"), default_hour=17, default_minute=0)
+            tz_name = str(item.get("tz", "America/New_York") or "America/New_York")
+            try:
+                tz_obj = ZoneInfo(tz_name)
+            except Exception:
+                tz_obj = TZ_NY
+            anchor_local = dt.datetime(d.year, d.month, d.day, hh, mm, 0, 0, tzinfo=tz_obj)
+            out.append((anchor_local.astimezone(TZ_NY), dict(item)))
+        return out
+
+    def _daily_rollover_anchor_ny(self, now_ny_dt: dt.datetime) -> dt.datetime:
+        return now_ny_dt.replace(hour=17, minute=0, second=0, microsecond=0)
+
+    def _is_in_window(
+        self,
+        now_ny_dt: dt.datetime,
+        anchor_ny_dt: dt.datetime,
+        *,
+        block_before_min: int,
+        block_after_min: int,
+    ) -> bool:
+        start = anchor_ny_dt - dt.timedelta(minutes=max(0, int(block_before_min)))
+        end = anchor_ny_dt + dt.timedelta(minutes=max(0, int(block_after_min)))
+        return bool(start <= now_ny_dt <= end)
+
+    def rollover_safe(self, symbol: Optional[str] = None) -> bool:
+        now_ny_dt = now_ny()
+
+        # Daily NY 17:00 safeguard (legacy behavior kept on purpose).
+        if self._is_in_window(
+            now_ny_dt,
+            self._daily_rollover_anchor_ny(now_ny_dt),
+            block_before_min=int(CFG.rollover_block_minutes_before),
+            block_after_min=int(CFG.rollover_block_minutes_after),
+        ):
+            return False
+
+        if not self._rollover_cfg_bool("enabled", True):
+            return True
+
+        if self._is_index_rollover_symbol(symbol):
+            q_anchor = self._quarterly_rollover_anchor_ny(now_ny_dt)
+            if q_anchor is not None and self._is_in_window(
+                now_ny_dt,
+                q_anchor,
+                block_before_min=self._rollover_cfg_int("quarter_block_minutes_before", int(CFG.rollover_block_minutes_before)),
+                block_after_min=self._rollover_cfg_int("quarter_block_minutes_after", int(CFG.rollover_block_minutes_after)),
+            ):
+                return False
+
+        for anchor_ny_dt, event in self._manual_rollover_anchors_ny(symbol):
+            before_min = int(event.get("block_before_min", CFG.rollover_block_minutes_before))
+            after_min = int(event.get("block_after_min", CFG.rollover_block_minutes_after))
+            if self._is_in_window(now_ny_dt, anchor_ny_dt, block_before_min=before_min, block_after_min=after_min):
+                return False
+
+        return True
+
+    def force_close_window(self, symbol: Optional[str] = None) -> bool:
+        now_ny_dt = now_ny()
+
+        if self._is_in_window(
+            now_ny_dt,
+            self._daily_rollover_anchor_ny(now_ny_dt),
+            block_before_min=int(CFG.force_close_before_rollover_min),
+            block_after_min=0,
+        ):
+            return True
+
+        if not self._rollover_cfg_bool("enabled", True):
+            return False
+
+        if self._is_index_rollover_symbol(symbol):
+            q_anchor = self._quarterly_rollover_anchor_ny(now_ny_dt)
+            if q_anchor is not None and self._is_in_window(
+                now_ny_dt,
+                q_anchor,
+                block_before_min=self._rollover_cfg_int("quarter_force_close_before_min", int(CFG.force_close_before_rollover_min)),
+                block_after_min=0,
+            ):
+                return True
+
+        for anchor_ny_dt, event in self._manual_rollover_anchors_ny(symbol):
+            force_before = int(event.get("force_close_before_min", CFG.force_close_before_rollover_min))
+            if self._is_in_window(now_ny_dt, anchor_ny_dt, block_before_min=force_before, block_after_min=0):
+                return True
+
+        return False
 
     def get_trend(self, symbol: str, grp: str) -> Tuple[str, str, str]:
         now_ts = time.time()
@@ -3932,7 +4165,7 @@ class StandardStrategy:
             return
         if not self.throttle.can_trade():
             return
-        if not self.rollover_safe():
+        if not self.rollover_safe(symbol=symbol):
             return
 
         try:
@@ -5142,6 +5375,8 @@ class SafetyBot:
 
         # rollover global
         rollover_safe = self.strategy.rollover_safe()
+        if not rollover_safe:
+            logging.warning("ROLLOVER_BLOCK global=1 reason=window_active")
 
         # tryb globalny: bazujemy na FX w tej chwili (rdzeń), ale to tylko do doboru limitów iteracji
         global_mode = "HOT" if self.ctrl.time_weight("FX", "EURUSD") >= 0.95 else ("WARM" if self.ctrl.time_weight("FX", "EURUSD") >= 0.55 else "ECO")
@@ -5218,6 +5453,12 @@ class SafetyBot:
         in_force_close = self.strategy.force_close_window()
         positions_map = self.positions_snapshot(global_mode, force=bool(in_force_close))
         open_syms = set(positions_map.keys()) if positions_map else set()
+        if open_syms and (not in_force_close):
+            try:
+                in_force_close = any(self.strategy.force_close_window(symbol=s) for s in open_syms)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                in_force_close = False
 
         # jeśli mamy pozycje i wchodzimy w force-close window => pilnuj (użyj rezerwy awaryjnej)
         if open_syms and in_force_close:

@@ -10,6 +10,7 @@ __pycache__/
 .coverage
 .tmp/
 .tmp_py/
+.tmp_pycache/
 TMP_AUDIT_IO/
 tests/_tmp_housekeeping/
 
