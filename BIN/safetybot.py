@@ -176,6 +176,8 @@ class CFG:
     # Okresowa synchronizacja zegara z czasem serwera (koszt: 1 PRICE na sync)
     time_anchor_sync_sec: int = 900   # 15 min
     time_anchor_min_price_remaining: int = 40  # nie syncuj, jeśli budżet niski
+    # Reject stale updates that would rewind anchor time too far backwards.
+    time_anchor_max_backward_sec: int = 120
 
     # Spend-down — jeśli pod koniec dnia NY zostało dużo niewykorzystanego PRICE budżetu,
     # bot może chwilowo zwiększyć aktywność (bez podnoszenia cap).
@@ -479,8 +481,22 @@ class TimeAnchor:
             server_utc = server_utc.replace(tzinfo=UTC)
         else:
             server_utc = server_utc.astimezone(UTC)
+
+        now_mono = time.monotonic()
+        if self._have and self._server_utc is not None:
+            est_now = self._server_utc + dt.timedelta(seconds=float(now_mono - self._mono))
+            max_back_s = max(0, int(getattr(CFG, "time_anchor_max_backward_sec", 120)))
+            if max_back_s > 0:
+                min_allowed = est_now - dt.timedelta(seconds=float(max_back_s))
+                if server_utc < min_allowed:
+                    logging.warning(
+                        f"TIME_ANCHOR_STALE_UPDATE_SKIP new={server_utc.isoformat()} "
+                        f"est={est_now.isoformat()} max_back_s={max_back_s}"
+                    )
+                    return
+
         self._server_utc = server_utc
-        self._mono = time.monotonic()
+        self._mono = now_mono
         self._last_sync_mono = self._mono
         self._have = True
 
@@ -5174,6 +5190,7 @@ if __name__ == "__main__":
     CFG.usb_watch_check_interval_sec = _cfg_int(
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
+    CFG.time_anchor_max_backward_sec = _cfg_int("time_anchor_max_backward_sec", CFG.time_anchor_max_backward_sec)
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)
     CFG.adx_threshold = _cfg_int("adx_threshold", CFG.adx_threshold)

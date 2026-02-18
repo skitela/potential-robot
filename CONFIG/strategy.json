@@ -10,6 +10,7 @@
   "price_soft_fraction": 0.99,
   "scan_interval_sec": 30,
   "usb_watch_check_interval_sec": 30,
+  "time_anchor_max_backward_sec": 120,
   "adx_threshold": 14,
   "position_time_stop_enabled": true,
   "position_time_stop_only_magic": true,
