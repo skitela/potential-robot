@@ -82,16 +82,16 @@ import traceback
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
 try:
-    import common_guards as cg
-    import common_contract as cc
-    from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
-    from self_heal_guard import SelfHealGuard, SelfHealPolicy
-    from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
-    from drift_guard import DriftGuard, DriftPolicy
-    from incident_guard import IncidentJournal, classify_retcode
-    from oanda_limits_guard import OandaLimitsGuard
-    from config_manager import ConfigManager
-    from risk_manager import RiskManager
+    from . import common_guards as cg
+    from . import common_contract as cc
+    from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
+    from .self_heal_guard import SelfHealGuard, SelfHealPolicy
+    from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
+    from .drift_guard import DriftGuard, DriftPolicy
+    from .incident_guard import IncidentJournal, classify_retcode
+    from .oanda_limits_guard import OandaLimitsGuard
+    from .config_manager import ConfigManager
+    from .risk_manager import RiskManager
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
@@ -104,7 +104,7 @@ except Exception:  # pragma: no cover
     from config_manager import ConfigManager
     from risk_manager import RiskManager
 try:
-    from runtime_root import (
+    from .runtime_root import (
         REQUIRED_OANDA_MT5_EXE,
         ensure_dirs,
         get_run_mode,
@@ -113,7 +113,7 @@ try:
         require_live_oanda_terminal,
     )
 except Exception:  # pragma: no cover
-    from .runtime_root import (
+    from runtime_root import (
         REQUIRED_OANDA_MT5_EXE,
         ensure_dirs,
         get_run_mode,
@@ -3279,7 +3279,10 @@ class MT5Client(ExecutionEngine):
 # ACTIVITY CONTROLLER (profile + score + warunki)
 # =============================================================================
 
-from scheduler import ActivityController
+try:
+    from .scheduler import ActivityController
+except Exception:  # pragma: no cover
+    from scheduler import ActivityController
 
 
 # =============================================================================

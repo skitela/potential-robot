@@ -6,3 +6,4 @@ isort
 mypy
 bandit
 pip-audit
+PyPDF2
