@@ -118,6 +118,28 @@ class TestPreliveGoNoGo(unittest.TestCase):
         self.assertEqual("SKIPPED_NO_REQUIREMENTS", str(dep.get("status")))
         self.assertTrue(bool(rep.get("go")))
 
+    def test_dependency_hygiene_contract_checks_present(self) -> None:
+        root = self._tmpdir()
+        learner = {
+            "ts_utc": "2099-01-01T00:00:00Z",
+            "ttl_sec": 3600,
+            "qa_light": "GREEN",
+        }
+        (root / "META" / "learner_advice.json").write_text(json.dumps(learner), encoding="utf-8")
+        (root / "requirements.txt").write_text("requests>=0\n", encoding="utf-8")
+        (root / "BIN").mkdir(parents=True, exist_ok=True)
+        (root / "BIN" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "BIN" / "mini.py").write_text("X = 1\n", encoding="utf-8")
+
+        rep = prelive_go_nogo.evaluate_prelive(root)
+        dep = dict(rep.get("dependency_hygiene") or {})
+        self.assertEqual("PASS", str(dep.get("status")))
+
+        checks = list(rep.get("checks") or [])
+        ids = {str(c.get("id")) for c in checks if isinstance(c, dict)}
+        self.assertIn("DEPENDENCY_REQUIREMENTS", ids)
+        self.assertIn("DEPENDENCY_LOCAL_LINKS", ids)
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
