@@ -45,6 +45,7 @@ import getpass
 import re
 import base64
 import ctypes
+import math
 
 def sqlite_exec_retry(conn: sqlite3.Connection, query: str, params=None, *, tries: int = 6, base_sleep: float = 0.15):
     """
@@ -378,6 +379,34 @@ class CFG:
     sma_trend: int = 200
     adx_period: int = 14
     adx_threshold: int = 22
+    adx_range_max: int = 18
+    regime_switch_enabled: bool = True
+    mean_reversion_enabled: bool = True
+    structure_filter_enabled: bool = True
+    sma_structure_fast: int = 55
+    sma_structure_slow: int = 200
+
+    # Adaptive exits: ATR-based SL/TP derived from current regime.
+    atr_exit_enabled: bool = True
+    atr_exit_use_override: bool = True
+    atr_sl_mult_hot: float = 1.2
+    atr_sl_mult_warm: float = 1.5
+    atr_sl_mult_eco: float = 1.8
+    atr_tp_mult_hot: float = 1.8
+    atr_tp_mult_warm: float = 2.2
+    atr_tp_mult_eco: float = 2.6
+    atr_sl_min_points: int = 80
+    atr_tp_min_points: int = 120
+
+    # Open-position management: trailing + partial take-profit.
+    trailing_stop_enabled: bool = True
+    trailing_activation_r: float = 0.8
+    trailing_atr_mult: float = 1.0
+    trailing_update_retry_sec: int = 60
+    partial_tp_enabled: bool = True
+    partial_tp_r: float = 1.0
+    partial_tp_fraction: float = 0.5
+    partial_tp_retry_sec: int = 120
 
     # Position lifecycle guard (scalp discipline): prevent stale multi-hour holds.
     position_time_stop_enabled: bool = True
@@ -607,6 +636,131 @@ def position_time_stop_minutes_for_mode(mode: str) -> int:
     if m == "WARM":
         return int(max(0, int(getattr(CFG, "position_time_stop_warm_min", 0))))
     return int(max(0, int(getattr(CFG, "position_time_stop_eco_min", 0))))
+
+
+def resolve_adx_regime(adx_value: float, trend_min: float, range_max: float) -> str:
+    """Return TREND / RANGE / TRANSITION for deterministic entry routing."""
+    try:
+        adx = float(adx_value)
+        trend_thr = float(trend_min)
+        range_thr = float(range_max)
+    except Exception:
+        return "TRANSITION"
+    if not np.isfinite(adx):
+        return "TRANSITION"
+    if range_thr > trend_thr:
+        range_thr = trend_thr
+    if adx >= trend_thr:
+        return "TREND"
+    if adx <= range_thr:
+        return "RANGE"
+    return "TRANSITION"
+
+
+def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float]) -> Tuple[int, int]:
+    """Compute SL/TP in points using fixed or ATR-based exits."""
+    sl_pts = int(max(1, int(getattr(CFG, "fixed_sl_points", 1) or 1)))
+    tp_pts = int(max(1, int(getattr(CFG, "fixed_tp_points", 1) or 1)))
+    if (not bool(getattr(CFG, "atr_exit_enabled", True))) or point <= 0.0 or atr_value is None:
+        return sl_pts, tp_pts
+    try:
+        atr = float(atr_value)
+    except Exception:
+        return sl_pts, tp_pts
+    if (not np.isfinite(atr)) or atr <= 0.0:
+        return sl_pts, tp_pts
+
+    m = str(mode).upper()
+    if m == "HOT":
+        sl_mult = float(getattr(CFG, "atr_sl_mult_hot", 1.2))
+        tp_mult = float(getattr(CFG, "atr_tp_mult_hot", 1.8))
+    elif m == "WARM":
+        sl_mult = float(getattr(CFG, "atr_sl_mult_warm", 1.5))
+        tp_mult = float(getattr(CFG, "atr_tp_mult_warm", 2.2))
+    else:
+        sl_mult = float(getattr(CFG, "atr_sl_mult_eco", 1.8))
+        tp_mult = float(getattr(CFG, "atr_tp_mult_eco", 2.6))
+
+    atr_pts = float(atr) / float(point)
+    if (not np.isfinite(atr_pts)) or atr_pts <= 0.0:
+        return sl_pts, tp_pts
+
+    calc_sl = int(max(1, round(atr_pts * sl_mult)))
+    calc_tp = int(max(1, round(atr_pts * tp_mult)))
+    min_sl = int(max(1, int(getattr(CFG, "atr_sl_min_points", 1) or 1)))
+    min_tp = int(max(1, int(getattr(CFG, "atr_tp_min_points", 1) or 1)))
+
+    if bool(getattr(CFG, "atr_exit_use_override", True)):
+        sl_pts = max(min_sl, calc_sl)
+        tp_pts = max(min_tp, calc_tp)
+    else:
+        sl_pts = max(sl_pts, min_sl, calc_sl)
+        tp_pts = max(tp_pts, min_tp, calc_tp)
+    return int(sl_pts), int(tp_pts)
+
+
+def select_entry_signal(
+    *,
+    trend_h4: str,
+    structure_h4: str,
+    regime: str,
+    close_price: float,
+    open_price: float,
+    sma_fast_value: float,
+    structure_filter_enabled: bool,
+    mean_reversion_enabled: bool,
+) -> Tuple[Optional[str], str]:
+    """Return (signal, reason_code) for trend/range routing."""
+    trend = str(trend_h4).upper()
+    structure = str(structure_h4).upper()
+    if structure_filter_enabled and structure in {"BUY", "SELL"} and structure != trend:
+        return None, "STRUCTURE_MISMATCH"
+
+    reg = str(regime).upper()
+    if reg == "TREND":
+        if trend == "BUY" and close_price > sma_fast_value and close_price > open_price:
+            return "BUY", "TREND_BREAK_CONTINUATION"
+        if trend == "SELL" and close_price < sma_fast_value and close_price < open_price:
+            return "SELL", "TREND_BREAK_CONTINUATION"
+        return None, "NO_TREND_SIGNAL"
+
+    if reg == "RANGE" and mean_reversion_enabled:
+        # Range module: fade short-term stretch but keep H4 bias.
+        if trend == "BUY" and close_price < sma_fast_value and close_price < open_price:
+            return "BUY", "RANGE_PULLBACK_BUY"
+        if trend == "SELL" and close_price > sma_fast_value and close_price > open_price:
+            return "SELL", "RANGE_PULLBACK_SELL"
+        return None, "NO_RANGE_SIGNAL"
+
+    if reg == "RANGE":
+        return None, "RANGE_DISABLED"
+    return None, "ADX_TRANSITION"
+
+
+def partial_close_volume(volume: float, fraction: float, vol_min: float, vol_step: float) -> float:
+    """Deterministic partial close volume rounded down to broker step."""
+    try:
+        v = float(volume)
+        frac = float(fraction)
+    except Exception:
+        return 0.0
+    if (not np.isfinite(v)) or (not np.isfinite(frac)) or v <= 0.0 or frac <= 0.0 or frac >= 1.0:
+        return 0.0
+    if vol_step <= 0.0:
+        return 0.0
+    raw = v * frac
+    steps = int(math.floor(raw / float(vol_step)))
+    out = float(round(steps * float(vol_step), 8))
+    if out <= 0.0:
+        return 0.0
+    min_vol = float(max(0.0, vol_min))
+    # Do not close if either leg would violate minimum size.
+    if min_vol > 0.0:
+        if out < min_vol:
+            return 0.0
+        if (v - out) < min_vol:
+            return 0.0
+    return out
 
 def in_window(local_dt: dt.datetime, start_hm: Tuple[int, int], end_hm: Tuple[int, int]) -> bool:
     s = local_dt.replace(hour=start_hm[0], minute=start_hm[1], second=0, microsecond=0)
@@ -3366,7 +3520,7 @@ except Exception:  # pragma: no cover
 
 class StrategyCache:
     def __init__(self):
-        self.trend_cache: Dict[str, Tuple[float, str, str]] = {}
+        self.trend_cache: Dict[str, Tuple[float, str, str, str]] = {}
         self.last_m5_calc_ts: Dict[str, float] = {}
         self.last_m5_bar_time: Dict[str, pd.Timestamp] = {}
 
@@ -3398,24 +3552,36 @@ class StandardStrategy:
         end = n.replace(hour=17, minute=0, second=0, microsecond=0)
         return start <= n <= end
 
-    def get_trend(self, symbol: str, grp: str) -> Tuple[str, str]:
+    def get_trend(self, symbol: str, grp: str) -> Tuple[str, str, str]:
         now_ts = time.time()
         cached = self.cache.trend_cache.get(symbol)
         if cached and (now_ts - cached[0] < CFG.trend_cache_ttl_sec):
-            return cached[1], cached[2]
+            return cached[1], cached[2], cached[3]
 
         df_h4 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_h4, 260)
         df_d1 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_d1, 260)
-        if df_h4 is None or df_d1 is None or len(df_h4) < 220 or len(df_d1) < 220:
-            return "NEUTRAL", "NEUTRAL"
+        slow_need = max(int(getattr(CFG, "sma_trend", 200)), int(getattr(CFG, "sma_structure_slow", 200)))
+        min_rows = max(220, slow_need + 20)
+        if df_h4 is None or df_d1 is None or len(df_h4) < min_rows or len(df_d1) < min_rows:
+            return "NEUTRAL", "NEUTRAL", "NEUTRAL"
 
-        df_h4["sma"] = ta.trend.sma_indicator(df_h4["close"], window=CFG.sma_trend)
-        df_d1["sma"] = ta.trend.sma_indicator(df_d1["close"], window=CFG.sma_trend)
+        df_h4["sma_trend"] = ta.trend.sma_indicator(df_h4["close"], window=CFG.sma_trend)
+        df_d1["sma_trend"] = ta.trend.sma_indicator(df_d1["close"], window=CFG.sma_trend)
+        df_h4["sma_struct_fast"] = ta.trend.sma_indicator(df_h4["close"], window=CFG.sma_structure_fast)
+        df_h4["sma_struct_slow"] = ta.trend.sma_indicator(df_h4["close"], window=CFG.sma_structure_slow)
 
-        trend_h4 = "BUY" if float(df_h4["close"].iloc[-1]) > float(df_h4["sma"].iloc[-1]) else "SELL"
-        trend_d1 = "BUY" if float(df_d1["close"].iloc[-1]) > float(df_d1["sma"].iloc[-1]) else "SELL"
-        self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1)
-        return trend_h4, trend_d1
+        trend_h4 = "BUY" if float(df_h4["close"].iloc[-1]) > float(df_h4["sma_trend"].iloc[-1]) else "SELL"
+        trend_d1 = "BUY" if float(df_d1["close"].iloc[-1]) > float(df_d1["sma_trend"].iloc[-1]) else "SELL"
+        struct_fast = float(df_h4["sma_struct_fast"].iloc[-1])
+        struct_slow = float(df_h4["sma_struct_slow"].iloc[-1])
+        if struct_fast > struct_slow:
+            structure_h4 = "BUY"
+        elif struct_fast < struct_slow:
+            structure_h4 = "SELL"
+        else:
+            structure_h4 = "NEUTRAL"
+        self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1, structure_h4)
+        return trend_h4, trend_d1, structure_h4
 
     def m5_indicators_if_due(self, symbol: str, grp: str, mode: str) -> Optional[Dict]:
         now_ts = time.time()
@@ -3484,7 +3650,16 @@ class StandardStrategy:
         )
         return ind
 
-    def try_trade(self, symbol: str, grp: str, mode: str, info, signal: str, is_paper: bool):
+    def try_trade(
+        self,
+        symbol: str,
+        grp: str,
+        mode: str,
+        info,
+        signal: str,
+        is_paper: bool,
+        ind: Optional[Dict[str, Any]] = None,
+    ):
         # tick na żądanie: spread + cena wykonania
         tick = self.engine.tick(symbol, grp)
         if not tick:
@@ -3516,11 +3691,16 @@ class StandardStrategy:
         bal_now = float(getattr(acc, "balance", 0.0) or 0.0)
         eq_now = float(getattr(acc, "equity", bal_now) or bal_now)
 
-        sl_points = CFG.fixed_sl_points
-        tp_points = CFG.fixed_tp_points
         point = float(getattr(info, "point", 0.0) or 0.0)
         if point <= 0:
             return
+        atr_value = None
+        if isinstance(ind, dict):
+            try:
+                atr_value = float(ind.get("atr", 0.0))
+            except Exception:
+                atr_value = None
+        sl_points, tp_points = adaptive_exit_points(mode, point, atr_value)
         sl = price - sl_points * point if signal == "BUY" else price + sl_points * point
         tp = price + tp_points * point if signal == "BUY" else price - tp_points * point
 
@@ -3622,6 +3802,8 @@ class StandardStrategy:
                         prop2["entry_price"] = float(price)
                         prop2["sl"] = float(sl)
                         prop2["tp"] = float(tp)
+                        prop2["sl_points"] = int(sl_points)
+                        prop2["tp_points"] = int(tp_points)
                 topk_payload.append({
                     "raw": raw,
                     "sym": it.get("sym"),
@@ -3765,28 +3947,37 @@ class StandardStrategy:
         ind = self.m5_indicators_if_due(symbol, grp, mode)
         if not ind:
             return
-        if ind["adx"] < CFG.adx_threshold:
-            logging.info(
-                f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} "
-                f"reason=ADX_LOW adx={float(ind['adx']):.2f} threshold={int(CFG.adx_threshold)}"
-            )
-            return
-
-        trend_h4, _trend_d1 = self.get_trend(symbol, grp)
+        adx_value = float(ind["adx"])
+        trend_h4, _trend_d1, structure_h4 = self.get_trend(symbol, grp)
         if trend_h4 == "NEUTRAL":
             logging.info(f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=TREND_NEUTRAL")
             return
 
-        signal = None
-        if trend_h4 == "BUY" and ind["close"] > ind["sma"] and ind["close"] > ind["open"]:
-            signal = "BUY"
-        elif trend_h4 == "SELL" and ind["close"] < ind["sma"] and ind["close"] < ind["open"]:
-            signal = "SELL"
+        regime = "TREND"
+        if bool(getattr(CFG, "regime_switch_enabled", True)):
+            regime = resolve_adx_regime(
+                adx_value,
+                float(getattr(CFG, "adx_threshold", 22)),
+                float(getattr(CFG, "adx_range_max", 18)),
+            )
+
+        signal, signal_reason = select_entry_signal(
+            trend_h4=trend_h4,
+            structure_h4=structure_h4,
+            regime=regime,
+            close_price=float(ind["close"]),
+            open_price=float(ind["open"]),
+            sma_fast_value=float(ind["sma"]),
+            structure_filter_enabled=bool(getattr(CFG, "structure_filter_enabled", True)),
+            mean_reversion_enabled=bool(getattr(CFG, "mean_reversion_enabled", True)),
+        )
 
         if signal:
             logging.info(
                 f"ENTRY_SIGNAL symbol={symbol} grp={grp} mode={mode} trend_h4={trend_h4} "
-                f"signal={signal} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} open={float(ind['open']):.6f}"
+                f"structure_h4={structure_h4} regime={regime} reason={signal_reason} "
+                f"signal={signal} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} "
+                f"open={float(ind['open']):.6f} adx={adx_value:.2f}"
             )
             try:
                 base = symbol_base(symbol)
@@ -3794,8 +3985,7 @@ class StandardStrategy:
                 point = float(getattr(info, 'point', 0.0) or 0.0)
                 if point == 0.0:
                     point = 1e-5
-                sl_points = CFG.fixed_sl_points
-                tp_points = CFG.fixed_tp_points
+                sl_points, tp_points = adaptive_exit_points(mode, point, float(ind.get("atr", 0.0) or 0.0))
                 if signal == 'BUY':
                     sl = mid - sl_points * point
                     tp = mid + tp_points * point
@@ -3808,18 +3998,23 @@ class StandardStrategy:
                     'entry_price': mid,
                     'sl': float(sl),
                     'tp': float(tp),
+                    'sl_points': int(sl_points),
+                    'tp_points': int(tp_points),
                     'point': point,
                     'tick_size': float(getattr(info, 'trade_tick_size', 0.0) or 0.0),
                     'tick_value': float(getattr(info, 'trade_tick_value', 0.0) or 0.0),
                     'spread_points': float(getattr(info, 'spread', 0.0) or 0.0),
+                    'regime': str(regime),
+                    'signal_reason': str(signal_reason),
                 }
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            self.try_trade(symbol, grp, mode, info, signal, is_paper)
+            self.try_trade(symbol, grp, mode, info, signal, is_paper, ind=ind)
         else:
             logging.info(
                 f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=NO_SIGNAL "
-                f"trend_h4={trend_h4} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} open={float(ind['open']):.6f}"
+                f"trend_h4={trend_h4} structure_h4={structure_h4} regime={regime} signal_reason={signal_reason} "
+                f"close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} open={float(ind['open']):.6f} adx={adx_value:.2f}"
             )
 
 # =============================================================================
@@ -4109,6 +4304,10 @@ class SafetyBot:
         self._positions_cache: Dict[str, List] = {}
         # Last close-attempt timestamp per ticket for position time-stop retries.
         self._position_close_attempt_ts: Dict[int, int] = {}
+        # Adaptive exit state.
+        self._partial_tp_done_tickets: Dict[int, bool] = {}
+        self._partial_close_attempt_ts: Dict[int, int] = {}
+        self._trail_update_attempt_ts: Dict[int, int] = {}
 
         # --- connect + universe ---
         if not self.execution_engine.connect():
@@ -4388,6 +4587,196 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return str(mode).upper()
+
+    def _manage_adaptive_exits(self, positions_map: Dict[str, List], global_mode: str, rollover_safe: bool) -> None:
+        """Apply trailing SL and one-shot partial TP for our open positions."""
+        if mt5 is None:
+            return
+        if not positions_map:
+            return
+        if (not bool(getattr(CFG, "trailing_stop_enabled", True))) and (not bool(getattr(CFG, "partial_tp_enabled", True))):
+            return
+
+        now_ts = int(time.time())
+        trail_retry_sec = max(1, int(getattr(CFG, "trailing_update_retry_sec", 60)))
+        partial_retry_sec = max(1, int(getattr(CFG, "partial_tp_retry_sec", 120)))
+        only_magic = bool(getattr(CFG, "position_time_stop_only_magic", True))
+        trailing_activation_r = float(max(0.0, float(getattr(CFG, "trailing_activation_r", 0.8))))
+        trailing_atr_mult = float(max(0.1, float(getattr(CFG, "trailing_atr_mult", 1.0))))
+        partial_tp_r = float(max(0.1, float(getattr(CFG, "partial_tp_r", 1.0))))
+        partial_fraction = float(min(0.95, max(0.05, float(getattr(CFG, "partial_tp_fraction", 0.5)))))
+
+        open_tickets: Dict[int, bool] = {}
+
+        for sym, positions in positions_map.items():
+            if not positions:
+                continue
+            grp = guess_group(sym)
+            info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
+            if info is None:
+                continue
+            point = float(getattr(info, "point", 0.0) or 0.0)
+            if point <= 0.0:
+                point = 1e-5
+            vol_min = float(getattr(info, "volume_min", 0.0) or 0.0)
+            vol_step = float(getattr(info, "volume_step", 0.0) or 0.0)
+
+            ind = None
+            try:
+                ind = self.strategy.last_indicators.get(symbol_base(sym))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                ind = None
+            atr_value = None
+            if isinstance(ind, dict):
+                try:
+                    atr_raw = float(ind.get("atr", 0.0) or 0.0)
+                    if np.isfinite(atr_raw) and atr_raw > 0.0:
+                        atr_value = atr_raw
+                except Exception:
+                    atr_value = None
+
+            for pos in positions:
+                try:
+                    ticket = int(getattr(pos, "ticket", 0) or 0)
+                except Exception:
+                    ticket = 0
+                if ticket <= 0:
+                    continue
+                open_tickets[ticket] = True
+
+                if only_magic:
+                    try:
+                        if int(getattr(pos, "magic", 0) or 0) != int(CFG.magic_number):
+                            continue
+                    except Exception:
+                        continue
+
+                pos_type = int(getattr(pos, "type", -1) or -1)
+                if pos_type == getattr(mt5, "ORDER_TYPE_BUY", -999):
+                    close_side = int(getattr(mt5, "ORDER_TYPE_SELL", -1))
+                    tick = self.execution_engine.tick(sym, grp, emergency=False)
+                    mkt = float(getattr(tick, "bid", 0.0) or 0.0) if tick is not None else 0.0
+                    direction = 1.0
+                elif pos_type == getattr(mt5, "ORDER_TYPE_SELL", -999):
+                    close_side = int(getattr(mt5, "ORDER_TYPE_BUY", -1))
+                    tick = self.execution_engine.tick(sym, grp, emergency=False)
+                    mkt = float(getattr(tick, "ask", 0.0) or 0.0) if tick is not None else 0.0
+                    direction = -1.0
+                else:
+                    continue
+                if mkt <= 0.0:
+                    continue
+
+                entry = float(getattr(pos, "price_open", 0.0) or 0.0)
+                if entry <= 0.0:
+                    continue
+                current_sl = float(getattr(pos, "sl", 0.0) or 0.0)
+                current_tp = float(getattr(pos, "tp", 0.0) or 0.0)
+                pos_volume = float(getattr(pos, "volume", 0.0) or 0.0)
+                if pos_volume <= 0.0:
+                    continue
+
+                risk_dist = abs(entry - current_sl)
+                if risk_dist <= 0.0:
+                    fallback_sl_pts = int(max(1, int(getattr(CFG, "fixed_sl_points", 1) or 1)))
+                    risk_dist = float(fallback_sl_pts) * float(point)
+                if atr_value is not None and atr_value > 0.0:
+                    risk_dist = max(risk_dist, 0.5 * float(atr_value))
+
+                favorable_move = (mkt - entry) if direction > 0 else (entry - mkt)
+                if favorable_move <= 0.0:
+                    continue
+
+                if bool(getattr(CFG, "partial_tp_enabled", True)) and (ticket not in self._partial_tp_done_tickets):
+                    last_partial_try = int(self._partial_close_attempt_ts.get(ticket, 0) or 0)
+                    if (now_ts - last_partial_try) >= partial_retry_sec and favorable_move >= (partial_tp_r * risk_dist):
+                        part_vol = partial_close_volume(pos_volume, partial_fraction, vol_min, vol_step)
+                        if part_vol > 0.0 and part_vol < pos_volume:
+                            req = {
+                                "action": mt5.TRADE_ACTION_DEAL,
+                                "symbol": sym,
+                                "volume": float(part_vol),
+                                "type": int(close_side),
+                                "position": int(ticket),
+                                "price": float(mkt),
+                                "deviation": int(getattr(CFG, "position_time_stop_deviation_points", 30)),
+                                "magic": CFG.magic_number,
+                                "comment": "PARTIAL_TP",
+                                "type_time": mt5.ORDER_TIME_GTC,
+                                "type_filling": mt5.ORDER_FILLING_IOC,
+                            }
+                            self._partial_close_attempt_ts[ticket] = now_ts
+                            res = self.execution_engine.order_send(sym, grp, req, emergency=False)
+                            ok = bool(res and getattr(res, "retcode", None) == mt5.TRADE_RETCODE_DONE)
+                            if ok:
+                                self._partial_tp_done_tickets[ticket] = True
+                                logging.info(
+                                    f"PARTIAL_TP_DONE symbol={sym} ticket={ticket} volume={part_vol:.4f} "
+                                    f"move={favorable_move:.6f} risk={risk_dist:.6f}"
+                                )
+                            else:
+                                logging.warning(
+                                    f"PARTIAL_TP_FAIL symbol={sym} ticket={ticket} volume={part_vol:.4f} "
+                                    f"retcode={getattr(res, 'retcode', None)} comment={getattr(res, 'comment', '')}"
+                                )
+
+                if not bool(getattr(CFG, "trailing_stop_enabled", True)):
+                    continue
+                last_trail_try = int(self._trail_update_attempt_ts.get(ticket, 0) or 0)
+                if (now_ts - last_trail_try) < trail_retry_sec:
+                    continue
+                if favorable_move < (trailing_activation_r * risk_dist):
+                    continue
+
+                trail_dist = float(risk_dist)
+                if atr_value is not None and atr_value > 0.0:
+                    trail_dist = max(float(risk_dist) * 0.5, float(atr_value) * trailing_atr_mult)
+                desired_sl = (mkt - trail_dist) if direction > 0 else (mkt + trail_dist)
+                improve = False
+                if direction > 0:
+                    improve = (current_sl <= 0.0) or (desired_sl > (current_sl + point))
+                else:
+                    improve = (current_sl <= 0.0) or (desired_sl < (current_sl - point))
+                if not improve:
+                    continue
+
+                req_mod = {
+                    "action": mt5.TRADE_ACTION_SLTP,
+                    "symbol": sym,
+                    "position": int(ticket),
+                    "sl": float(desired_sl),
+                    "tp": float(current_tp) if current_tp > 0.0 else 0.0,
+                    "magic": CFG.magic_number,
+                    "comment": "TRAIL_ATR",
+                }
+                self._trail_update_attempt_ts[ticket] = now_ts
+                res_mod = self.execution_engine.order_send(sym, grp, req_mod, emergency=False)
+                ok_mod = bool(res_mod and getattr(res_mod, "retcode", None) in (
+                    mt5.TRADE_RETCODE_DONE,
+                    mt5.TRADE_RETCODE_PLACED,
+                ))
+                if ok_mod:
+                    logging.info(
+                        f"TRAIL_UPDATE_DONE symbol={sym} ticket={ticket} sl_old={current_sl:.6f} "
+                        f"sl_new={desired_sl:.6f} move={favorable_move:.6f}"
+                    )
+                else:
+                    logging.warning(
+                        f"TRAIL_UPDATE_FAIL symbol={sym} ticket={ticket} sl_new={desired_sl:.6f} "
+                        f"retcode={getattr(res_mod, 'retcode', None)} comment={getattr(res_mod, 'comment', '')}"
+                    )
+
+        if open_tickets:
+            to_drop = [t for t in self._partial_tp_done_tickets.keys() if int(t) not in open_tickets]
+            for t in to_drop:
+                self._partial_tp_done_tickets.pop(t, None)
+                self._partial_close_attempt_ts.pop(t, None)
+                self._trail_update_attempt_ts.pop(t, None)
+        else:
+            self._partial_tp_done_tickets.clear()
+            self._partial_close_attempt_ts.clear()
+            self._trail_update_attempt_ts.clear()
 
     def _close_stale_positions(self, positions_map: Dict[str, List], global_mode: str, rollover_safe: bool) -> None:
         if mt5 is None:
@@ -4839,6 +5228,9 @@ class SafetyBot:
                 logging.critical("FORCE FLAT incomplete.")
             return
 
+        # Adaptive open-position management (partial TP + trailing SL) before stale-close logic.
+        self._manage_adaptive_exits(positions_map, global_mode=global_mode, rollover_safe=rollover_safe)
+
         # Position time-stop guard (scalp discipline): close stale positions deterministically.
         self._close_stale_positions(positions_map, global_mode=global_mode, rollover_safe=rollover_safe)
 
@@ -5194,6 +5586,30 @@ if __name__ == "__main__":
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)
     CFG.adx_threshold = _cfg_int("adx_threshold", CFG.adx_threshold)
+    CFG.adx_range_max = _cfg_int("adx_range_max", CFG.adx_range_max)
+    CFG.regime_switch_enabled = _cfg_bool("regime_switch_enabled", CFG.regime_switch_enabled)
+    CFG.mean_reversion_enabled = _cfg_bool("mean_reversion_enabled", CFG.mean_reversion_enabled)
+    CFG.structure_filter_enabled = _cfg_bool("structure_filter_enabled", CFG.structure_filter_enabled)
+    CFG.sma_structure_fast = _cfg_int("sma_structure_fast", CFG.sma_structure_fast)
+    CFG.sma_structure_slow = _cfg_int("sma_structure_slow", CFG.sma_structure_slow)
+    CFG.atr_exit_enabled = _cfg_bool("atr_exit_enabled", CFG.atr_exit_enabled)
+    CFG.atr_exit_use_override = _cfg_bool("atr_exit_use_override", CFG.atr_exit_use_override)
+    CFG.atr_sl_mult_hot = _cfg_float("atr_sl_mult_hot", CFG.atr_sl_mult_hot)
+    CFG.atr_sl_mult_warm = _cfg_float("atr_sl_mult_warm", CFG.atr_sl_mult_warm)
+    CFG.atr_sl_mult_eco = _cfg_float("atr_sl_mult_eco", CFG.atr_sl_mult_eco)
+    CFG.atr_tp_mult_hot = _cfg_float("atr_tp_mult_hot", CFG.atr_tp_mult_hot)
+    CFG.atr_tp_mult_warm = _cfg_float("atr_tp_mult_warm", CFG.atr_tp_mult_warm)
+    CFG.atr_tp_mult_eco = _cfg_float("atr_tp_mult_eco", CFG.atr_tp_mult_eco)
+    CFG.atr_sl_min_points = _cfg_int("atr_sl_min_points", CFG.atr_sl_min_points)
+    CFG.atr_tp_min_points = _cfg_int("atr_tp_min_points", CFG.atr_tp_min_points)
+    CFG.trailing_stop_enabled = _cfg_bool("trailing_stop_enabled", CFG.trailing_stop_enabled)
+    CFG.trailing_activation_r = _cfg_float("trailing_activation_r", CFG.trailing_activation_r)
+    CFG.trailing_atr_mult = _cfg_float("trailing_atr_mult", CFG.trailing_atr_mult)
+    CFG.trailing_update_retry_sec = _cfg_int("trailing_update_retry_sec", CFG.trailing_update_retry_sec)
+    CFG.partial_tp_enabled = _cfg_bool("partial_tp_enabled", CFG.partial_tp_enabled)
+    CFG.partial_tp_r = _cfg_float("partial_tp_r", CFG.partial_tp_r)
+    CFG.partial_tp_fraction = _cfg_float("partial_tp_fraction", CFG.partial_tp_fraction)
+    CFG.partial_tp_retry_sec = _cfg_int("partial_tp_retry_sec", CFG.partial_tp_retry_sec)
     CFG.learner_qa_gate_enabled = _cfg_bool("learner_qa_gate_enabled", CFG.learner_qa_gate_enabled)
     CFG.learner_qa_red_to_eco = _cfg_bool("learner_qa_red_to_eco", CFG.learner_qa_red_to_eco)
     CFG.canary_rollout_enabled = _cfg_bool("canary_rollout_enabled", CFG.canary_rollout_enabled)

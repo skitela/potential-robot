@@ -62,11 +62,30 @@ class ActivityController:
         ny_hour = now_ny().hour
         req = self.db.price_req_for_hour(grp, symbol, ny_hour, lookback_days=14)
         pnl = self.db.pnl_net_for_hour(grp, symbol, ny_hour, lookback_days=14)
-        if req < 50:
-            return 1.0
-        score = pnl / max(1.0, float(req))
-        x = np.tanh(score / 2.0)
-        return float(1.0 + 0.3 * x)
+        try:
+            strat = getattr(self.config, "strategy", {}) or {}
+        except Exception:
+            strat = {}
+
+        # Edge minus execution-cost proxy.
+        spread_penalty_w = float(strat.get("score_spread_penalty_weight", 0.030))
+        score_scale = float(strat.get("score_edge_scale", 2.0))
+        req_soft_cap = float(strat.get("score_req_soft_cap", 120.0))
+        req_penalty_w = float(strat.get("score_req_penalty_weight", 0.10))
+
+        spread_p80 = 0.0
+        try:
+            spread_p80 = float(self.db.get_p80_spread(symbol))
+        except Exception:
+            spread_p80 = 0.0
+
+        edge_per_req = float(pnl) / max(1.0, float(req))
+        edge_minus_cost = edge_per_req - (spread_penalty_w * max(0.0, spread_p80))
+        x = np.tanh(edge_minus_cost / max(1e-6, score_scale))
+
+        req_pressure = min(1.0, float(req) / max(1.0, req_soft_cap))
+        factor = 1.0 + 0.35 * x - req_penalty_w * req_pressure
+        return float(min(1.35, max(0.60, factor)))
 
     def mode(self, grp: str, symbol: str, rollover_safe: bool) -> str:
         if not rollover_safe:
