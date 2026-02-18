@@ -300,6 +300,7 @@ class CFG:
 
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
     group_price_shares = {"FX": 0.45, "METAL": 0.25, "INDEX": 0.30}
+    per_group: Dict[str, Dict[str, Any]] = {}
     group_borrow_fraction: float = 0.15  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
 
     # --- Strategia ---
@@ -642,12 +643,18 @@ def position_open_ts_utc(pos: Any) -> Optional[int]:
     """Best-effort extraction of MT5 position open timestamp (UTC epoch seconds)."""
     now_ts = int(time.time())
     candidates: List[int] = []
-    fields = (
+    # Use open-time fields first. update-time fields can move on modify/trailing,
+    # which would artificially "rejuvenate" position age and block time-stop exits.
+    open_fields = (
         ("time", 1),
         ("time_msc", 1000),
+    )
+    update_fields = (
         ("time_update", 1),
         ("time_update_msc", 1000),
     )
+
+    fields = open_fields + update_fields
     for field, div in fields:
         raw = getattr(pos, field, None)
         if raw is None:
@@ -666,6 +673,27 @@ def position_open_ts_utc(pos: Any) -> Optional[int]:
     valid = [t for t in candidates if (t >= 946684800 and t <= now_ts + 300)]
     if not valid:
         return None
+
+    # Prefer timestamps coming from open fields.
+    open_candidates: List[int] = []
+    for field, div in open_fields:
+        raw = getattr(pos, field, None)
+        if raw is None:
+            continue
+        try:
+            ts = int(float(raw))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            continue
+        if div > 1:
+            ts //= int(div)
+        if ts >= 946684800 and ts <= now_ts + 300:
+            open_candidates.append(int(ts))
+
+    if open_candidates:
+        return int(min(open_candidates))
+
+    # Last-resort fallback for brokers/feeds without open-time fields.
     return int(min(valid))
 
 
@@ -679,13 +707,67 @@ def position_age_sec(pos: Any, now_ts: Optional[int] = None) -> Optional[int]:
     return int(max(0, int(now_ts) - int(ts_open)))
 
 
-def position_time_stop_minutes_for_mode(mode: str) -> int:
+def _group_key(group: Optional[str]) -> str:
+    g = str(group or "").strip().upper()
+    if g in {"METALS", "XAU"}:
+        return "METAL"
+    if g in {"INDICES"}:
+        return "INDEX"
+    return g
+
+
+def _cfg_group_value(group: Optional[str], key: str, default: Any) -> Any:
+    try:
+        per_group = getattr(CFG, "per_group", {}) or {}
+        if not isinstance(per_group, dict):
+            return default
+        g = _group_key(group)
+        node = per_group.get(g, {})
+        if not isinstance(node, dict):
+            return default
+        return node.get(key, default)
+    except Exception:
+        return default
+
+
+def _cfg_group_int(group: Optional[str], key: str, default: int) -> int:
+    raw = _cfg_group_value(group, key, default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+def _cfg_group_float(group: Optional[str], key: str, default: float) -> float:
+    raw = _cfg_group_value(group, key, default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def _cfg_group_bool(group: Optional[str], key: str, default: bool) -> bool:
+    raw = _cfg_group_value(group, key, default)
+    if isinstance(raw, bool):
+        return bool(raw)
+    txt = str(raw).strip().lower()
+    if txt in {"1", "true", "yes", "y", "on"}:
+        return True
+    if txt in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def position_time_stop_minutes_for_mode(mode: str, grp: Optional[str] = None) -> int:
     m = str(mode).upper()
     if m == "HOT":
-        return int(max(0, int(getattr(CFG, "position_time_stop_hot_min", 0))))
+        base = int(max(0, int(getattr(CFG, "position_time_stop_hot_min", 0))))
+        return int(max(0, _cfg_group_int(grp, "position_time_stop_hot_min", base)))
     if m == "WARM":
-        return int(max(0, int(getattr(CFG, "position_time_stop_warm_min", 0))))
-    return int(max(0, int(getattr(CFG, "position_time_stop_eco_min", 0))))
+        base = int(max(0, int(getattr(CFG, "position_time_stop_warm_min", 0))))
+        return int(max(0, _cfg_group_int(grp, "position_time_stop_warm_min", base)))
+    base = int(max(0, int(getattr(CFG, "position_time_stop_eco_min", 0))))
+    return int(max(0, _cfg_group_int(grp, "position_time_stop_eco_min", base)))
 
 
 def resolve_adx_regime(adx_value: float, trend_min: float, range_max: float) -> str:
@@ -707,10 +789,10 @@ def resolve_adx_regime(adx_value: float, trend_min: float, range_max: float) -> 
     return "TRANSITION"
 
 
-def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float]) -> Tuple[int, int]:
+def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float], grp: Optional[str] = None) -> Tuple[int, int]:
     """Compute SL/TP in points using fixed or ATR-based exits."""
-    sl_pts = int(max(1, int(getattr(CFG, "fixed_sl_points", 1) or 1)))
-    tp_pts = int(max(1, int(getattr(CFG, "fixed_tp_points", 1) or 1)))
+    sl_pts = int(max(1, _cfg_group_int(grp, "fixed_sl_points", int(getattr(CFG, "fixed_sl_points", 1) or 1))))
+    tp_pts = int(max(1, _cfg_group_int(grp, "fixed_tp_points", int(getattr(CFG, "fixed_tp_points", 1) or 1))))
     if (not bool(getattr(CFG, "atr_exit_enabled", True))) or point <= 0.0 or atr_value is None:
         return sl_pts, tp_pts
     try:
@@ -722,14 +804,14 @@ def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float]) ->
 
     m = str(mode).upper()
     if m == "HOT":
-        sl_mult = float(getattr(CFG, "atr_sl_mult_hot", 1.2))
-        tp_mult = float(getattr(CFG, "atr_tp_mult_hot", 1.8))
+        sl_mult = _cfg_group_float(grp, "atr_sl_mult_hot", float(getattr(CFG, "atr_sl_mult_hot", 1.2)))
+        tp_mult = _cfg_group_float(grp, "atr_tp_mult_hot", float(getattr(CFG, "atr_tp_mult_hot", 1.8)))
     elif m == "WARM":
-        sl_mult = float(getattr(CFG, "atr_sl_mult_warm", 1.5))
-        tp_mult = float(getattr(CFG, "atr_tp_mult_warm", 2.2))
+        sl_mult = _cfg_group_float(grp, "atr_sl_mult_warm", float(getattr(CFG, "atr_sl_mult_warm", 1.5)))
+        tp_mult = _cfg_group_float(grp, "atr_tp_mult_warm", float(getattr(CFG, "atr_tp_mult_warm", 2.2)))
     else:
-        sl_mult = float(getattr(CFG, "atr_sl_mult_eco", 1.8))
-        tp_mult = float(getattr(CFG, "atr_tp_mult_eco", 2.6))
+        sl_mult = _cfg_group_float(grp, "atr_sl_mult_eco", float(getattr(CFG, "atr_sl_mult_eco", 1.8)))
+        tp_mult = _cfg_group_float(grp, "atr_tp_mult_eco", float(getattr(CFG, "atr_tp_mult_eco", 2.6)))
 
     atr_pts = float(atr) / float(point)
     if (not np.isfinite(atr_pts)) or atr_pts <= 0.0:
@@ -737,8 +819,8 @@ def adaptive_exit_points(mode: str, point: float, atr_value: Optional[float]) ->
 
     calc_sl = int(max(1, round(atr_pts * sl_mult)))
     calc_tp = int(max(1, round(atr_pts * tp_mult)))
-    min_sl = int(max(1, int(getattr(CFG, "atr_sl_min_points", 1) or 1)))
-    min_tp = int(max(1, int(getattr(CFG, "atr_tp_min_points", 1) or 1)))
+    min_sl = int(max(1, _cfg_group_int(grp, "atr_sl_min_points", int(getattr(CFG, "atr_sl_min_points", 1) or 1))))
+    min_tp = int(max(1, _cfg_group_int(grp, "atr_tp_min_points", int(getattr(CFG, "atr_tp_min_points", 1) or 1))))
 
     if bool(getattr(CFG, "atr_exit_use_override", True)):
         sl_pts = max(min_sl, calc_sl)
@@ -3547,6 +3629,70 @@ class ExecutionEngine:
             time.sleep(delay)
         return False
 
+    def force_flat_symbol(self, symbol: str, db: Persistence, retries: int, delay: float, deviation: int) -> bool:
+        target = str(symbol or "").strip()
+        if not target:
+            return False
+        logging.warning(f"EXECUTING FORCE FLAT SYMBOL symbol={target}")
+        for _ in range(int(retries)):
+            # emergency SYS positions_get
+            if not self.gov.consume("SYS", "__POSITIONS__", "positions_get", 1, emergency=True):
+                return False
+            all_pos = mt5.positions_get()
+            if not all_pos:
+                return True
+            positions = [p for p in all_pos if str(getattr(p, "symbol", "")) == target]
+            if not positions:
+                return True
+
+            ok_all = True
+            for pos in positions:
+                sym = str(getattr(pos, "symbol", target))
+                grp = guess_group(sym)
+                info = self.symbol_info_cached(sym, grp, db)
+                if info is None:
+                    ok_all = False
+                    continue
+                t = self.tick(sym, grp, emergency=True)
+                if t is None:
+                    ok_all = False
+                    continue
+                if t is not None and _TIME_ANCHOR is not None:
+                    try:
+                        _TIME_ANCHOR.update(dt.datetime.fromtimestamp(int(t.time), tz=UTC))
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                price = t.bid if pos.type == mt5.ORDER_TYPE_BUY else t.ask
+                if float(price or 0.0) <= 0.0:
+                    ok_all = False
+                    continue
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": sym,
+                    "volume": float(getattr(pos, "volume", 0.0) or 0.0),
+                    "type": close_type,
+                    "position": int(getattr(pos, "ticket", 0) or 0),
+                    "price": float(price),
+                    "deviation": int(deviation),
+                    "magic": CFG.magic_number,
+                    "comment": "TIME_STOP_FORCE_FLAT",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC,
+                }
+                if req["position"] <= 0 or req["volume"] <= 0.0:
+                    ok_all = False
+                    continue
+                res = self.order_send(sym, grp, req, emergency=True)
+                done_code = int(getattr(mt5, "TRADE_RETCODE_DONE", 10009))
+                if not res or int(getattr(res, "retcode", -1)) != done_code:
+                    ok_all = False
+
+            if ok_all:
+                return True
+            time.sleep(delay)
+        return False
+
 
 class MT5Client(ExecutionEngine):
     """Backward-compatible alias after extracting MT5 execution logic."""
@@ -3791,17 +3937,21 @@ class StandardStrategy:
         if cached and (now_ts - cached[0] < CFG.trend_cache_ttl_sec):
             return cached[1], cached[2], cached[3]
 
+        sma_trend_win = max(2, _cfg_group_int(grp, "sma_trend", int(getattr(CFG, "sma_trend", 200))))
+        sma_struct_fast_win = max(2, _cfg_group_int(grp, "sma_structure_fast", int(getattr(CFG, "sma_structure_fast", 55))))
+        sma_struct_slow_win = max(sma_struct_fast_win + 1, _cfg_group_int(grp, "sma_structure_slow", int(getattr(CFG, "sma_structure_slow", 200))))
+
         df_h4 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_h4, 260)
         df_d1 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_d1, 260)
-        slow_need = max(int(getattr(CFG, "sma_trend", 200)), int(getattr(CFG, "sma_structure_slow", 200)))
+        slow_need = max(int(sma_trend_win), int(sma_struct_slow_win))
         min_rows = max(220, slow_need + 20)
         if df_h4 is None or df_d1 is None or len(df_h4) < min_rows or len(df_d1) < min_rows:
             return "NEUTRAL", "NEUTRAL", "NEUTRAL"
 
-        df_h4["sma_trend"] = ta.trend.sma_indicator(df_h4["close"], window=CFG.sma_trend)
-        df_d1["sma_trend"] = ta.trend.sma_indicator(df_d1["close"], window=CFG.sma_trend)
-        df_h4["sma_struct_fast"] = ta.trend.sma_indicator(df_h4["close"], window=CFG.sma_structure_fast)
-        df_h4["sma_struct_slow"] = ta.trend.sma_indicator(df_h4["close"], window=CFG.sma_structure_slow)
+        df_h4["sma_trend"] = ta.trend.sma_indicator(df_h4["close"], window=sma_trend_win)
+        df_d1["sma_trend"] = ta.trend.sma_indicator(df_d1["close"], window=sma_trend_win)
+        df_h4["sma_struct_fast"] = ta.trend.sma_indicator(df_h4["close"], window=sma_struct_fast_win)
+        df_h4["sma_struct_slow"] = ta.trend.sma_indicator(df_h4["close"], window=sma_struct_slow_win)
 
         trend_h4 = "BUY" if float(df_h4["close"].iloc[-1]) > float(df_h4["sma_trend"].iloc[-1]) else "SELL"
         trend_d1 = "BUY" if float(df_d1["close"].iloc[-1]) > float(df_d1["sma_trend"].iloc[-1]) else "SELL"
@@ -3826,6 +3976,7 @@ class StandardStrategy:
                 pull = int(sch.get("m5_pull_sec_warm", CFG.m5_pull_sec_warm))
             else:
                 pull = int(sch.get("m5_pull_sec_hot", CFG.m5_pull_sec_hot))
+            pull = max(1, _cfg_group_int(grp, f"m5_pull_sec_{str(mode).lower()}", int(pull)))
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             pull = CFG.m5_pull_sec_eco if mode == "ECO" else (CFG.m5_pull_sec_warm if mode == "WARM" else CFG.m5_pull_sec_hot)
@@ -3850,8 +4001,12 @@ class StandardStrategy:
             return None
         self.cache.last_m5_bar_time[symbol] = last_bar
 
-        df["sma_fast"] = ta.trend.sma_indicator(df["close"], window=CFG.sma_fast)
-        adx = ta.trend.ADXIndicator(df["high"], df["low"], df["close"], window=CFG.adx_period)
+        sma_fast_win = max(2, _cfg_group_int(grp, "sma_fast", int(getattr(CFG, "sma_fast", 20))))
+        adx_period = max(2, _cfg_group_int(grp, "adx_period", int(getattr(CFG, "adx_period", 14))))
+        atr_period = max(2, _cfg_group_int(grp, "atr_period", int(getattr(CFG, "atr_period", 14))))
+
+        df["sma_fast"] = ta.trend.sma_indicator(df["close"], window=sma_fast_win)
+        adx = ta.trend.ADXIndicator(df["high"], df["low"], df["close"], window=adx_period)
         df["adx"] = adx.adx()
 
         atr = None
@@ -3860,7 +4015,7 @@ class StandardStrategy:
             tr2 = (df["high"] - df["close"].shift(1)).abs()
             tr3 = (df["low"] - df["close"].shift(1)).abs()
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            atr = float(tr.rolling(window=CFG.atr_period, min_periods=CFG.atr_period).mean().iloc[-1])
+            atr = float(tr.rolling(window=atr_period, min_periods=atr_period).mean().iloc[-1])
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             atr = None
@@ -3901,18 +4056,21 @@ class StandardStrategy:
         spread_pts = (tick.ask - tick.bid) / float(info.point)
         self.db.log_spread(symbol, spread_pts)
         p80 = self.db.get_p80_spread(symbol)
+        spread_gate_hot = _cfg_group_float(grp, "spread_gate_hot_factor", float(getattr(CFG, "spread_gate_hot_factor", 1.25)))
+        spread_gate_warm = _cfg_group_float(grp, "spread_gate_warm_factor", float(getattr(CFG, "spread_gate_warm_factor", 1.75)))
+        spread_gate_eco = _cfg_group_float(grp, "spread_gate_eco_factor", float(getattr(CFG, "spread_gate_eco_factor", 2.00)))
         # Execution green gate: scalp (HOT) is only allowed on tight spreads; if spread widens,
         # we either downgrade HOT->WARM (if still acceptable) or skip.
         if p80 > 0:
             m_upper = str(mode).upper()
-            if m_upper == "HOT" and spread_pts > float(CFG.spread_gate_hot_factor) * p80:
-                if spread_pts <= float(CFG.spread_gate_warm_factor) * p80:
+            if m_upper == "HOT" and spread_pts > float(spread_gate_hot) * p80:
+                if spread_pts <= float(spread_gate_warm) * p80:
                     mode = "WARM"
                 else:
                     return
-            elif m_upper == "WARM" and spread_pts > float(CFG.spread_gate_warm_factor) * p80:
+            elif m_upper == "WARM" and spread_pts > float(spread_gate_warm) * p80:
                 return
-            elif m_upper == "ECO" and spread_pts > float(CFG.spread_gate_eco_factor) * p80:
+            elif m_upper == "ECO" and spread_pts > float(spread_gate_eco) * p80:
                 return
 
         price = float(tick.ask if signal == "BUY" else tick.bid)
@@ -3933,7 +4091,7 @@ class StandardStrategy:
                 atr_value = float(ind.get("atr", 0.0))
             except Exception:
                 atr_value = None
-        sl_points, tp_points = adaptive_exit_points(mode, point, atr_value)
+        sl_points, tp_points = adaptive_exit_points(mode, point, atr_value, grp=grp)
         sl = price - sl_points * point if signal == "BUY" else price + sl_points * point
         tp = price + tp_points * point if signal == "BUY" else price - tp_points * point
 
@@ -3977,6 +4135,20 @@ class StandardStrategy:
 
         if volume is None:
             return
+        try:
+            vol_cap = float(_cfg_group_float(grp, "volume_cap_lots", 0.0))
+        except Exception:
+            vol_cap = 0.0
+        if vol_cap > 0.0:
+            volume = min(float(volume), float(vol_cap))
+            if vol_step > 0.0:
+                volume = math.floor(float(volume) / float(vol_step)) * float(vol_step)
+            volume = float(round(max(vol_min, min(vol_max, volume)), 8))
+            if volume < vol_min:
+                logging.info(
+                    f"SKIP_VOL_CAP symbol={symbol} grp={grp} vol_cap={vol_cap:.6f} vol_min={vol_min:.6f}"
+                )
+                return
         
         positions = self.engine.positions_get(emergency=False)
         if positions is None:
@@ -4082,6 +4254,7 @@ class StandardStrategy:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         comment = f"SBOT-EVT-{event_id}" if event_id else f"MT5_SAFETY_BOT_{CFG.BOT_VERSION}"
+        order_dev = int(max(1, _cfg_group_int(grp, "order_deviation_points", 20)))
 
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -4091,7 +4264,7 @@ class StandardStrategy:
             "price": float(price),
             "sl": float(sl),
             "tp": float(tp),
-            "deviation": 20,
+            "deviation": order_dev,
             "magic": CFG.magic_number,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
@@ -4188,10 +4361,12 @@ class StandardStrategy:
 
         regime = "TREND"
         if bool(getattr(CFG, "regime_switch_enabled", True)):
+            adx_threshold = _cfg_group_float(grp, "adx_threshold", float(getattr(CFG, "adx_threshold", 22)))
+            adx_range_max = _cfg_group_float(grp, "adx_range_max", float(getattr(CFG, "adx_range_max", 18)))
             regime = resolve_adx_regime(
                 adx_value,
-                float(getattr(CFG, "adx_threshold", 22)),
-                float(getattr(CFG, "adx_range_max", 18)),
+                adx_threshold,
+                adx_range_max,
             )
 
         signal, signal_reason = select_entry_signal(
@@ -4218,7 +4393,7 @@ class StandardStrategy:
                 point = float(getattr(info, 'point', 0.0) or 0.0)
                 if point == 0.0:
                     point = 1e-5
-                sl_points, tp_points = adaptive_exit_points(mode, point, float(ind.get("atr", 0.0) or 0.0))
+                sl_points, tp_points = adaptive_exit_points(mode, point, float(ind.get("atr", 0.0) or 0.0), grp=grp)
                 if signal == 'BUY':
                     sl = mid - sl_points * point
                     tp = mid + tp_points * point
@@ -4831,13 +5006,13 @@ class SafetyBot:
             return
 
         now_ts = int(time.time())
-        trail_retry_sec = max(1, int(getattr(CFG, "trailing_update_retry_sec", 60)))
-        partial_retry_sec = max(1, int(getattr(CFG, "partial_tp_retry_sec", 120)))
+        trail_retry_sec_base = max(1, int(getattr(CFG, "trailing_update_retry_sec", 60)))
+        partial_retry_sec_base = max(1, int(getattr(CFG, "partial_tp_retry_sec", 120)))
         only_magic = bool(getattr(CFG, "position_time_stop_only_magic", True))
-        trailing_activation_r = float(max(0.0, float(getattr(CFG, "trailing_activation_r", 0.8))))
-        trailing_atr_mult = float(max(0.1, float(getattr(CFG, "trailing_atr_mult", 1.0))))
-        partial_tp_r = float(max(0.1, float(getattr(CFG, "partial_tp_r", 1.0))))
-        partial_fraction = float(min(0.95, max(0.05, float(getattr(CFG, "partial_tp_fraction", 0.5)))))
+        trailing_activation_r_base = float(max(0.0, float(getattr(CFG, "trailing_activation_r", 0.8))))
+        trailing_atr_mult_base = float(max(0.1, float(getattr(CFG, "trailing_atr_mult", 1.0))))
+        partial_tp_r_base = float(max(0.1, float(getattr(CFG, "partial_tp_r", 1.0))))
+        partial_fraction_base = float(min(0.95, max(0.05, float(getattr(CFG, "partial_tp_fraction", 0.5)))))
 
         open_tickets: Dict[int, bool] = {}
 
@@ -4845,6 +5020,26 @@ class SafetyBot:
             if not positions:
                 continue
             grp = guess_group(sym)
+            trail_retry_sec = max(1, _cfg_group_int(grp, "trailing_update_retry_sec", trail_retry_sec_base))
+            partial_retry_sec = max(1, _cfg_group_int(grp, "partial_tp_retry_sec", partial_retry_sec_base))
+            trailing_activation_r = float(max(0.0, _cfg_group_float(grp, "trailing_activation_r", trailing_activation_r_base)))
+            trailing_atr_mult = float(max(0.1, _cfg_group_float(grp, "trailing_atr_mult", trailing_atr_mult_base)))
+            partial_tp_r = float(max(0.1, _cfg_group_float(grp, "partial_tp_r", partial_tp_r_base)))
+            partial_fraction = float(
+                min(0.95, max(0.05, _cfg_group_float(grp, "partial_tp_fraction", partial_fraction_base)))
+            )
+            trailing_enabled = _cfg_group_bool(grp, "trailing_stop_enabled", bool(getattr(CFG, "trailing_stop_enabled", True)))
+            partial_enabled = _cfg_group_bool(grp, "partial_tp_enabled", bool(getattr(CFG, "partial_tp_enabled", True)))
+            close_dev = int(
+                max(
+                    1,
+                    _cfg_group_int(
+                        grp,
+                        "position_time_stop_deviation_points",
+                        int(getattr(CFG, "position_time_stop_deviation_points", 30)),
+                    ),
+                )
+            )
             info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
             if info is None:
                 continue
@@ -4921,7 +5116,7 @@ class SafetyBot:
                 if favorable_move <= 0.0:
                     continue
 
-                if bool(getattr(CFG, "partial_tp_enabled", True)) and (ticket not in self._partial_tp_done_tickets):
+                if bool(partial_enabled) and (ticket not in self._partial_tp_done_tickets):
                     last_partial_try = int(self._partial_close_attempt_ts.get(ticket, 0) or 0)
                     if (now_ts - last_partial_try) >= partial_retry_sec and favorable_move >= (partial_tp_r * risk_dist):
                         part_vol = partial_close_volume(pos_volume, partial_fraction, vol_min, vol_step)
@@ -4933,7 +5128,7 @@ class SafetyBot:
                                 "type": int(close_side),
                                 "position": int(ticket),
                                 "price": float(mkt),
-                                "deviation": int(getattr(CFG, "position_time_stop_deviation_points", 30)),
+                                "deviation": int(close_dev),
                                 "magic": CFG.magic_number,
                                 "comment": "PARTIAL_TP",
                                 "type_time": mt5.ORDER_TIME_GTC,
@@ -4954,7 +5149,7 @@ class SafetyBot:
                                     f"retcode={getattr(res, 'retcode', None)} comment={getattr(res, 'comment', '')}"
                                 )
 
-                if not bool(getattr(CFG, "trailing_stop_enabled", True)):
+                if not bool(trailing_enabled):
                     continue
                 last_trail_try = int(self._trail_update_attempt_ts.get(ticket, 0) or 0)
                 if (now_ts - last_trail_try) < trail_retry_sec:
@@ -5022,29 +5217,45 @@ class SafetyBot:
         now_ts = int(time.time())
         retry_sec = max(1, int(getattr(CFG, "position_time_stop_retry_sec", 120)))
         only_magic = bool(getattr(CFG, "position_time_stop_only_magic", True))
-        deviation = int(
-            max(
-                1,
-                int(
-                    getattr(
-                        CFG,
-                        "position_time_stop_deviation_points",
-                        getattr(CFG, "kill_close_deviation_points", 30),
-                    )
-                ),
-            )
-        )
         for sym, positions in positions_map.items():
             if not positions:
                 continue
             grp = guess_group(sym)
+            deviation = int(
+                max(
+                    1,
+                    _cfg_group_int(
+                        grp,
+                        "position_time_stop_deviation_points",
+                        int(
+                            getattr(
+                                CFG,
+                                "position_time_stop_deviation_points",
+                                getattr(CFG, "kill_close_deviation_points", 30),
+                            )
+                        ),
+                    ),
+                )
+            )
             mode = self._effective_mode_for_symbol(grp, symbol_base(sym), global_mode, rollover_safe)
-            max_hold_min = position_time_stop_minutes_for_mode(mode)
+            max_hold_min = position_time_stop_minutes_for_mode(mode, grp=grp)
             if max_hold_min <= 0:
                 continue
             max_hold_sec = int(max_hold_min) * 60
+            cnt_total = 0
+            cnt_skip_retry = 0
+            cnt_skip_magic = 0
+            cnt_skip_age = 0
+            cnt_skip_type = 0
+            cnt_skip_notick = 0
+            cnt_skip_vol = 0
+            cnt_stale_due = 0
+            cnt_attempt = 0
+            cnt_done = 0
+            cnt_fail = 0
 
             for pos in positions:
+                cnt_total += 1
                 try:
                     ticket = int(getattr(pos, "ticket", 0) or 0)
                 except Exception as e:
@@ -5053,6 +5264,7 @@ class SafetyBot:
                 if ticket > 0:
                     last_try = int(self._position_close_attempt_ts.get(ticket, 0) or 0)
                     if (now_ts - last_try) < retry_sec:
+                        cnt_skip_retry += 1
                         continue
 
                 if only_magic:
@@ -5062,11 +5274,14 @@ class SafetyBot:
                         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                         magic = 0
                     if magic != int(CFG.magic_number):
+                        cnt_skip_magic += 1
                         continue
 
                 age_s = position_age_sec(pos, now_ts=now_ts)
                 if age_s is None or int(age_s) < int(max_hold_sec):
+                    cnt_skip_age += 1
                     continue
+                cnt_stale_due += 1
 
                 pos_type = int(getattr(pos, "type", -1) or -1)
                 if pos_type == getattr(mt5, "ORDER_TYPE_BUY", -999):
@@ -5076,8 +5291,10 @@ class SafetyBot:
                     close_type = getattr(mt5, "ORDER_TYPE_BUY", None)
                     side_price = float(getattr(self.execution_engine.tick(sym, grp, emergency=False), "ask", 0.0) or 0.0)
                 else:
+                    cnt_skip_type += 1
                     continue
                 if close_type is None or side_price <= 0.0:
+                    cnt_skip_notick += 1
                     logging.warning(
                         f"TIME_STOP_CLOSE_SKIP symbol={sym} ticket={ticket} reason=NO_TICK_OR_TYPE age_s={int(age_s)}"
                     )
@@ -5085,6 +5302,7 @@ class SafetyBot:
 
                 vol = float(getattr(pos, "volume", 0.0) or 0.0)
                 if vol <= 0.0:
+                    cnt_skip_vol += 1
                     continue
 
                 req = {
@@ -5101,19 +5319,50 @@ class SafetyBot:
                     "type_filling": mt5.ORDER_FILLING_IOC,
                 }
 
+                cnt_attempt += 1
                 if ticket > 0:
                     self._position_close_attempt_ts[ticket] = now_ts
                 res = self.execution_engine.order_send(sym, grp, req, emergency=False)
                 ok = bool(res and getattr(res, "retcode", None) == mt5.TRADE_RETCODE_DONE)
                 if ok:
+                    cnt_done += 1
                     logging.warning(
                         f"TIME_STOP_CLOSE_DONE symbol={sym} ticket={ticket} age_s={int(age_s)} mode={mode} hold_min={int(max_hold_min)}"
                     )
                 else:
+                    cnt_fail += 1
                     logging.warning(
                         f"TIME_STOP_CLOSE_FAIL symbol={sym} ticket={ticket} age_s={int(age_s)} mode={mode} "
                         f"retcode={getattr(res, 'retcode', None)} comment={getattr(res, 'comment', '')}"
                     )
+            if cnt_total > 0:
+                logging.info(
+                    f"TIME_STOP_AUDIT symbol={sym} mode={mode} hold_min={int(max_hold_min)} total={cnt_total} "
+                    f"skip_magic={cnt_skip_magic} skip_age={cnt_skip_age} skip_retry={cnt_skip_retry} "
+                    f"skip_type={cnt_skip_type} skip_notick={cnt_skip_notick} skip_vol={cnt_skip_vol} "
+                    f"stale_due={cnt_stale_due} attempt={cnt_attempt} done={cnt_done} fail={cnt_fail}"
+                )
+            # Safety fallback: stale positions detected, but regular close path made no attempts.
+            if cnt_stale_due > 0 and cnt_attempt == 0:
+                try:
+                    logging.warning(
+                        f"TIME_STOP_FALLBACK_TRIGGER symbol={sym} stale_due={cnt_stale_due} "
+                        f"reason=no_regular_close_attempt"
+                    )
+                    ok_flat = bool(
+                        self.execution_engine.force_flat_symbol(
+                            symbol=sym,
+                            db=self.db,
+                            retries=max(1, int(CFG.close_retries)),
+                            delay=float(CFG.close_retry_delay_sec),
+                            deviation=int(deviation),
+                        )
+                    )
+                    logging.warning(
+                        f"TIME_STOP_FALLBACK_RESULT symbol={sym} stale_due={cnt_stale_due} ok={int(ok_flat)}"
+                    )
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _collect_black_swan_inputs(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         vols: Dict[str, float] = {}
@@ -5370,6 +5619,18 @@ class SafetyBot:
         self.poll_deals()
         self_heal_signal = self._evaluate_self_heal()
         canary_signal = self._evaluate_canary_rollout()
+        # If canary is disabled in config, do not keep stale canary backoff from prior runs.
+        if not bool(getattr(CFG, "canary_rollout_enabled", True)):
+            try:
+                gb_until = int(self.db.get_global_backoff_until_ts())
+                gb_reason = str(self.db.get_global_backoff_reason() or "")
+                if gb_until > 0 and gb_reason.startswith("canary:"):
+                    self.db.set_global_backoff(until_ts=0, reason="canary_disabled_autoclear")
+                    logging.info(
+                        f"GLOBAL_BACKOFF_AUTOCLR reason=canary_disabled prev_until_ts={gb_until} prev_reason={gb_reason}"
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         drift_signal = self._evaluate_drift()
         learner_qa_light = self._read_learner_qa_light()
 
@@ -5411,7 +5672,8 @@ class SafetyBot:
                     self.incident_journal.note_guard(
                         guard="canary_rollout",
                         reason=";".join(canary_signal.reasons),
-                        severity="ERROR",
+                        # Avoid self-reinforcing INCIDENTS loop in canary gating.
+                        severity="WARN",
                         category="model",
                     )
             except Exception as e:
@@ -5783,6 +6045,23 @@ if __name__ == "__main__":
     
     config = ConfigManager(_paths["config"])
     strategy_cfg = getattr(config, "strategy", {}) or {}
+    raw_per_group = strategy_cfg.get("per_group", {}) if isinstance(strategy_cfg, dict) else {}
+    if raw_per_group is None:
+        raw_per_group = {}
+    if not isinstance(raw_per_group, dict):
+        raise SystemExit("CONFIG_STRATEGY_FAIL: per_group must be object")
+
+    norm_per_group: Dict[str, Dict[str, Any]] = {}
+    for gk, gv in raw_per_group.items():
+        g = _group_key(gk)
+        if g not in {"FX", "INDEX", "METAL"}:
+            continue
+        if gv is None:
+            continue
+        if not isinstance(gv, dict):
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: per_group.{g} must be object")
+        norm_per_group[g] = dict(gv)
+    CFG.per_group = norm_per_group
 
     def _cfg_int(key: str, fallback: int | None = None) -> int:
         raw = strategy_cfg.get(key, fallback)

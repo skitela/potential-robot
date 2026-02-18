@@ -3,6 +3,7 @@ param(
     [int]$StartTimeoutSec = 45,
     [int]$ObserveSec = 20,
     [int]$PollSec = 2,
+    [int]$ProgressEverySec = 60,
     [switch]$StopFirst,
     [ValidateSet("full", "safety_only")]
     [string]$Profile = "full"
@@ -59,8 +60,51 @@ $bootDir = Join-Path $runtimeRoot "LOGS\bootstrap"
 New-Item -ItemType Directory -Force -Path $bootDir | Out-Null
 $runDir = Join-Path $runtimeRoot "RUN"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+$progressPath = Join-Path $runDir "start_online_smart_progress.json"
+$script:lastProgressEmit = $null
+
+function Write-ProgressState {
+    param(
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [hashtable]$Extra = @{}
+    )
+    $elapsedMs = $null
+    $swVar = Get-Variable -Name sw -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $swVar -and $null -ne $swVar.Value) {
+        try { $elapsedMs = [int]$swVar.Value.ElapsedMilliseconds } catch { $elapsedMs = $null }
+    }
+    $payload = [ordered]@{
+        ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+        root = $runtimeRoot
+        profile = $Profile
+        phase = $Phase
+        message = $Message
+        elapsed_ms = $elapsedMs
+        start_timeout_sec = [int]$StartTimeoutSec
+        observe_sec = [int]$ObserveSec
+        poll_sec = [int]$PollSec
+        progress_every_sec = [int]$ProgressEverySec
+    }
+    if ($null -ne $Extra) {
+        foreach ($key in $Extra.Keys) {
+            $payload[$key] = $Extra[$key]
+        }
+    }
+    Write-JsonAtomic -Path $progressPath -Object $payload
+
+    $now = Get-Date
+    $emitEvery = [Math]::Max(1, [int]$ProgressEverySec)
+    if (($null -eq $script:lastProgressEmit) -or (($now - $script:lastProgressEmit).TotalSeconds -ge $emitEvery)) {
+        Write-Output ("SMART_START_PROGRESS phase={0} elapsed_ms={1} msg={2}" -f $Phase, ($payload.elapsed_ms), $Message)
+        $script:lastProgressEmit = $now
+    }
+}
+
+Write-ProgressState -Phase "init" -Message "bootstrap begin"
 
 if ($StopFirst) {
+    Write-ProgressState -Phase "stop_first" -Message "stopping current profile before start"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $systemControl -Action stop -Root $runtimeRoot -Profile $Profile | Out-Null
 }
 
@@ -77,14 +121,29 @@ $proc = Start-Process -FilePath powershell -ArgumentList @(
     "-Profile", $Profile
 ) -WorkingDirectory $runtimeRoot -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
 
+Write-ProgressState -Phase "start_wait" -Message ("spawned SYSTEM_CONTROL pid={0}" -f [int]$proc.Id) -Extra @{
+    system_control_pid = [int]$proc.Id
+}
+
 $deadline = (Get-Date).AddSeconds([Math]::Max(5, $StartTimeoutSec))
 $timedOut = $false
 while ((Get-Date) -lt $deadline) {
-    if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) { break }
+    $alive = [bool](Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)
+    if (-not $alive) { break }
+    $remaining = [int][Math]::Max(0, (($deadline - (Get-Date)).TotalSeconds))
+    Write-ProgressState -Phase "start_wait" -Message ("waiting for SYSTEM_CONTROL pid={0}, remaining={1}s" -f [int]$proc.Id, $remaining) -Extra @{
+        system_control_pid = [int]$proc.Id
+        process_alive = [bool]$alive
+        remaining_sec = [int]$remaining
+    }
     Start-Sleep -Milliseconds 500
 }
 if (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue) {
     $timedOut = $true
+    Write-ProgressState -Phase "start_timeout" -Message ("timeout reached, killing SYSTEM_CONTROL pid={0}" -f [int]$proc.Id) -Extra @{
+        system_control_pid = [int]$proc.Id
+        process_alive = $true
+    }
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 }
 $sw.Stop()
@@ -130,6 +189,12 @@ while ((Get-Date) -lt $obsUntil) {
         }
     }
     $timeline += $snap
+    $aliveNow = @($snap.components | Where-Object { $_.running_heartbeat }).Count
+    Write-ProgressState -Phase "observe" -Message ("heartbeat observation alive={0}/{1}" -f [int]$aliveNow, [int]$watch.Count) -Extra @{
+        system_control_pid = [int]$proc.Id
+        alive_heartbeat_count = [int]$aliveNow
+        observed_components = [int]$watch.Count
+    }
     Start-Sleep -Seconds ([Math]::Max(1, $PollSec))
 }
 
@@ -170,6 +235,12 @@ $report = [ordered]@{
 
 $reportPath = Join-Path $runtimeRoot "RUN\start_online_smart_report.json"
 Write-JsonAtomic -Path $reportPath -Object $report
+Write-ProgressState -Phase "done" -Message ("final={0}" -f $final) -Extra @{
+    final_status = $final
+    timed_out = [bool]$timedOut
+    exit_code = $exitCode
+    report_path = $reportPath
+}
 
 Write-Output ("SMART_START status={0} elapsed_ms={1} timed_out={2} exit_code={3} alive={4}" -f $final, [int]$sw.ElapsedMilliseconds, [int]([bool]$timedOut), $exitCode, [int]$aliveCount)
 Write-Output ("SMART_START report={0}" -f $reportPath)

@@ -11,6 +11,7 @@ param(
 Set-StrictMode -Version Latest
 
 $ErrorActionPreference = "Stop"
+$Script:WmiOperationTimeoutSec = 2
 
 function Resolve-Root {
     param([string]$InputRoot = "")
@@ -82,7 +83,7 @@ function Get-ComponentProcessIds {
     $ids = @()
     try {
         $binPath = (Join-Path $RuntimeRoot ("BIN\" + $ScriptName)).Replace("\", "\\")
-        $procs = Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+        $procs = Get-CimInstance Win32_Process -OperationTimeoutSec $Script:WmiOperationTimeoutSec -ErrorAction Stop | Where-Object {
             $_.CommandLine -and (
                 $_.CommandLine -like "*$binPath*" -or
                 $_.CommandLine -like "*" + $ScriptName + "*"
