@@ -38,3 +38,15 @@ F. Jeśli bramki FAIL → hotfix nie przechodzi do active.
 
 Uwaga:
 - Ten runbook opisuje proces. Implementacja narzędzi (diagnostyka / apply hotfix) musi respektować zakaz autonomicznych napraw i zakaz modyfikacji CORE.
+
+6) Bramka prelive (nowe kontrole spojnosci i bezpieczenstwa)
+A. Przed startem online uruchom:
+   - python -B TOOLS\prelive_go_nogo.py --root C:\OANDA_MT5_SYSTEM
+B. Weryfikuj, ze checks zawiera:
+   - DEPENDENCY_REQUIREMENTS
+   - DEPENDENCY_LOCAL_LINKS
+C. Jezeli ktorykolwiek z powyzszych checkow ma ok=false -> NO_GO (nie uruchamiac online).
+D. Dodatkowa bramka awaryjna (manual):
+   - python TOOLS\dependency_hygiene.py --root . --fail-on-missing-requirements --fail-on-local-unresolved
+E. Ochrona logow przed wyciekiem danych:
+   - python -B -m unittest tests.test_no_sensitive_log_literals -v
