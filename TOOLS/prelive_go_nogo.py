@@ -10,6 +10,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+try:
+    from TOOLS import dependency_hygiene as _dep_hygiene
+except Exception:
+    _dep_hygiene = None  # type: ignore
 
 UTC = dt.timezone.utc
 
@@ -102,6 +106,36 @@ def _incident_counts(log_path: Path, lookback_sec: int = 24 * 3600) -> Dict[str,
     return out
 
 
+def _dependency_hygiene_check(root: Path) -> Dict[str, Any]:
+    req = root / "requirements.txt"
+    if not req.exists():
+        return {
+            "ok_requirements": True,
+            "ok_local_links": True,
+            "missing_requirements": [],
+            "local_unresolved_total": 0,
+            "status": "SKIPPED_NO_REQUIREMENTS",
+        }
+    if _dep_hygiene is None:
+        return {
+            "ok_requirements": False,
+            "ok_local_links": False,
+            "missing_requirements": ["DEPENDENCY_HYGIENE_IMPORT_FAIL"],
+            "local_unresolved_total": 1,
+            "status": "IMPORT_FAIL",
+        }
+    rep = _dep_hygiene.detect_hygiene(root, _dep_hygiene.REQUIREMENT_FILES_DEFAULT)
+    missing = list(rep.get("missing_requirements") or [])
+    unresolved = int(rep.get("local_unresolved_total") or 0)
+    return {
+        "ok_requirements": len(missing) == 0,
+        "ok_local_links": unresolved == 0,
+        "missing_requirements": missing,
+        "local_unresolved_total": unresolved,
+        "status": str(rep.get("status") or "UNKNOWN"),
+    }
+
+
 def evaluate_prelive(root: Path) -> Dict[str, Any]:
     root = Path(root)
     meta = root / "META"
@@ -144,6 +178,7 @@ def evaluate_prelive(root: Path) -> Dict[str, Any]:
     cold_start_flag_path = run / "ALLOW_COLD_START_CANARY.flag"
     cold_start_flag = bool(_flag_enabled(cold_start_flag_path))
     cold_start_override = False
+    dep = _dependency_hygiene_check(root)
     if cold_start_candidate and cold_start_flag:
         crit = int(incidents.get("critical") or 0)
         errs = int(incidents.get("error_or_worse") or 0)
@@ -183,6 +218,20 @@ def evaluate_prelive(root: Path) -> Dict[str, Any]:
     )
     checks.append(
         {
+            "id": "DEPENDENCY_REQUIREMENTS",
+            "ok": bool(dep.get("ok_requirements")),
+            "value": list(dep.get("missing_requirements") or []),
+        }
+    )
+    checks.append(
+        {
+            "id": "DEPENDENCY_LOCAL_LINKS",
+            "ok": bool(dep.get("ok_local_links")),
+            "value": int(dep.get("local_unresolved_total") or 0),
+        }
+    )
+    checks.append(
+        {
             "id": "COLD_START_CANARY_OVERRIDE",
             "ok": (not cold_start_candidate) or bool(cold_start_override),
             "value": (
@@ -211,6 +260,7 @@ def evaluate_prelive(root: Path) -> Dict[str, Any]:
         "n_total": int(n_total),
         "anti_overfit_reasons": sorted(reasons),
         "incidents_24h": incidents,
+        "dependency_hygiene": dep,
         "canary_promoted": canary_promoted,
         "cold_start_candidate": bool(cold_start_candidate),
         "cold_start_override": bool(cold_start_override),

@@ -105,6 +105,19 @@ class TestPreliveGoNoGo(unittest.TestCase):
         self.assertFalse(bool(rep.get("go")))
         self.assertFalse(bool(rep.get("cold_start_override")))
 
+    def test_dependency_hygiene_skips_without_requirements_file(self) -> None:
+        root = self._tmpdir()
+        learner = {
+            "ts_utc": "2099-01-01T00:00:00Z",
+            "ttl_sec": 3600,
+            "qa_light": "GREEN",
+        }
+        (root / "META" / "learner_advice.json").write_text(json.dumps(learner), encoding="utf-8")
+        rep = prelive_go_nogo.evaluate_prelive(root)
+        dep = dict(rep.get("dependency_hygiene") or {})
+        self.assertEqual("SKIPPED_NO_REQUIREMENTS", str(dep.get("status")))
+        self.assertTrue(bool(rep.get("go")))
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
