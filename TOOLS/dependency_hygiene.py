@@ -8,7 +8,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 
 REQUIREMENT_FILES_DEFAULT = [
@@ -49,6 +49,24 @@ def _normalize_req_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name.strip().lower())
 
 
+def iter_python_files(root: Path) -> Iterable[Path]:
+    excluded_prefixes = (
+        "EVIDENCE/",
+        "DIAG/",
+        "TMP_AUDIT_IO/",
+        ".tmp/",
+        ".tmp_py/",
+        ".tmp_pycache/",
+    )
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith(excluded_prefixes):
+            continue
+        if "__pycache__" in rel:
+            continue
+        yield path
+
+
 def parse_requirements(paths: Iterable[Path]) -> Set[str]:
     out: Set[str] = set()
     for path in paths:
@@ -68,14 +86,7 @@ def parse_requirements(paths: Iterable[Path]) -> Set[str]:
 
 def parse_imports(root: Path) -> Set[str]:
     imports: Set[str] = set()
-    for path in root.rglob("*.py"):
-        rel = path.relative_to(root).as_posix()
-        if rel.startswith("EVIDENCE/"):
-            continue
-        if rel.startswith("DIAG/"):
-            continue
-        if "__pycache__" in rel:
-            continue
+    for path in iter_python_files(root):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"), filename=str(path))
         except SyntaxError:
@@ -92,14 +103,7 @@ def parse_imports(root: Path) -> Set[str]:
 
 def parse_local_modules(root: Path) -> Set[str]:
     mods: Set[str] = set()
-    for path in root.rglob("*.py"):
-        rel = path.relative_to(root).as_posix()
-        if rel.startswith("EVIDENCE/"):
-            continue
-        if rel.startswith("DIAG/"):
-            continue
-        if "__pycache__" in rel:
-            continue
+    for path in iter_python_files(root):
         stem = path.stem.strip()
         if stem and stem != "__init__":
             mods.add(stem)
@@ -108,6 +112,125 @@ def parse_local_modules(root: Path) -> Set[str]:
         if pkg_init.exists():
             mods.add(pkg)
     return mods
+
+
+def module_name_from_path(root: Path, path: Path) -> str:
+    rel = path.relative_to(root).as_posix()
+    if rel.endswith("/__init__.py"):
+        rel = rel[: -len("/__init__.py")]
+    elif rel.endswith(".py"):
+        rel = rel[:-3]
+    return rel.replace("/", ".")
+
+
+def build_module_index(root: Path) -> Set[str]:
+    out: Set[str] = set()
+    for path in iter_python_files(root):
+        mod = module_name_from_path(root, path)
+        if mod:
+            out.add(mod)
+    return out
+
+
+def _resolve_relative_module(current_module: str, module: Optional[str], level: int) -> Optional[str]:
+    if level <= 0:
+        return module
+    parts = current_module.split(".")
+    # current_module is a module path (not package path), so strip leaf first.
+    pkg = parts[:-1]
+    if level > len(pkg):
+        return None
+    base = pkg[: len(pkg) - level + 1]
+    mod_tail = (module or "").strip()
+    if mod_tail:
+        return ".".join(base + [mod_tail])
+    return ".".join(base)
+
+
+def _module_exists(target: str, module_index: Set[str]) -> bool:
+    if not target:
+        return False
+    if target in module_index:
+        return True
+    # allow package imports (e.g. "BIN" if "BIN.safetybot" exists)
+    pref = target + "."
+    return any(mod.startswith(pref) for mod in module_index)
+
+
+def analyze_local_links(root: Path) -> Dict[str, Any]:
+    module_index = build_module_index(root)
+    local_prefixes = ("BIN", "TOOLS", "tests")
+    edges: List[Dict[str, str]] = []
+    unresolved: List[Dict[str, Any]] = []
+
+    for path in iter_python_files(root):
+        current_module = module_name_from_path(root, path)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"), filename=str(path))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    target = str(alias.name or "").strip()
+                    if not target.startswith(local_prefixes):
+                        continue
+                    if _module_exists(target, module_index):
+                        edges.append({"src": current_module, "dst": target, "kind": "import"})
+                    else:
+                        unresolved.append(
+                            {
+                                "src": current_module,
+                                "import": target,
+                                "line": int(getattr(node, "lineno", 0) or 0),
+                                "kind": "import",
+                            }
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                resolved = _resolve_relative_module(current_module, node.module, int(getattr(node, "level", 0) or 0))
+                if not resolved:
+                    continue
+                if not resolved.startswith(local_prefixes):
+                    continue
+                if _module_exists(resolved, module_index):
+                    edges.append({"src": current_module, "dst": resolved, "kind": "from"})
+                else:
+                    unresolved.append(
+                        {
+                            "src": current_module,
+                            "import": resolved,
+                            "line": int(getattr(node, "lineno", 0) or 0),
+                            "kind": "from",
+                        }
+                    )
+
+    # Deduplicate while preserving deterministic order.
+    dedup_edges: List[Dict[str, str]] = []
+    seen_edges: Set[str] = set()
+    for row in sorted(edges, key=lambda x: (x["src"], x["dst"], x["kind"])):
+        key = f"{row['src']}|{row['dst']}|{row['kind']}"
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        dedup_edges.append(row)
+
+    dedup_unresolved: List[Dict[str, Any]] = []
+    seen_unresolved: Set[str] = set()
+    for row in sorted(unresolved, key=lambda x: (x["src"], x["import"], int(x["line"]), x["kind"])):
+        key = f"{row['src']}|{row['import']}|{row['line']}|{row['kind']}"
+        if key in seen_unresolved:
+            continue
+        seen_unresolved.add(key)
+        dedup_unresolved.append(row)
+
+    return {
+        "module_index_total": len(module_index),
+        "local_prefixes": list(local_prefixes),
+        "edges_total": len(dedup_edges),
+        "unresolved_total": len(dedup_unresolved),
+        "edges": dedup_edges,
+        "unresolved": dedup_unresolved,
+    }
 
 
 def detect_hygiene(root: Path, requirement_files: List[str], *, include_tooling: bool = False) -> Dict[str, object]:
@@ -173,6 +296,8 @@ def detect_hygiene(root: Path, requirement_files: List[str], *, include_tooling:
         and _normalize_req_name(name) not in normalized_locals
     )
 
+    local_links = analyze_local_links(root)
+
     return {
         "status": "PASS",
         "ts_utc": utc_now_iso(),
@@ -187,6 +312,10 @@ def detect_hygiene(root: Path, requirement_files: List[str], *, include_tooling:
         "third_party_imports": third_party_imports,
         "missing_requirements": missing_requirements,
         "local_modules_detected": sorted(local_modules),
+        "local_module_index_total": int(local_links.get("module_index_total", 0)),
+        "local_link_edges_total": int(local_links.get("edges_total", 0)),
+        "local_unresolved_total": int(local_links.get("unresolved_total", 0)),
+        "local_unresolved": list(local_links.get("unresolved", [])),
     }
 
 
