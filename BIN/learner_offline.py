@@ -271,6 +271,97 @@ def parse_ts_utc(s: str) -> Optional[dt.datetime]:
         cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
         return None
 
+def load_external_replay_summary(meta_dir: Path, *, max_age_sec: int) -> Optional[Dict[str, Any]]:
+    """Load offline replay summary produced by TOOLS/offline_replay_analytics.py.
+    Returns None when missing/stale/invalid.
+    """
+    path = Path(meta_dir) / "offline_replay_summary.json"
+    if not path.exists():
+        return None
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(obj, dict):
+            return None
+        ts = parse_ts_utc(str(obj.get("ts_utc") or ""))
+        if ts is None:
+            return None
+        age = (_now_utc() - ts).total_seconds()
+        if age < 0:
+            age = 0.0
+        if age > float(max_age_sec):
+            return None
+        return obj
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        return None
+
+def apply_external_replay_blend(
+    meta_advice: Dict[str, Any],
+    external_summary: Dict[str, Any],
+    *,
+    weight: float,
+) -> int:
+    """Optional tiny blend of rank score with external replay score.
+    Returns number of rank rows updated.
+    """
+    if float(weight) <= 0.0:
+        return 0
+    ranks = meta_advice.get("ranks")
+    if not isinstance(ranks, list) or not ranks:
+        return 0
+    src = external_summary.get("symbol_scores")
+    if not isinstance(src, list) or not src:
+        return 0
+
+    ext_map: Dict[str, float] = {}
+    for item in src:
+        if not isinstance(item, dict):
+            continue
+        sym = str(item.get("symbol") or "").strip().upper()
+        if not sym:
+            continue
+        try:
+            sc = float(item.get("replay_score") or 0.0)
+        except Exception:
+            continue
+        if not math.isfinite(sc):
+            continue
+        # Keep external component bounded to avoid unstable rank jumps.
+        sc = max(-5.0, min(5.0, sc))
+        ext_map[sym] = sc
+
+    if not ext_map:
+        return 0
+
+    w = max(0.0, min(1.0, float(weight)))
+    touched = 0
+    for row in ranks:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or "").strip().upper()
+        if sym not in ext_map:
+            continue
+        try:
+            base = float(row.get("score") or 0.0)
+        except Exception:
+            base = 0.0
+        blend = (1.0 - w) * base + w * float(ext_map[sym])
+        row["score"] = round(float(blend), 12)
+        touched += 1
+
+    if touched > 0:
+        ranks.sort(
+            key=lambda d: (
+                float(d.get("score", 0.0)),
+                float(d.get("es95", 0.0)),
+                -float(d.get("mdd", 0.0)),
+                int(d.get("n", 0)),
+            ),
+            reverse=True,
+        )
+        meta_advice["ranks"] = ranks[:10]
+    return int(touched)
+
 # -------------------------
 # Guards (META output)
 # -------------------------
@@ -921,6 +1012,41 @@ def run_once(root: Path) -> int:
         "window_days_effective": int(window_days),
         "row_limit_effective": int(row_limit),
     }
+
+    # Optional handoff from deterministic offline replay analytics.
+    # This stage is strictly offline and never touches LIVE execution loop.
+    ext_max_age_sec = _env_int("LEARNER_EXT_REPLAY_MAX_AGE_SEC", 7200, vmin=60, vmax=86400)
+    ext_weight = _env_float("LEARNER_EXT_REPLAY_WEIGHT", 0.0, vmin=0.0, vmax=1.0)
+    ext_summary = load_external_replay_summary(meta_dir, max_age_sec=ext_max_age_sec)
+    if isinstance(ext_summary, dict):
+        ext_metrics = ext_summary.get("metrics") if isinstance(ext_summary.get("metrics"), dict) else {}
+        ext_scores = ext_summary.get("symbol_scores") if isinstance(ext_summary.get("symbol_scores"), list) else []
+        touched = apply_external_replay_blend(meta_advice, ext_summary, weight=float(ext_weight))
+        report["external_replay"] = {
+            "present": True,
+            "schema": str(ext_summary.get("schema") or ""),
+            "ts_utc": str(ext_summary.get("ts_utc") or ""),
+            "weight": float(ext_weight),
+            "blend_applied": bool(touched > 0),
+            "blend_touched": int(touched),
+            "n_total": int(ext_metrics.get("n_total") or 0),
+            "trades_per_day": float(ext_metrics.get("trades_per_day") or 0.0),
+            "cost_pressure": float(ext_metrics.get("cost_pressure") or 0.0),
+            "symbol_scores_n": int(len(ext_scores)),
+        }
+        try:
+            meta_advice.setdefault("notes", []).append("external_replay=present")
+            if int(touched) > 0:
+                meta_advice.setdefault("notes", []).append("external_replay_blend=on")
+        except Exception as e:
+            cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+    else:
+        report["external_replay"] = {
+            "present": False,
+            "reason": "missing_or_stale_summary",
+            "max_age_sec": int(ext_max_age_sec),
+            "weight": float(ext_weight),
+        }
 
     # Hard gates for META output
     guard_obj_no_price_like(meta_advice)
