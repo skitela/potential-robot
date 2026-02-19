@@ -30,3 +30,17 @@ class TestStructuralP0(unittest.TestCase):
         self.assertIsNotNone(cls, "MT5Client class missing")
         methods = _get_method_names(cls)
         self.assertIn("order_send", methods, "MT5Client.order_send missing (indentation or definition error)")
+
+    def test_execution_queue_present(self):
+        tree = self._parse()
+        cls = _get_class(tree, "ExecutionQueue")
+        self.assertIsNotNone(cls, "ExecutionQueue class missing")
+        methods = _get_method_names(cls)
+        self.assertIn("submit", methods, "ExecutionQueue.submit missing")
+
+    def test_safetybot_has_pending_snapshot(self):
+        tree = self._parse()
+        cls = _get_class(tree, "SafetyBot")
+        self.assertIsNotNone(cls, "SafetyBot class missing")
+        methods = _get_method_names(cls)
+        self.assertIn("pending_snapshot", methods, "SafetyBot.pending_snapshot missing")

@@ -63,6 +63,11 @@
   "signal_dedupe_enabled": true,
   "signal_dedupe_ttl_sec": 900,
   "use_order_check": true,
+  "execution_queue_enabled": true,
+  "execution_queue_maxsize": 256,
+  "execution_queue_submit_timeout_sec": 20,
+  "pending_reconcile_poll_sec": 60,
+  "pending_reconcile_force_poll_sec": 20,
   "oanda_warn_symbols_cap": 1,
   "per_group": {
     "FX": {

@@ -38,6 +38,8 @@ import datetime as dt
 import os
 import sys
 import sqlite3
+import threading
+import queue as pyqueue
 import shutil
 import subprocess
 import platform
@@ -433,6 +435,11 @@ class CFG:
     signal_dedupe_enabled: bool = True
     signal_dedupe_ttl_sec: int = 900
     use_order_check: bool = True
+    execution_queue_enabled: bool = True
+    execution_queue_maxsize: int = 256
+    execution_queue_submit_timeout_sec: int = 20
+    pending_reconcile_poll_sec: int = 60
+    pending_reconcile_force_poll_sec: int = 20
 
     # Position lifecycle guard (scalp discipline): prevent stale multi-hour holds.
     position_time_stop_enabled: bool = True
@@ -2919,6 +2926,166 @@ class OrderThrottle:
         self.orders_last_min.append(now)
         self.orders_last_hour.append(now)
 
+
+class ExecutionQueue:
+    """Single-writer dispatcher for order submissions.
+
+    WHY: serializes non-emergency order flow through one worker thread, so
+    different strategy paths cannot race on parallel `order_send` calls.
+    """
+
+    def __init__(self, engine: "ExecutionEngine"):
+        self.engine = engine
+        self.enabled = bool(getattr(CFG, "execution_queue_enabled", True))
+        self.maxsize = max(1, int(getattr(CFG, "execution_queue_maxsize", 256)))
+        self.submit_timeout_sec = max(1, int(getattr(CFG, "execution_queue_submit_timeout_sec", 20)))
+        self._queue: "pyqueue.Queue[Optional[Dict[str, Any]]]" = pyqueue.Queue(maxsize=self.maxsize)
+        self._stop_evt = threading.Event()
+        self._worker: Optional[threading.Thread] = None
+        self._worker_ident: int = 0
+        self._seq = 0
+        self._seq_lock = threading.Lock()
+
+    def _next_seq(self) -> int:
+        with self._seq_lock:
+            self._seq += 1
+            return int(self._seq)
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        if self._worker is not None and self._worker.is_alive():
+            return
+        self._stop_evt.clear()
+        self._worker = threading.Thread(
+            target=self._run,
+            name="SafetyBot-OrderWriter",
+            daemon=True,
+        )
+        self._worker.start()
+        logging.info("ORDER_QUEUE_START enabled=1 maxsize=%s", int(self.maxsize))
+
+    def stop(self, timeout_sec: float = 5.0) -> None:
+        if not self.enabled:
+            return
+        self._stop_evt.set()
+        try:
+            self._queue.put_nowait(None)
+        except Exception:
+            pass
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=max(0.1, float(timeout_sec)))
+        alive = int(bool(worker is not None and worker.is_alive()))
+        logging.info("ORDER_QUEUE_STOP alive=%s", int(alive))
+
+    def _run(self) -> None:
+        self._worker_ident = int(threading.get_ident())
+        while not self._stop_evt.is_set():
+            try:
+                item = self._queue.get(timeout=0.5)
+            except pyqueue.Empty:
+                continue
+            if item is None:
+                self._queue.task_done()
+                break
+            done_evt = item["done_evt"]
+            box = item["box"]
+            symbol = str(item["symbol"])
+            grp = str(item["grp"])
+            request = dict(item["request"] or {})
+            emergency = bool(item["emergency"])
+            seq = int(item["seq"])
+            t0 = float(time.perf_counter())
+            try:
+                box["res"] = self.engine.order_send(symbol, grp, request, emergency=emergency)
+            except Exception as e:
+                box["exc"] = repr(e)
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            finally:
+                run_ms = int((time.perf_counter() - t0) * 1000.0)
+                if run_ms >= 500:
+                    logging.warning(
+                        "ORDER_QUEUE_SLOW seq=%s symbol=%s grp=%s run_ms=%s emergency=%s",
+                        int(seq),
+                        symbol,
+                        grp,
+                        int(run_ms),
+                        int(emergency),
+                    )
+                done_evt.set()
+                self._queue.task_done()
+
+    def submit(self, symbol: str, grp: str, request: dict, emergency: bool = False, timeout_sec: Optional[int] = None):
+        if not self.enabled:
+            return self.engine.order_send(symbol, grp, request, emergency=bool(emergency))
+        # Emergency closes bypass queue to reduce flatten latency.
+        if emergency:
+            return self.engine.order_send(symbol, grp, request, emergency=True)
+        worker_alive = bool(self._worker is not None and self._worker.is_alive())
+        if not worker_alive:
+            self.start()
+        if int(threading.get_ident()) == int(self._worker_ident or 0):
+            # avoid deadlock if called re-entrantly from worker
+            return self.engine.order_send(symbol, grp, request, emergency=bool(emergency))
+
+        done_evt = threading.Event()
+        box: Dict[str, Any] = {}
+        seq = self._next_seq()
+        item = {
+            "seq": int(seq),
+            "symbol": str(symbol),
+            "grp": str(grp),
+            "request": dict(request or {}),
+            "emergency": bool(emergency),
+            "done_evt": done_evt,
+            "box": box,
+        }
+        t_enqueue = float(time.perf_counter())
+        try:
+            self._queue.put(item, timeout=1.0)
+        except pyqueue.Full:
+            logging.warning(
+                "ORDER_QUEUE_FULL seq=%s symbol=%s grp=%s qsize=%s",
+                int(seq),
+                str(symbol),
+                str(grp),
+                int(self._queue.qsize()),
+            )
+            return None
+
+        wait_timeout = int(timeout_sec) if timeout_sec is not None else int(self.submit_timeout_sec)
+        wait_timeout = max(1, int(wait_timeout))
+        if not done_evt.wait(timeout=float(wait_timeout)):
+            logging.warning(
+                "ORDER_QUEUE_TIMEOUT seq=%s symbol=%s grp=%s timeout_s=%s qsize=%s",
+                int(seq),
+                str(symbol),
+                str(grp),
+                int(wait_timeout),
+                int(self._queue.qsize()),
+            )
+            return None
+        queue_wait_ms = int((time.perf_counter() - t_enqueue) * 1000.0)
+        if queue_wait_ms >= 1000:
+            logging.warning(
+                "ORDER_QUEUE_WAIT_HIGH seq=%s symbol=%s grp=%s wait_ms=%s",
+                int(seq),
+                str(symbol),
+                str(grp),
+                int(queue_wait_ms),
+            )
+        if "exc" in box:
+            logging.error(
+                "ORDER_QUEUE_WORKER_EXC seq=%s symbol=%s grp=%s err=%s",
+                int(seq),
+                str(symbol),
+                str(grp),
+                str(box.get("exc")),
+            )
+            return None
+        return box.get("res")
+
 # =============================================================================
 # MT5 CLIENT
 # =============================================================================
@@ -3957,13 +4124,23 @@ class StrategyCache:
         self.last_soft_skip_log_ts: Dict[str, float] = {}
 
 class StandardStrategy:
-    def __init__(self, engine: ExecutionEngine, gov: RequestGovernor, throttle: OrderThrottle, db: Persistence, config: ConfigManager, risk_manager: RiskManager):
+    def __init__(
+        self,
+        engine: ExecutionEngine,
+        gov: RequestGovernor,
+        throttle: OrderThrottle,
+        db: Persistence,
+        config: ConfigManager,
+        risk_manager: RiskManager,
+        order_queue: Optional[ExecutionQueue] = None,
+    ):
         self.engine = engine
         self.gov = gov
         self.throttle = throttle
         self.db = db
         self.config = config
         self.risk_manager = risk_manager
+        self.order_queue = order_queue
         self.cache = StrategyCache()
         self.last_indicators: Dict[str, Dict[str, Any]] = {}
         self._scan_meta: Dict[str, Any] = {}
@@ -4006,6 +4183,11 @@ class StandardStrategy:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return False
+
+    def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
+        if self.order_queue is not None:
+            return self.order_queue.submit(symbol, grp, request, emergency=bool(emergency))
+        return self.engine.order_send(symbol, grp, request, emergency=bool(emergency))
 
     def _rollover_cfg(self) -> Dict[str, Any]:
         raw = getattr(self.config, "rollover", {}) or {}
@@ -4558,7 +4740,7 @@ class StandardStrategy:
             logging.info(f"PAPER TRADE: {signal} {symbol} @ {price} | SL {sl} TP {tp}")
             return
 
-        res = self.engine.order_send(symbol, grp, req)
+        res = self._dispatch_order(symbol, grp, req, emergency=False)
         if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
             logging.error(f"Order failed: {getattr(res, 'retcode', None)} {getattr(res, 'comment', '')}")
             return
@@ -5014,6 +5196,8 @@ class SafetyBot:
         # --- MT5 client ---
         self.execution_engine = ExecutionEngine(self.mt5_config, self.gov, self.limits)
         self.execution_engine.incident_journal = self.incident_journal
+        self.execution_queue = ExecutionQueue(self.execution_engine)
+        self.execution_queue.start()
         self.throttle = OrderThrottle()
 
         # --- stores for Scout ---
@@ -5023,11 +5207,21 @@ class SafetyBot:
 
         # --- strategy / controller ---
         self.ctrl = ActivityController(self.db, self.config)
-        self.strategy = StandardStrategy(self.execution_engine, self.gov, self.throttle, self.db, self.config, self.risk_manager)
+        self.strategy = StandardStrategy(
+            self.execution_engine,
+            self.gov,
+            self.throttle,
+            self.db,
+            self.config,
+            self.risk_manager,
+            order_queue=self.execution_queue,
+        )
         self.strategy.decision_store = self.decision_store
         self.resolved_symbols = {}
         # Cache of last known open positions; used by guard polling cadence.
         self._positions_cache: Dict[str, List] = {}
+        # Cache of last known pending orders for dedicated reconcile loop.
+        self._pending_cache: Dict[str, List] = {}
         # Last close-attempt timestamp per ticket for position time-stop retries.
         self._position_close_attempt_ts: Dict[int, int] = {}
         # Adaptive exit state.
@@ -5237,6 +5431,11 @@ class SafetyBot:
                 self._last_manual_kill_log_ts = now_ts
         return active
 
+    def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
+        if getattr(self, "execution_queue", None) is not None:
+            return self.execution_queue.submit(symbol, grp, request, emergency=bool(emergency))
+        return self.execution_engine.order_send(symbol, grp, request, emergency=bool(emergency))
+
     def poll_deals(self):
         # SYS — rzadziej (10 min)
         now_ts = int(time.time())
@@ -5345,6 +5544,80 @@ class SafetyBot:
 
         self._positions_cache = dict(m)
         return dict(self._positions_cache)
+
+    def pending_snapshot(self, mode_global: str, force: bool = False) -> Dict[str, List]:
+        """Dedicated pending-orders reconciliation loop.
+
+        WHY: positions reconcile alone does not detect pending-order drift.
+        This loop tracks pending ticket lifecycle and logs deterministic deltas.
+        """
+        now_ts = int(time.time())
+        base_period = max(1, int(getattr(CFG, "pending_reconcile_poll_sec", 60)))
+        force_period = max(1, int(getattr(CFG, "pending_reconcile_force_poll_sec", 20)))
+        period = int(force_period if force else base_period)
+        if self._pending_cache:
+            period = min(int(period), int(max(1, CFG.open_positions_guard_sec)))
+        last = self.db.get_last_ts("last_pending_poll_ts")
+        if now_ts - int(last) < int(period):
+            return dict(self._pending_cache)
+
+        ords = self.execution_engine.orders_get(emergency=bool(force))
+        if ords is None:
+            return dict(self._pending_cache)
+
+        self.db.set_last_ts("last_pending_poll_ts", now_ts)
+        pending_types = {
+            getattr(mt5, "ORDER_TYPE_BUY_LIMIT", None),
+            getattr(mt5, "ORDER_TYPE_SELL_LIMIT", None),
+            getattr(mt5, "ORDER_TYPE_BUY_STOP", None),
+            getattr(mt5, "ORDER_TYPE_SELL_STOP", None),
+            getattr(mt5, "ORDER_TYPE_BUY_STOP_LIMIT", None),
+            getattr(mt5, "ORDER_TYPE_SELL_STOP_LIMIT", None),
+        }
+        pending_types = {t for t in pending_types if t is not None}
+        current: Dict[str, List] = {}
+        if ords:
+            for o in ords:
+                try:
+                    if int(getattr(o, "type", -1)) not in pending_types:
+                        continue
+                    sym = str(getattr(o, "symbol", "") or "")
+                    if not sym:
+                        continue
+                    current.setdefault(sym, []).append(o)
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    continue
+
+        try:
+            def _pending_tickets(src: Dict[str, List]) -> set[int]:
+                out: set[int] = set()
+                for vals in src.values():
+                    for oo in vals:
+                        try:
+                            out.add(int(getattr(oo, "ticket", 0) or 0))
+                        except Exception:
+                            continue
+                return out
+
+            prev_t = _pending_tickets(self._pending_cache)
+            now_t = _pending_tickets(current)
+            if prev_t != now_t:
+                added = sorted(x for x in (now_t - prev_t) if int(x) > 0)
+                removed = sorted(x for x in (prev_t - now_t) if int(x) > 0)
+                logging.info(
+                    "RECONCILE_PENDING changed=%s added=%s removed=%s prev_total=%s now_total=%s",
+                    int(bool(added or removed)),
+                    int(len(added)),
+                    int(len(removed)),
+                    int(len(prev_t)),
+                    int(len(now_t)),
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        self._pending_cache = dict(current)
+        return dict(self._pending_cache)
 
     def _effective_mode_for_symbol(self, grp: str, sym: str, global_mode: str, rollover_safe: bool) -> str:
         mode = str(global_mode).upper()
@@ -5507,7 +5780,7 @@ class SafetyBot:
                                 "type_filling": mt5.ORDER_FILLING_IOC,
                             }
                             self._partial_close_attempt_ts[ticket] = now_ts
-                            res = self.execution_engine.order_send(sym, grp, req, emergency=False)
+                            res = self._dispatch_order(sym, grp, req, emergency=False)
                             ok = bool(res and getattr(res, "retcode", None) == mt5.TRADE_RETCODE_DONE)
                             if ok:
                                 self._partial_tp_done_tickets[ticket] = True
@@ -5551,7 +5824,7 @@ class SafetyBot:
                     "comment": "TRAIL_ATR",
                 }
                 self._trail_update_attempt_ts[ticket] = now_ts
-                res_mod = self.execution_engine.order_send(sym, grp, req_mod, emergency=False)
+                res_mod = self._dispatch_order(sym, grp, req_mod, emergency=False)
                 ok_mod = bool(res_mod and getattr(res_mod, "retcode", None) in (
                     mt5.TRADE_RETCODE_DONE,
                     mt5.TRADE_RETCODE_PLACED,
@@ -5695,7 +5968,7 @@ class SafetyBot:
                 cnt_attempt += 1
                 if ticket > 0:
                     self._position_close_attempt_ts[ticket] = now_ts
-                res = self.execution_engine.order_send(sym, grp, req, emergency=False)
+                res = self._dispatch_order(sym, grp, req, emergency=False)
                 ok = bool(res and getattr(res, "retcode", None) == mt5.TRADE_RETCODE_DONE)
                 if ok:
                     cnt_done += 1
@@ -6123,6 +6396,7 @@ class SafetyBot:
         # pozycje (SYS): ECO nie może odciąć opieki nad otwartymi pozycjami
         in_force_close = self.strategy.force_close_window()
         positions_map = self.positions_snapshot(global_mode, force=bool(in_force_close))
+        pending_map = self.pending_snapshot(global_mode, force=bool(in_force_close))
         open_syms = set(positions_map.keys()) if positions_map else set()
         if open_syms and (not in_force_close):
             try:
@@ -6130,6 +6404,16 @@ class SafetyBot:
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                 in_force_close = False
+        try:
+            pending_total = int(sum(len(v) for v in (pending_map or {}).values()))
+            if pending_total > 0:
+                logging.info(
+                    "PENDING_SNAPSHOT symbols=%s pending_total=%s",
+                    int(len(pending_map or {})),
+                    int(pending_total),
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         # jeśli mamy pozycje i wchodzimy w force-close window => pilnuj (użyj rezerwy awaryjnej)
         if open_syms and in_force_close:
@@ -6434,21 +6718,28 @@ class SafetyBot:
             logging.error(f"Startup Check Error: {e}")
 
         # --- PĘTLA GŁÓWNA ---
-        while True:
-            try:
-                self.execution_engine.ensure_connected()
-                self.scan_once()
-                self._idle_sleep_with_usb_watch(CFG.scan_interval_sec)
+        try:
+            while True:
+                try:
+                    self.execution_engine.ensure_connected()
+                    self.scan_once()
+                    self._idle_sleep_with_usb_watch(CFG.scan_interval_sec)
 
-            except KeyboardInterrupt:
-                logging.info("BOT STOP | manual")
-                break
-            except SystemExit:
-                raise
+                except KeyboardInterrupt:
+                    logging.info("BOT STOP | manual")
+                    break
+                except SystemExit:
+                    raise
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    logging.error(f"MAIN LOOP ERROR | {e}")
+                    self._idle_sleep_with_usb_watch(60)
+        finally:
+            try:
+                if getattr(self, "execution_queue", None) is not None:
+                    self.execution_queue.stop(timeout_sec=5.0)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                logging.error(f"MAIN LOOP ERROR | {e}")
-                self._idle_sleep_with_usb_watch(60)
 
 if __name__ == "__main__":
     
@@ -6592,6 +6883,15 @@ if __name__ == "__main__":
     CFG.signal_dedupe_enabled = _cfg_bool("signal_dedupe_enabled", CFG.signal_dedupe_enabled)
     CFG.signal_dedupe_ttl_sec = _cfg_int("signal_dedupe_ttl_sec", CFG.signal_dedupe_ttl_sec)
     CFG.use_order_check = _cfg_bool("use_order_check", CFG.use_order_check)
+    CFG.execution_queue_enabled = _cfg_bool("execution_queue_enabled", CFG.execution_queue_enabled)
+    CFG.execution_queue_maxsize = _cfg_int("execution_queue_maxsize", CFG.execution_queue_maxsize)
+    CFG.execution_queue_submit_timeout_sec = _cfg_int(
+        "execution_queue_submit_timeout_sec", CFG.execution_queue_submit_timeout_sec
+    )
+    CFG.pending_reconcile_poll_sec = _cfg_int("pending_reconcile_poll_sec", CFG.pending_reconcile_poll_sec)
+    CFG.pending_reconcile_force_poll_sec = _cfg_int(
+        "pending_reconcile_force_poll_sec", CFG.pending_reconcile_force_poll_sec
+    )
     CFG.fx_only_mode = _cfg_bool("fx_only_mode", CFG.fx_only_mode)
     CFG.oanda_warn_symbols_cap = _cfg_int("oanda_warn_symbols_cap", CFG.oanda_warn_symbols_cap)
     CFG.symbols_to_trade = _cfg_str_list("symbols_to_trade", list(CFG.symbols_to_trade))
