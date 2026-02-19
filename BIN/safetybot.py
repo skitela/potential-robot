@@ -472,6 +472,7 @@ class CFG:
     trend_cache_ttl_sec = 3600
     symbol_info_cache_ttl_sec = 6 * 3600
     deals_poll_interval_sec = 600   # 10 min, bo to SYS request
+    runtime_metrics_interval_sec = 600  # periodic metrics snapshot (10 min)
 
     # --- Scheduler ---
 
@@ -3106,6 +3107,42 @@ class ExecutionEngine:
         self._sltp_pos_ts: Dict[int, float] = {}
         self._exec_error_ts: List[float] = []
         self.incident_journal: Optional[IncidentJournal] = None
+        self._retcodes_day_key: str = str(pl_day_key(now_utc()))
+        self._retcodes_day: Dict[int, int] = {}
+
+    def _roll_retcodes_day(self) -> None:
+        day_key = str(pl_day_key(now_utc()))
+        if day_key != str(self._retcodes_day_key):
+            self._retcodes_day_key = day_key
+            self._retcodes_day = {}
+
+    def _note_retcode_day(self, retcode_num: int) -> None:
+        self._roll_retcodes_day()
+        rc = int(retcode_num)
+        self._retcodes_day[rc] = int(self._retcodes_day.get(rc, 0)) + 1
+
+    def metrics_snapshot(self) -> Dict[str, Any]:
+        self._roll_retcodes_day()
+        success_codes = {
+            int(getattr(mt5, "TRADE_RETCODE_DONE", 10009)),
+            int(getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)),
+            int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008)),
+        }
+        rejects = 0
+        reject_map: Dict[int, int] = {}
+        for rc, cnt in self._retcodes_day.items():
+            c = int(cnt)
+            if int(rc) in success_codes:
+                continue
+            rejects += c
+            reject_map[int(rc)] = c
+        top_rejects = sorted(reject_map.items(), key=lambda x: x[1], reverse=True)[:5]
+        return {
+            "day_key": str(self._retcodes_day_key),
+            "rejects_day": int(rejects),
+            "retcodes_day": dict(self._retcodes_day),
+            "top_rejects": [(int(rc), int(cnt)) for rc, cnt in top_rejects],
+        }
 
     def _check_execution_burst_guard(
         self,
@@ -3717,6 +3754,7 @@ class ExecutionEngine:
             10016: (int(CFG.cooldown_stops_too_close_s), "invalid_stops"),
             10018: (int(CFG.cooldown_market_closed_s), "market_closed"),
             10021: (int(CFG.cooldown_no_quotes_s), "no_quotes"),
+            10022: (int(CFG.cooldown_limit_s), "invalid_expiration"),
             10030: (int(CFG.cooldown_trade_mode_s), "invalid_fill_mode"),
             10033: (int(CFG.cooldown_limit_s), "limit_orders"),
             10034: (int(CFG.cooldown_limit_s), "limit_volume"),
@@ -3885,6 +3923,7 @@ class ExecutionEngine:
                 str(ret_name),
                 int(send_ms),
             )
+            self._note_retcode_day(int(ret_num))
             try:
                 if self.incident_journal is not None:
                     self.incident_journal.note_retcode(
@@ -4121,6 +4160,7 @@ class StrategyCache:
         self.trend_cache: Dict[str, Tuple[float, str, str, str]] = {}
         self.last_m5_calc_ts: Dict[str, float] = {}
         self.last_m5_bar_time: Dict[str, pd.Timestamp] = {}
+        self.next_m5_fetch_ts: Dict[str, float] = {}
         self.last_soft_skip_log_ts: Dict[str, float] = {}
 
 class StandardStrategy:
@@ -4149,6 +4189,73 @@ class StandardStrategy:
         self._last_eval_sys_before: Optional[int] = None
         self._last_event_id: Optional[str] = None
         self._signal_seen_local: Dict[str, float] = {}
+        self._metrics_day_key: str = str(pl_day_key(now_utc()))
+        self._metrics_day: Dict[str, int] = {
+            "entry_signals": 0,
+            "entry_ok": 0,
+            "entry_fail": 0,
+        }
+        self._metrics_total: Dict[str, int] = {
+            "entry_signals": 0,
+            "entry_ok": 0,
+            "entry_fail": 0,
+        }
+        self._skip_day: Dict[str, int] = {}
+        self._skip_total: Dict[str, int] = {}
+        self._spread_entry_sum_day: float = 0.0
+        self._spread_entry_count_day: int = 0
+
+    def _metrics_roll_day(self) -> None:
+        day_key = str(pl_day_key(now_utc()))
+        if day_key == str(self._metrics_day_key):
+            return
+        self._metrics_day_key = day_key
+        self._metrics_day = {"entry_signals": 0, "entry_ok": 0, "entry_fail": 0}
+        self._skip_day = {}
+        self._spread_entry_sum_day = 0.0
+        self._spread_entry_count_day = 0
+
+    def _metric_inc_skip(self, reason: str) -> None:
+        self._metrics_roll_day()
+        key = str(reason or "UNKNOWN")
+        self._skip_day[key] = int(self._skip_day.get(key, 0)) + 1
+        self._skip_total[key] = int(self._skip_total.get(key, 0)) + 1
+
+    def _metric_note_entry_signal(self) -> None:
+        self._metrics_roll_day()
+        self._metrics_day["entry_signals"] = int(self._metrics_day.get("entry_signals", 0)) + 1
+        self._metrics_total["entry_signals"] = int(self._metrics_total.get("entry_signals", 0)) + 1
+
+    def _metric_note_order_result(self, ok: bool, spread_points: Optional[float] = None) -> None:
+        self._metrics_roll_day()
+        key = "entry_ok" if bool(ok) else "entry_fail"
+        self._metrics_day[key] = int(self._metrics_day.get(key, 0)) + 1
+        self._metrics_total[key] = int(self._metrics_total.get(key, 0)) + 1
+        try:
+            sp = float(spread_points) if spread_points is not None else float("nan")
+            if np.isfinite(sp) and sp > 0.0:
+                self._spread_entry_sum_day += float(sp)
+                self._spread_entry_count_day += 1
+        except Exception:
+            pass
+
+    def metrics_snapshot(self) -> Dict[str, Any]:
+        self._metrics_roll_day()
+        avg_spread = 0.0
+        if int(self._spread_entry_count_day) > 0:
+            avg_spread = float(self._spread_entry_sum_day) / float(self._spread_entry_count_day)
+        return {
+            "day_key": str(self._metrics_day_key),
+            "entry_signals_day": int(self._metrics_day.get("entry_signals", 0)),
+            "entries_day": int(self._metrics_day.get("entry_ok", 0)),
+            "entry_fails_day": int(self._metrics_day.get("entry_fail", 0)),
+            "avg_spread_entry_points_day": float(avg_spread),
+            "skip_day": dict(self._skip_day),
+            "entry_signals_total": int(self._metrics_total.get("entry_signals", 0)),
+            "entries_total": int(self._metrics_total.get("entry_ok", 0)),
+            "entry_fails_total": int(self._metrics_total.get("entry_fail", 0)),
+            "skip_total": dict(self._skip_total),
+        }
 
     def _signal_id(self, symbol: str, signal: str, signal_reason: str, regime: str) -> str:
         bar_ts = self.cache.last_m5_bar_time.get(symbol)
@@ -4442,20 +4549,41 @@ class StandardStrategy:
         last = self.cache.last_m5_calc_ts.get(symbol, 0.0)
         if now_ts - last < pull:
             wait_s = int(max(0, float(pull) - (now_ts - last)))
+            self._metric_inc_skip("M5_PULL_WAIT")
             logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_PULL_WAIT wait_s={wait_s}")
+            return None
+
+        next_fetch_ts = float(self.cache.next_m5_fetch_ts.get(symbol, 0.0) or 0.0)
+        if next_fetch_ts > now_ts:
+            wait_s = int(max(0, next_fetch_ts - now_ts))
+            self._metric_inc_skip("M5_WAIT_NEW_BAR")
+            logging.info(
+                f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_WAIT_NEW_BAR wait_s={wait_s}"
+            )
             return None
 
         df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
         if df is None or len(df) < 60:
             self.cache.last_m5_calc_ts[symbol] = now_ts
             rows = 0 if df is None else int(len(df))
+            self._metric_inc_skip("M5_DATA_SHORT")
             logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_DATA_SHORT rows={rows}")
             return None
 
         self.cache.last_m5_calc_ts[symbol] = now_ts
         last_bar = df["time"].iloc[-1]
+        try:
+            tf_min = max(1, int(getattr(CFG, "timeframe_trade", 5)))
+            ts_bar = pd.Timestamp(last_bar)
+            if ts_bar.tzinfo is None:
+                ts_bar = ts_bar.tz_localize(TZ_PL)
+            ts_utc = ts_bar.tz_convert(UTC)
+            self.cache.next_m5_fetch_ts[symbol] = float(ts_utc.timestamp()) + float(tf_min * 60)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         prev_bar = self.cache.last_m5_bar_time.get(symbol)
         if prev_bar is not None and last_bar == prev_bar :
+            self._metric_inc_skip("M5_SAME_BAR")
             logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_SAME_BAR")
             return None
         self.cache.last_m5_bar_time[symbol] = last_bar
@@ -4532,10 +4660,40 @@ class StandardStrategy:
                 if spread_pts <= float(spread_gate_warm) * p80:
                     mode = "WARM"
                 else:
+                    self._metric_inc_skip("SPREAD_TOO_WIDE_HOT")
+                    logging.info(
+                        "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=SPREAD_TOO_WIDE spread_pts=%.2f p80=%.2f gate_hot=%.2f",
+                        symbol,
+                        grp,
+                        m_upper,
+                        float(spread_pts),
+                        float(p80),
+                        float(spread_gate_hot),
+                    )
                     return
             elif m_upper == "WARM" and spread_pts > float(spread_gate_warm) * p80:
+                self._metric_inc_skip("SPREAD_TOO_WIDE_WARM")
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=SPREAD_TOO_WIDE spread_pts=%.2f p80=%.2f gate_warm=%.2f",
+                    symbol,
+                    grp,
+                    m_upper,
+                    float(spread_pts),
+                    float(p80),
+                    float(spread_gate_warm),
+                )
                 return
             elif m_upper == "ECO" and spread_pts > float(spread_gate_eco) * p80:
+                self._metric_inc_skip("SPREAD_TOO_WIDE_ECO")
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=SPREAD_TOO_WIDE spread_pts=%.2f p80=%.2f gate_eco=%.2f",
+                    symbol,
+                    grp,
+                    m_upper,
+                    float(spread_pts),
+                    float(p80),
+                    float(spread_gate_eco),
+                )
                 return
 
         price = float(tick.ask if signal == "BUY" else tick.bid)
@@ -4742,6 +4900,7 @@ class StandardStrategy:
 
         res = self._dispatch_order(symbol, grp, req, emergency=False)
         if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
+            self._metric_note_order_result(False, spread_points=float(spread_pts))
             logging.error(f"Order failed: {getattr(res, 'retcode', None)} {getattr(res, 'comment', '')}")
             return
 
@@ -4780,6 +4939,7 @@ class StandardStrategy:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         self.throttle.register_trade()
+        self._metric_note_order_result(True, spread_points=float(spread_pts))
         logging.info(f"Order executed: {getattr(res, 'order', None)}")
     def evaluate_symbol(self, symbol: str, grp: str, mode: str, info, is_paper: bool) -> None:
         # P0: global backoff + per-symbol cooldown (avoid wasting PRICE budget on repeated skips)
@@ -4817,6 +4977,7 @@ class StandardStrategy:
                     self.cache.last_soft_skip_log_ts[symbol] = float(now_ts)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            self._metric_inc_skip("PRICE_SOFT_MODE")
             return
         if not self.throttle.can_trade():
             return
@@ -4838,6 +4999,7 @@ class StandardStrategy:
         adx_value = float(ind["adx"])
         trend_h4, _trend_d1, structure_h4 = self.get_trend(symbol, grp)
         if trend_h4 == "NEUTRAL":
+            self._metric_inc_skip("TREND_NEUTRAL")
             logging.info(f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=TREND_NEUTRAL")
             return
 
@@ -4869,6 +5031,7 @@ class StandardStrategy:
         if signal:
             signal_id = self._signal_id(symbol, signal, signal_reason, regime)
             if self._signal_dedup_block(signal_id):
+                self._metric_inc_skip("SIGNAL_DUPLICATE")
                 logging.info(
                     "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=SIGNAL_DUPLICATE signal_id=%s",
                     symbol,
@@ -4883,6 +5046,7 @@ class StandardStrategy:
                 f"signal={signal} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} "
                 f"open={float(ind['open']):.6f} adx={adx_value:.2f}"
             )
+            self._metric_note_entry_signal()
             try:
                 base = symbol_base(symbol)
                 mid = float(ind.get('close'))
@@ -4917,6 +5081,7 @@ class StandardStrategy:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             self.try_trade(symbol, grp, mode, info, signal, is_paper, ind=ind)
         else:
+            self._metric_inc_skip("NO_SIGNAL")
             logging.info(
                 f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=NO_SIGNAL "
                 f"trend_h4={trend_h4} structure_h4={structure_h4} regime={regime} signal_reason={signal_reason} "
@@ -5143,6 +5308,11 @@ class SafetyBot:
         self.evidence_dir = _paths["evidence"]
         self.manual_kill_switch_path = self.runtime_root / str(getattr(CFG, "manual_kill_switch_file", "RUN/kill_switch.flag"))
         self._last_manual_kill_log_ts = 0.0
+        self._metrics_day_key = str(pl_day_key(now_utc()))
+        self._metrics_eco_scans_day = 0
+        self._metrics_warn_scans_day = 0
+        self._metrics_10m_last_emit_ts = 0.0
+        self._metrics_10m_anchor: Dict[str, Any] = {}
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -5430,6 +5600,106 @@ class SafetyBot:
                 )
                 self._last_manual_kill_log_ts = now_ts
         return active
+
+    def _metrics_roll_day(self) -> None:
+        day_key = str(pl_day_key(now_utc()))
+        if day_key == str(self._metrics_day_key):
+            return
+        self._metrics_day_key = day_key
+        self._metrics_eco_scans_day = 0
+        self._metrics_warn_scans_day = 0
+        self._metrics_10m_anchor = {}
+        self._metrics_10m_last_emit_ts = 0.0
+
+    def _emit_runtime_metrics(self, st: Dict[str, Any], *, eco_active: bool, warn_active: bool) -> None:
+        self._metrics_roll_day()
+        if bool(eco_active):
+            self._metrics_eco_scans_day = int(self._metrics_eco_scans_day) + 1
+        if bool(warn_active):
+            self._metrics_warn_scans_day = int(self._metrics_warn_scans_day) + 1
+
+        now_ts = float(time.time())
+        interval_s = max(60, int(getattr(CFG, "runtime_metrics_interval_sec", 600)))
+        strat_metrics = {}
+        exec_metrics = {}
+        try:
+            strat_metrics = self.strategy.metrics_snapshot()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            strat_metrics = {}
+        try:
+            exec_metrics = self.execution_engine.metrics_snapshot()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            exec_metrics = {}
+
+        if not self._metrics_10m_anchor:
+            self._metrics_10m_anchor = {
+                "ts": now_ts,
+                "price_requests_day": int(st.get("price_requests_day", 0) or 0),
+                "sys_requests_day": int(st.get("sys_requests_day", 0) or 0),
+                "order_actions_day": int(st.get("order_actions_day", 0) or 0),
+                "entries_day": int(strat_metrics.get("entries_day", 0) or 0),
+                "rejects_day": int(exec_metrics.get("rejects_day", 0) or 0),
+                "eco_scans_day": int(self._metrics_eco_scans_day),
+                "warn_scans_day": int(self._metrics_warn_scans_day),
+            }
+            self._metrics_10m_last_emit_ts = now_ts
+            return
+
+        if (now_ts - float(self._metrics_10m_last_emit_ts or 0.0)) < float(interval_s):
+            return
+
+        a = dict(self._metrics_10m_anchor)
+        cur_price = int(st.get("price_requests_day", 0) or 0)
+        cur_sys = int(st.get("sys_requests_day", 0) or 0)
+        cur_order = int(st.get("order_actions_day", 0) or 0)
+        cur_entries = int(strat_metrics.get("entries_day", 0) or 0)
+        cur_rejects = int(exec_metrics.get("rejects_day", 0) or 0)
+        d_price = max(0, cur_price - int(a.get("price_requests_day", 0)))
+        d_sys = max(0, cur_sys - int(a.get("sys_requests_day", 0)))
+        d_order = max(0, cur_order - int(a.get("order_actions_day", 0)))
+        d_entries = max(0, cur_entries - int(a.get("entries_day", 0)))
+        d_rejects = max(0, cur_rejects - int(a.get("rejects_day", 0)))
+        d_eco = max(0, int(self._metrics_eco_scans_day) - int(a.get("eco_scans_day", 0)))
+        d_warn = max(0, int(self._metrics_warn_scans_day) - int(a.get("warn_scans_day", 0)))
+        skip_day = dict(strat_metrics.get("skip_day", {}) or {})
+        top_rejects = list(exec_metrics.get("top_rejects", []) or [])
+
+        logging.info(
+            "RUNTIME_METRICS_10M day=%s price_requests_10m=%s sys_requests_10m=%s order_actions_10m=%s "
+            "entries_10m=%s rejects_10m=%s entries_day=%s rejects_day=%s avg_spread_entry_points_day=%.3f "
+            "skip_no_signal_day=%s skip_m5_same_bar_day=%s skip_m5_pull_wait_day=%s skip_m5_wait_new_bar_day=%s "
+            "eco_scans_10m=%s warn_scans_10m=%s top_rejects_day=%s",
+            str(self._metrics_day_key),
+            int(d_price),
+            int(d_sys),
+            int(d_order),
+            int(d_entries),
+            int(d_rejects),
+            int(cur_entries),
+            int(cur_rejects),
+            float(strat_metrics.get("avg_spread_entry_points_day", 0.0) or 0.0),
+            int(skip_day.get("NO_SIGNAL", 0)),
+            int(skip_day.get("M5_SAME_BAR", 0)),
+            int(skip_day.get("M5_PULL_WAIT", 0)),
+            int(skip_day.get("M5_WAIT_NEW_BAR", 0)),
+            int(d_eco),
+            int(d_warn),
+            str(top_rejects),
+        )
+
+        self._metrics_10m_anchor = {
+            "ts": now_ts,
+            "price_requests_day": int(cur_price),
+            "sys_requests_day": int(cur_sys),
+            "order_actions_day": int(cur_order),
+            "entries_day": int(cur_entries),
+            "rejects_day": int(cur_rejects),
+            "eco_scans_day": int(self._metrics_eco_scans_day),
+            "warn_scans_day": int(self._metrics_warn_scans_day),
+        }
+        self._metrics_10m_last_emit_ts = now_ts
 
     def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
         if getattr(self, "execution_queue", None) is not None:
@@ -6289,6 +6559,7 @@ class SafetyBot:
             logging.warning(
                 f"ECO_MODE reason={eco_reason} price_pct={price_pct:.3f} sys_pct={sys_pct:.3f} order_pct={order_pct:.3f}"
             )
+        self._emit_runtime_metrics(st, eco_active=bool(eco_by_budget), warn_active=bool(warn_degrade_active))
 
 # Additional legacy line kept for continuity (informational only)
         logging.info(
@@ -6834,6 +7105,9 @@ if __name__ == "__main__":
     CFG.price_budget_day = _cfg_int("price_budget_day", CFG.price_budget_day)
     CFG.order_budget_day = _cfg_int("order_budget_day", CFG.order_budget_day)
     CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
+    CFG.runtime_metrics_interval_sec = _cfg_int(
+        "runtime_metrics_interval_sec", CFG.runtime_metrics_interval_sec
+    )
     CFG.usb_watch_check_interval_sec = _cfg_int(
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
