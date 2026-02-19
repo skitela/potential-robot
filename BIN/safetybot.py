@@ -193,8 +193,11 @@ class CFG:
     oanda_price_warning_per_day: int = 1000   # WARNING level per calendar day
     oanda_price_cutoff_per_day: int = 5000    # CUT-OFF level per calendar day
     # Appendix 4: Limits on Orders / Positions.
-    oanda_market_orders_per_sec: int = 50     # applies to market Orders only
+    # Hard broker limit=50/s; house limit is intentionally lower for LIVE stability.
+    oanda_market_orders_per_sec: int = 20     # applies to market Orders only
     oanda_positions_pending_limit: int = 450  # house stop before 500 (positions + pending orders, excl. TP/SL)
+    oanda_warn_degrade_enabled: bool = True
+    oanda_warn_symbols_cap: int = 1
 
     # --- House safety margins (do not loosen) ---
 
@@ -256,10 +259,17 @@ class CFG:
     execution_burst_symbol_cooldown_s: int = 180
 
     # --- Grupy i profile ---
-    symbols_to_trade = ["EURUSD", "GBPUSD", "XAUUSD", "DAX40", "US500"]
+    fx_only_mode: bool = True
+    symbols_to_trade = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURGBP"]
     symbol_group_map = {
         "EURUSD": "FX",
         "GBPUSD": "FX",
+        "USDJPY": "FX",
+        "USDCHF": "FX",
+        "USDCAD": "FX",
+        "AUDUSD": "FX",
+        "NZDUSD": "FX",
+        "EURGBP": "FX",
         "XAUUSD": "METAL",
         "XAGUSD": "METAL",
         "GOLD": "METAL",
@@ -285,6 +295,12 @@ class CFG:
     symbol_alias_map: Dict[str, Tuple[str, ...]] = {
         "EURUSD": ("EURUSD",),
         "GBPUSD": ("GBPUSD",),
+        "USDJPY": ("USDJPY",),
+        "USDCHF": ("USDCHF",),
+        "USDCAD": ("USDCAD",),
+        "AUDUSD": ("AUDUSD",),
+        "NZDUSD": ("NZDUSD",),
+        "EURGBP": ("EURGBP",),
         "XAUUSD": ("XAUUSD", "GOLD"),
         "XAGUSD": ("XAGUSD", "SILVER"),
         "DAX40": ("DAX40", "DE40", "DE30", "GER40", "GER30"),
@@ -294,12 +310,12 @@ class CFG:
     # OANDA MT5 policy guard: block accidental algo on equity/ETF/ETN symbols (non-close only).
     symbol_policy_enabled: bool = True
     symbol_policy_fail_on_other_group: bool = True
-    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX", "METAL", "INDEX")
+    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX",)
     symbol_policy_forbidden_symbol_markers: Tuple[str, ...] = (".ETF", "_CFD.ETF", ".ETN", "_CFD.ETN")
     symbol_policy_forbidden_path_markers: Tuple[str, ...] = ("STOCK", "AKCJE", "EQUITY", "ETF", "ETN")
 
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
-    group_price_shares = {"FX": 0.45, "METAL": 0.25, "INDEX": 0.30}
+    group_price_shares = {"FX": 1.0}
     per_group: Dict[str, Dict[str, Any]] = {}
     per_symbol: Dict[str, Dict[str, Any]] = {}
     group_borrow_fraction: float = 0.15  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
@@ -367,6 +383,7 @@ class CFG:
     black_swan_min_vol_samples: int = 1
     kill_switch_on_black_swan_stress: bool = True
     kill_switch_black_swan_multiplier: float = 1.0
+    manual_kill_switch_file: str = "RUN/kill_switch.flag"
 
     # Learner QA gate (P1): anti-overfit traffic-light from learner_offline.
     learner_qa_gate_enabled: bool = True
@@ -409,6 +426,13 @@ class CFG:
     partial_tp_r: float = 1.0
     partial_tp_fraction: float = 0.5
     partial_tp_retry_sec: int = 120
+    sltp_modify_min_interval_sec: int = 12
+    sltp_modify_max_per_sec: int = 6
+
+    # Execution idempotency / pre-flight checks.
+    signal_dedupe_enabled: bool = True
+    signal_dedupe_ttl_sec: int = 900
+    use_order_check: bool = True
 
     # Position lifecycle guard (scalp discipline): prevent stale multi-hour holds.
     position_time_stop_enabled: bool = True
@@ -2354,6 +2378,34 @@ def apply_scout_tiebreak(candidates: List[Tuple[float, str, str, str]],
 def is_price_kind(kind: str) -> bool:
     return kind == "tick" or kind.startswith("rates_")
 
+
+def pip_size_from_point(point: float, digits: int) -> float:
+    p = float(point or 0.0)
+    d = int(digits or 0)
+    if p <= 0.0:
+        return 0.0
+    if d in (3, 5):
+        return p * 10.0
+    return p
+
+
+def pips_to_price(pips: float, point: float, digits: int) -> float:
+    ps = pip_size_from_point(point, digits)
+    if ps <= 0.0:
+        return 0.0
+    return float(pips) * ps
+
+
+def price_to_pips(delta_price: float, point: float, digits: int) -> float:
+    ps = pip_size_from_point(point, digits)
+    if ps <= 0.0:
+        return 0.0
+    return float(delta_price) / ps
+
+
+def round_price_to_digits(price: float, digits: int) -> float:
+    return float(round(float(price), int(max(0, digits))))
+
 # =============================================================================
 # P0 helpers: trade_mode / retcode mapping / budgets
 # =============================================================================
@@ -2883,6 +2935,8 @@ class ExecutionEngine:
         self._sym_info_cache: Dict[str, Tuple[float, object]] = {}
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
+        self._sltp_ts: List[float] = []
+        self._sltp_pos_ts: Dict[int, float] = {}
         self._exec_error_ts: List[float] = []
         self.incident_journal: Optional[IncidentJournal] = None
 
@@ -3030,7 +3084,7 @@ class ExecutionEngine:
     def copy_rates(self, symbol: str, grp: str, timeframe, n: int):
         kind = f"rates_{timeframe}"
         if self.limits is not None:
-            if not self.limits.allow_price_request(emergency=False):
+            if not self.limits.allow_price_request(emergency=False, kind=kind):
                 logging.info(f"SKIP_PRICE_LIMIT kind=copy_rates symbol={symbol}")
                 return None
         if not self.gov.consume(grp, symbol, kind, 1, emergency=False):
@@ -3038,7 +3092,7 @@ class ExecutionEngine:
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, n)
         if self.limits is not None:
             # Count OANDA PRICE only after real MT5 request attempt.
-            self.limits.note_price_request(now_ts=time.time(), emergency=False)
+            self.limits.note_price_request(now_ts=time.time(), emergency=False, kind=kind)
         if rates is None or len(rates) == 0:
             err1 = None
             try:
@@ -3059,7 +3113,7 @@ class ExecutionEngine:
             if selected and self.gov.consume(grp, symbol, kind, 1, emergency=False):
                 rates2 = mt5.copy_rates_from_pos(symbol, timeframe, 0, n)
                 if self.limits is not None:
-                    self.limits.note_price_request(now_ts=time.time(), emergency=False)
+                    self.limits.note_price_request(now_ts=time.time(), emergency=False, kind=kind)
                 try:
                     err2 = mt5.last_error()
                 except Exception as e:
@@ -3104,7 +3158,7 @@ class ExecutionEngine:
 
     def tick(self, symbol: str, grp: str, emergency: bool = False):
         if self.limits is not None:
-            if not self.limits.allow_price_request(emergency=bool(emergency)):
+            if not self.limits.allow_price_request(emergency=bool(emergency), kind="tick"):
                 logging.info(f"SKIP_PRICE_LIMIT kind=tick symbol={symbol} emergency={int(bool(emergency))}")
                 return None
         if not self.gov.consume(grp, symbol, "tick", 1, emergency=bool(emergency)):
@@ -3112,7 +3166,7 @@ class ExecutionEngine:
         t = mt5.symbol_info_tick(symbol)
         if self.limits is not None:
             # Count OANDA PRICE only after real MT5 request attempt.
-            self.limits.note_price_request(now_ts=time.time(), emergency=bool(emergency))
+            self.limits.note_price_request(now_ts=time.time(), emergency=bool(emergency), kind="tick")
         # V1.10: time anchor update (server tick time)
         if t is not None and _TIME_ANCHOR is not None:
             try:
@@ -3131,8 +3185,8 @@ class ExecutionEngine:
             action = request.get("action")
             if action != getattr(mt5, "TRADE_ACTION_DEAL", None):
                 return
-            # Keep margin: use 90% of Appendix limit.
-            limit = max(1, int(CFG.oanda_market_orders_per_sec * 0.90))
+            # House stop (conservative), configured against broker hard-limit.
+            limit = max(1, int(getattr(CFG, "oanda_market_orders_per_sec", 20)))
             now = time.time()
             self._deal_ts = [t for t in self._deal_ts if (now - float(t)) < 1.0]
             if len(self._deal_ts) >= limit:
@@ -3143,6 +3197,31 @@ class ExecutionEngine:
             self._deal_ts.append(time.time())
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _allow_sltp_modify(self, request: dict, emergency: bool = False) -> bool:
+        if emergency:
+            return True
+        try:
+            action = request.get("action")
+            if action != getattr(mt5, "TRADE_ACTION_SLTP", None):
+                return True
+            now = float(time.time())
+            max_per_sec = max(1, int(getattr(CFG, "sltp_modify_max_per_sec", 6)))
+            min_interval = max(1, int(getattr(CFG, "sltp_modify_min_interval_sec", 12)))
+            self._sltp_ts = [t for t in self._sltp_ts if (now - float(t)) < 1.0]
+            if len(self._sltp_ts) >= max_per_sec:
+                return False
+            pos_ticket = int(request.get("position") or 0)
+            if pos_ticket > 0:
+                last = float(self._sltp_pos_ts.get(pos_ticket, 0.0) or 0.0)
+                if (now - last) < float(min_interval):
+                    return False
+                self._sltp_pos_ts[pos_ticket] = now
+            self._sltp_ts.append(now)
+            return True
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return False
 
     def order_send(self, symbol: str, grp: str, request: dict, emergency: bool = False):
         """P0 order_send wrapper.
@@ -3171,6 +3250,14 @@ class ExecutionEngine:
             if not self.limits.allow_order_submit(now_ts=now_ts, emergency=bool(emergency)):
                 logging.info(f"SKIP_ORDER_RATE_LIMIT symbol={symbol} emergency={int(bool(emergency))}")
                 return None
+        if not self._allow_sltp_modify(request=request, emergency=bool(emergency)):
+            logging.info(
+                "SKIP_SLTP_THROTTLE symbol=%s position=%s emergency=%s",
+                symbol,
+                int(request.get("position") or 0),
+                int(bool(emergency)),
+            )
+            return None
 
         # SYS: fresh symbol_info right before order_send (not counted as PRICE request)
         if not self.gov.consume("SYS", symbol, "symbol_info", 1, emergency=bool(emergency)):
@@ -3309,11 +3396,13 @@ class ExecutionEngine:
             stops_level_raw = getattr(info, "trade_stops_level", None)
             freeze_level_raw = getattr(info, "trade_freeze_level", None)
             point_raw = getattr(info, "point", None)
+            digits_raw = getattr(info, "digits", None)
             if stops_level_raw is None or freeze_level_raw is None or point_raw is None:
                 raise ValueError("missing stops/freeze/point")
             stops_level = int(stops_level_raw)
             freeze_level = int(freeze_level_raw)
             point = float(point_raw)
+            digits = int(digits_raw if digits_raw is not None else 5)
             if stops_level < 0 or freeze_level < 0 or (point <= 0.0):
                 raise ValueError("invalid stops/freeze/point")
         except Exception as e:
@@ -3327,9 +3416,11 @@ class ExecutionEngine:
             stops_level, freeze_level = 0, 0
             try:
                 point = float(getattr(info, "point", 0.0) or 0.0)
+                digits = int(getattr(info, "digits", 5) or 5)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                 point = 0.0
+                digits = 5
             if point <= 0.0:
                 point = 1e-5
         buffer_pts = int(CFG.stops_buffer_pts)
@@ -3361,11 +3452,16 @@ class ExecutionEngine:
         if (sl_pts > 0.0 and sl_pts < float(min_required_pts)) or (tp_pts > 0.0 and tp_pts < float(min_required_pts)):
             cooldown_s = int(CFG.cooldown_stops_too_close_s)
             self.gov.db.set_cooldown(symbol, cooldown_s, "stops_too_close")
+            min_required_price = float(min_required_pts) * float(point)
+            min_required_pips = price_to_pips(min_required_price, point, digits)
+            sl_pips = price_to_pips(float(abs(float(price or 0.0) - float(sl_v or 0.0))) if sl_v is not None else 0.0, point, digits)
+            tp_pips = price_to_pips(float(abs(float(price or 0.0) - float(tp_v or 0.0))) if tp_v is not None else 0.0, point, digits)
             # Required one-liner (P0)
             logging.info(
                 f"SKIP_PRECHECK_STOPS symbol={symbol} side={side} sl_pts={sl_pts:.2f} tp_pts={tp_pts:.2f} "
                 f"min_required_pts={min_required_pts} stops_level={stops_level} freeze_level={freeze_level} "
-                f"buffer_pts={buffer_pts} cooldown_s={cooldown_s}"
+                f"buffer_pts={buffer_pts} sl_pips={sl_pips:.3f} tp_pips={tp_pips:.3f} "
+                f"min_required_pips={min_required_pips:.3f} cooldown_s={cooldown_s}"
             )
             return None
 
@@ -3540,13 +3636,69 @@ class ExecutionEngine:
                     )
                     return None
 
+            # Optional broker-side preflight on the exact request payload.
+            # WHY: catches invalid stops/fill/permissions before consuming ORDER action budget.
+            if (not emergency) and bool(getattr(CFG, "use_order_check", True)) and hasattr(mt5, "order_check"):
+                if not self.gov.consume("SYS", symbol, "order_check", 1, emergency=False):
+                    logging.info(f"SKIP_SYS_BUDGET symbol={symbol} kind=order_check emergency=0")
+                    return None
+                t_check0 = time.perf_counter()
+                chk = mt5.order_check(request)
+                check_ms = int((time.perf_counter() - t_check0) * 1000.0)
+                chk_num = -1
+                try:
+                    if chk is not None and hasattr(chk, "retcode"):
+                        chk_num = int(getattr(chk, "retcode"))
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    chk_num = -1
+                chk_name = "ORDER_CHECK_OK" if chk_num == 0 else _retcode_name(chk_num)
+                logging.info(
+                    "ORDER_CHECK symbol=%s attempt=%s retcode_num=%s retcode_name=%s latency_ms=%s",
+                    symbol,
+                    int(attempt + 1),
+                    int(chk_num),
+                    chk_name,
+                    int(check_ms),
+                )
+                if chk_num not in (0, int(getattr(mt5, "TRADE_RETCODE_DONE", 10009)), int(getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)), int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008))):
+                    try:
+                        if chk_num in symbol_cooldown_cfg:
+                            sec, rsn = symbol_cooldown_cfg[int(chk_num)]
+                            cd = self.gov.db.set_cooldown(symbol, int(sec), f"order_check:{rsn}")
+                            logging.info(
+                                "ORDER_CHECK_COOLDOWN symbol=%s retcode_num=%s retcode_name=%s cooldown_until_ts=%s reason=%s",
+                                symbol,
+                                int(chk_num),
+                                chk_name,
+                                int(cd),
+                                str(rsn),
+                            )
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    if chk_num in global_backoff_cfg:
+                        backoff_s = int(global_backoff_cfg.get(chk_num, 0))
+                        if backoff_s > 0:
+                            until = int(time.time()) + backoff_s
+                            self.gov.db.set_global_backoff(until_ts=until, reason=f"order_check:{chk_num}:{chk_name}")
+                            logging.warning(
+                                "GLOBAL_BACKOFF source=order_check retcode_num=%s retcode_name=%s backoff_s=%s until_ts=%s",
+                                int(chk_num),
+                                chk_name,
+                                int(backoff_s),
+                                int(until),
+                            )
+                    return None
+
             # Count every mt5.order_send call as ORDER action/day (P0)
             self.gov.db.inc_order_action(1, now_dt=now_dt)
 
             attempt += 1
             # Appendix 4: market orders/sec guard
             self._rate_limit_market_orders(request)
+            t_send0 = time.perf_counter()
             res = mt5.order_send(request)
+            send_ms = int((time.perf_counter() - t_send0) * 1000.0)
             last_res = res
             ret_num = -1
             try:
@@ -3558,7 +3710,14 @@ class ExecutionEngine:
             ret_name = _retcode_name(ret_num)
 
             # Required per-call log (P0)
-            logging.info(f"ORDER_SEND symbol={symbol} attempt={attempt} retcode_num={ret_num} retcode_name={ret_name}")
+            logging.info(
+                "ORDER_SEND symbol=%s attempt=%s retcode_num=%s retcode_name=%s latency_ms=%s",
+                symbol,
+                int(attempt),
+                int(ret_num),
+                str(ret_name),
+                int(send_ms),
+            )
             try:
                 if self.incident_journal is not None:
                     self.incident_journal.note_retcode(
@@ -3812,6 +3971,41 @@ class StandardStrategy:
         self._last_eval_price_before: Optional[int] = None
         self._last_eval_sys_before: Optional[int] = None
         self._last_event_id: Optional[str] = None
+        self._signal_seen_local: Dict[str, float] = {}
+
+    def _signal_id(self, symbol: str, signal: str, signal_reason: str, regime: str) -> str:
+        bar_ts = self.cache.last_m5_bar_time.get(symbol)
+        if isinstance(bar_ts, pd.Timestamp):
+            bar_key = bar_ts.tz_convert(UTC).strftime("%Y%m%dT%H%M%SZ")
+        else:
+            bar_key = str(int(time.time() // 60))
+        return (
+            f"{symbol_base(symbol)}|tf={int(getattr(CFG, 'timeframe_trade', 5))}|"
+            f"bar={bar_key}|signal={str(signal)}|reason={str(signal_reason)}|regime={str(regime)}"
+        )
+
+    def _signal_dedup_block(self, signal_id: str) -> bool:
+        if not bool(getattr(CFG, "signal_dedupe_enabled", True)):
+            return False
+        now_ts = float(time.time())
+        ttl_s = max(30, int(getattr(CFG, "signal_dedupe_ttl_sec", 900)))
+        last_local = float(self._signal_seen_local.get(signal_id, 0.0) or 0.0)
+        if (now_ts - last_local) < ttl_s:
+            return True
+        key = f"signal_seen_ts:{signal_id}"
+        try:
+            last_db = float(self.db.state_get(key, "0") or 0.0)
+        except Exception:
+            last_db = 0.0
+        if (now_ts - last_db) < ttl_s:
+            self._signal_seen_local[signal_id] = now_ts
+            return True
+        self._signal_seen_local[signal_id] = now_ts
+        try:
+            self.db.state_set(key, str(now_ts))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return False
 
     def _rollover_cfg(self) -> Dict[str, Any]:
         raw = getattr(self.config, "rollover", {}) or {}
@@ -4491,6 +4685,16 @@ class StandardStrategy:
         )
 
         if signal:
+            signal_id = self._signal_id(symbol, signal, signal_reason, regime)
+            if self._signal_dedup_block(signal_id):
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=SIGNAL_DUPLICATE signal_id=%s",
+                    symbol,
+                    grp,
+                    mode,
+                    signal_id,
+                )
+                return
             logging.info(
                 f"ENTRY_SIGNAL symbol={symbol} grp={grp} mode={mode} trend_h4={trend_h4} "
                 f"structure_h4={structure_h4} regime={regime} reason={signal_reason} "
@@ -4755,6 +4959,8 @@ class SafetyBot:
         self.backups_dir = _paths["backups"]
         self.lock_dir = _paths["lock"]
         self.evidence_dir = _paths["evidence"]
+        self.manual_kill_switch_path = self.runtime_root / str(getattr(CFG, "manual_kill_switch_file", "RUN/kill_switch.flag"))
+        self._last_manual_kill_log_ts = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -4954,6 +5160,9 @@ class SafetyBot:
                 logging.warning(f"Nie znaleziono symbolu w MT5: {raw}")
                 continue
             grp = guess_group(sym)
+            if bool(getattr(CFG, "fx_only_mode", True)) and str(grp).upper() != "FX":
+                logging.info(f"UNIVERSE_SKIP_FX_ONLY raw={raw} symbol={sym} group={grp}")
+                continue
             info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
             block_reason = symbol_policy_block_reason(sym, grp, info=info, is_close=False)
             if block_reason:
@@ -5012,6 +5221,21 @@ class SafetyBot:
             _, ref_sym, ref_grp = self.universe[0]
 
         _ = self.execution_engine.tick(ref_sym, ref_grp)  # tick() aktualizuje kotwicę
+
+    def _manual_kill_switch_active(self) -> bool:
+        try:
+            active = bool(self.manual_kill_switch_path.exists())
+        except Exception:
+            active = False
+        if active:
+            now_ts = float(time.time())
+            if (now_ts - float(self._last_manual_kill_log_ts or 0.0)) >= 60.0:
+                logging.warning(
+                    "MANUAL_KILL_SWITCH active=1 path=%s (new entries paused)",
+                    str(self.manual_kill_switch_path),
+                )
+                self._last_manual_kill_log_ts = now_ts
+        return active
 
     def poll_deals(self):
         # SYS — rzadziej (10 min)
@@ -5087,10 +5311,37 @@ class SafetyBot:
 
         self.db.set_last_ts("last_positions_poll_ts", now_ts)
 
+        prev_map = dict(self._positions_cache)
         m: Dict[str, List] = {}
         if pos:
             for p in pos:
                 m.setdefault(p.symbol, []).append(p)
+
+        try:
+            def _tickets(src: Dict[str, List]) -> set[int]:
+                out: set[int] = set()
+                for vals in src.values():
+                    for pp in vals:
+                        try:
+                            out.add(int(getattr(pp, "ticket", 0) or 0))
+                        except Exception:
+                            continue
+                return out
+            prev_t = _tickets(prev_map)
+            now_t = _tickets(m)
+            if prev_t != now_t:
+                added = sorted(x for x in (now_t - prev_t) if int(x) > 0)
+                removed = sorted(x for x in (prev_t - now_t) if int(x) > 0)
+                logging.info(
+                    "RECONCILE_POSITIONS changed=%s added=%s removed=%s prev_total=%s now_total=%s",
+                    int(bool(added or removed)),
+                    int(len(added)),
+                    int(len(removed)),
+                    int(len(prev_t)),
+                    int(len(now_t)),
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         self._positions_cache = dict(m)
         return dict(self._positions_cache)
@@ -5725,6 +5976,7 @@ class SafetyBot:
             f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
         )
 
+        warn_degrade_active = False
         # OANDA warning threshold (price requests/day): emit one warning per primary day key.
         try:
             if self.limits.warn_level_reached():
@@ -5740,6 +5992,23 @@ class SafetyBot:
                         f"price_budget={price_budget} safe_mode={int(bool(self.limits.safe_mode_active()))}"
                     )
                     self.db.state_set(state_key, day_key)
+            warn_degrade_active = bool(self.limits.warn_degrade_active())
+            if warn_degrade_active and bool(getattr(CFG, "oanda_warn_degrade_enabled", True)):
+                eco_by_budget = True
+                eco_reason = ",".join([x for x in (eco_reason.split(",") if eco_reason else []) if x] + ["OANDA_WARN"])
+            try:
+                pb = self.limits.get_price_breakdown()
+                logging.info(
+                    "OANDA_PRICE_BREAKDOWN day=%s total=%s tick=%s rates=%s other=%s warn_active=%s",
+                    str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or ""),
+                    int(pb.get("total", 0)),
+                    int(pb.get("tick", 0)),
+                    int(pb.get("rates", 0)),
+                    int(pb.get("other", 0)),
+                    int(bool(warn_degrade_active)),
+                )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -5907,6 +6176,9 @@ class SafetyBot:
                 f"threshold={black_swan_signal.precaution_threshold:.3f} => ECO"
             )
 
+        if self._manual_kill_switch_active():
+            return
+
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
         for raw, sym, grp in self.universe:
             # priorytet: time_weight * score_factor (+ bonus, jeśli mamy otwartą pozycję)
@@ -5949,6 +6221,8 @@ class SafetyBot:
 
         # V1.10: Spend-down — niewielki boost liczby symboli, jeśli i tak budżet by się zmarnował.
         n_limit = int(n_max) + (int(CFG.spenddown_extra_symbols) if spenddown_active else 0)
+        if warn_degrade_active and bool(getattr(CFG, "oanda_warn_degrade_enabled", True)):
+            n_limit = min(int(n_limit), max(0, int(getattr(CFG, "oanda_warn_symbols_cap", 1))))
         if canary_signal.canary_active:
             n_limit = min(int(n_limit), int(max(0, canary_signal.allowed_symbols)))
         if bool(getattr(CFG, "learner_qa_gate_enabled", True)) and learner_qa_light == "YELLOW":
@@ -6245,6 +6519,19 @@ if __name__ == "__main__":
         except Exception:
             raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be float (got {raw!r})")
 
+    def _cfg_str_list(key: str, fallback: List[str]) -> List[str]:
+        raw = strategy_cfg.get(key, fallback)
+        if raw is None:
+            return list(fallback)
+        if not isinstance(raw, list):
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be list (got {raw!r})")
+        out: List[str] = []
+        for item in raw:
+            txt = str(item or "").strip().upper()
+            if txt:
+                out.append(txt)
+        return out or list(fallback)
+
     # Required runtime fields (previously declared-only) are now sourced from CONFIG/strategy.json.
     CFG.fixed_sl_points = _cfg_int("fixed_sl_points", CFG.fixed_sl_points)
     CFG.fixed_tp_points = _cfg_int("fixed_tp_points", CFG.fixed_tp_points)
@@ -6300,6 +6587,14 @@ if __name__ == "__main__":
     CFG.position_time_stop_deviation_points = _cfg_int(
         "position_time_stop_deviation_points", CFG.position_time_stop_deviation_points
     )
+    CFG.sltp_modify_min_interval_sec = _cfg_int("sltp_modify_min_interval_sec", CFG.sltp_modify_min_interval_sec)
+    CFG.sltp_modify_max_per_sec = _cfg_int("sltp_modify_max_per_sec", CFG.sltp_modify_max_per_sec)
+    CFG.signal_dedupe_enabled = _cfg_bool("signal_dedupe_enabled", CFG.signal_dedupe_enabled)
+    CFG.signal_dedupe_ttl_sec = _cfg_int("signal_dedupe_ttl_sec", CFG.signal_dedupe_ttl_sec)
+    CFG.use_order_check = _cfg_bool("use_order_check", CFG.use_order_check)
+    CFG.fx_only_mode = _cfg_bool("fx_only_mode", CFG.fx_only_mode)
+    CFG.oanda_warn_symbols_cap = _cfg_int("oanda_warn_symbols_cap", CFG.oanda_warn_symbols_cap)
+    CFG.symbols_to_trade = _cfg_str_list("symbols_to_trade", list(CFG.symbols_to_trade))
 
     CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
     CFG.black_swan_precaution_fraction = float(
@@ -6311,6 +6606,12 @@ if __name__ == "__main__":
     )
     CFG.kill_switch_black_swan_multiplier = float(
         config.risk.get("kill_switch_black_swan_multiplier", CFG.kill_switch_black_swan_multiplier)
+    )
+    CFG.oanda_price_warning_per_day = int(config.limits.get("house_price_warn_per_day", CFG.oanda_price_warning_per_day))
+    CFG.oanda_price_cutoff_per_day = int(config.limits.get("house_price_hard_stop_per_day", CFG.oanda_price_cutoff_per_day))
+    CFG.oanda_market_orders_per_sec = int(config.limits.get("house_orders_per_sec", CFG.oanda_market_orders_per_sec))
+    CFG.oanda_positions_pending_limit = int(
+        config.limits.get("house_positions_pending_limit", CFG.oanda_positions_pending_limit)
     )
     db = Persistence(_paths["db"] / DECISION_EVENTS_DB_NAME)
     gov = RequestGovernor(db)

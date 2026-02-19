@@ -1,6 +1,6 @@
 {
   "house_price_warn_per_day": 1000,
   "house_price_hard_stop_per_day": 4500,
-  "house_orders_per_sec": 45,
+  "house_orders_per_sec": 20,
   "house_positions_pending_limit": 450
 }

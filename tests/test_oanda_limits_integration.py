@@ -70,6 +70,7 @@ class _StubMT5:
         self._filling_mode = self.SYMBOL_FILLING_FOK | self.SYMBOL_FILLING_IOC | self.SYMBOL_FILLING_RETURN
         self._symbol_path = ""
         self._retcodes = []
+        self._order_check_retcodes = []
         self.order_send_calls = 0
         self.requests = []
 
@@ -98,6 +99,11 @@ class _StubMT5:
         if self._retcodes:
             return _StubResult(int(self._retcodes.pop(0)))
         return _StubResult(self.TRADE_RETCODE_DONE)
+
+    def order_check(self, _request):
+        if self._order_check_retcodes:
+            return _StubResult(int(self._order_check_retcodes.pop(0)))
+        return _StubResult(0)
 
 
 class TestOandaLimitsIntegration(unittest.TestCase):
@@ -343,6 +349,19 @@ class TestOandaLimitsIntegration(unittest.TestCase):
             self.assertGreater(int(db.get_global_backoff_until_ts()), int(safetybot.time.time()))
             reason = db.get_global_backoff_reason()
             self.assertIn("execution_burst", str(reason))
+        finally:
+            db.conn.close()
+
+    def test_order_check_invalid_stops_blocks_before_send(self):
+        tmp = self._tmpdir()
+        client, db = self._build_client(tmp, orders_per_sec=100)
+        try:
+            self.stub.order_send_calls = 0
+            self.stub._order_check_retcodes = [10016]
+            req = {"action": self.stub.TRADE_ACTION_DEAL, "type": self.stub.ORDER_TYPE_BUY, "price": 1.0, "sl": 0.9999}
+            res = client.order_send("EURUSD", "FX", req, emergency=False)
+            self.assertIsNone(res)
+            self.assertEqual(self.stub.order_send_calls, 0)
         finally:
             db.conn.close()
 

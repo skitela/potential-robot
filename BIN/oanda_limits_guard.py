@@ -29,6 +29,15 @@ class OandaLimitsGuard:
         self._lock = threading.Lock()
         self._order_ts: List[float] = []
 
+    @staticmethod
+    def _norm_price_kind(kind: Optional[str]) -> str:
+        k = str(kind or "").strip().lower()
+        if k == "tick":
+            return "tick"
+        if k.startswith("rates_") or k == "copy_rates":
+            return "rates"
+        return "other"
+
     def _utc_day_id(self, now_ts: Optional[float] = None) -> str:
         if now_ts is None:
             now_ts = time.time()
@@ -117,11 +126,21 @@ class OandaLimitsGuard:
         self._state_set(key_count, str(cur))
         return cur
 
-    def note_price_request(self, now_ts: Optional[float] = None, emergency: bool = False) -> bool:
+    def _increment_kind_utc_day(self, kind: str, now_ts: Optional[float] = None) -> int:
+        utc_day = self._utc_day_id(now_ts)
+        k = self._norm_price_kind(kind)
+        key = f"oanda_limits:price_kind:utc:{utc_day}:{k}"
+        cur = int(self._state_get(key, "0"))
+        cur += 1
+        self._state_set(key, str(cur))
+        return cur
+
+    def note_price_request(self, now_ts: Optional[float] = None, emergency: bool = False, kind: Optional[str] = None) -> bool:
         if now_ts is None:
             now_ts = time.time()
         with self._lock:
             utc_count = self._increment_utc_day(now_ts)
+            self._increment_kind_utc_day(str(kind or "other"), now_ts)
             rolling = self._load_rolling()
             cutoff = int(float(now_ts)) - 24 * 3600
             rolling = [int(t) for t in rolling if int(t) >= cutoff]
@@ -138,7 +157,7 @@ class OandaLimitsGuard:
                 return False
             return True
 
-    def allow_price_request(self, emergency: bool = False) -> bool:
+    def allow_price_request(self, emergency: bool = False, kind: Optional[str] = None) -> bool:
         if (not emergency) and self.safe_mode_active():
             return False
         return True
@@ -174,3 +193,20 @@ class OandaLimitsGuard:
         cutoff = int(float(now_ts)) - 24 * 3600
         rolling = [int(t) for t in rolling if int(t) >= cutoff]
         return (utc_count >= self.warn_day) or (len(rolling) >= self.warn_day)
+
+    def warn_degrade_active(self, now_ts: Optional[float] = None) -> bool:
+        return bool(self.warn_level_reached(now_ts=now_ts)) and (not self.safe_mode_active())
+
+    def get_price_breakdown(self, now_ts: Optional[float] = None) -> dict:
+        if now_ts is None:
+            now_ts = time.time()
+        utc_day = self._utc_day_id(now_ts)
+        out = {"tick": 0, "rates": 0, "other": 0}
+        for k in tuple(out.keys()):
+            key = f"oanda_limits:price_kind:utc:{utc_day}:{k}"
+            try:
+                out[k] = int(self._state_get(key, "0"))
+            except Exception:
+                out[k] = 0
+        out["total"] = int(out["tick"] + out["rates"] + out["other"])
+        return out

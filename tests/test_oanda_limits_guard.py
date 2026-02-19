@@ -82,6 +82,26 @@ class TestOandaLimitsGuard(unittest.TestCase):
         self.assertTrue(guard.allow_positions_pending(3))
         self.assertFalse(guard.allow_positions_pending(4))
 
+    def test_price_kind_breakdown(self):
+        db = MemState()
+        tmp = self._tmpdir()
+        guard = OandaLimitsGuard(
+            db,
+            tmp,
+            warn_day=3,
+            hard_stop_day=50,
+            orders_per_sec=2,
+            positions_pending_limit=4,
+        )
+        now = 2_000_000
+        self.assertTrue(guard.note_price_request(now_ts=now, kind="tick"))
+        self.assertTrue(guard.note_price_request(now_ts=now + 1, kind="rates_5"))
+        self.assertTrue(guard.note_price_request(now_ts=now + 2, kind="copy_rates"))
+        b = guard.get_price_breakdown(now_ts=now + 2)
+        self.assertEqual(int(b.get("tick", -1)), 1)
+        self.assertEqual(int(b.get("rates", -1)), 2)
+        self.assertEqual(int(b.get("total", -1)), 3)
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
