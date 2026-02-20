@@ -546,6 +546,73 @@ def required_cfg_missing_fields() -> list[str]:
 
 _TIME_ANCHOR = None  # ustawiane w SafetyBot po połączeniu z MT5
 
+# MT5 Python API returns `tick.time` / rate["time"] as an epoch-like integer, but on some brokers
+# it behaves like "server-local epoch" (UTC epoch + tz offset). We must correct it to real UTC
+# before feeding TimeAnchor, otherwise day-boundary and trade-windows can shift by ~1h (P0).
+_MT5_SERVER_EPOCH_OFFSET_HAVE = False
+_MT5_SERVER_EPOCH_OFFSET_SEC = 0
+_MT5_SERVER_EPOCH_OFFSET_LAST_LOG_TS = 0.0
+
+
+def _mt5_epoch_offset_snap(raw_offset_s: float, snap_s: int) -> int:
+    snap = max(1, int(snap_s))
+    return int(round(float(raw_offset_s) / float(snap)) * snap)
+
+
+def _maybe_update_mt5_server_epoch_offset(epoch_s: int, source: str, max_age_s: int) -> None:
+    """Best-effort detection of MT5 server-epoch offset vs true UTC epoch.
+
+    We only attempt this using timestamps that are expected to be close to "now" (tick/M1/M5),
+    otherwise bar age would dominate the estimate.
+    """
+    global _MT5_SERVER_EPOCH_OFFSET_HAVE, _MT5_SERVER_EPOCH_OFFSET_SEC, _MT5_SERVER_EPOCH_OFFSET_LAST_LOG_TS
+    try:
+        now_ts = float(time.time())
+        raw = float(int(epoch_s)) - now_ts
+
+        # If the provided epoch is expected to be close to now, then `raw` should be roughly:
+        #   raw ~= server_tz_offset_seconds (+/- small network delay, +/- small bar age)
+        # We treat small skews as "already UTC epoch".
+        max_age = max(0, int(max_age_s))
+        max_skew = int(getattr(CFG, "mt5_server_epoch_max_skew_sec", 120))
+        if abs(raw) <= float(max_skew + max_age):
+            snapped = 0
+        else:
+            snap_s = int(getattr(CFG, "mt5_server_epoch_offset_snap_sec", 60))
+            snapped = _mt5_epoch_offset_snap(raw, snap_s=snap_s)
+
+        # Sanity clamp: if absurd, ignore.
+        max_abs = int(getattr(CFG, "mt5_server_epoch_max_offset_abs_sec", 14 * 3600))
+        if abs(int(snapped)) > max_abs:
+            return
+
+        if (not _MT5_SERVER_EPOCH_OFFSET_HAVE) or (int(snapped) != int(_MT5_SERVER_EPOCH_OFFSET_SEC)):
+            _MT5_SERVER_EPOCH_OFFSET_HAVE = True
+            _MT5_SERVER_EPOCH_OFFSET_SEC = int(snapped)
+            # Rate-limit logs in case of flapping clocks.
+            now = float(time.time())
+            if (now - float(_MT5_SERVER_EPOCH_OFFSET_LAST_LOG_TS)) >= 60.0:
+                _MT5_SERVER_EPOCH_OFFSET_LAST_LOG_TS = now
+                logging.warning(
+                    "MT5_SERVER_EPOCH_OFFSET source=%s raw=%.2f snapped=%s max_age_s=%s",
+                    str(source),
+                    float(raw),
+                    int(snapped),
+                    int(max_age),
+                )
+    except Exception as e:
+        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+
+def mt5_epoch_to_utc_dt(epoch_s: int) -> dt.datetime:
+    """Convert MT5 epoch-like seconds to real UTC datetime using detected server offset (best-effort)."""
+    try:
+        off = int(_MT5_SERVER_EPOCH_OFFSET_SEC) if bool(_MT5_SERVER_EPOCH_OFFSET_HAVE) else 0
+        return dt.datetime.fromtimestamp(int(epoch_s) - off, tz=UTC)
+    except Exception:
+        return dt.datetime.fromtimestamp(int(epoch_s), tz=UTC)
+
+
 class TimeAnchor:
     """Zegar oparty o czas serwera (tick/bar) + monotonic() jako nośnik między synchronizacjami.
     Chroni rollover/NY-day przed dryftem czasu systemowego i problemami DST.
@@ -3441,7 +3508,19 @@ class ExecutionEngine:
                 err1,
             )
         df = pd.DataFrame(rates)
-        t_series = pd.to_datetime(df["time"], unit="s", utc=True)
+        # Detect MT5 server-epoch offset from "fresh" bars (M1/M5), then correct time column to true UTC.
+        try:
+            tf_int = int(timeframe) if timeframe is not None else -1
+        except Exception:
+            tf_int = -1
+        if tf_int in (1, 5) and "time" in df.columns and len(df) > 0:
+            try:
+                _maybe_update_mt5_server_epoch_offset(int(df["time"].iloc[-1]), source=str(kind), max_age_s=600)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        off = int(_MT5_SERVER_EPOCH_OFFSET_SEC) if bool(_MT5_SERVER_EPOCH_OFFSET_HAVE) else 0
+        t_series = pd.to_datetime((df["time"].astype(int) - int(off)), unit="s", utc=True)
         # V1.10: time anchor update (server bar time)
         if _TIME_ANCHOR is not None:
             try:
@@ -3471,7 +3550,8 @@ class ExecutionEngine:
         # V1.10: time anchor update (server tick time)
         if t is not None and _TIME_ANCHOR is not None:
             try:
-                _TIME_ANCHOR.update(dt.datetime.fromtimestamp(int(t.time), tz=UTC))
+                _maybe_update_mt5_server_epoch_offset(int(t.time), source="tick", max_age_s=10)
+                _TIME_ANCHOR.update(mt5_epoch_to_utc_dt(int(t.time)))
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return t
@@ -4134,7 +4214,8 @@ class ExecutionEngine:
 
                     try:
 
-                        _TIME_ANCHOR.update(dt.datetime.fromtimestamp(int(t.time), tz=UTC))
+                        _maybe_update_mt5_server_epoch_offset(int(t.time), source="tick_emergency", max_age_s=10)
+                        _TIME_ANCHOR.update(mt5_epoch_to_utc_dt(int(t.time)))
 
                     except Exception as e:
 
@@ -4197,7 +4278,8 @@ class ExecutionEngine:
                     continue
                 if t is not None and _TIME_ANCHOR is not None:
                     try:
-                        _TIME_ANCHOR.update(dt.datetime.fromtimestamp(int(t.time), tz=UTC))
+                        _maybe_update_mt5_server_epoch_offset(int(t.time), source="tick_emergency", max_age_s=10)
+                        _TIME_ANCHOR.update(mt5_epoch_to_utc_dt(int(t.time)))
                     except Exception as e:
                         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                 close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
