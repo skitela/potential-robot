@@ -216,7 +216,8 @@ class CFG:
 
     # Soft/Emergency podział budżetów (utrzymuje możliwość awaryjnych domknięć).
     price_soft_fraction: float = 0.96
-    price_emergency_reserve_fraction: float = 0.12
+    # Wymuszenie 45/45/10: 10% rezerwy awaryjnej (domknięcia/kill-switch), 90% na trading.
+    price_emergency_reserve_fraction: float = 0.10
 
     sys_soft_fraction: float = 0.90
     sys_emergency_reserve: int = 40  # stała rezerwa awaryjna SYS (w ramach sys_budget_day)
@@ -261,6 +262,22 @@ class CFG:
     execution_burst_symbol_cooldown_s: int = 180
 
     # --- Grupy i profile ---
+
+    # --- Trade windows (P0): 2 okna, brak handlu poza nimi ---
+    # Wymaganie operacyjne (czas PL / Europe/Warsaw):
+    # - 09:00–12:00: FX (trening + scalping)
+    # - 14:00–17:00: METAL (XAU/XAG)
+    # Poza oknami:
+    # - brak nowych wejść (entry_allowed=0)
+    # - brak PRICE polling (tick/copy_rates), poza awaryjnymi domknięciami (emergency)
+    trade_windows = {
+        "FX_AM": {"group": "FX", "anchor_tz": "Europe/Warsaw", "start_hm": (9, 0), "end_hm": (12, 0)},
+        "METAL_PM": {"group": "METAL", "anchor_tz": "Europe/Warsaw", "start_hm": (14, 0), "end_hm": (17, 0)},
+    }
+    trade_closeout_buffer_min: int = 15
+    hard_no_mt5_outside_windows: bool = True
+    # Outside windows we still do minimal SYS reconciliation (positions/orders) for safety.
+    trade_off_sys_poll_sec: int = 900
     fx_only_mode: bool = True
     symbols_to_trade = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURGBP"]
     symbol_group_map = {
@@ -312,15 +329,17 @@ class CFG:
     # OANDA MT5 policy guard: block accidental algo on equity/ETF/ETN symbols (non-close only).
     symbol_policy_enabled: bool = True
     symbol_policy_fail_on_other_group: bool = True
-    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX",)
+    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX", "METAL")
     symbol_policy_forbidden_symbol_markers: Tuple[str, ...] = (".ETF", "_CFD.ETF", ".ETN", "_CFD.ETN")
     symbol_policy_forbidden_path_markers: Tuple[str, ...] = ("STOCK", "AKCJE", "EQUITY", "ETF", "ETN")
 
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
-    group_price_shares = {"FX": 1.0}
+    # 45/45/10: przy price_emergency_reserve_fraction=0.10, równe udziały FX/METAL dają 45%/45% (z 90% puli trade).
+    group_price_shares = {"FX": 1.0, "METAL": 1.0}
     per_group: Dict[str, Dict[str, Any]] = {}
     per_symbol: Dict[str, Dict[str, Any]] = {}
-    group_borrow_fraction: float = 0.15  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
+    # Brak pożyczania: trzymamy sztywny podział budżetu między FX i METAL.
+    group_borrow_fraction: float = 0.0  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
 
     # --- Strategia ---
     timeframe_trade = getattr(mt5, "TIMEFRAME_M5", 5)
@@ -611,6 +630,84 @@ def pl_day_key(ts_utc: Optional[dt.datetime] = None) -> str:
         ts_utc = now_utc()
     p = ts_utc.astimezone(TZ_PL)
     return p.strftime("%Y-%m-%d")
+
+# =============================================================================
+# TRADE WINDOWS (P0): 2 okna czasowe + bufor domknięcia
+# =============================================================================
+
+def _in_window(local_now: dt.datetime, start_hm: Tuple[int, int], end_hm: Tuple[int, int]) -> bool:
+    s_h, s_m = int(start_hm[0]), int(start_hm[1])
+    e_h, e_m = int(end_hm[0]), int(end_hm[1])
+    start = local_now.replace(hour=s_h, minute=s_m, second=0, microsecond=0)
+    end = local_now.replace(hour=e_h, minute=e_m, second=0, microsecond=0)
+    return bool(start <= local_now <= end)
+
+
+def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
+    """Return current trade-window context.
+
+    phase:
+      - ACTIVE: allowed to open new entries for the active group
+      - CLOSEOUT: within buffer to window end; only closing/cancel allowed (no entries)
+      - OFF: outside windows; no PRICE polling, only minimal SYS safety reconciliation
+    """
+    if now_dt is None:
+        now_dt = now_utc()
+
+    # Default: OFF
+    ctx: Dict[str, object] = {
+        "phase": "OFF",
+        "window_id": None,
+        "group": None,
+        "anchor_tz": None,
+        "pl_now": now_dt.astimezone(TZ_PL),
+        "anchor_now": None,
+        "entry_allowed": False,
+        "mt5_allowed": False,
+        "closeout_only": False,
+    }
+
+    try:
+        tw = getattr(CFG, "trade_windows", {}) or {}
+        buf_min = int(getattr(CFG, "trade_closeout_buffer_min", 15))
+    except Exception:
+        tw = {}
+        buf_min = 15
+
+    # Deterministic order: FX_AM then METAL_PM (no overlap expected by design)
+    for wid in ("FX_AM", "METAL_PM"):
+        w = tw.get(wid)
+        if not isinstance(w, dict) or not w:
+            continue
+        try:
+            tz = ZoneInfo(str(w.get("anchor_tz") or "Europe/Warsaw"))
+        except Exception:
+            tz = TZ_PL
+        local_now = now_dt.astimezone(tz)
+        try:
+            start_hm = tuple(w.get("start_hm") or (0, 0))
+            end_hm = tuple(w.get("end_hm") or (0, 0))
+        except Exception:
+            continue
+        if _in_window(local_now, start_hm, end_hm):
+            # Closeout buffer
+            e_h, e_m = int(end_hm[0]), int(end_hm[1])
+            end_dt = local_now.replace(hour=e_h, minute=e_m, second=0, microsecond=0)
+            closeout_start = end_dt - dt.timedelta(minutes=int(buf_min))
+            in_closeout = bool(local_now >= closeout_start)
+            ctx.update({
+                "phase": "CLOSEOUT" if in_closeout else "ACTIVE",
+                "window_id": wid,
+                "group": str(w.get("group") or "").upper(),
+                "anchor_tz": str(w.get("anchor_tz") or "Europe/Warsaw"),
+                "anchor_now": local_now,
+                "entry_allowed": (not in_closeout),
+                "mt5_allowed": True,
+                "closeout_only": bool(in_closeout),
+            })
+            return ctx
+
+    return ctx
 
 def pl_day_start_utc_ts(ts_utc: Optional[dt.datetime] = None) -> int:
     """Start of PL day (00:00 Europe/Warsaw) expressed as UTC epoch seconds."""
@@ -5398,6 +5495,10 @@ class SafetyBot:
         self._partial_tp_done_tickets: Dict[int, bool] = {}
         self._partial_close_attempt_ts: Dict[int, int] = {}
         self._trail_update_attempt_ts: Dict[int, int] = {}
+        # Trade windows: last logged state (to avoid log spam).
+        self._last_tw_phase: Optional[str] = None
+        self._last_tw_window_id: Optional[str] = None
+        self._last_tw_group: Optional[str] = None
 
         # --- connect + universe ---
         if not self.execution_engine.connect():
@@ -6481,8 +6582,137 @@ class SafetyBot:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return signal
 
+    # -------------------------------------------------------------------------
+    # Trade windows (P0): OFF/ACTIVE/CLOSEOUT routing
+    # -------------------------------------------------------------------------
+    def _trade_window_off_maintenance(self, ctx: Dict[str, object]) -> None:
+        """Outside windows: do not scan or pull prices.
+
+        We still do low-frequency SYS reconciliation to detect unexpected open positions/orders
+        and, if needed, perform emergency closeout (safety > no-ops).
+        """
+        try:
+            off_poll = int(getattr(CFG, "trade_off_sys_poll_sec", 900))
+        except Exception:
+            off_poll = 900
+        off_poll = max(60, int(off_poll))
+
+        now_ts = int(time.time())
+        last = int(self.db.get_last_ts("last_trade_window_off_sys_ts") or 0)
+        if (now_ts - last) < int(off_poll):
+            return
+        self.db.set_last_ts("last_trade_window_off_sys_ts", now_ts)
+
+        # Minimal SYS snapshot: if anything is open, close it (emergency).
+        positions_map = self.positions_snapshot(mode_global="ECO", force=False)
+        pending_map = self.pending_snapshot(mode_global="ECO", force=False)
+        open_total = 0
+        pend_total = 0
+        try:
+            open_total = int(sum(len(v) for v in (positions_map or {}).values()))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            open_total = 0
+        try:
+            pend_total = int(sum(len(v) for v in (pending_map or {}).values()))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            pend_total = 0
+
+        if open_total > 0 or pend_total > 0:
+            logging.critical(
+                "WINDOW_OFF_NOT_FLAT positions=%s pending=%s => EMERGENCY_CLOSEOUT",
+                int(open_total),
+                int(pend_total),
+            )
+            self._trade_window_closeout(reason="outside_window_not_flat", ctx=ctx)
+
+    def _trade_window_closeout(self, *, reason: str, ctx: Optional[Dict[str, object]] = None) -> None:
+        """Close all positions and cancel pending orders. Always uses emergency budgets."""
+        now_ts = int(time.time())
+        last = int(self.db.get_last_ts("last_trade_window_closeout_ts") or 0)
+        # Avoid spamming closeout attempts every scan loop.
+        if (now_ts - last) < 30:
+            return
+        self.db.set_last_ts("last_trade_window_closeout_ts", now_ts)
+
+        # 1) Cancel pending orders (if any).
+        try:
+            if mt5 is not None and hasattr(mt5, "TRADE_ACTION_REMOVE"):
+                ords = self.execution_engine.orders_get(emergency=True) or ()
+                if ords:
+                    pending_types = {
+                        getattr(mt5, "ORDER_TYPE_BUY_LIMIT", None),
+                        getattr(mt5, "ORDER_TYPE_SELL_LIMIT", None),
+                        getattr(mt5, "ORDER_TYPE_BUY_STOP", None),
+                        getattr(mt5, "ORDER_TYPE_SELL_STOP", None),
+                        getattr(mt5, "ORDER_TYPE_BUY_STOP_LIMIT", None),
+                        getattr(mt5, "ORDER_TYPE_SELL_STOP_LIMIT", None),
+                    }
+                    pending_types = {t for t in pending_types if t is not None}
+                    for o in ords:
+                        try:
+                            if int(getattr(o, "type", -1)) not in pending_types:
+                                continue
+                            ticket = int(getattr(o, "ticket", 0) or 0)
+                            sym = str(getattr(o, "symbol", "") or "")
+                            if ticket <= 0 or not sym:
+                                continue
+                            grp = guess_group(sym)
+                            req = {
+                                "action": mt5.TRADE_ACTION_REMOVE,
+                                "order": ticket,
+                                "symbol": sym,
+                                "magic": int(getattr(CFG, "magic_number", 0) or 0),
+                                "comment": f"WINDOW_CLOSEOUT:{reason}",
+                            }
+                            self.execution_engine.order_send(sym, grp, req, emergency=True)
+                        except Exception as e:
+                            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        # 2) Close all open positions (kill-switch style).
+        ok = self.execution_engine.force_flat_all(
+            self.db,
+            retries=int(getattr(CFG, "close_retries", 2)),
+            delay=float(getattr(CFG, "close_retry_delay_sec", 0.5)),
+            deviation=int(getattr(CFG, "kill_close_deviation_points", 30)),
+        )
+        if ok:
+            logging.warning("WINDOW_CLOSEOUT_DONE reason=%s", str(reason))
+        else:
+            logging.critical("WINDOW_CLOSEOUT_INCOMPLETE reason=%s", str(reason))
+
     def scan_once(self):
         st = self.gov.day_state()
+
+        # Trade windows (P0): strict time windows (PL) + group routing (FX vs METAL).
+        tw_ctx = trade_window_ctx(now_utc())
+        tw_phase = str(tw_ctx.get("phase") or "OFF").upper()
+        tw_window_id = str(tw_ctx.get("window_id") or "")
+        tw_group = str(tw_ctx.get("group") or "").upper()
+        tw_entry_allowed = bool(tw_ctx.get("entry_allowed"))
+
+        # Log only on transition (avoid spam).
+        try:
+            prev = getattr(self, "_last_tw_phase", None)
+            prev_wid = getattr(self, "_last_tw_window_id", None)
+            prev_grp = getattr(self, "_last_tw_group", None)
+            if (prev != tw_phase) or (prev_wid != tw_window_id) or (prev_grp != tw_group):
+                setattr(self, "_last_tw_phase", tw_phase)
+                setattr(self, "_last_tw_window_id", tw_window_id)
+                setattr(self, "_last_tw_group", tw_group)
+                logging.info(
+                    "WINDOW_PHASE phase=%s window=%s group=%s entry_allowed=%s pl_now=%s",
+                    tw_phase,
+                    tw_window_id or "NONE",
+                    tw_group or "NONE",
+                    int(bool(tw_entry_allowed)),
+                    str(tw_ctx.get("pl_now")),
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         # ECO on budget pressure (PRICE / SYS / ORDER)
         eco_by_budget = False
@@ -6568,6 +6798,16 @@ class SafetyBot:
             f"| price_soft={self.gov.price_soft_mode()}"
         )
 
+        # Trade windows gate:
+        # - OFF: no training/scanning and no PRICE polling; keep minimal SYS safety reconciliation.
+        # - CLOSEOUT: close/cancel only; no new entries.
+        if tw_phase == "OFF":
+            self._trade_window_off_maintenance(tw_ctx)
+            return
+        if tw_phase == "CLOSEOUT":
+            self._trade_window_closeout(reason="closeout_buffer", ctx=tw_ctx)
+            return
+
         # deals (SYS)
         self.poll_deals()
         self_heal_signal = self._evaluate_self_heal()
@@ -6592,8 +6832,9 @@ class SafetyBot:
         if not rollover_safe:
             logging.warning("ROLLOVER_BLOCK global=1 reason=window_active")
 
-        # tryb globalny: bazujemy na FX w tej chwili (rdzeń), ale to tylko do doboru limitów iteracji
-        global_mode = "HOT" if self.ctrl.time_weight("FX", "EURUSD") >= 0.95 else ("WARM" if self.ctrl.time_weight("FX", "EURUSD") >= 0.55 else "ECO")
+        # Tryb globalny: w aktywnym oknie handlu domyślnie HOT (szybsze skanowanie),
+        # poza oknami scan_once już zwraca wcześniej.
+        global_mode = "HOT" if tw_phase == "ACTIVE" else "ECO"
         if not rollover_safe:
             global_mode = "ECO"
         if eco_by_budget:
@@ -6736,6 +6977,9 @@ class SafetyBot:
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
         for raw, sym, grp in self.universe:
+            # Trade window routing: in ACTIVE we trade only the active group (FX_AM => FX, METAL_PM => METAL).
+            if tw_group and str(grp).upper() != tw_group:
+                continue
             # priorytet: time_weight * score_factor (+ bonus, jeśli mamy otwartą pozycję)
             prio = self.ctrl.time_weight(grp, sym) * self.ctrl.score_factor(grp, sym)
             if sym in open_syms:
@@ -7114,6 +7358,15 @@ if __name__ == "__main__":
     CFG.time_anchor_max_backward_sec = _cfg_int("time_anchor_max_backward_sec", CFG.time_anchor_max_backward_sec)
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)
+    CFG.price_emergency_reserve_fraction = _cfg_float(
+        "price_emergency_reserve_fraction", CFG.price_emergency_reserve_fraction
+    )
+    CFG.group_borrow_fraction = _cfg_float("group_borrow_fraction", CFG.group_borrow_fraction)
+    CFG.trade_closeout_buffer_min = _cfg_int("trade_closeout_buffer_min", CFG.trade_closeout_buffer_min)
+    CFG.hard_no_mt5_outside_windows = _cfg_bool(
+        "hard_no_mt5_outside_windows", CFG.hard_no_mt5_outside_windows
+    )
+    CFG.trade_off_sys_poll_sec = _cfg_int("trade_off_sys_poll_sec", CFG.trade_off_sys_poll_sec)
     CFG.adx_threshold = _cfg_int("adx_threshold", CFG.adx_threshold)
     CFG.adx_range_max = _cfg_int("adx_range_max", CFG.adx_range_max)
     CFG.regime_switch_enabled = _cfg_bool("regime_switch_enabled", CFG.regime_switch_enabled)
@@ -7169,6 +7422,73 @@ if __name__ == "__main__":
     CFG.fx_only_mode = _cfg_bool("fx_only_mode", CFG.fx_only_mode)
     CFG.oanda_warn_symbols_cap = _cfg_int("oanda_warn_symbols_cap", CFG.oanda_warn_symbols_cap)
     CFG.symbols_to_trade = _cfg_str_list("symbols_to_trade", list(CFG.symbols_to_trade))
+
+    # Optional advanced config blocks (dict/list) for LIVE process control.
+    # NOTE: These must be set before RequestGovernor is created.
+    raw_groups = strategy_cfg.get("symbol_policy_allowed_groups", None)
+    if raw_groups is not None:
+        if not isinstance(raw_groups, list):
+            raise SystemExit("CONFIG_STRATEGY_FAIL: symbol_policy_allowed_groups must be list")
+        groups_out: List[str] = []
+        for item in raw_groups:
+            g = _group_key(str(item or ""))
+            if g in {"FX", "METAL", "INDEX"}:
+                groups_out.append(g)
+        if groups_out:
+            CFG.symbol_policy_allowed_groups = tuple(groups_out)
+
+    raw_shares = strategy_cfg.get("group_price_shares", None)
+    if raw_shares is not None:
+        if not isinstance(raw_shares, dict):
+            raise SystemExit("CONFIG_STRATEGY_FAIL: group_price_shares must be object")
+        shares_out: Dict[str, float] = {}
+        for k, v in raw_shares.items():
+            g = _group_key(str(k or ""))
+            if g not in {"FX", "METAL", "INDEX"}:
+                continue
+            try:
+                shares_out[g] = float(v)
+            except Exception:
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: group_price_shares.{g} must be number")
+        if shares_out:
+            CFG.group_price_shares = dict(shares_out)
+
+    raw_tw = strategy_cfg.get("trade_windows", None)
+    if raw_tw is not None:
+        if not isinstance(raw_tw, dict):
+            raise SystemExit("CONFIG_STRATEGY_FAIL: trade_windows must be object")
+        tw_out: Dict[str, Dict[str, object]] = {}
+
+        def _hm(x: object, *, label: str) -> Tuple[int, int]:
+            if isinstance(x, (list, tuple)) and len(x) == 2:
+                try:
+                    hh = int(x[0])
+                    mm = int(x[1])
+                except Exception:
+                    raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.*.{label} must be [HH,MM]")
+                if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+                    raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.*.{label} invalid HH/MM")
+                return int(hh), int(mm)
+            if isinstance(x, str) and ":" in x:
+                hh, mm = _parse_hhmm(x, default_hour=0, default_minute=0)
+                return int(hh), int(mm)
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.*.{label} must be [HH,MM] or 'HH:MM'")
+
+        for wid in ("FX_AM", "METAL_PM"):
+            w = raw_tw.get(wid)
+            if w is None:
+                continue
+            if not isinstance(w, dict):
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.{wid} must be object")
+            grp = _group_key(str(w.get("group") or ""))
+            if grp not in {"FX", "METAL"}:
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.{wid}.group must be FX or METAL")
+            anchor_tz = str(w.get("anchor_tz") or "Europe/Warsaw")
+            start_hm = _hm(w.get("start_hm"), label="start_hm")
+            end_hm = _hm(w.get("end_hm"), label="end_hm")
+            tw_out[wid] = {"group": grp, "anchor_tz": anchor_tz, "start_hm": start_hm, "end_hm": end_hm}
+        if tw_out:
+            CFG.trade_windows = dict(tw_out)
 
     CFG.black_swan_threshold = float(config.risk.get("black_swan_threshold", CFG.black_swan_threshold))
     CFG.black_swan_precaution_fraction = float(

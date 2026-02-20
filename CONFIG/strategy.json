@@ -6,11 +6,50 @@
   "price_budget_day": 900,
   "order_budget_day": 400,
   "sys_budget_day": 2000,
+  "price_emergency_reserve_fraction": 0.1,
+  "group_borrow_fraction": 0.0,
+  "group_price_shares": {
+    "FX": 1.0,
+    "METAL": 1.0
+  },
+  "symbol_policy_allowed_groups": [
+    "FX",
+    "METAL"
+  ],
+  "trade_windows": {
+    "FX_AM": {
+      "group": "FX",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [
+        9,
+        0
+      ],
+      "end_hm": [
+        12,
+        0
+      ]
+    },
+    "METAL_PM": {
+      "group": "METAL",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [
+        14,
+        0
+      ],
+      "end_hm": [
+        17,
+        0
+      ]
+    }
+  },
+  "trade_closeout_buffer_min": 15,
+  "hard_no_mt5_outside_windows": true,
+  "trade_off_sys_poll_sec": 900,
   "eco_threshold_pct": 0.9,
   "price_soft_fraction": 0.99,
   "scan_interval_sec": 30,
   "usb_watch_check_interval_sec": 30,
-  "fx_only_mode": true,
+  "fx_only_mode": false,
   "symbols_to_trade": [
     "EURUSD",
     "GBPUSD",
@@ -19,7 +58,9 @@
     "USDCAD",
     "AUDUSD",
     "NZDUSD",
-    "EURGBP"
+    "EURGBP",
+    "XAUUSD",
+    "XAGUSD"
   ],
   "time_anchor_max_backward_sec": 120,
   "adx_threshold": 14,
