@@ -25,6 +25,7 @@ input int    InpAdxPeriod = 14;
 input int    InpAtrPeriod = 14;
 
 string G_Symbol = "";
+string G_SymbolUpper = "";
 ulong  G_LastPythonMessageTime = 0;
 bool   G_IsFailSafeActive = false;
 
@@ -52,6 +53,11 @@ string ToUpperAscii(string value)
     }
   }
   return out;
+}
+
+bool IsCurrentSymbol(string symbol_value)
+{
+  return (ToUpperAscii(symbol_value) == G_SymbolUpper);
 }
 
 string JsonEscape(string value)
@@ -537,7 +543,7 @@ void SendBarData()
 
   string json = StringFormat(
     "{\"type\":\"BAR\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"volume\":%I64d",
-    JsonEscape(G_Symbol),
+    JsonEscape(G_SymbolUpper),
     (int)rates[0].time,
     rates[0].open,
     rates[0].high,
@@ -586,7 +592,7 @@ void SendTickData()
     "\"volume_min\":%.6f,\"volume_max\":%.6f,\"volume_step\":%.6f,"
     "\"trade_stops_level\":%d,\"trade_freeze_level\":%d,"
     "\"schema_version\":\"%s\",\"__v\":\"%s\"}",
-    JsonEscape(G_Symbol),
+    JsonEscape(G_SymbolUpper),
     (long)tick.time_msc,
     tick.bid,
     tick.ask,
@@ -611,7 +617,7 @@ void SendTickData()
     ulong now_ms = (ulong)GetTickCount();
     if(now_ms - last_error_time > 5000)
     {
-      Print("ZMQ_TICK_SEND_FAIL symbol=", G_Symbol);
+      Print("ZMQ_TICK_SEND_FAIL symbol=", G_SymbolUpper);
       last_error_time = now_ms;
     }
   }
@@ -679,12 +685,12 @@ void ExecuteTrade(
     return;
   }
 
-  if(symbol != G_Symbol)
+  if(!IsCurrentSymbol(symbol))
   {
     SendReplyEnvelope(
       "REJECTED", msg_id, action_reply,
       50004, "CUSTOM_RETCODE_INVALID_SYMBOL", 0, 0,
-      StringFormat("Invalid symbol. EA=%s command=%s", G_Symbol, symbol),
+      StringFormat("Invalid symbol. EA=%s command=%s", G_SymbolUpper, symbol),
       symbol,
       "Invalid symbol.", request_hash, true
     );
@@ -697,7 +703,7 @@ void ExecuteTrade(
     if(pos_ticket <= 0)
       continue;
 
-    if(PositionGetString(POSITION_SYMBOL) == symbol && (int)PositionGetInteger(POSITION_MAGIC) == magic)
+    if(IsCurrentSymbol(PositionGetString(POSITION_SYMBOL)) && (int)PositionGetInteger(POSITION_MAGIC) == magic)
     {
       SendReplyEnvelope(
         "REJECTED", msg_id, action_reply,
@@ -753,7 +759,7 @@ void ExecuteTrade(
   ZeroMemory(result);
 
   request.action = TRADE_ACTION_DEAL;
-  request.symbol = symbol;
+  request.symbol = G_Symbol;
   request.volume = volume;
   request.price = price;
   request.sl = sl_price;
@@ -964,14 +970,15 @@ int OnInit()
     return INIT_FAILED;
   }
 
-  G_Symbol = ToUpperAscii(_Symbol);
+  G_Symbol = _Symbol;
+  G_SymbolUpper = ToUpperAscii(_Symbol);
   G_LastPythonMessageTime = (ulong)GetTickCount();
   G_IsFailSafeActive = false;
 
   if(!InitIndicatorHandles())
     Print("WARN: indicator handles partially unavailable. BAR feature payload may be incomplete.");
 
-  Print("HybridAgent ready symbol=", G_Symbol, " timer_sec=", InpTimerSec, " timeout_sec=", InpPythonTimeoutSec, " account_pulse_sec=", InpAccountPulseSec);
+  Print("HybridAgent ready symbol=", G_SymbolUpper, " timer_sec=", InpTimerSec, " timeout_sec=", InpPythonTimeoutSec, " account_pulse_sec=", InpAccountPulseSec);
   return INIT_SUCCEEDED;
 }
 
