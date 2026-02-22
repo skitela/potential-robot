@@ -164,6 +164,9 @@ class CFG:
 
     # pętla globalna (scheduler wybiera co zrobić w tej iteracji)
     scan_interval_sec: int = 60
+    # REQ/REP heartbeat to validate MQL5 agent liveness
+    zmq_heartbeat_interval_sec: int = 15
+    zmq_heartbeat_fail_threshold: int = 3
     # częstotliwość sprawdzania obecności klucza USB podczas uśpienia pętli
     usb_watch_check_interval_sec: int = 3
     # Legacy pull cadence values still referenced in strategy hot/warm/eco path.
@@ -5908,31 +5911,94 @@ class SafetyBot:
 
     def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
         """
-        Przekierowuje zlecenia do Agenta MQL5 przez ZMQ (Hybrid Mode).
+        Dispatches orders with synchronous REQ/REP semantics for DEAL opens.
         """
         action = request.get("action")
-        # Obsługujemy tylko TRADE_ACTION_DEAL przez ZMQ w tej fazie
-        if action == mt5.TRADE_ACTION_DEAL:
-            logging.info(f"HYBRID_DISPATCH | Przekierowanie zlecenia DEAL przez ZMQ: {symbol}")
-            success = self._send_trade_command(
-                signal="BUY" if request.get("type") == mt5.ORDER_TYPE_BUY else "SELL",
+        close_ticket = int(request.get("position") or 0)
+        # Agent MQL5 currently supports TRADE opens only.
+        # Position-close DEAL requests stay on legacy path to preserve behavior.
+        if action == mt5.TRADE_ACTION_DEAL and close_ticket <= 0:
+            signal = "BUY" if request.get("type") == mt5.ORDER_TYPE_BUY else "SELL"
+            logging.info(f"HYBRID_DISPATCH | DEAL over ZMQ symbol={symbol} signal={signal}")
+            reply = self._send_trade_command(
+                signal=signal,
                 symbol=symbol,
                 volume=request.get("volume"),
                 sl_price=request.get("sl"),
                 tp_price=request.get("tp"),
                 magic=request.get("magic"),
-                comment=request.get("comment")
+                comment=request.get("comment"),
             )
-            if success:
-                # Tworzymy sztuczny wynik sukcesu, aby strategia mogła kontynuować
-                class ResultStub:
-                    def __init__(self):
-                        self.retcode = mt5.TRADE_RETCODE_DONE
-                        self.comment = "ZMQ_SENT"
-                        self.order = 999999 # Dummy ticket
-                        self.deal = 999999
-                return ResultStub()
-        
+            if not isinstance(reply, dict):
+                logging.error(f"HYBRID_DISPATCH_FAIL | No valid reply for symbol={symbol}")
+                return None
+
+            status = str(reply.get("status") or "").upper()
+            details = reply.get("details")
+            if not isinstance(details, dict):
+                details = {}
+
+            def _as_int(val: Any, default: int = 0) -> int:
+                try:
+                    return int(val)
+                except Exception:
+                    return int(default)
+
+            done_code = int(getattr(mt5, "TRADE_RETCODE_DONE", 10009))
+            placed_code = int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008))
+            reject_code = int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006))
+            error_code = int(getattr(mt5, "TRADE_RETCODE_ERROR", 10011))
+
+            retcode = _as_int(details.get("retcode"), default=0)
+            order = _as_int(details.get("order"), default=0)
+            deal = _as_int(details.get("deal"), default=0)
+            comment = str(details.get("comment") or reply.get("error") or "")
+
+            if status == "PROCESSED":
+                if retcode <= 0:
+                    retcode = error_code
+                logging.info(
+                    "HYBRID_DISPATCH_ACK | symbol=%s retcode=%s retcode_str=%s order=%s deal=%s",
+                    symbol,
+                    retcode,
+                    str(details.get("retcode_str") or ""),
+                    order,
+                    deal,
+                )
+            elif status == "REJECTED":
+                retcode = _as_int(reply.get("retcode"), default=retcode or reject_code)
+                if retcode <= 0:
+                    retcode = reject_code
+                order = 0
+                deal = 0
+                logging.warning(
+                    "HYBRID_DISPATCH_REJECT | symbol=%s retcode=%s comment=%s",
+                    symbol,
+                    retcode,
+                    comment,
+                )
+            else:
+                retcode = _as_int(reply.get("retcode"), default=retcode or error_code)
+                if retcode <= 0:
+                    retcode = error_code
+                order = 0
+                deal = 0
+                logging.error(
+                    "HYBRID_DISPATCH_ERROR | symbol=%s status=%s comment=%s",
+                    symbol,
+                    status or "UNKNOWN",
+                    comment,
+                )
+
+            class ResultStub:
+                def __init__(self, rc: int, cm: str, ord_id: int, deal_id: int):
+                    self.retcode = int(rc)
+                    self.comment = str(cm or "")
+                    self.order = int(ord_id)
+                    self.deal = int(deal_id)
+
+            return ResultStub(retcode, comment, order, deal)
+
         # Fallback do standardowej kolejki/silnika dla innych akcji (np. SLTP modify)
         if getattr(self, "execution_queue", None) is not None:
             return self.execution_queue.submit(symbol, grp, request, emergency=bool(emergency))
@@ -7343,25 +7409,57 @@ class SafetyBot:
                     logging.critical("KILL SWITCH | FORCE FLAT incomplete.")
                 sys.exit(2)
 
-    def _send_trade_command(self, signal: str, symbol: str, volume: float, sl_price: float, tp_price: float, magic: int, comment: str):
-        """Formatuje i wysyła komendę transakcyjną do Agenta MQL5 przez ZMQ."""
+    def _send_trade_command(
+        self,
+        signal: str,
+        symbol: str,
+        volume: float,
+        sl_price: float,
+        tp_price: float,
+        magic: int,
+        comment: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Sends a synchronous trade command to MQL5 and returns parsed reply."""
+        def _f(v: Any, default: float = 0.0) -> float:
+            try:
+                return float(v)
+            except Exception:
+                return float(default)
+
+        def _i(v: Any, default: int = 0) -> int:
+            try:
+                return int(v)
+            except Exception:
+                return int(default)
+
         command = {
             "action": "TRADE",
             "payload": {
                 "signal": str(signal).upper(),
                 "symbol": str(symbol).upper(),
-                "volume": float(volume),
-                "sl_price": float(sl_price),
-                "tp_price": float(tp_price),
-                "magic": int(magic),
+                "volume": _f(volume, 0.0),
+                "sl_price": _f(sl_price, 0.0),
+                "tp_price": _f(tp_price, 0.0),
+                "magic": _i(magic, 0),
                 "comment": str(comment),
             }
         }
-        logging.info(f"[ZMQ_SEND] Wysyłanie komendy transakcyjnej: {command}")
-        success = self.zmq_bridge.send_command(command)
-        if not success:
-            logging.error("Nie udało się wysłać komendy transakcyjnej do Agenta MQL5.")
-        return success
+        logging.info(
+            "ZMQ_SEND | action=TRADE signal=%s symbol=%s volume=%.6f",
+            command["payload"]["signal"],
+            command["payload"]["symbol"],
+            float(command["payload"]["volume"]),
+        )
+        reply = self.zmq_bridge.send_command(command)
+        if not isinstance(reply, dict):
+            logging.error("ZMQ_SEND_FAIL | No reply from MQL5 for TRADE command.")
+            return None
+        logging.info(
+            "ZMQ_REPLY | status=%s correlation_id=%s",
+            str(reply.get("status") or "UNKNOWN"),
+            str(reply.get("correlation_id") or ""),
+        )
+        return reply
 
     def _handle_market_data(self, data: Dict[str, Any]):
         """
@@ -7393,6 +7491,11 @@ class SafetyBot:
 
         last_scan_ts = 0.0
         scan_interval = int(getattr(CFG, "scan_interval_sec", 60))
+        heartbeat_interval = max(1, int(getattr(CFG, "zmq_heartbeat_interval_sec", 15)))
+        heartbeat_fail_threshold = max(1, int(getattr(CFG, "zmq_heartbeat_fail_threshold", 3)))
+        last_heartbeat_ts = 0.0
+        heartbeat_failures = 0
+        heartbeat_fail_safe_active = False
 
         try:
             while True:
@@ -7403,21 +7506,75 @@ class SafetyBot:
                 if market_data:
                     self._handle_market_data(market_data)
 
-                # 2. Cykliczny skan logiki (zastępuje starą pętlę, ale działa wewnątrz nowej)
+                # 2. Synchronous heartbeat over REQ/REP
+                if (now - last_heartbeat_ts) >= heartbeat_interval:
+                    hb_reply = self.zmq_bridge.send_command({"action": "HEARTBEAT"})
+                    hb_ok = (
+                        isinstance(hb_reply, dict)
+                        and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
+                        and str(hb_reply.get("status") or "").upper() == "OK"
+                    )
+                    if hb_ok:
+                        if heartbeat_fail_safe_active or heartbeat_failures > 0:
+                            logging.warning(
+                                "HEARTBEAT_RECOVERED | previous_failures=%s",
+                                int(heartbeat_failures),
+                            )
+                        heartbeat_failures = 0
+                        heartbeat_fail_safe_active = False
+                    else:
+                        heartbeat_failures += 1
+                        logging.error(
+                            "HEARTBEAT_FAIL | consecutive=%s threshold=%s reply=%s",
+                            int(heartbeat_failures),
+                            int(heartbeat_fail_threshold),
+                            hb_reply,
+                        )
+                        if heartbeat_failures >= heartbeat_fail_threshold and not heartbeat_fail_safe_active:
+                            heartbeat_fail_safe_active = True
+                            logging.critical(
+                                "HEARTBEAT_FAILSAFE_ACTIVE | consecutive=%s threshold=%s mode=NO_TRADE",
+                                int(heartbeat_failures),
+                                int(heartbeat_fail_threshold),
+                            )
+                            try:
+                                if self.incident_journal is not None:
+                                    self.incident_journal.note_guard(
+                                        guard="zmq_heartbeat",
+                                        reason="consecutive_heartbeat_failures",
+                                        severity="CRITICAL",
+                                        category="system",
+                                        symbol="__ALL__",
+                                        extra={
+                                            "failures": int(heartbeat_failures),
+                                            "threshold": int(heartbeat_fail_threshold),
+                                        },
+                                    )
+                            except Exception as e:
+                                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    last_heartbeat_ts = now
+
+                # 3. Cykliczny skan logiki (wstrzymany, gdy heartbeat fail-safe aktywny)
                 if now - last_scan_ts >= scan_interval:
-                    logging.info("--- START PERIODIC SCAN ---")
-                    try:
-                        self.scan_once()
-                    except Exception as e:
-                        logging.error(f"Błąd podczas scan_once: {e}", exc_info=True)
+                    if heartbeat_fail_safe_active:
+                        logging.warning(
+                            "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s",
+                            int(heartbeat_failures),
+                        )
+                    else:
+                        logging.info("--- START PERIODIC SCAN ---")
+                        try:
+                            self.scan_once()
+                        except Exception as e:
+                            logging.error(f"Błąd podczas scan_once: {e}", exc_info=True)
                     last_scan_ts = now
 
-                # 3. Sprawdzenie Kill-Switch
+                # 4. Sprawdzenie Kill-Switch
                 if self.manual_kill_switch_path.exists():
                     logging.info("BOT STOP | Wykryto plik kill_switch.")
                     break
                 
-                # 4. Krótki odpoczynek dla CPU, jeśli nie było danych
+                # 5. Krótki odpoczynek dla CPU, jeśli nie było danych
                 if not market_data:
                     time.sleep(0.01)
 
@@ -7525,6 +7682,12 @@ if __name__ == "__main__":
     CFG.price_budget_day = _cfg_int("price_budget_day", CFG.price_budget_day)
     CFG.order_budget_day = _cfg_int("order_budget_day", CFG.order_budget_day)
     CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
+    CFG.zmq_heartbeat_interval_sec = _cfg_int(
+        "zmq_heartbeat_interval_sec", CFG.zmq_heartbeat_interval_sec
+    )
+    CFG.zmq_heartbeat_fail_threshold = _cfg_int(
+        "zmq_heartbeat_fail_threshold", CFG.zmq_heartbeat_fail_threshold
+    )
     CFG.runtime_metrics_interval_sec = _cfg_int(
         "runtime_metrics_interval_sec", CFG.runtime_metrics_interval_sec
     )
@@ -7765,3 +7928,4 @@ if __name__ == "__main__":
         bot.run()
     finally:
         zmq_bridge.close()
+

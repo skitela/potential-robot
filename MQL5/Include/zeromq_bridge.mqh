@@ -7,7 +7,7 @@
   OPIS:
   Ten plik nagłówkowy stanowi warstwę pośredniczącą do komunikacji z backendem w Pythonie
   przy użyciu biblioteki ZeroMQ. Upraszcza on proces wysyłania danych rynkowych
-  i odbierania komend transakcyjnych.
+  i odbierania komend transakcyjnych w niezawodny sposób (REQ/REP).
 
   KRYTYCZNA ZALEŻNOŚĆ:
   Ten kod wymaga zewnętrznej biblioteki ZeroMQ dla MQL5. Należy ją pobrać i zainstalować
@@ -34,13 +34,13 @@
 
 // --- Zmienne globalne dla kontekstu i gniazd ZMQ ---
 int G_ZmqContext = -1; // Uchwyt do kontekstu ZMQ
-int G_PushSocket = -1; // Uchwyt do gniazda PUSH (wysyłanie danych do Pythona)
-int G_PullSocket = -1; // Uchwyt do gniazda PULL (odbieranie komend z Pythona)
+int G_PushSocket = -1; // Uchwyt do gniazda PUSH (wysyłanie danych telemetrycznych do Pythona)
+int G_RepSocket = -1;  // Uchwyt do gniazda REP (odbieranie komend i wysyłanie odpowiedzi)
 
 //+------------------------------------------------------------------+
 //| Inicjalizuje most ZMQ                                            |
 //+------------------------------------------------------------------+
-bool Zmq_Init(string python_host = "127.0.0.1", int data_port = 5555, int command_port = 5556)
+bool Zmq_Init(string python_host = "127.0.0.1", int data_port = 5555, int rep_port = 5556)
 {
   // 1. Utwórz kontekst ZMQ
   G_ZmqContext = ZmqContextNew();
@@ -72,30 +72,30 @@ bool Zmq_Init(string python_host = "127.0.0.1", int data_port = 5555, int comman
   }
   Print("Gniazdo PUSH połączone z ", push_address);
 
-  // 4. Utwórz gniazdo PULL do odbierania komend od Pythona
-  G_PullSocket = ZmqSocketNew(G_ZmqContext, ZMQ_PULL);
-  if(G_PullSocket < 0)
+  // 4. Utwórz gniazdo REP do odbierania komend i wysyłania odpowiedzi
+  G_RepSocket = ZmqSocketNew(G_ZmqContext, ZMQ_REP);
+  if(G_RepSocket < 0)
   {
-    Print("Błąd: Nie udało się utworzyć gniazda PULL.");
+    Print("Błąd: Nie udało się utworzyć gniazda REP.");
     ZmqSocketClose(G_PushSocket);
     ZmqContextDestroy(G_ZmqContext);
     return(false);
   }
-  Print("Gniazdo PULL utworzone pomyślnie.");
+  Print("Gniazdo REP utworzone pomyślnie.");
   
-  // 5. Połącz gniazdo PULL z serwerem Pythona
-  string pull_address = "tcp://" + python_host + ":" + IntegerToString(command_port);
-  if(!ZmqConnect(G_PullSocket, pull_address))
+  // 5. Połącz gniazdo REP z serwerem Pythona
+  string rep_address = "tcp://" + python_host + ":" + IntegerToString(rep_port);
+  if(!ZmqConnect(G_RepSocket, rep_address))
   {
-    Print("Błąd: Nie udało się połączyć gniazda PULL z adresem ", pull_address);
+    Print("Błąd: Nie udało się połączyć gniazda REP z adresem ", rep_address);
     ZmqSocketClose(G_PushSocket);
-    ZmqSocketClose(G_PullSocket);
+    ZmqSocketClose(G_RepSocket);
     ZmqContextDestroy(G_ZmqContext);
     return(false);
   }
-  Print("Gniazdo PULL połączone z ", pull_address);
+  Print("Gniazdo REP połączone z ", rep_address);
 
-  Print("Most komunikacyjny ZMQ zainicjalizowany pomyślnie.");
+  Print("Most komunikacyjny ZMQ (PUSH & REP) zainicjalizowany pomyślnie.");
   return(true);
 }
 
@@ -112,11 +112,11 @@ void Zmq_Deinit()
     G_PushSocket = -1;
     Print("Gniazdo PUSH zamknięte.");
   }
-  if(G_PullSocket >= 0)
+  if(G_RepSocket >= 0)
   {
-    ZmqSocketClose(G_PullSocket);
-    G_PullSocket = -1;
-    Print("Gniazdo PULL zamknięte.");
+    ZmqSocketClose(G_RepSocket);
+    G_RepSocket = -1;
+    Print("Gniazdo REP zamknięte.");
   }
   // Zniszcz kontekst
   if(G_ZmqContext >= 0)
@@ -129,13 +129,13 @@ void Zmq_Deinit()
 }
 
 //+------------------------------------------------------------------+
-//| Wysyła dane (jako string JSON) do Pythona                        |
+//| Wysyła dane telemetryczne (jako string JSON) do Pythona          |
 //+------------------------------------------------------------------+
 bool Zmq_SendData(string &data_json)
 {
   if(G_PushSocket < 0)
   {
-    Print("Błąd wysyłania: Gniazdo PUSH nie jest zainicjalizowane.");
+    Print("Błąd wysyłania danych: Gniazdo PUSH nie jest zainicjalizowane.");
     return(false);
   }
 
@@ -144,20 +144,20 @@ bool Zmq_SendData(string &data_json)
 }
 
 //+------------------------------------------------------------------+
-//| Odbiera komendę (jako string JSON) od Pythona                    |
+//| Odbiera żądanie (jako string JSON) od Pythona                    |
 //+------------------------------------------------------------------+
-bool Zmq_ReceiveCommand(string &result_json)
+bool Zmq_ReceiveRequest(string &result_json)
 {
-  if(G_PullSocket < 0)
+  if(G_RepSocket < 0)
   {
-    Print("Błąd odbioru: Gniazdo PULL nie jest zainicjalizowane.");
+    Print("Błąd odbioru żądania: Gniazdo REP nie jest zainicjalizowane.");
     result_json = "";
     return(false);
   }
 
   // Używamy ZMQ_DONTWAIT, aby Expert Advisor nigdy nie był blokowany
   // podczas oczekiwania na komendę.
-  if(ZmqRecv(G_PullSocket, result_json, ZMQ_DONTWAIT))
+  if(ZmqRecv(G_RepSocket, result_json, ZMQ_DONTWAIT))
   {
     // Wiadomość została odebrana
     return(true);
@@ -166,6 +166,22 @@ bool Zmq_ReceiveCommand(string &result_json)
   // Brak wiadomości w kolejce
   result_json = "";
   return(false);
+}
+
+//+------------------------------------------------------------------+
+//| Wysyła odpowiedź (jako string JSON) do Pythona                   |
+//+------------------------------------------------------------------+
+bool Zmq_SendReply(string &reply_json)
+{
+  if(G_RepSocket < 0)
+  {
+    Print("Błąd wysyłania odpowiedzi: Gniazdo REP nie jest zainicjalizowane.");
+    return(false);
+  }
+
+  // Wysyłamy odpowiedź. To musi być operacja blokująca, aby zapewnić dostarczenie
+  // i zachować poprawny stan maszyny stanów REQ/REP.
+  return(ZmqSend(G_RepSocket, reply_json, 0));
 }
 //+------------------------------------------------------------------+
 

@@ -1,0 +1,60 @@
+ROLA:
+Jestes audytorem i refaktoryzatorem systemu OANDA_MT5_SYSTEM. Twoim celem jest TOTALNE CZYSZCZENIE repo oraz stabilizacja calosci architektury hybrydowej Python + MQL5.
+
+KRYTYCZNA DECYZJA WLASCICIELA (NIEODWRACALNA):
+- Przeniesienie czesci logiki wykonawczej do MQL5 jest NIEODWRACALNE.
+- Nie wolno proponowac rollbacku do modelu Python-only.
+- Wszystkie rekomendacje i zmiany musza utrzymac kierunek hybrydowy.
+
+CEL GLOWNY:
+1) Usunac zbedne linie kodu, martwy kod, duplikacje i przestarzale obejscia.
+2) Usunac niepotrzebne pliki, katalogi, podkatalogi i stare historie, do ktorych juz nigdy nie wracamy.
+3) Utrzymac i zweryfikowac spojna strategie miedzy MQL5 i Python.
+4) Ustabilizowac komunikacje i dzialanie calego systemu, w tym botow: SafetyBot, Learner, SCUD, InfoBot, RepairAgent i komponentow posrednich.
+
+ZAKRES AUDYTU I PRAC:
+A) Czyszczenie repo:
+- Zrob pelny inventory plikow i katalogow.
+- Oznacz kazdy element jako: KEEP / ARCHIVE / DELETE z uzasadnieniem.
+- Wykryj i usun: dead code, stale TODO, nieuzywane helpery, stare eksperymenty, osierocone testy, duplikaty configow.
+- Ogranicz noise: bez masowego formatowania niezwiązanego z logika.
+
+B) Spojnosc strategii MQL5 <-> Python:
+- Porownaj logike strategii, risk management, parametry wejsc/wyjsc, SL/TP, limity, harmonogramy, nazewnictwo symboli.
+- Wykryj rozjazdy semantyczne miedzy plikami MQL5 i Python i zaproponuj jedno zrodlo prawdy.
+- Wymus zgodnosc kontraktow danych i decyzji miedzy warstwami.
+
+C) Komunikacja miedzy warstwami:
+- Zweryfikuj kontrakt IPC MQL5 <-> Python (schema_version, rid, ttl/deadline, ack, retry, idempotencja, timeouty).
+- Sprawdz fail-safe: co sie dzieje gdy jedna strona nie odpowiada.
+- Upewnij sie, ze tryb awaryjny nie generuje niekontrolowanych zlecen.
+
+D) Stabilnosc systemu wielobotowego:
+- Sprawdz zaleznosci i interakcje miedzy wszystkimi botami i workerami.
+- Zweryfikuj locki, kolejki, dzienniki, watchdogi, recovery, restart i race conditions.
+- Wykryj single points of failure i zaproponuj minimalne, konkretne hardeningi.
+
+E) Testy i walidacja:
+- Po zmianach uruchom pelny zestaw testow i podaj wynik.
+- Dodaj testy brakujace tylko tam, gdzie zmiany tego wymagaja.
+- Udowodnij, ze czyszczenie nie psuje zachowania produkcyjnego.
+
+TRYB REALIZACJI (WYMAGANY):
+1. Najpierw plan atomowych commitow (male, logiczne, audytowalne).
+2. Potem implementacja krok po kroku.
+3. Na koncu raport:
+   - lista usunietych plikow/katalogow,
+   - lista zmian strategicznych,
+   - lista napraw stabilnosci,
+   - lista ryzyk pozostalych,
+   - wynik testow.
+
+OGRANICZENIA:
+- Nie usuwaj nic "w ciemno". Kazde DELETE musi miec uzasadnienie i brak zaleznosci runtime.
+- Nie zmieniaj publicznych kontraktow bez aktualizacji obu stron komunikacji.
+- Nie naruszaj decyzji: MQL5 execution path zostaje.
+
+FORMAT ODPOWIEDZI:
+- Najpierw: "PLAN".
+- Potem: "WYKONANIE".
+- Na koncu: "RAPORT KONCOWY" z listami punktowanymi i konkretami plik-po-pliku.

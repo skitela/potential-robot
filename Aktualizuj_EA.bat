@@ -22,8 +22,8 @@ echo [INFO] Katalog docelowy (MetaTrader 5): %TARGET_DIR%
 echo.
 
 :: === Walidacja ===
-if not exist "%SOURCE_DIR%\Experts\OANDA_SafetyBot_EA.mq5" (
-    echo [ERROR] Krytyczny blad: Nie znaleziono pliku zrodlowego OANDA_SafetyBot_EA.mq5!
+if not exist "%SOURCE_DIR%\Experts\HybridAgent.mq5" (
+    echo [ERROR] Krytyczny blad: Nie znaleziono pliku zrodlowego HybridAgent.mq5!
     echo [ERROR] Sciezka: %SOURCE_DIR%\Experts\
     echo [ERROR] Proces przerwany. Sprawdz strukture repozytorium.
     pause
@@ -46,12 +46,12 @@ echo.
 echo [EXEC] Rozpoczynanie kopiowania plikow EA...
 
 :: Kopiowanie glownego pliku eksperta
-echo [COPY] Kopiowanie: MQL5\Experts\OANDA_SafetyBot_EA.mq5
-xcopy "%SOURCE_DIR%\Experts\OANDA_SafetyBot_EA.mq5" "%TARGET_DIR%\Experts\" /Y /Q /F
+echo [COPY] Kopiowanie: MQL5\Experts\HybridAgent.mq5
+xcopy "%SOURCE_DIR%\Experts\HybridAgent.mq5" "%TARGET_DIR%\Experts\" /Y /Q /F
 if %errorlevel% neq 0 (
-    echo [ERROR] Nie udalo sie skopiowac OANDA_SafetyBot_EA.mq5.
+    echo [ERROR] Nie udalo sie skopiowac HybridAgent.mq5.
 ) else (
-    echo [SUCCESS] Skopiowano OANDA_SafetyBot_EA.mq5.
+    echo [SUCCESS] Skopiowano HybridAgent.mq5.
 )
 
 :: Kopiowanie plikow includowanych (np. kontrakty, helpery)
@@ -68,7 +68,7 @@ echo [FINAL] === Proces aktualizacji zakonczony ===
 echo [INFO] Pliki Agenta Eksperckiego zostaly zaktualizowane w katalogu MetaTrader 5.
 echo [ACTION] Nastepny krok:
 echo [ACTION] 1. Otworz MetaEditor w MT5.
-echo [ACTION] 2. Otworz plik OANDA_SafetyBot_EA.mq5.
+echo [ACTION] 2. Otworz plik HybridAgent.mq5.
 echo [ACTION] 3. Kliknij 'Kompiluj' (F7), aby zastosowac zmiany.
 echo [ACTION] 4. Jesli EA jest juz na wykresie, przeladuj go, aby uzyc nowej wersji.
 echo.
