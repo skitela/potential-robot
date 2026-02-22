@@ -162,8 +162,8 @@ def _write_json_atomic(path: Path, obj: Dict[str, object]) -> None:
             if wrote_tmp:
                 try:
                     tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Cleanup of tmp file failed: {exc}")
     try:
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
@@ -623,8 +623,8 @@ def _stop_targeted_components(root: Path) -> None:
             _kill_pid(pid)
         try:
             lock_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug(f"Lock unlink failed: {lock_path} {exc}")
 
 
 def _spawn_cmd(cmd: str) -> Tuple[bool, str]:
@@ -796,26 +796,27 @@ def main() -> int:
                 try:
                     lock_path.write_text(str(os.getpid()), encoding="utf-8")
                     pid = 0
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Lock write failed: {exc}")
             # Dead PID lock: reclaim with overwrite fallback.
             if pid > 0 and (not _pid_is_running(pid)):
                 try:
                     lock_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Lock unlink failed: {exc}")
                 try:
                     lock_path.write_text(str(os.getpid()), encoding="utf-8")
                     pid = 0
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Lock write failed: {exc}")
             if pid > 0 and _pid_is_running(pid):
                 print("REPAIR_AGENT juz dziala.")
                 return 1
-        except Exception:
+        except Exception as exc:
             try:
                 lock_path.write_text(str(os.getpid()), encoding="utf-8")
-            except Exception:
+            except Exception as exc2:
+                logging.debug(f"Lock reclaim failed: {exc} -> {exc2}")
                 print("REPAIR_AGENT juz dziala.")
                 return 1
     lock_path.write_text(str(os.getpid()), encoding="utf-8")

@@ -228,11 +228,21 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
             continue
         try:
+            if path.exists():
+                try:
+                    os.remove(path)
+                except Exception as exc:
+                    cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", exc)
             os.replace(tmp, path)
             return
         except Exception as e:
             last_exc = e
             try:
+                if path.exists():
+                    try:
+                        os.remove(path)
+                    except Exception as exc:
+                        cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", exc)
                 shutil.move(str(tmp), str(path))
                 return
             except Exception as e2:

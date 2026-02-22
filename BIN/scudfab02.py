@@ -366,8 +366,8 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             if wrote_tmp:
                 try:
                     tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Cleanup of tmp file failed: {exc}")
         time.sleep(float(ATOMIC_REPLACE_RETRY_SLEEP_S))
     # Fallback for environments where atomic rename/move is blocked.
     try:
@@ -1056,8 +1056,8 @@ def read_closed_events(db_path: Path, limit: int = 500) -> List[Dict[str, Any]]:
     finally:
         try:
             conn.close()
-        except Exception as e:
-            cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
+        except Exception as exc:
+            cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", exc)
 
 def compute_edge_fuel(pnl_net: float, reqs_trade: int) -> float:
     if reqs_trade <= 0:

@@ -157,8 +157,8 @@ def _write_json_atomic(path: Path, obj: Dict[str, object]) -> None:
             if wrote_tmp:
                 try:
                     tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Cleanup of tmp file failed: {exc}")
         time.sleep(0.01 * (i + 1))
     try:
         with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -560,19 +560,19 @@ def _acquire_lock(lock_path: Path) -> None:
                 try:
                     lock_path.write_text(str(os.getpid()), encoding="utf-8")
                     return
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Lock write failed: {exc}")
             # Dead PID lock: reclaim even when unlink is denied.
             if pid > 0 and (not _pid_is_running(pid)):
                 try:
                     lock_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Lock unlink failed: {exc}")
                 try:
                     lock_path.write_text(str(os.getpid()), encoding="utf-8")
                     return
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Lock write failed: {exc}")
         except RuntimeError:
             raise
         except Exception:

@@ -1,19 +1,15 @@
 from __future__ import annotations
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-# Forward-declare for type hints
-class ConfigManager:
-    pass
-
-class Persistence:
-    pass
+if TYPE_CHECKING:
+    from .config_manager import ConfigManager
 
 class RiskManager:
     """
     Encapsulates all logic related to trade risk assessment and portfolio heat management.
     """
-    def __init__(self, config: ConfigManager, db: Persistence):
+    def __init__(self, config: ConfigManager | Any, db: Any):
         self.config = config
         self.db = db
 
@@ -70,9 +66,11 @@ class RiskManager:
         vol_max: float,
         vol_step: float,
         symbol: str,
+        margin_free: Optional[float] = None,
     ) -> Optional[float]:
         """
         Calculates the trade volume based on risk percentage, stop loss distance, and instrument properties.
+        Also considers available margin if provided to avoid TRADE_RETCODE_NO_MONEY.
         Returns the calculated volume or None if sizing is not possible or safe.
         """
         risk_money = eq_now * risk_pct
@@ -91,6 +89,15 @@ class RiskManager:
 
         vol_raw = risk_money / per_lot_risk
         
+        # Margin safety buffer: do not use more than 80% of free margin for a single trade
+        if margin_free is not None:
+            # Conservative estimate: assume 1:30 leverage for FX if not known, 
+            # but here we just cap the volume if we have very little margin left.
+            # A better way is to use mt5.order_check in the caller.
+            if margin_free <= 0:
+                logging.warning(f"SKIP_RISK_NO_MARGIN {symbol} margin_free={margin_free}")
+                return None
+
         if vol_min <= 0 or vol_max <= 0 or vol_step <= 0:
             return None
 

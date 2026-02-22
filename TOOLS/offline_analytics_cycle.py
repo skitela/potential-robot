@@ -36,7 +36,7 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             if tmp.exists():
                 tmp.unlink()
         except Exception:
-            pass
+            return
 
 
 def run_cmd(cmd: List[str], *, cwd: Path, env: Dict[str, str], timeout_sec: int) -> Dict[str, Any]:

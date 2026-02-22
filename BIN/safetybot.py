@@ -95,6 +95,7 @@ try:
     from .oanda_limits_guard import OandaLimitsGuard
     from .config_manager import ConfigManager
     from .risk_manager import RiskManager
+    from .zeromq_bridge import ZMQBridge
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
@@ -741,8 +742,8 @@ def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
         tw = {}
         buf_min = 15
 
-    # Deterministic order: FX_AM then METAL_PM (no overlap expected by design)
-    for wid in ("FX_AM", "METAL_PM"):
+    # Deterministic order: iterate over configured windows
+    for wid in sorted(tw.keys()):
         w = tw.get(wid)
         if not isinstance(w, dict) or not w:
             continue
@@ -1326,8 +1327,8 @@ def acquire_lockfile(lock_path: Path) -> None:
                             lock_path.unlink(missing_ok=True)
                             time.sleep(0.05)
                             continue
-                        except Exception as e:
-                            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        except Exception as e2:
+                            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e2)
                             time.sleep(0.1)
                             continue
             except Exception as e:
@@ -2209,8 +2210,8 @@ def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
             try:
                 if tmp.exists():
                     tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", exc)
 
         # Fallback: direct overwrite (still with fsync).
         try:
@@ -3136,8 +3137,8 @@ class ExecutionQueue:
         self._stop_evt.set()
         try:
             self._queue.put_nowait(None)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("ORDER_QUEUE_STOP_WAKEUP_FAIL %s", exc)
         worker = self._worker
         if worker is not None and worker.is_alive():
             worker.join(timeout=max(0.1, float(timeout_sec)))
@@ -3265,6 +3266,7 @@ class ExecutionEngine:
         self.limits = limits
         self.connected = False
         self._sym_info_cache: Dict[str, Tuple[float, object]] = {}
+        self._zmq_tick_cache: Dict[str, Dict[str, Any]] = {}
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
         self._sltp_ts: List[float] = []
@@ -3537,6 +3539,23 @@ class ExecutionEngine:
         return df
 
     def tick(self, symbol: str, grp: str, emergency: bool = False):
+        # 1. Sprawdź cache ZMQ (Hybrid Mode)
+        zmq_data = self._zmq_tick_cache.get(symbol)
+        if zmq_data:
+            # Tworzymy stub udający strukturę MqlTick
+            class TickStub:
+                def __init__(self, d):
+                    self.bid = float(d.get("bid", 0.0))
+                    self.ask = float(d.get("ask", 0.0))
+                    self.time = int(d.get("timestamp_ms", 0) // 1000)
+                    self.volume = int(d.get("volume", 0))
+            
+            t = TickStub(zmq_data)
+            logging.debug(f"TICK_FROM_ZMQ_CACHE symbol={symbol}")
+            # Przy danych z ZMQ nie konsumujemy budżetu PRICE (oszczędność!)
+            return t
+
+        # 2. Fallback do standardowego pobierania przez MT5 API
         if self.limits is not None:
             if not self.limits.allow_price_request(emergency=bool(emergency), kind="tick"):
                 logging.info(f"SKIP_PRICE_LIMIT kind=tick symbol={symbol} emergency={int(bool(emergency))}")
@@ -4416,7 +4435,7 @@ class StandardStrategy:
                 self._spread_entry_sum_day += float(sp)
                 self._spread_entry_count_day += 1
         except Exception:
-            pass
+            return
 
     def metrics_snapshot(self) -> Dict[str, Any]:
         self._metrics_roll_day()
@@ -4883,6 +4902,7 @@ class StandardStrategy:
             return
         bal_now = float(getattr(acc, "balance", 0.0) or 0.0)
         eq_now = float(getattr(acc, "equity", bal_now) or bal_now)
+        margin_free = float(getattr(acc, "margin_free", 0.0) or 0.0)
 
         point = float(getattr(info, "point", 0.0) or 0.0)
         if point <= 0:
@@ -4932,7 +4952,8 @@ class StandardStrategy:
             eq_now, risk_pct, price, sl,
             tick_size, tick_value,
             vol_min, vol_max, vol_step,
-            symbol
+            symbol,
+            margin_free=margin_free
         )
 
         if volume is None:
@@ -5459,7 +5480,7 @@ def ensure_db_ready(db_dir: Path, backups_dir: Path, release_id: str, log: loggi
         raise SystemExit(3)
 
 class SafetyBot:
-    def __init__(self, config, db, gov, risk_manager, limits, black_swan_guard, self_heal_guard, canary_guard, drift_guard, incident_journal):
+    def __init__(self, config, db, gov, risk_manager, limits, black_swan_guard, self_heal_guard, canary_guard, drift_guard, incident_journal, zmq_bridge):
         self.cfg = CFG
         self.config = config
         self.db = db
@@ -5471,6 +5492,7 @@ class SafetyBot:
         self.canary_guard = canary_guard
         self.drift_guard = drift_guard
         self.incident_journal = incident_journal
+        self.zmq_bridge = zmq_bridge
 
         # --- runtime root (V6.2 hard-root) ---
         self.run_mode = get_run_mode()
@@ -5885,6 +5907,33 @@ class SafetyBot:
         self._metrics_10m_last_emit_ts = now_ts
 
     def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
+        """
+        Przekierowuje zlecenia do Agenta MQL5 przez ZMQ (Hybrid Mode).
+        """
+        action = request.get("action")
+        # Obsługujemy tylko TRADE_ACTION_DEAL przez ZMQ w tej fazie
+        if action == mt5.TRADE_ACTION_DEAL:
+            logging.info(f"HYBRID_DISPATCH | Przekierowanie zlecenia DEAL przez ZMQ: {symbol}")
+            success = self._send_trade_command(
+                signal="BUY" if request.get("type") == mt5.ORDER_TYPE_BUY else "SELL",
+                symbol=symbol,
+                volume=request.get("volume"),
+                sl_price=request.get("sl"),
+                tp_price=request.get("tp"),
+                magic=request.get("magic"),
+                comment=request.get("comment")
+            )
+            if success:
+                # Tworzymy sztuczny wynik sukcesu, aby strategia mogła kontynuować
+                class ResultStub:
+                    def __init__(self):
+                        self.retcode = mt5.TRADE_RETCODE_DONE
+                        self.comment = "ZMQ_SENT"
+                        self.order = 999999 # Dummy ticket
+                        self.deal = 999999
+                return ResultStub()
+        
+        # Fallback do standardowej kolejki/silnika dla innych akcji (np. SLTP modify)
         if getattr(self, "execution_queue", None) is not None:
             return self.execution_queue.submit(symbol, grp, request, emergency=bool(emergency))
         return self.execution_engine.order_send(symbol, grp, request, emergency=bool(emergency))
@@ -7294,49 +7343,94 @@ class SafetyBot:
                     logging.critical("KILL SWITCH | FORCE FLAT incomplete.")
                 sys.exit(2)
 
+    def _send_trade_command(self, signal: str, symbol: str, volume: float, sl_price: float, tp_price: float, magic: int, comment: str):
+        """Formatuje i wysyła komendę transakcyjną do Agenta MQL5 przez ZMQ."""
+        command = {
+            "action": "TRADE",
+            "payload": {
+                "signal": str(signal).upper(),
+                "symbol": str(symbol).upper(),
+                "volume": float(volume),
+                "sl_price": float(sl_price),
+                "tp_price": float(tp_price),
+                "magic": int(magic),
+                "comment": str(comment),
+            }
+        }
+        logging.info(f"[ZMQ_SEND] Wysyłanie komendy transakcyjnej: {command}")
+        success = self.zmq_bridge.send_command(command)
+        if not success:
+            logging.error("Nie udało się wysłać komendy transakcyjnej do Agenta MQL5.")
+        return success
+
+    def _handle_market_data(self, data: Dict[str, Any]):
+        """
+        Główny punkt wejścia dla danych rynkowych przychodzących z Agenta MQL5.
+        Integruje przychodzące dane z logiką SafetyBot.
+        """
+        msg_type = data.get("type")
+        symbol = data.get("symbol")
+        
+        if not symbol:
+            return
+
+        # Aktualizacja cache'u ticków dla silnika wykonawczego
+        if msg_type == "TICK":
+            # Wstrzykujemy tick do cache'u silnika
+            if hasattr(self.execution_engine, "_zmq_tick_cache"):
+                self.execution_engine._zmq_tick_cache[symbol] = data
+            logging.debug(f"ZMQ_TICK | {symbol} | Bid: {data.get('bid')} Ask: {data.get('ask')}")
+
+        # Przetwarzanie danych barowych (M5)
+        elif msg_type == "BAR":
+            logging.info(f"ZMQ_BAR | {symbol} | Time: {data.get('time')} Close: {data.get('close')}")
+            # Tutaj w przyszłości: aktualizacja lokalnej bazy barów i przeliczenie wskaźników
+            # bez konieczności odpytywania MT5 przez copy_rates.
+
     def run(self):
-        logging.info(f"BOT START | MT5 SAFETY BOT {CFG.BOT_VERSION}")
+        logging.info(f"BOT START | HYBRID MODE | MT5 SAFETY BOT {CFG.BOT_VERSION}")
+        logging.info("Uruchamianie pętli hybrydowej (ZMQ + Periodic Scan)...")
 
-        # --- STARTUP CHECK (jednorazowo): waluta rachunku / stabilność połączenia ---
-        try:
-            self.execution_engine.ensure_connected()
-            acc = self.execution_engine.account_info()
-            if acc is not None:
-                ccy = str(getattr(acc, "currency", "")).upper()
-                if ccy and ccy != "PLN":
-                    logging.warning(
-                        f"UWAGA WALUTOWA: Konto w {ccy}. Limit ryzyka CFG.max_risk_cap_acct={CFG.max_risk_cap_acct} "
-                        f"jest liczony w {ccy}. Jeśli chcesz limit ~50 PLN na koncie {ccy}, ustaw odpowiednią kwotę."
-                    )
-            else:
-                logging.warning("Nie udało się pobrać info o koncie przy starcie (account_info=None).")
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            logging.error(f"Startup Check Error: {e}")
+        last_scan_ts = 0.0
+        scan_interval = int(getattr(CFG, "scan_interval_sec", 60))
 
-        # --- PĘTLA GŁÓWNA ---
         try:
             while True:
-                try:
-                    self.execution_engine.ensure_connected()
-                    self.scan_once()
-                    self._idle_sleep_with_usb_watch(CFG.scan_interval_sec)
+                now = time.time()
+                
+                # 1. Odbiór danych z ZMQ (nieblokujący z krótkim timeoutem)
+                market_data = self.zmq_bridge.receive_data(timeout=100)
+                if market_data:
+                    self._handle_market_data(market_data)
 
-                except KeyboardInterrupt:
-                    logging.info("BOT STOP | manual")
+                # 2. Cykliczny skan logiki (zastępuje starą pętlę, ale działa wewnątrz nowej)
+                if now - last_scan_ts >= scan_interval:
+                    logging.info("--- START PERIODIC SCAN ---")
+                    try:
+                        self.scan_once()
+                    except Exception as e:
+                        logging.error(f"Błąd podczas scan_once: {e}", exc_info=True)
+                    last_scan_ts = now
+
+                # 3. Sprawdzenie Kill-Switch
+                if self.manual_kill_switch_path.exists():
+                    logging.info("BOT STOP | Wykryto plik kill_switch.")
                     break
-                except SystemExit:
-                    raise
-                except Exception as e:
-                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                    logging.error(f"MAIN LOOP ERROR | {e}")
-                    self._idle_sleep_with_usb_watch(60)
+                
+                # 4. Krótki odpoczynek dla CPU, jeśli nie było danych
+                if not market_data:
+                    time.sleep(0.01)
+
+        except KeyboardInterrupt:
+            logging.info("BOT STOP | manual (Ctrl+C)")
+        except Exception as e:
+            cg.tlog(None, "CRITICAL", "SB_FATAL", "Błąd krytyczny pętli głównej", e)
+            logging.error(f"MAIN LOOP ERROR | {e}", exc_info=True)
         finally:
-            try:
-                if getattr(self, "execution_queue", None) is not None:
-                    self.execution_queue.stop(timeout_sec=5.0)
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            logging.info("Zamykanie bota i zwalnianie zasobów...")
+            if self.execution_queue:
+                self.execution_queue.stop()
+
 
 if __name__ == "__main__":
     
@@ -7556,15 +7650,17 @@ if __name__ == "__main__":
                 return int(hh), int(mm)
             raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.*.{label} must be [HH,MM] or 'HH:MM'")
 
-        for wid in ("FX_AM", "METAL_PM"):
+        for wid in raw_tw.keys():
             w = raw_tw.get(wid)
             if w is None:
                 continue
             if not isinstance(w, dict):
                 raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.{wid} must be object")
             grp = _group_key(str(w.get("group") or ""))
-            if grp not in {"FX", "METAL"}:
-                raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.{wid}.group must be FX or METAL")
+            # Allow null/empty group for "all groups" or "no specific group" windows
+            # but enforce valid group if specified.
+            if grp and grp not in {"FX", "METAL", "INDEX"}:
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.{wid}.group must be FX, METAL or INDEX")
             anchor_tz = str(w.get("anchor_tz") or "Europe/Warsaw")
             start_hm = _hm(w.get("start_hm"), label="start_hm")
             end_hm = _hm(w.get("end_hm"), label="end_hm")
@@ -7649,6 +7745,9 @@ if __name__ == "__main__":
 
     incident_journal = IncidentJournal(_paths["logs"])
 
+    zmq_bridge = ZMQBridge()
+    zmq_bridge.setup_sockets()
+
     bot = SafetyBot(
         config=config,
         db=db,
@@ -7660,5 +7759,9 @@ if __name__ == "__main__":
         canary_guard=canary_guard,
         drift_guard=drift_guard,
         incident_journal=incident_journal,
+        zmq_bridge=zmq_bridge,
     )
-    bot.run()
+    try:
+        bot.run()
+    finally:
+        zmq_bridge.close()

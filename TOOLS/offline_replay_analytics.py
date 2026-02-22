@@ -49,7 +49,7 @@ def atomic_write_json(path: Path, obj: Any) -> None:
             if tmp.exists():
                 tmp.unlink()
         except Exception:
-            pass
+            return
 
 
 def sqlite_connect_ro(db_path: Path) -> sqlite3.Connection:

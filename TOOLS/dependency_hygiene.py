@@ -24,6 +24,7 @@ IMPORT_MAP = {
     "scikit-learn": "sklearn",
     "metatrader5": "MetaTrader5",
     "pypdf2": "PyPDF2",
+    "pyzmq": "zmq",
 }
 
 TOOLING_REQUIREMENTS = {
@@ -288,12 +289,14 @@ def detect_hygiene(root: Path, requirement_files: List[str], *, include_tooling:
         and not name.startswith("_")
         and _normalize_req_name(name) not in normalized_locals
     )
+    provided_imports_norm = {_normalize_req_name(imp) for imp in req_to_import.values() if imp}
     missing_requirements = sorted(
         name
         for name in third_party_imports
         if _normalize_req_name(name) not in reqs
         and _normalize_req_name(name.replace("_", "-")) not in reqs
         and _normalize_req_name(name) not in normalized_locals
+        and _normalize_req_name(name) not in provided_imports_norm
     )
 
     local_links = analyze_local_links(root)

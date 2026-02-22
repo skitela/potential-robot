@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 import datetime as dt
 import json
-import tempfile
+import shutil
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
 from BIN import scudfab02 as s
 
+ROOT = Path(__file__).resolve().parents[1]
 
 class TestSCUDAdviceContractInMemory(unittest.TestCase):
     def test_write_advice_contract_v2(self):
@@ -65,25 +67,30 @@ class TestSCUDAdviceContractInMemory(unittest.TestCase):
             "qa_light": "GREEN",
         }
 
-        with tempfile.TemporaryDirectory() as td:
-            meta_dir = Path(td)
-            advice_path = meta_dir / "learner_advice.json"
-            advice_path.write_text("{}", encoding="utf-8")
+        base = ROOT / "TMP_AUDIT_IO" / "test_scud_advice_contract_inmem"
+        meta_dir = base / f"case_{uuid.uuid4().hex}"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(meta_dir, ignore_errors=True))
 
-            state = {"n": 0}
-            orig_read = Path.read_text
+        advice_path = meta_dir / "learner_advice.json"
+        advice_path.write_text("{}", encoding="utf-8")
 
-            def _read_text_retry_once(self, *args, **kwargs):
-                if self == advice_path and state["n"] == 0:
-                    state["n"] += 1
-                    return "{"
-                if self == advice_path:
-                    return json.dumps(valid)
-                return orig_read(self, *args, **kwargs)
+        state = {"n": 0}
+        orig_read = Path.read_text
 
-            with mock.patch.object(Path, "read_text", new=_read_text_retry_once), \
-                 mock.patch("BIN.scudfab02.time.sleep", return_value=None):
-                out = s.read_learner_advice(meta_dir)
+        def _read_text_retry_once(self, *args, **kwargs):
+            if self == advice_path and state["n"] == 0:
+                state["n"] += 1
+                return "{"
+            if self == advice_path:
+                return json.dumps(valid)
+            return orig_read(self, *args, **kwargs)
+
+        with (
+            mock.patch.object(Path, "read_text", new=_read_text_retry_once),
+            mock.patch("BIN.scudfab02.time.sleep", return_value=None),
+        ):
+            out = s.read_learner_advice(meta_dir)
 
         self.assertIsInstance(out, dict)
         self.assertEqual(str((out or {}).get("source")), "offline_learner")
