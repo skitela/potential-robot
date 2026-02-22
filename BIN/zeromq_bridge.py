@@ -10,10 +10,9 @@ Architektura:
 - Komunikacja odbywa się na dwóch dedykowanych gniazdach (sockets):
   1. PULL Socket (Port 5555): Python nasłuchuje na tym porcie, aby odbierać dane
      (ceny, wartości wskaźników) wysyłane z MQL5.
-  2. PUSH Socket (Port 5556): Python używa tego portu do wysyłania komend
-     (sygnałów transakcyjnych, poleceń modyfikacji) do MQL5.
-- Ten wzorzec (PUSH/PULL) jest idealny do rozdzielenia strumieni danych i komend
-  i zapewnia, że wiadomości są kolejkowane i dostarczane niezawodnie.
+  2. REQ Socket (Port 5556): Python wysyła komendy i czeka na odpowiedź REP z MQL5.
+- Ten wzorzec (PULL + REQ/REP) rozdziela strumień danych i strumień egzekucji
+  oraz zapewnia potwierdzoną, synchroniczną komunikację komend.
 - Wszystkie wiadomości są serializowane do formatu JSON.
 """
 

@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from BIN.safetybot import SafetyBot
+from BIN.safetybot import SafetyBot, StandardStrategy
 
 
 class TestHybridExecution(unittest.TestCase):
@@ -98,6 +98,30 @@ class TestHybridExecution(unittest.TestCase):
         self.assertIs(fallback_result, res)
         bot._send_trade_command.assert_not_called()
         bot.execution_engine.order_send.assert_called_once()
+
+    @patch("BIN.safetybot.mt5")
+    def test_standard_strategy_uses_dispatch_hook(self, mock_mt5):
+        mock_mt5.TRADE_ACTION_DEAL = 1
+
+        engine = MagicMock()
+        hook = MagicMock(return_value="HOOK_RESULT")
+        strategy = StandardStrategy(
+            engine=engine,
+            gov=MagicMock(),
+            throttle=MagicMock(),
+            db=MagicMock(),
+            config=MagicMock(),
+            risk_manager=MagicMock(),
+            order_queue=None,
+            dispatch_order_hook=hook,
+        )
+
+        req = {"action": mock_mt5.TRADE_ACTION_DEAL, "symbol": "EURUSD", "volume": 0.01}
+        res = strategy._dispatch_order("EURUSD", "FX", req, emergency=False)
+
+        self.assertEqual("HOOK_RESULT", res)
+        hook.assert_called_once()
+        engine.order_send.assert_not_called()
 
 
 if __name__ == "__main__":

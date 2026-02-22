@@ -83,7 +83,7 @@ import uuid
 import logging
 import traceback
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple, Any
+from typing import Dict, Optional, List, Tuple, Any, Callable
 try:
     from . import common_guards as cg
     from . import common_contract as cc
@@ -4374,6 +4374,7 @@ class StandardStrategy:
         config: ConfigManager,
         risk_manager: RiskManager,
         order_queue: Optional[ExecutionQueue] = None,
+        dispatch_order_hook: Optional[Callable[[str, str, dict, bool], Any]] = None,
     ):
         self.engine = engine
         self.gov = gov
@@ -4382,6 +4383,7 @@ class StandardStrategy:
         self.config = config
         self.risk_manager = risk_manager
         self.order_queue = order_queue
+        self.dispatch_order_hook = dispatch_order_hook
         self.cache = StrategyCache()
         self.last_indicators: Dict[str, Dict[str, Any]] = {}
         self._scan_meta: Dict[str, Any] = {}
@@ -4493,6 +4495,13 @@ class StandardStrategy:
         return False
 
     def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
+        # Prefer a single dispatch path when provided by the bot (hybrid REQ/REP).
+        if callable(self.dispatch_order_hook):
+            try:
+                return self.dispatch_order_hook(symbol, grp, request, bool(emergency))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                return None
         if self.order_queue is not None:
             return self.order_queue.submit(symbol, grp, request, emergency=bool(emergency))
         return self.engine.order_send(symbol, grp, request, emergency=bool(emergency))
@@ -5589,6 +5598,7 @@ class SafetyBot:
             self.config,
             self.risk_manager,
             order_queue=self.execution_queue,
+            dispatch_order_hook=self._dispatch_order,
         )
         self.strategy.decision_store = self.decision_store
         self.resolved_symbols = {}
@@ -5944,8 +5954,6 @@ class SafetyBot:
                 except Exception:
                     return int(default)
 
-            done_code = int(getattr(mt5, "TRADE_RETCODE_DONE", 10009))
-            placed_code = int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008))
             reject_code = int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006))
             error_code = int(getattr(mt5, "TRADE_RETCODE_ERROR", 10011))
 
