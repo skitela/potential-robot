@@ -169,6 +169,11 @@ class CFG:
     zmq_heartbeat_fail_threshold: int = 3
     # częstotliwość sprawdzania obecności klucza USB podczas uśpienia pętli
     usb_watch_check_interval_sec: int = 3
+    # Hybrid data path:
+    # - prefer M5 bars from MQL5 snapshots (ZMQ BAR) instead of Python -> mt5.copy_rates
+    # - strict mode blocks fallback fetches when snapshot history is missing
+    hybrid_use_zmq_m5_bars: bool = True
+    hybrid_m5_no_fetch_strict: bool = False
     # Legacy pull cadence values still referenced in strategy hot/warm/eco path.
     # Keep explicit defaults aligned with CONFIG/scheduler.json.
     m5_pull_sec_hot: int = 60
@@ -2784,6 +2789,7 @@ class M5BarsStore:
         self.db_dir = db_dir
         self.db_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.db_dir / M5_BARS_DB_NAME
+        self._lock = threading.Lock()
         self.conn = sqlite3.connect(str(self.db_path), timeout=5, isolation_level=None, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
@@ -2813,7 +2819,59 @@ class M5BarsStore:
                 continue
             rows.append((base_symbol, t_utc.replace(tzinfo=UTC).isoformat().replace("+00:00","Z"),
                          float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])))
-        self.conn.executemany("INSERT OR REPLACE INTO m5_bars(symbol,t_utc,o,h,l,c) VALUES (?,?,?,?,?,?)", rows)
+        with self._lock:
+            self.conn.executemany("INSERT OR REPLACE INTO m5_bars(symbol,t_utc,o,h,l,c) VALUES (?,?,?,?,?,?)", rows)
+
+    def upsert_bar_snapshot(self, base_symbol: str, bar: Dict[str, Any]) -> bool:
+        """Persist one BAR snapshot received from MQL5 over ZMQ."""
+        try:
+            ts = int(bar.get("time") or 0)
+            if ts <= 0:
+                return False
+            t_utc = dt.datetime.fromtimestamp(ts, tz=UTC).replace(microsecond=0)
+            row = (
+                str(base_symbol),
+                t_utc.isoformat().replace("+00:00", "Z"),
+                float(bar.get("open")),
+                float(bar.get("high")),
+                float(bar.get("low")),
+                float(bar.get("close")),
+            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return False
+        with self._lock:
+            sqlite_exec_retry(
+                self.conn,
+                "INSERT OR REPLACE INTO m5_bars(symbol,t_utc,o,h,l,c) VALUES (?,?,?,?,?,?)",
+                row,
+            )
+        return True
+
+    def read_recent_df(self, base_symbol: str, limit: int) -> Optional["pd.DataFrame"]:
+        """Read recent bars as dataframe compatible with indicator pipeline."""
+        lim = max(1, int(limit))
+        with self._lock:
+            rows = sqlite_exec_retry(
+                self.conn,
+                "SELECT t_utc,o,h,l,c FROM m5_bars WHERE symbol=? ORDER BY t_utc DESC LIMIT ?",
+                (str(base_symbol), int(lim)),
+            ).fetchall()
+        if not rows:
+            return None
+        rows = list(reversed(rows))
+        out = pd.DataFrame(rows, columns=["t_utc", "open", "high", "low", "close"])
+        ts = pd.to_datetime(out["t_utc"], utc=True, errors="coerce")
+        out["time"] = ts.dt.tz_convert(TZ_PL)
+        out = out.dropna(subset=["time"]).copy()
+        if out.empty:
+            return None
+        for c in ("open", "high", "low", "close"):
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+        out = out.dropna(subset=["open", "high", "low", "close"]).copy()
+        if out.empty:
+            return None
+        return out[["time", "open", "high", "low", "close"]].reset_index(drop=True)
 
     
 
@@ -3455,6 +3513,42 @@ class ExecutionEngine:
         return mt5.history_deals_get(from_dt, to_dt)
 
     def copy_rates(self, symbol: str, grp: str, timeframe, n: int):
+        # Hybrid path: for M5 decision bars prefer local snapshots from MQL5 (ZMQ BAR),
+        # so Python does not need to fetch bars directly from MT5.
+        try:
+            tf_i = int(timeframe)
+        except Exception:
+            tf_i = int(getattr(CFG, "timeframe_trade", 5))
+        want_n = max(1, int(n))
+        trade_tf = int(getattr(CFG, "timeframe_trade", 5))
+        if (
+            bool(getattr(CFG, "hybrid_use_zmq_m5_bars", True))
+            and tf_i == trade_tf
+            and getattr(self, "bars_store", None) is not None
+        ):
+            try:
+                df_store = self.bars_store.read_recent_df(symbol_base(symbol), want_n)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                df_store = None
+            if df_store is not None and len(df_store) >= want_n:
+                logging.debug(
+                    "COPY_RATES_SOURCE source=ZMQ_STORE symbol=%s tf=%s rows=%s",
+                    symbol,
+                    tf_i,
+                    int(len(df_store)),
+                )
+                return df_store.tail(want_n).reset_index(drop=True)
+            if bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)):
+                logging.info(
+                    "COPY_RATES_STRICT_NOFETCH_SKIP symbol=%s tf=%s need_rows=%s have_rows=%s",
+                    symbol,
+                    tf_i,
+                    int(want_n),
+                    int(0 if df_store is None else len(df_store)),
+                )
+                return None
+
         kind = f"rates_{timeframe}"
         if self.limits is not None:
             if not self.limits.allow_price_request(emergency=False, kind=kind):
@@ -7489,9 +7583,19 @@ class SafetyBot:
 
         # Przetwarzanie danych barowych (M5)
         elif msg_type == "BAR":
-            logging.info(f"ZMQ_BAR | {symbol} | Time: {data.get('time')} Close: {data.get('close')}")
-            # Tutaj w przyszłości: aktualizacja lokalnej bazy barów i przeliczenie wskaźników
-            # bez konieczności odpytywania MT5 przez copy_rates.
+            persisted = False
+            try:
+                if getattr(self, "bars_store", None) is not None:
+                    persisted = bool(self.bars_store.upsert_bar_snapshot(symbol_base(symbol), data))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            logging.info(
+                "ZMQ_BAR | %s | Time: %s Close: %s persisted=%s",
+                symbol,
+                data.get("time"),
+                data.get("close"),
+                int(bool(persisted)),
+            )
 
     def run(self):
         logging.info(f"BOT START | HYBRID MODE | MT5 SAFETY BOT {CFG.BOT_VERSION}")
@@ -7702,6 +7806,8 @@ if __name__ == "__main__":
     CFG.usb_watch_check_interval_sec = _cfg_int(
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
+    CFG.hybrid_use_zmq_m5_bars = _cfg_bool("hybrid_use_zmq_m5_bars", CFG.hybrid_use_zmq_m5_bars)
+    CFG.hybrid_m5_no_fetch_strict = _cfg_bool("hybrid_m5_no_fetch_strict", CFG.hybrid_m5_no_fetch_strict)
     CFG.time_anchor_max_backward_sec = _cfg_int("time_anchor_max_backward_sec", CFG.time_anchor_max_backward_sec)
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)
