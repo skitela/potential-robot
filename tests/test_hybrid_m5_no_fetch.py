@@ -71,6 +71,7 @@ class TestHybridM5NoFetch(unittest.TestCase):
         self._orig_sqlite_connect = safetybot.sqlite3.connect
         self._orig_hybrid_use = safetybot.CFG.hybrid_use_zmq_m5_bars
         self._orig_hybrid_strict = safetybot.CFG.hybrid_m5_no_fetch_strict
+        self._orig_hybrid_hard = getattr(safetybot.CFG, "hybrid_no_mt5_data_fetch_hard", False)
         safetybot.mt5 = _StubMT5()
 
         def _connect_in_memory(_path, timeout=5, check_same_thread=False, **kwargs):
@@ -83,6 +84,7 @@ class TestHybridM5NoFetch(unittest.TestCase):
         safetybot.sqlite3.connect = self._orig_sqlite_connect
         safetybot.CFG.hybrid_use_zmq_m5_bars = self._orig_hybrid_use
         safetybot.CFG.hybrid_m5_no_fetch_strict = self._orig_hybrid_strict
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = self._orig_hybrid_hard
 
     def _tmpdir(self) -> Path:
         base = ROOT / "TMP_AUDIT_IO" / "test_hybrid_m5_no_fetch"
@@ -107,6 +109,7 @@ class TestHybridM5NoFetch(unittest.TestCase):
     def test_copy_rates_prefers_zmq_store_for_m5(self):
         safetybot.CFG.hybrid_use_zmq_m5_bars = True
         safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
         t0 = safetybot.pd.Timestamp.now(tz=safetybot.TZ_PL).floor("5min")
         df_src = safetybot.pd.DataFrame(
             [
@@ -124,6 +127,7 @@ class TestHybridM5NoFetch(unittest.TestCase):
     def test_copy_rates_strict_no_fetch_returns_none_when_store_short(self):
         safetybot.CFG.hybrid_use_zmq_m5_bars = True
         safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
         engine = self._build_engine(_StoreStub())
         df = engine.copy_rates("EURUSD", "FX", safetybot.CFG.timeframe_trade, 2)
         self.assertIsNone(df)
@@ -132,6 +136,7 @@ class TestHybridM5NoFetch(unittest.TestCase):
     def test_copy_rates_non_strict_falls_back_to_mt5(self):
         safetybot.CFG.hybrid_use_zmq_m5_bars = True
         safetybot.CFG.hybrid_m5_no_fetch_strict = False
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = False
         engine = self._build_engine(_StoreStub())
         df = engine.copy_rates("EURUSD", "FX", safetybot.CFG.timeframe_trade, 2)
         self.assertIsNotNone(df)

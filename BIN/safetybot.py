@@ -82,6 +82,7 @@ import json
 import uuid
 import logging
 import traceback
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any, Callable
 try:
@@ -178,9 +179,14 @@ class CFG:
     hybrid_use_zmq_m5_features: bool = True
     # Reuse M5 store to synthesize H4/D1 bars for trend (no direct mt5.copy_rates when possible).
     hybrid_use_mtf_resample_from_m5_store: bool = True
-    hybrid_m5_no_fetch_strict: bool = False
+    hybrid_m5_no_fetch_strict: bool = True
+    # Hard switch: decision path must operate on MQL5 snapshots only.
+    hybrid_no_mt5_data_fetch_hard: bool = True
     # Maximum accepted age of incoming market snapshots in decision path.
     hybrid_snapshot_max_age_sec: int = 180
+    # Snapshot freshness windows for symbol/account metadata channels.
+    hybrid_symbol_snapshot_max_age_sec: int = 300
+    hybrid_account_snapshot_max_age_sec: int = 30
     # Legacy pull cadence values still referenced in strategy hot/warm/eco path.
     # Keep explicit defaults aligned with CONFIG/scheduler.json.
     m5_pull_sec_hot: int = 60
@@ -3376,6 +3382,8 @@ class ExecutionEngine:
         self.connected = False
         self._sym_info_cache: Dict[str, Tuple[float, object]] = {}
         self._zmq_tick_cache: Dict[str, Dict[str, Any]] = {}
+        self._zmq_symbol_info_cache: Dict[str, Dict[str, Any]] = {}
+        self._zmq_account_cache: Dict[str, Any] = {}
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
         self._sltp_ts: List[float] = []
@@ -3514,7 +3522,65 @@ class ExecutionEngine:
             self.connected = False
             self.connect()
 
+    def _snapshot_only_mode(self) -> bool:
+        return bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)) and bool(
+            getattr(CFG, "hybrid_no_mt5_data_fetch_hard", False)
+        )
+
+    def _symbol_info_from_snapshot(self, symbol: str) -> Optional[object]:
+        cache = self._zmq_symbol_info_cache if isinstance(self._zmq_symbol_info_cache, dict) else {}
+        base = symbol_base(symbol)
+        rec = cache.get(base) or cache.get(str(symbol).upper())
+        if not isinstance(rec, dict):
+            return None
+        try:
+            age_s = max(0.0, time.time() - float(rec.get("recv_ts") or 0.0))
+            max_age = max(5, int(getattr(CFG, "hybrid_symbol_snapshot_max_age_sec", 300)))
+            if age_s > float(max_age):
+                return None
+            return SimpleNamespace(
+                symbol=str(symbol).upper(),
+                point=float(rec.get("point", 0.0) or 0.0),
+                digits=int(rec.get("digits", 0) or 0),
+                spread=float(rec.get("spread", 0.0) or 0.0),
+                trade_tick_size=float(rec.get("trade_tick_size", 0.0) or 0.0),
+                trade_tick_value=float(rec.get("trade_tick_value", 0.0) or 0.0),
+                volume_min=float(rec.get("volume_min", 0.0) or 0.0),
+                volume_max=float(rec.get("volume_max", 0.0) or 0.0),
+                volume_step=float(rec.get("volume_step", 0.0) or 0.0),
+                trade_stops_level=int(rec.get("trade_stops_level", 0) or 0),
+                trade_freeze_level=int(rec.get("trade_freeze_level", 0) or 0),
+            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return None
+
+    def _account_info_from_snapshot(self) -> Optional[object]:
+        rec = self._zmq_account_cache if isinstance(self._zmq_account_cache, dict) else {}
+        if not rec:
+            return None
+        try:
+            age_s = max(0.0, time.time() - float(rec.get("recv_ts") or 0.0))
+            max_age = max(5, int(getattr(CFG, "hybrid_account_snapshot_max_age_sec", 30)))
+            if age_s > float(max_age):
+                return None
+            return SimpleNamespace(
+                balance=float(rec.get("balance", 0.0) or 0.0),
+                equity=float(rec.get("equity", 0.0) or 0.0),
+                margin_free=float(rec.get("margin_free", 0.0) or 0.0),
+                margin_level=float(rec.get("margin_level", 0.0) or 0.0),
+            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return None
+
     def symbol_info_cached(self, symbol: str, grp: str, db: Persistence) -> Optional[object]:
+        if self._snapshot_only_mode():
+            info = self._symbol_info_from_snapshot(symbol)
+            if info is None:
+                logging.info("SYMBOL_INFO_STRICT_SNAPSHOT_MISSING symbol=%s", symbol)
+            return info
+
         now = time.time()
         cached = self._sym_info_cache.get(symbol)
         if cached and (now - cached[0] < CFG.symbol_info_cache_ttl_sec):
@@ -3549,6 +3615,11 @@ class ExecutionEngine:
         return mt5.orders_get()
 
     def account_info(self):
+        if self._snapshot_only_mode():
+            acc = self._account_info_from_snapshot()
+            if acc is None:
+                logging.info("ACCOUNT_INFO_STRICT_SNAPSHOT_MISSING")
+            return acc
         if mt5 is None:
             return None
         if not self.gov.consume("SYS", "__ACCOUNT__", "account_info", 1, emergency=False):
@@ -3631,7 +3702,10 @@ class ExecutionEngine:
                         int(len(df_store)),
                     )
                     return df_store.tail(want_n).reset_index(drop=True)
-            if bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)):
+            strict_no_fetch = bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)) or bool(
+                getattr(CFG, "hybrid_no_mt5_data_fetch_hard", False)
+            )
+            if strict_no_fetch:
                 logging.info(
                     "COPY_RATES_STRICT_NOFETCH_SKIP symbol=%s tf=%s need_rows=%s have_rows=%s",
                     symbol,
@@ -3729,7 +3803,7 @@ class ExecutionEngine:
 
     def tick(self, symbol: str, grp: str, emergency: bool = False):
         # 1. Sprawdź cache ZMQ (Hybrid Mode)
-        zmq_data = self._zmq_tick_cache.get(symbol)
+        zmq_data = self._zmq_tick_cache.get(symbol) or self._zmq_tick_cache.get(symbol_base(symbol))
         if zmq_data:
             # Tworzymy stub udający strukturę MqlTick
             class TickStub:
@@ -3743,6 +3817,10 @@ class ExecutionEngine:
             logging.debug(f"TICK_FROM_ZMQ_CACHE symbol={symbol}")
             # Przy danych z ZMQ nie konsumujemy budżetu PRICE (oszczędność!)
             return t
+
+        if self._snapshot_only_mode() and (not bool(emergency)):
+            logging.info("TICK_STRICT_NOFETCH_SKIP symbol=%s emergency=%s", symbol, int(bool(emergency)))
+            return None
 
         # 2. Fallback do standardowego pobierania przez MT5 API
         if self.limits is not None:
@@ -5817,8 +5895,12 @@ class SafetyBot:
         self.bars_store = M5BarsStore(self.db_dir)
         self.execution_engine.bars_store = self.bars_store
         self._zmq_m5_feature_cache: Dict[str, Dict[str, Any]] = {}
+        self._zmq_symbol_info_cache: Dict[str, Dict[str, Any]] = {}
+        self._zmq_account_cache: Dict[str, Any] = {}
         self._zmq_last_tick_ts: Dict[str, float] = {}
         self._zmq_last_bar_ts: Dict[str, float] = {}
+        self.execution_engine._zmq_symbol_info_cache = self._zmq_symbol_info_cache
+        self.execution_engine._zmq_account_cache = self._zmq_account_cache
 
         # --- strategy / controller ---
         self.ctrl = ActivityController(self.db, self.config)
@@ -7781,25 +7863,68 @@ class SafetyBot:
         Główny punkt wejścia dla danych rynkowych przychodzących z Agenta MQL5.
         Integruje przychodzące dane z logiką SafetyBot.
         """
-        msg_type = data.get("type")
+        msg_type = str(data.get("type") or "").upper()
         symbol = data.get("symbol")
         schema_v = str(data.get("schema_version") or data.get("__v") or "").strip()
-        
-        if not symbol:
-            return
+
         if schema_v and schema_v != "1.0":
             logging.warning("ZMQ_DATA_SCHEMA_MISMATCH symbol=%s type=%s schema_version=%s", symbol, msg_type, schema_v)
             return
 
-        base_symbol = symbol_base(symbol)
         now_ts = float(time.time())
+
+        if msg_type == "ACCOUNT":
+            try:
+                self._zmq_account_cache.clear()
+                self._zmq_account_cache.update(
+                    {
+                        "recv_ts": now_ts,
+                        "balance": float(data.get("balance", 0.0) or 0.0),
+                        "equity": float(data.get("equity", 0.0) or 0.0),
+                        "margin_free": float(data.get("margin_free", 0.0) or 0.0),
+                        "margin_level": float(data.get("margin_level", 0.0) or 0.0),
+                    }
+                )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return
+
+        if not symbol:
+            return
+
+        base_symbol = symbol_base(symbol)
 
         # Aktualizacja cache'u ticków dla silnika wykonawczego
         if msg_type == "TICK":
             # Wstrzykujemy tick do cache'u silnika
             if hasattr(self.execution_engine, "_zmq_tick_cache"):
                 self.execution_engine._zmq_tick_cache[symbol] = data
+                self.execution_engine._zmq_tick_cache[base_symbol] = data
             self._zmq_last_tick_ts[base_symbol] = now_ts
+
+            # Snapshot metadata for strict no-fetch symbol_info replacement.
+            try:
+                point = float(data.get("point", 0.0) or 0.0)
+                bid = float(data.get("bid", 0.0) or 0.0)
+                ask = float(data.get("ask", 0.0) or 0.0)
+                spread_pts = float(data.get("spread_points", 0.0) or 0.0)
+                if spread_pts <= 0.0 and point > 0.0:
+                    spread_pts = max(0.0, float((ask - bid) / point))
+                self._zmq_symbol_info_cache[base_symbol] = {
+                    "recv_ts": now_ts,
+                    "point": point,
+                    "digits": int(data.get("digits", 0) or 0),
+                    "spread": spread_pts,
+                    "trade_tick_size": float(data.get("trade_tick_size", 0.0) or 0.0),
+                    "trade_tick_value": float(data.get("trade_tick_value", 0.0) or 0.0),
+                    "volume_min": float(data.get("volume_min", 0.0) or 0.0),
+                    "volume_max": float(data.get("volume_max", 0.0) or 0.0),
+                    "volume_step": float(data.get("volume_step", 0.0) or 0.0),
+                    "trade_stops_level": int(data.get("trade_stops_level", 0) or 0),
+                    "trade_freeze_level": int(data.get("trade_freeze_level", 0) or 0),
+                }
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             logging.debug(f"ZMQ_TICK | {symbol} | Bid: {data.get('bid')} Ask: {data.get('ask')}")
 
         # Przetwarzanie danych barowych (M5)
@@ -8062,7 +8187,19 @@ if __name__ == "__main__":
         CFG.hybrid_use_mtf_resample_from_m5_store,
     )
     CFG.hybrid_m5_no_fetch_strict = _cfg_bool("hybrid_m5_no_fetch_strict", CFG.hybrid_m5_no_fetch_strict)
+    CFG.hybrid_no_mt5_data_fetch_hard = _cfg_bool(
+        "hybrid_no_mt5_data_fetch_hard",
+        CFG.hybrid_no_mt5_data_fetch_hard,
+    )
     CFG.hybrid_snapshot_max_age_sec = _cfg_int("hybrid_snapshot_max_age_sec", CFG.hybrid_snapshot_max_age_sec)
+    CFG.hybrid_symbol_snapshot_max_age_sec = _cfg_int(
+        "hybrid_symbol_snapshot_max_age_sec",
+        CFG.hybrid_symbol_snapshot_max_age_sec,
+    )
+    CFG.hybrid_account_snapshot_max_age_sec = _cfg_int(
+        "hybrid_account_snapshot_max_age_sec",
+        CFG.hybrid_account_snapshot_max_age_sec,
+    )
     CFG.time_anchor_max_backward_sec = _cfg_int("time_anchor_max_backward_sec", CFG.time_anchor_max_backward_sec)
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)

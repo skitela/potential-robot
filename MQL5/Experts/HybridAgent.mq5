@@ -18,6 +18,7 @@ input int    InpDataPort   = 5555;
 input int    InpCmdPort    = 5556;
 input uint   InpTimerSec   = 1;     // EventSetTimer uses seconds
 input uint   InpPythonTimeoutSec = 180;
+input uint   InpAccountPulseSec = 5;
 input uint   InpReplyCacheSize = 64;
 input int    InpSmaFastPeriod = 20;
 input int    InpAdxPeriod = 14;
@@ -528,13 +529,41 @@ void SendTickData()
   if(!SymbolInfoTick(G_Symbol, tick))
     return;
 
+  int digits = (int)SymbolInfoInteger(G_Symbol, SYMBOL_DIGITS);
+  int stops_level = (int)SymbolInfoInteger(G_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+  int freeze_level = (int)SymbolInfoInteger(G_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+  double point = SymbolInfoDouble(G_Symbol, SYMBOL_POINT);
+  double tick_size = SymbolInfoDouble(G_Symbol, SYMBOL_TRADE_TICK_SIZE);
+  double tick_value = SymbolInfoDouble(G_Symbol, SYMBOL_TRADE_TICK_VALUE);
+  double vol_min = SymbolInfoDouble(G_Symbol, SYMBOL_VOLUME_MIN);
+  double vol_max = SymbolInfoDouble(G_Symbol, SYMBOL_VOLUME_MAX);
+  double vol_step = SymbolInfoDouble(G_Symbol, SYMBOL_VOLUME_STEP);
+  double spread_points = 0.0;
+  if(point > 0.0)
+    spread_points = (tick.ask - tick.bid) / point;
+
   string json = StringFormat(
-    "{\"type\":\"TICK\",\"symbol\":\"%s\",\"timestamp_ms\":%I64d,\"bid\":%.5f,\"ask\":%.5f,\"volume\":%I64d,\"schema_version\":\"%s\",\"__v\":\"%s\"}",
+    "{\"type\":\"TICK\",\"symbol\":\"%s\",\"timestamp_ms\":%I64d,\"bid\":%.5f,\"ask\":%.5f,\"volume\":%I64d,"
+    "\"digits\":%d,\"point\":%.10f,\"spread_points\":%.6f,"
+    "\"trade_tick_size\":%.10f,\"trade_tick_value\":%.10f,"
+    "\"volume_min\":%.6f,\"volume_max\":%.6f,\"volume_step\":%.6f,"
+    "\"trade_stops_level\":%d,\"trade_freeze_level\":%d,"
+    "\"schema_version\":\"%s\",\"__v\":\"%s\"}",
     JsonEscape(G_Symbol),
     (long)tick.time_msc,
     tick.bid,
     tick.ask,
     (long)tick.volume,
+    digits,
+    point,
+    spread_points,
+    tick_size,
+    tick_value,
+    vol_min,
+    vol_max,
+    vol_step,
+    stops_level,
+    freeze_level,
     PROTOCOL_VERSION,
     PROTOCOL_VERSION
   );
@@ -549,6 +578,38 @@ void SendTickData()
       last_error_time = now_ms;
     }
   }
+}
+
+//+------------------------------------------------------------------+
+//| Telemetry out: account snapshot                                  |
+//+------------------------------------------------------------------+
+void SendAccountData()
+{
+  static ulong last_sent_ms = 0;
+  ulong now_ms = (ulong)GetTickCount();
+  uint pulse_sec = (uint)MathMax(1, (int)InpAccountPulseSec);
+  if(last_sent_ms > 0 && (now_ms - last_sent_ms) < ((ulong)pulse_sec * 1000))
+    return;
+
+  double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+  double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+  double margin_free = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+  double margin_level = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+
+  string json = StringFormat(
+    "{\"type\":\"ACCOUNT\",\"balance\":%.8f,\"equity\":%.8f,\"margin_free\":%.8f,\"margin_level\":%.8f,"
+    "\"timestamp_ms\":%I64d,\"schema_version\":\"%s\",\"__v\":\"%s\"}",
+    balance,
+    equity,
+    margin_free,
+    margin_level,
+    (long)TimeCurrent() * 1000,
+    PROTOCOL_VERSION,
+    PROTOCOL_VERSION
+  );
+
+  if(Zmq_SendData(json))
+    last_sent_ms = now_ms;
 }
 
 //+------------------------------------------------------------------+
@@ -868,7 +929,7 @@ int OnInit()
   if(!InitIndicatorHandles())
     Print("WARN: indicator handles partially unavailable. BAR feature payload may be incomplete.");
 
-  Print("HybridAgent ready symbol=", G_Symbol, " timer_sec=", InpTimerSec, " timeout_sec=", InpPythonTimeoutSec);
+  Print("HybridAgent ready symbol=", G_Symbol, " timer_sec=", InpTimerSec, " timeout_sec=", InpPythonTimeoutSec, " account_pulse_sec=", InpAccountPulseSec);
   return INIT_SUCCEEDED;
 }
 
@@ -898,6 +959,7 @@ void OnTimer()
   {
     SendTickData();
     SendBarData();
+    SendAccountData();
     ProcessCommands();
   }
 }

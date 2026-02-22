@@ -42,6 +42,11 @@
       ]
     }
   },
+  "hybrid_m5_no_fetch_strict": true,
+  "hybrid_no_mt5_data_fetch_hard": true,
+  "hybrid_snapshot_max_age_sec": 180,
+  "hybrid_symbol_snapshot_max_age_sec": 300,
+  "hybrid_account_snapshot_max_age_sec": 30,
   "trade_closeout_buffer_min": 15,
   "hard_no_mt5_outside_windows": true,
   "trade_off_sys_poll_sec": 900,
