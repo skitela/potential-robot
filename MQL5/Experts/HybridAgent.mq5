@@ -1,430 +1,378 @@
 //+------------------------------------------------------------------+
 //|                                                  HybridAgent.mq5 |
-//|                                     Agent wykonawczy dla MQL5    |
-//|                                     https://github.com/gemini    |
+//|                        Execution agent for Python <-> MQL5 stack |
 //+------------------------------------------------------------------+
 #property copyright "Gemini"
 #property link      "https://github.com/gemini"
-#property version   "1.10"
-#property description "Agent hybrydowy - część wykonawcza w MQL5. Komunikuje się z mózgiem w Pythonie."
+#property version   "1.11"
+#property description "Hybrid execution agent with deterministic REQ/REP contract."
 
-// Dołączamy nasz most komunikacyjny ZMQ
 #include <zeromq_bridge.mqh>
-
-/*
- KRYTYCZNA ZALEŻNOŚĆ: PONIŻSZA BIBLIOTEKA MUSI ZOSTAĆ POBRANA RĘCZNIE
- Link: https://github.com/xefino/mql5-json
- Plik 'Json.mqh' należy umieścić w katalogu 'MQL5/Include/Json/'.
-*/
 #include <Json/Json.mqh>
 
+#define PROTOCOL_VERSION "1.0"
 
-// --- Parametry wejściowe Experta ---
-input string InpPythonHost = "127.0.0.1"; // Adres IP, na którym działa serwer Pythona
-input int    InpDataPort   = 5555;        // Port do wysyłania danych do Pythona
-input int    InpCmdPort    = 5556;        // Port do odbierania komend od Pythona
-input uint   InpTimerSec   = 1;           // Interwał timera w sekundach (P0: EventSetTimer uses seconds)
-input uint   InpPythonTimeoutSec = 180;   // Po ilu sekundach bez komendy z Pythona aktywować tryb fail-safe
+// --- Expert inputs ---
+input string InpPythonHost = "127.0.0.1";
+input int    InpDataPort   = 5555;
+input int    InpCmdPort    = 5556;
+input uint   InpTimerSec   = 1;     // EventSetTimer uses seconds
+input uint   InpPythonTimeoutSec = 180;
+input uint   InpReplyCacheSize = 64;
+input int    InpSmaFastPeriod = 20;
+input int    InpAdxPeriod = 14;
+input int    InpAtrPeriod = 14;
 
-// Zmienna globalna do przechowywania nazwy symbolu
-string G_Symbol;
-
-// Zmienne globalne dla mechanizmu fail-safe
+string G_Symbol = "";
 ulong  G_LastPythonMessageTime = 0;
 bool   G_IsFailSafeActive = false;
 
-//+------------------------------------------------------------------+
-//| Funkcja inicjalizacji Experta                                    |
-//+------------------------------------------------------------------+
-int OnInit()
-{
-  Print("Inicjalizacja Agenta Hybrydowego...");
-  
-  // 1. Inicjalizuj most ZMQ
-  if(!Zmq_Init(InpPythonHost, InpDataPort, InpCmdPort))
-  {
-    Alert("BŁĄD KRYTYCZNY: Nie udało się zainicjalizować mostu ZMQ. Sprawdź logi.");
-    return(INIT_FAILED);
-  }
-  
-  // 2. Ustaw timer (P0: EventSetTimer uses seconds)
-  if(!EventSetTimer(InpTimerSec))
-  {
-     Alert("BŁĄD KRYTYCZNY: Nie udało się ustawić timera. Agent nie będzie działać.");
-     Zmq_Deinit(); // Posprzątaj po ZMQ
-     return(INIT_FAILED);
-  }
-  
-  // 3. Zapisz nazwę symbolu i czas startu
-  G_Symbol = _Symbol;
-  G_LastPythonMessageTime = GetTickCount(); // Ustawiamy początkowy czas
-  
-  Print("Agent Hybrydowy zainicjalizowany pomyślnie na symbolu ", G_Symbol);
-  Print("Timer ustawiony na ", InpTimerSec, " s.");
-  Print("Timeout dla Pythona ustawiony na ", InpPythonTimeoutSec, " s.");
-  return(INIT_SUCCEEDED);
-}
+int G_MAFastHandle = INVALID_HANDLE;
+int G_ADXHandle = INVALID_HANDLE;
+int G_ATRHandle = INVALID_HANDLE;
+
+string G_ReplyCacheMsgId[];
+string G_ReplyCachePayload[];
+ulong  G_ReplyCacheTs[];
 
 //+------------------------------------------------------------------+
-//| Funkcja deinicjalizacji Experta                                  |
+//| Utility helpers                                                   |
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
+string ToUpperAscii(string value)
 {
-  Print("Deinicjalizacja Agenta Hybrydowego, powód: ", reason);
-  
-  // 1. Wyłącz timer
-  EventKillTimer();
-  
-  // 2. Zamknij most ZMQ
-  Zmq_Deinit();
-  
-  Print("Zasoby zwolnione.");
-}
-
-//+------------------------------------------------------------------+
-//| Funkcja obsługi zdarzeń timera                                   |
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-  // --- Krok 0: Sprawdzenie trybu Fail-Safe ---
-  if(!G_IsFailSafeActive && InpPythonTimeoutSec > 0)
+  string out = value;
+  int len = StringLen(out);
+  for(int i = 0; i < len; i++)
   {
-    ulong elapsed_ms = GetTickCount() - G_LastPythonMessageTime;
-    if(elapsed_ms > (InpPythonTimeoutSec * 1000))
+    ushort ch = (ushort)StringGetCharacter(out, i);
+    if(ch >= 97 && ch <= 122)
     {
-      G_IsFailSafeActive = true;
-      Alert("FAIL-SAFE AKTYWOWANY! Utracono połączenie z Pythonem (timeout > ", (string)InpPythonTimeoutSec, "s). Zamykanie wszystkich pozycji.");
-      CloseAllOpenPositionsByMagic((int)PositionGetInteger(POSITION_MAGIC), "FAIL_SAFE_TIMEOUT");
+      StringSetCharacter(out, i, (ushort)(ch - 32));
     }
   }
-
-  // --- Krok 1: Wysyłanie danych do Pythona ---
-  if(!G_IsFailSafeActive)
-  {
-    SendTickData();
-    SendBarData();
-  }
-  
-  // --- Krok 2: Odbieranie i przetwarzanie komend z Pythona ---
-  // W trybie fail-safe nie przetwarzamy nowych komend
-  if(!G_IsFailSafeActive)
-  {
-    ProcessCommands();
-  }
+  return out;
 }
 
-//+------------------------------------------------------------------+
-//| Zamyka wszystkie otwarte pozycje dla danego numeru magic         |
-//+------------------------------------------------------------------+
-void CloseAllOpenPositionsByMagic(int magic_to_close, string reason)
+string JsonEscape(string value)
 {
-  for(int i = PositionsTotal() - 1; i >= 0; i--)
-  {
-    ulong pos_ticket = PositionGetTicket(i);
-    if(pos_ticket > 0)
-    {
-      if(PositionGetInteger(POSITION_MAGIC) == magic_to_close)
-      {
-        MqlTradeRequest request={0};
-        MqlTradeResult  result={0};
-        
-        request.action = TRADE_ACTION_DEAL;
-        request.symbol = PositionGetString(POSITION_SYMBOL);
-        request.volume = PositionGetDouble(POSITION_VOLUME);
-        request.magic = magic_to_close;
-        request.comment = reason;
-        request.type_filling = ORDER_FILLING_IOC;
-        request.deviation = 20; // Większy slippage dla zamknięć awaryjnych
-
-        if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-        {
-          request.type = ORDER_TYPE_SELL;
-          request.price = SymbolInfoDouble(request.symbol, SYMBOL_BID);
-        }
-        else
-        {
-          request.type = ORDER_TYPE_BUY;
-          request.price = SymbolInfoDouble(request.symbol, SYMBOL_ASK);
-        }
-        
-        if(request.price > 0)
-        {
-          Print("FAIL-SAFE: Zamykanie pozycji #", (string)pos_ticket, " ", (string)request.volume, " ", request.symbol);
-          OrderSend(request, result);
-        }
-        else
-        {
-          Print("FAIL-SAFE: Nie udało się pobrać ceny do zamknięcia pozycji #", (string)pos_ticket);
-        }
-      }
-    }
-  }
+  string out = value;
+  StringReplace(out, "\\", "\\\\");
+  StringReplace(out, "\"", "\\\"");
+  StringReplace(out, "\r", "\\r");
+  StringReplace(out, "\n", "\\n");
+  return out;
 }
 
-//+------------------------------------------------------------------+
-//| Wysyła dane o ostatnim zamkniętym barze M5 do Pythona            |
-//+------------------------------------------------------------------+
-void SendBarData()
+string NormFloat8(double value)
 {
-  static datetime last_bar_time = 0;
-  MqlRates rates[];
-  
-  // Pobieramy ostatni zamknięty bar (indeks 1)
-  if(CopyRates(G_Symbol, PERIOD_M5, 1, 1, rates) > 0)
-  {
-    if(rates[0].time > last_bar_time)
-    {
-      string json = StringFormat(
-        "{\"type\":\"BAR\", \"symbol\":\"%s\", \"timeframe\":\"M5\", \"time\":%d, \"open\":%.5f, \"high\":%.5f, \"low\":%.5f, \"close\":%.5f, \"volume\":%d}",
-        G_Symbol,
-        rates[0].time,
-        rates[0].open,
-        rates[0].high,
-        rates[0].low,
-        rates[0].close,
-        (int)rates[0].tick_volume
-      );
-      
-      if(Zmq_SendData(json))
-      {
-        last_bar_time = rates[0].time;
-      }
-    }
-  }
+  return StringFormat("%.8f", value);
 }
 
-//+------------------------------------------------------------------+
-//| Wysyła ostatni tick do Pythona                                   |
-//+------------------------------------------------------------------+
-void SendTickData()
+string NormInt(long value)
 {
-  MqlTick tick;
-  if(SymbolInfoTick(G_Symbol, tick))
-  {
-    // Budujemy string JSON
-    string json = StringFormat(
-      "{\"type\":\"TICK\", \"symbol\":\"%s\", \"timestamp_ms\":%d, \"bid\":%.5f, \"ask\":%.5f, \"volume\":%d}",
-      G_Symbol,
-      tick.time_msc,
-      tick.bid,
-      tick.ask,
-      (int)tick.volume
-    );
-    
-    // Wysyłamy dane przez most
-    if(!Zmq_SendData(json))
-    {
-      // Logujemy błąd tylko raz na jakiś czas, aby nie zalać logów
-      static ulong last_error_time = 0;
-      if(GetTickCount() - last_error_time > 5000)
-      {
-        Print("Błąd wysyłania danych tick do Pythona.");
-        last_error_time = GetTickCount();
-      }
-    }
-  }
+  return LongToString(value);
 }
 
-//+------------------------------------------------------------------+
-//| Odbiera i przetwarza komendy z Pythona                           |
-//+------------------------------------------------------------------+
-void ProcessCommands()
+string Fnv1a32Hex(string text)
 {
-  string command_json;
-  // Sprawdzamy, czy w kolejce jest jakieś żądanie
-  if(Zmq_ReceiveRequest(command_json))
-  {
-    G_LastPythonMessageTime = GetTickCount(); // Zresetuj czas ostatniej komendy
-    // Nie logujemy heartbeatów, żeby nie zaśmiecać logów
-    if(StringFind(command_json, "\"action\":\"HEARTBEAT\"") == -1)
-    {
-      Print("Odebrano żądanie z Pythona: ", command_json);
-    }
-    
-    // Parsujemy otrzymany JSON
-    Json json;
-    if(json.Parse(command_json))
-    {
-      string action = json.Get("action");
-      string msg_id = json.Get("msg_id"); // Pobieramy ID wiadomości
-      string contract_v = json.Get("__v");
-      if(contract_v == "")
-      {
-        Print("WARN: Missing protocol version __v in command msg_id=", msg_id);
-      }
-      else if(contract_v != "1.0")
-      {
-        Print("WARN: Protocol version mismatch __v=", contract_v, " expected=1.0 msg_id=", msg_id);
-      }
-      
-      if(action == "HEARTBEAT")
-      {
-        string reply = StringFormat("{\"status\":\"OK\", \"correlation_id\":\"%s\", \"action\":\"HEARTBEAT_REPLY\"}", msg_id);
-        Zmq_SendReply(reply);
-      }
-      else if(action == "TRADE")
-      {
-        Json payload = json.GetNode("payload");
-        if(payload.IsObject())
-        {
-          string signal = payload.Get("signal");
-          string symbol = payload.Get("symbol");
-          double volume = payload.Get("volume");
-          double sl_price = payload.Get("sl_price");
-          double tp_price = payload.Get("tp_price");
-          long   magic = payload.Get("magic");
-          string comment = payload.Get("comment");
+  uint h = 0x811C9DC5;
+  uchar bytes[];
+  int n = StringToCharArray(text, bytes, 0, -1, CP_UTF8);
+  if(n <= 1)
+    return StringFormat("%08X", (int)h);
 
-          ExecuteTrade(signal, symbol, volume, sl_price, tp_price, (int)magic, comment, msg_id);
-        }
-        else
-        {
-          string reply = StringFormat("{\"status\":\"ERROR\", \"correlation_id\":\"%s\", \"error\":\"Payload is not a valid object\"}", msg_id);
-          Zmq_SendReply(reply);
-        }
-      }
-      else
-      {
-         string reply = StringFormat("{\"status\":\"ERROR\", \"correlation_id\":\"%s\", \"error\":\"Unknown action specified\"}", msg_id);
-         Zmq_SendReply(reply);
-      }
-    }
-    else
-    {
-      string bad_reply_msg_id = "unknown";
-      int pos = StringFind(command_json, "\"msg_id\":\"");
-      if(pos != -1)
-      {
-        int end_pos = StringFind(command_json, "\"", pos + 10);
-        if(end_pos != -1) bad_reply_msg_id = StringSubstr(command_json, pos + 10, end_pos - (pos + 10));
-      }
-      Print("Błąd parsowania komendy JSON: ", command_json);
-      string reply = StringFormat("{\"status\":\"ERROR\", \"correlation_id\":\"%s\", \"error\":\"Failed to parse command JSON\"}", bad_reply_msg_id);
-      Zmq_SendReply(reply);
-    }
+  for(int i = 0; i < (n - 1); i++)
+  {
+    h ^= (uint)bytes[i];
+    h = (uint)((ulong)h * 0x01000193);
   }
+  return StringFormat("%08X", (int)h);
 }
 
-//+------------------------------------------------------------------+
-//| Wykonuje zlecenie transakcyjne na podstawie komendy              |
-//+------------------------------------------------------------------+
-void ExecuteTrade(string signal, string symbol, double volume, double sl_price, double tp_price, int magic, string comment, string msg_id)
+string BuildRequestHashSimple(string action, string msg_id)
 {
-  // --- GUARD: Sprawdź, czy nie jest aktywny tryb fail-safe ---
-  if(G_IsFailSafeActive)
+  string sig = ToUpperAscii(action) + "|" + msg_id;
+  return Fnv1a32Hex(sig);
+}
+
+string BuildRequestHashTrade(
+  string action,
+  string msg_id,
+  string signal,
+  string symbol,
+  double volume,
+  double sl_price,
+  double tp_price,
+  long magic,
+  string comment
+)
+{
+  string sig = ToUpperAscii(action) + "|" + msg_id + "|" + ToUpperAscii(signal) + "|" + ToUpperAscii(symbol)
+    + "|" + NormFloat8(volume)
+    + "|" + NormFloat8(sl_price)
+    + "|" + NormFloat8(tp_price)
+    + "|" + NormInt(magic)
+    + "|" + comment;
+  return Fnv1a32Hex(sig);
+}
+
+string BuildResponseHash(
+  string status,
+  string correlation_id,
+  string action,
+  long retcode,
+  string retcode_str,
+  long order_id,
+  long deal_id,
+  string comment,
+  string symbol,
+  string error,
+  string request_hash
+)
+{
+  string sig = ToUpperAscii(status) + "|" + correlation_id + "|" + ToUpperAscii(action)
+    + "|" + NormInt(retcode)
+    + "|" + retcode_str
+    + "|" + NormInt(order_id)
+    + "|" + NormInt(deal_id)
+    + "|" + comment
+    + "|" + symbol
+    + "|" + error
+    + "|" + request_hash;
+  return Fnv1a32Hex(sig);
+}
+
+int ReplyCacheLimit()
+{
+  return (int)MathMax(4, (int)InpReplyCacheSize);
+}
+
+int FindReplyCacheIndex(const string msg_id)
+{
+  int n = ArraySize(G_ReplyCacheMsgId);
+  for(int i = 0; i < n; i++)
   {
-    Print("Odrzucono zlecenie (msg_id: ", msg_id, "): Aktywny tryb FAIL-SAFE.");
-    string nack_json = StringFormat(
-      "{\"status\":\"REJECTED\", \"correlation_id\":\"%s\", \"retcode\":%d, \"retcode_str\":\"%s\", \"comment\":\"Rejected due to active FAIL-SAFE mode.\"}",
-      msg_id,
-      50002, // Custom retcode for fail-safe active
-      "CUSTOM_RETCODE_FAIL_SAFE_ACTIVE"
-    );
-    Zmq_SendReply(nack_json);
+    if(G_ReplyCacheMsgId[i] == msg_id)
+      return i;
+  }
+  return -1;
+}
+
+bool TryGetCachedReply(const string msg_id, string &reply_json)
+{
+  if(msg_id == "")
+    return false;
+
+  int idx = FindReplyCacheIndex(msg_id);
+  if(idx < 0)
+    return false;
+
+  reply_json = G_ReplyCachePayload[idx];
+  return (reply_json != "");
+}
+
+void PutCachedReply(const string msg_id, const string reply_json)
+{
+  if(msg_id == "" || reply_json == "")
+    return;
+
+  int idx = FindReplyCacheIndex(msg_id);
+  int n = ArraySize(G_ReplyCacheMsgId);
+  ulong now_ts = (ulong)GetTickCount();
+
+  if(idx >= 0)
+  {
+    G_ReplyCachePayload[idx] = reply_json;
+    G_ReplyCacheTs[idx] = now_ts;
     return;
   }
 
-  // Sprawdzenie poprawności symbolu (czy na pewno ten, na którym działa EA)
-  if(symbol != G_Symbol)
+  int lim = ReplyCacheLimit();
+  int slot = -1;
+  if(n < lim)
   {
-    Print("Odebrano komendę dla innego symbolu: ", symbol, ". Agent działa na: ", G_Symbol);
-    string nack_json = StringFormat("{\"status\":\"REJECTED\", \"correlation_id\":\"%s\", \"error\":\"Invalid symbol. EA runs on %s, command was for %s.\"}", msg_id, G_Symbol, symbol);
-    Zmq_SendReply(nack_json);
-    return;
+    slot = n;
+    ArrayResize(G_ReplyCacheMsgId, n + 1);
+    ArrayResize(G_ReplyCachePayload, n + 1);
+    ArrayResize(G_ReplyCacheTs, n + 1);
   }
-
-  // --- GUARD: Sprawdź, czy już nie ma pozycji dla tego symbolu i magic ---
-  for(int i = PositionsTotal() - 1; i >= 0; i--)
+  else if(n > 0)
   {
-    ulong pos_ticket = PositionGetTicket(i);
-    if(pos_ticket > 0)
+    ulong oldest = G_ReplyCacheTs[0];
+    slot = 0;
+    for(int i = 1; i < n; i++)
     {
-      if(PositionGetString(POSITION_SYMBOL) == symbol && PositionGetInteger(POSITION_MAGIC) == magic)
+      if(G_ReplyCacheTs[i] < oldest)
       {
-        Print("Odrzucono zlecenie (msg_id: ", msg_id, "): Istnieje już pozycja dla ", symbol, " z tym samym numerem magic.");
-        string nack_json = StringFormat(
-          "{\"status\":\"REJECTED\", \"correlation_id\":\"%s\", \"retcode\":%d, \"retcode_str\":\"%s\", \"comment\":\"Position already exists for this magic number on the specified symbol.\"}",
-          msg_id,
-          50001, // Custom retcode for duplicate position
-          "CUSTOM_RETCODE_DUPLICATE_POSITION"
-        );
-        Zmq_SendReply(nack_json);
-        return; // Zakończ, aby nie otwierać nowej pozycji
+        oldest = G_ReplyCacheTs[i];
+        slot = i;
       }
     }
   }
 
-  MqlTradeRequest request={0};
-  MqlTradeResult  result={0};
-  
-  ENUM_ORDER_TYPE order_type;
-  double price;
+  if(slot >= 0)
+  {
+    G_ReplyCacheMsgId[slot] = msg_id;
+    G_ReplyCachePayload[slot] = reply_json;
+    G_ReplyCacheTs[slot] = now_ts;
+  }
+}
 
-  // Ustawienie typu zlecenia i ceny
-  if(signal == "BUY")
-  {
-    order_type = ORDER_TYPE_BUY;
-    price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-  }
-  else if(signal == "SELL")
-  {
-    order_type = ORDER_TYPE_SELL;
-    price = SymbolInfoDouble(symbol, SYMBOL_BID);
-  }
-  else
-  {
-    Print("Nieznany typ sygnału w komendzie: ", signal);
-    string nack_json = StringFormat("{\"status\":\"REJECTED\", \"correlation_id\":\"%s\", \"error\":\"Unknown signal type in command\"}", msg_id);
-    Zmq_SendReply(nack_json);
-    return;
-  }
-  
-  if(price <= 0)
-  {
-    Print("Nie udało się pobrać aktualnej ceny dla ", symbol);
-    string nack_json = StringFormat("{\"status\":\"REJECTED\", \"correlation_id\":\"%s\", \"error\":\"Could not fetch current price for symbol\"}", msg_id);
-    Zmq_SendReply(nack_json);
-    return;
-  }
+bool SendReplyEnvelope(
+  string status,
+  string correlation_id,
+  string action,
+  long retcode,
+  string retcode_str,
+  long order_id,
+  long deal_id,
+  string comment,
+  string symbol,
+  string error,
+  string request_hash,
+  bool cache_reply = true
+)
+{
+  string s_status = ToUpperAscii(status);
+  string s_action = ToUpperAscii(action);
+  string s_corr = (correlation_id == "" ? "unknown" : correlation_id);
+  string s_retcode = retcode_str;
+  string s_comment = comment;
+  string s_symbol = symbol;
+  string s_error = error;
+  string s_req_hash = request_hash;
 
-  // Wypełnienie struktury zlecenia
-  request.action   = TRADE_ACTION_DEAL;
-  request.symbol   = symbol;
-  request.volume   = volume;
-  request.price    = price;
-  request.sl       = sl_price;
-  request.tp       = tp_price;
-  request.magic    = magic;
-  request.comment  = comment;
-  request.type     = order_type;
-  request.type_filling = ORDER_FILLING_FOK; // Fill or Kill
-  request.deviation  = 10; // Slippage w punktach
-
-  Print("Wysyłanie zlecenia: ", signal, " ", volume, " lota ", symbol, " @ ", price, " SL:", sl_price, " TP:", tp_price);
-
-  // Wysłanie zlecenia i obsługa wyniku
-  if(!OrderSend(request, result))
-  {
-    Print("Błąd wysyłania zlecenia: ", GetLastError(), " - ", result.comment);
-  }
-  
-  // --- KROK KRYTYCZNY: Wysłanie potwierdzenia ACK/NACK do Pythona ---
-  string ack_json = StringFormat(
-    "{\"status\":\"PROCESSED\", \"correlation_id\":\"%s\", \"details\":{\"retcode\":%d, \"retcode_str\":\"%s\", \"order\":%d, \"deal\":%d, \"comment\":\"%s\", \"symbol\":\"%s\"}}",
-    msg_id,
-    result.retcode,
-    GetRetcodeString(result.retcode),
-    (int)result.order,
-    (int)result.deal,
-    result.comment,
-    symbol
+  string response_hash = BuildResponseHash(
+    s_status,
+    s_corr,
+    s_action,
+    retcode,
+    s_retcode,
+    order_id,
+    deal_id,
+    s_comment,
+    s_symbol,
+    s_error,
+    s_req_hash
   );
-  
-  Zmq_SendReply(ack_json);
+
+  string reply_fmt =
+    "{\"status\":\"%s\",\"correlation_id\":\"%s\",\"action\":\"%s\",\"request_hash\":\"%s\","
+    + "\"details\":{\"retcode\":%d,\"retcode_str\":\"%s\",\"order\":%I64d,\"deal\":%I64d,\"comment\":\"%s\",\"symbol\":\"%s\"},"
+    + "\"error\":\"%s\",\"schema_version\":\"%s\",\"__v\":\"%s\",\"response_hash\":\"%s\"}";
+
+  string reply_json = StringFormat(
+    reply_fmt,
+    JsonEscape(s_status),
+    JsonEscape(s_corr),
+    JsonEscape(s_action),
+    JsonEscape(s_req_hash),
+    (int)retcode,
+    JsonEscape(s_retcode),
+    (long)order_id,
+    (long)deal_id,
+    JsonEscape(s_comment),
+    JsonEscape(s_symbol),
+    JsonEscape(s_error),
+    PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+    response_hash
+  );
+
+  if(cache_reply && correlation_id != "")
+    PutCachedReply(correlation_id, reply_json);
+
+  return Zmq_SendReply(reply_json);
+}
+
+bool InitIndicatorHandles()
+{
+  if(G_MAFastHandle != INVALID_HANDLE)
+    IndicatorRelease(G_MAFastHandle);
+  if(G_ADXHandle != INVALID_HANDLE)
+    IndicatorRelease(G_ADXHandle);
+  if(G_ATRHandle != INVALID_HANDLE)
+    IndicatorRelease(G_ATRHandle);
+  G_MAFastHandle = INVALID_HANDLE;
+  G_ADXHandle = INVALID_HANDLE;
+  G_ATRHandle = INVALID_HANDLE;
+
+  G_MAFastHandle = iMA(G_Symbol, PERIOD_M5, InpSmaFastPeriod, 0, MODE_SMA, PRICE_CLOSE);
+  G_ADXHandle = iADX(G_Symbol, PERIOD_M5, InpAdxPeriod);
+  G_ATRHandle = iATR(G_Symbol, PERIOD_M5, InpAtrPeriod);
+
+  bool ok = true;
+  if(G_MAFastHandle == INVALID_HANDLE)
+  {
+    Print("WARN: iMA handle init failed for ", G_Symbol);
+    ok = false;
+  }
+  if(G_ADXHandle == INVALID_HANDLE)
+  {
+    Print("WARN: iADX handle init failed for ", G_Symbol);
+    ok = false;
+  }
+  if(G_ATRHandle == INVALID_HANDLE)
+  {
+    Print("WARN: iATR handle init failed for ", G_Symbol);
+    ok = false;
+  }
+  return ok;
+}
+
+void ReleaseIndicatorHandles()
+{
+  if(G_MAFastHandle != INVALID_HANDLE)
+  {
+    IndicatorRelease(G_MAFastHandle);
+    G_MAFastHandle = INVALID_HANDLE;
+  }
+  if(G_ADXHandle != INVALID_HANDLE)
+  {
+    IndicatorRelease(G_ADXHandle);
+    G_ADXHandle = INVALID_HANDLE;
+  }
+  if(G_ATRHandle != INVALID_HANDLE)
+  {
+    IndicatorRelease(G_ATRHandle);
+    G_ATRHandle = INVALID_HANDLE;
+  }
+}
+
+bool ReadClosedBarFeatures(double &sma_fast, double &adx, double &atr)
+{
+  sma_fast = 0.0;
+  adx = 0.0;
+  atr = 0.0;
+
+  if(G_MAFastHandle == INVALID_HANDLE || G_ADXHandle == INVALID_HANDLE || G_ATRHandle == INVALID_HANDLE)
+    return false;
+
+  double b_ma[];
+  double b_adx[];
+  double b_atr[];
+
+  if(CopyBuffer(G_MAFastHandle, 0, 1, 1, b_ma) != 1)
+    return false;
+  if(CopyBuffer(G_ADXHandle, 0, 1, 1, b_adx) != 1)
+    return false;
+  if(CopyBuffer(G_ATRHandle, 0, 1, 1, b_atr) != 1)
+    return false;
+
+  if(ArraySize(b_ma) < 1 || ArraySize(b_adx) < 1 || ArraySize(b_atr) < 1)
+    return false;
+
+  if(!MathIsValidNumber(b_ma[0]) || !MathIsValidNumber(b_adx[0]) || !MathIsValidNumber(b_atr[0]))
+    return false;
+
+  sma_fast = b_ma[0];
+  adx = b_adx[0];
+  atr = b_atr[0];
+  return true;
 }
 
 //+------------------------------------------------------------------+
-//| Zwraca tekstową reprezentację kodu wyniku transakcji (retcode)   |
+//| Retcode mapping                                                   |
 //+------------------------------------------------------------------+
 string GetRetcodeString(uint retcode)
 {
@@ -474,13 +422,487 @@ string GetRetcodeString(uint retcode)
   }
 }
 
+//+------------------------------------------------------------------+
+//| Fail-safe closeout                                                |
+//+------------------------------------------------------------------+
+void CloseAllOpenPositions(string reason)
+{
+  for(int i = PositionsTotal() - 1; i >= 0; i--)
+  {
+    ulong ticket = PositionGetTicket(i);
+    if(ticket <= 0)
+      continue;
+
+    string symbol = PositionGetString(POSITION_SYMBOL);
+    if(symbol != G_Symbol)
+      continue;
+
+    MqlTradeRequest req = {0};
+    MqlTradeResult  res = {0};
+
+    req.action = TRADE_ACTION_DEAL;
+    req.position = ticket;
+    req.symbol = symbol;
+    req.volume = PositionGetDouble(POSITION_VOLUME);
+    req.magic = (long)PositionGetInteger(POSITION_MAGIC);
+    req.comment = reason;
+    req.type_filling = ORDER_FILLING_IOC;
+    req.deviation = 25;
+
+    long pos_type = PositionGetInteger(POSITION_TYPE);
+    if(pos_type == POSITION_TYPE_BUY)
+    {
+      req.type = ORDER_TYPE_SELL;
+      req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+    }
+    else
+    {
+      req.type = ORDER_TYPE_BUY;
+      req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    }
+
+    if(req.price <= 0.0)
+    {
+      Print("FAIL_SAFE_CLOSE_SKIP ticket=", (long)ticket, " reason=PRICE_UNAVAILABLE");
+      continue;
+    }
+
+    if(!OrderSend(req, res))
+    {
+      Print("FAIL_SAFE_CLOSE_FAIL ticket=", (long)ticket, " err=", GetLastError(), " retcode=", (long)res.retcode);
+    }
+    else
+    {
+      Print("FAIL_SAFE_CLOSE_OK ticket=", (long)ticket, " retcode=", (long)res.retcode);
+    }
+  }
+}
 
 //+------------------------------------------------------------------+
-// Funkcja OnTick() jest celowo pusta. Cała logika jest w OnTimer(),
-// aby uniknąć nadmiernego obciążenia przy bardzo dużej liczbie ticków
-// i zapewnić stały, regularny rytm pracy agenta.
+//| Telemetry out: closed BAR                                         |
 //+------------------------------------------------------------------+
+void SendBarData()
+{
+  static datetime last_bar_time = 0;
+  MqlRates rates[];
+
+  if(CopyRates(G_Symbol, PERIOD_M5, 1, 1, rates) <= 0)
+    return;
+
+  if(rates[0].time <= last_bar_time)
+    return;
+
+  double sma_fast = 0.0;
+  double adx = 0.0;
+  double atr = 0.0;
+  bool has_features = ReadClosedBarFeatures(sma_fast, adx, atr);
+
+  string json = StringFormat(
+    "{\"type\":\"BAR\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"volume\":%I64d",
+    JsonEscape(G_Symbol),
+    (int)rates[0].time,
+    rates[0].open,
+    rates[0].high,
+    rates[0].low,
+    rates[0].close,
+    (long)rates[0].tick_volume
+  );
+
+  if(has_features)
+  {
+    json += StringFormat(",\"sma_fast\":%.8f,\"adx\":%.8f,\"atr\":%.8f", sma_fast, adx, atr);
+  }
+
+  json += StringFormat(",\"schema_version\":\"%s\",\"__v\":\"%s\"}", PROTOCOL_VERSION, PROTOCOL_VERSION);
+
+  if(Zmq_SendData(json))
+    last_bar_time = rates[0].time;
+}
+
+//+------------------------------------------------------------------+
+//| Telemetry out: latest tick                                        |
+//+------------------------------------------------------------------+
+void SendTickData()
+{
+  MqlTick tick;
+  if(!SymbolInfoTick(G_Symbol, tick))
+    return;
+
+  string json = StringFormat(
+    "{\"type\":\"TICK\",\"symbol\":\"%s\",\"timestamp_ms\":%I64d,\"bid\":%.5f,\"ask\":%.5f,\"volume\":%I64d,\"schema_version\":\"%s\",\"__v\":\"%s\"}",
+    JsonEscape(G_Symbol),
+    (long)tick.time_msc,
+    tick.bid,
+    tick.ask,
+    (long)tick.volume,
+    PROTOCOL_VERSION,
+    PROTOCOL_VERSION
+  );
+
+  if(!Zmq_SendData(json))
+  {
+    static ulong last_error_time = 0;
+    ulong now_ms = (ulong)GetTickCount();
+    if(now_ms - last_error_time > 5000)
+    {
+      Print("ZMQ_TICK_SEND_FAIL symbol=", G_Symbol);
+      last_error_time = now_ms;
+    }
+  }
+}
+
+//+------------------------------------------------------------------+
+//| Trade execution                                                    |
+//+------------------------------------------------------------------+
+void ExecuteTrade(
+  string signal,
+  string symbol,
+  double volume,
+  double sl_price,
+  double tp_price,
+  int magic,
+  string comment,
+  string msg_id,
+  string request_hash
+)
+{
+  string action_reply = "TRADE_REPLY";
+  signal = ToUpperAscii(signal);
+  symbol = ToUpperAscii(symbol);
+
+  if(G_IsFailSafeActive)
+  {
+    SendReplyEnvelope(
+      "REJECTED", msg_id, action_reply,
+      50002, "CUSTOM_RETCODE_FAIL_SAFE_ACTIVE", 0, 0,
+      "Rejected due to active FAIL-SAFE mode.", symbol,
+      "", request_hash, true
+    );
+    return;
+  }
+
+  if(symbol != G_Symbol)
+  {
+    SendReplyEnvelope(
+      "REJECTED", msg_id, action_reply,
+      50004, "CUSTOM_RETCODE_INVALID_SYMBOL", 0, 0,
+      StringFormat("Invalid symbol. EA=%s command=%s", G_Symbol, symbol),
+      symbol,
+      "Invalid symbol.", request_hash, true
+    );
+    return;
+  }
+
+  for(int i = PositionsTotal() - 1; i >= 0; i--)
+  {
+    ulong pos_ticket = PositionGetTicket(i);
+    if(pos_ticket <= 0)
+      continue;
+
+    if(PositionGetString(POSITION_SYMBOL) == symbol && (int)PositionGetInteger(POSITION_MAGIC) == magic)
+    {
+      SendReplyEnvelope(
+        "REJECTED", msg_id, action_reply,
+        50001, "CUSTOM_RETCODE_DUPLICATE_POSITION", 0, 0,
+        "Position already exists for this magic number on the specified symbol.",
+        symbol,
+        "", request_hash, true
+      );
+      return;
+    }
+  }
+
+  ENUM_ORDER_TYPE order_type;
+  double price = 0.0;
+
+  if(signal == "BUY")
+  {
+    order_type = ORDER_TYPE_BUY;
+    price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+  }
+  else if(signal == "SELL")
+  {
+    order_type = ORDER_TYPE_SELL;
+    price = SymbolInfoDouble(symbol, SYMBOL_BID);
+  }
+  else
+  {
+    SendReplyEnvelope(
+      "REJECTED", msg_id, action_reply,
+      50005, "CUSTOM_RETCODE_UNKNOWN_SIGNAL", 0, 0,
+      "Unknown signal type in command.",
+      symbol,
+      "Unknown signal type.", request_hash, true
+    );
+    return;
+  }
+
+  if(price <= 0.0)
+  {
+    SendReplyEnvelope(
+      "REJECTED", msg_id, action_reply,
+      50006, "CUSTOM_RETCODE_PRICE_UNAVAILABLE", 0, 0,
+      "Could not fetch current price for symbol.",
+      symbol,
+      "Price unavailable.", request_hash, true
+    );
+    return;
+  }
+
+  MqlTradeRequest request = {0};
+  MqlTradeResult result = {0};
+
+  request.action = TRADE_ACTION_DEAL;
+  request.symbol = symbol;
+  request.volume = volume;
+  request.price = price;
+  request.sl = sl_price;
+  request.tp = tp_price;
+  request.magic = magic;
+  request.comment = comment;
+  request.type = order_type;
+  request.type_filling = ORDER_FILLING_FOK;
+  request.deviation = 10;
+
+  if(!OrderSend(request, result))
+  {
+    Print("ORDER_SEND_FAIL msg_id=", msg_id, " err=", GetLastError(), " retcode=", (long)result.retcode);
+  }
+
+  long rc = (long)result.retcode;
+  if(rc <= 0)
+    rc = 10011;
+
+  SendReplyEnvelope(
+    "PROCESSED", msg_id, action_reply,
+    rc,
+    GetRetcodeString((uint)rc),
+    (long)result.order,
+    (long)result.deal,
+    result.comment,
+    symbol,
+    "",
+    request_hash,
+    true
+  );
+}
+
+//+------------------------------------------------------------------+
+//| Command intake + contract validation                              |
+//+------------------------------------------------------------------+
+void ProcessCommands()
+{
+  string command_json = "";
+  if(!Zmq_ReceiveRequest(command_json))
+    return;
+
+  G_LastPythonMessageTime = (ulong)GetTickCount();
+
+  Json json;
+  if(!json.Parse(command_json))
+  {
+    string bad_msg_id = "unknown";
+    int pos = StringFind(command_json, "\"msg_id\":\"");
+    if(pos != -1)
+    {
+      int end_pos = StringFind(command_json, "\"", pos + 10);
+      if(end_pos != -1)
+        bad_msg_id = StringSubstr(command_json, pos + 10, end_pos - (pos + 10));
+    }
+
+    SendReplyEnvelope(
+      "ERROR", bad_msg_id, "ERROR_REPLY",
+      50010, "CUSTOM_RETCODE_PARSE_ERROR", 0, 0,
+      "Failed to parse command JSON.",
+      "",
+      "Failed to parse command JSON.",
+      "",
+      true
+    );
+    return;
+  }
+
+  string msg_id = json.Get("msg_id");
+  if(msg_id == "")
+    msg_id = StringFormat("missing-%d", (int)GetTickCount());
+
+  string cached_reply = "";
+  if(TryGetCachedReply(msg_id, cached_reply))
+  {
+    Print("IDEMPOTENCY_HIT msg_id=", msg_id);
+    Zmq_SendReply(cached_reply);
+    return;
+  }
+
+  string action = ToUpperAscii(json.Get("action"));
+  string contract_v = json.Get("__v");
+  string schema_v = json.Get("schema_version");
+  string request_hash = json.Get("request_hash");
+
+  if(contract_v == "")
+    Print("WARN: Missing __v in command msg_id=", msg_id);
+  else if(contract_v != PROTOCOL_VERSION)
+    Print("WARN: __v mismatch got=", contract_v, " expected=", PROTOCOL_VERSION, " msg_id=", msg_id);
+
+  if(schema_v == "")
+    Print("WARN: Missing schema_version in command msg_id=", msg_id);
+  else if(schema_v != PROTOCOL_VERSION)
+    Print("WARN: schema_version mismatch got=", schema_v, " expected=", PROTOCOL_VERSION, " msg_id=", msg_id);
+
+  if(action == "HEARTBEAT")
+  {
+    string expected = BuildRequestHashSimple(action, msg_id);
+    if(request_hash != "" && request_hash != expected)
+    {
+      SendReplyEnvelope(
+        "REJECTED", msg_id, "HEARTBEAT_REPLY",
+        50003, "CUSTOM_RETCODE_REQUEST_HASH_MISMATCH", 0, 0,
+        "Request hash mismatch.",
+        "",
+        "Request hash mismatch.",
+        request_hash,
+        true
+      );
+      return;
+    }
+
+    SendReplyEnvelope(
+      "OK", msg_id, "HEARTBEAT_REPLY",
+      0, "", 0, 0,
+      "", "", "", request_hash,
+      true
+    );
+    return;
+  }
+
+  if(action == "TRADE")
+  {
+    Json payload = json.GetNode("payload");
+    if(!payload.IsObject())
+    {
+      SendReplyEnvelope(
+        "ERROR", msg_id, "TRADE_REPLY",
+        50011, "CUSTOM_RETCODE_PAYLOAD_INVALID", 0, 0,
+        "Payload is not a valid object.",
+        "",
+        "Payload is not a valid object.",
+        request_hash,
+        true
+      );
+      return;
+    }
+
+    string signal = ToUpperAscii(payload.Get("signal"));
+    string symbol = ToUpperAscii(payload.Get("symbol"));
+    double volume = payload.Get("volume");
+    double sl_price = payload.Get("sl_price");
+    double tp_price = payload.Get("tp_price");
+    long magic = (long)payload.Get("magic");
+    string comment = payload.Get("comment");
+
+    string expected_hash = BuildRequestHashTrade(
+      action,
+      msg_id,
+      signal,
+      symbol,
+      volume,
+      sl_price,
+      tp_price,
+      magic,
+      comment
+    );
+
+    if(request_hash != "" && request_hash != expected_hash)
+    {
+      SendReplyEnvelope(
+        "REJECTED", msg_id, "TRADE_REPLY",
+        50003, "CUSTOM_RETCODE_REQUEST_HASH_MISMATCH", 0, 0,
+        "Request hash mismatch.",
+        symbol,
+        "Request hash mismatch.",
+        request_hash,
+        true
+      );
+      return;
+    }
+
+    ExecuteTrade(signal, symbol, volume, sl_price, tp_price, (int)magic, comment, msg_id, request_hash);
+    return;
+  }
+
+  SendReplyEnvelope(
+    "ERROR", msg_id, "ERROR_REPLY",
+    50012, "CUSTOM_RETCODE_UNKNOWN_ACTION", 0, 0,
+    "Unknown action specified.",
+    "",
+    "Unknown action specified.",
+    request_hash,
+    true
+  );
+}
+
+//+------------------------------------------------------------------+
+//| Expert lifecycle                                                  |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+  Print("HybridAgent init...");
+
+  if(!Zmq_Init(InpPythonHost, InpDataPort, InpCmdPort))
+  {
+    Alert("CRITICAL: ZMQ init failed.");
+    return INIT_FAILED;
+  }
+
+  if(!EventSetTimer(InpTimerSec))
+  {
+    Alert("CRITICAL: EventSetTimer failed.");
+    Zmq_Deinit();
+    return INIT_FAILED;
+  }
+
+  G_Symbol = ToUpperAscii(_Symbol);
+  G_LastPythonMessageTime = (ulong)GetTickCount();
+  G_IsFailSafeActive = false;
+
+  if(!InitIndicatorHandles())
+    Print("WARN: indicator handles partially unavailable. BAR feature payload may be incomplete.");
+
+  Print("HybridAgent ready symbol=", G_Symbol, " timer_sec=", InpTimerSec, " timeout_sec=", InpPythonTimeoutSec);
+  return INIT_SUCCEEDED;
+}
+
+void OnDeinit(const int reason)
+{
+  Print("HybridAgent deinit reason=", reason);
+  EventKillTimer();
+  ReleaseIndicatorHandles();
+  Zmq_Deinit();
+}
+
+void OnTimer()
+{
+  if(!G_IsFailSafeActive && InpPythonTimeoutSec > 0)
+  {
+    ulong now_ms = (ulong)GetTickCount();
+    ulong elapsed_ms = now_ms - G_LastPythonMessageTime;
+    if(elapsed_ms > (InpPythonTimeoutSec * 1000))
+    {
+      G_IsFailSafeActive = true;
+      Alert("FAIL-SAFE ACTIVATED: Python timeout exceeded. Closing open positions.");
+      CloseAllOpenPositions("FAIL_SAFE_TIMEOUT");
+    }
+  }
+
+  if(!G_IsFailSafeActive)
+  {
+    SendTickData();
+    SendBarData();
+    ProcessCommands();
+  }
+}
+
+// Intentionally empty: all logic is timer-driven for deterministic cadence.
 void OnTick()
 {
 }
-//+------------------------------------------------------------------+

@@ -60,6 +60,10 @@ class _StoreStub:
         except Exception:
             return None
 
+    def read_resampled_df(self, base_symbol: str, timeframe_min: int, limit: int):
+        _ = timeframe_min
+        return self.read_recent_df(base_symbol, limit)
+
 
 class TestHybridM5NoFetch(unittest.TestCase):
     def setUp(self):
@@ -103,11 +107,12 @@ class TestHybridM5NoFetch(unittest.TestCase):
     def test_copy_rates_prefers_zmq_store_for_m5(self):
         safetybot.CFG.hybrid_use_zmq_m5_bars = True
         safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        t0 = safetybot.pd.Timestamp.now(tz=safetybot.TZ_PL).floor("5min")
         df_src = safetybot.pd.DataFrame(
             [
-                {"time": safetybot.pd.Timestamp("2026-02-22T09:00:00+01:00"), "open": 1.1, "high": 1.11, "low": 1.09, "close": 1.105},
-                {"time": safetybot.pd.Timestamp("2026-02-22T09:05:00+01:00"), "open": 1.2, "high": 1.21, "low": 1.19, "close": 1.205},
-                {"time": safetybot.pd.Timestamp("2026-02-22T09:10:00+01:00"), "open": 1.3, "high": 1.31, "low": 1.29, "close": 1.305},
+                {"time": t0 - safetybot.pd.Timedelta(minutes=10), "open": 1.1, "high": 1.11, "low": 1.09, "close": 1.105},
+                {"time": t0 - safetybot.pd.Timedelta(minutes=5), "open": 1.2, "high": 1.21, "low": 1.19, "close": 1.205},
+                {"time": t0, "open": 1.3, "high": 1.31, "low": 1.29, "close": 1.305},
             ]
         )
         engine = self._build_engine(_StoreStub({"EURUSD": df_src}))

@@ -22,13 +22,83 @@ import json
 import logging
 import uuid
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import zmq
 
 PROTOCOL_VERSION = "1.0"
+
+
+def _fnv1a32_hex(text: str) -> str:
+    data = str(text or "").encode("utf-8", errors="ignore")
+    h = 0x811C9DC5
+    for b in data:
+        h ^= int(b)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08X}"
+
+
+def _norm_float(value: Any) -> str:
+    try:
+        return f"{float(value):.8f}"
+    except Exception:
+        return "0.00000000"
+
+
+def _norm_int(value: Any) -> str:
+    try:
+        return str(int(value))
+    except Exception:
+        return "0"
+
+
+def build_request_hash(command: Dict[str, Any]) -> str:
+    action = str(command.get("action") or "").strip().upper()
+    msg_id = str(command.get("msg_id") or "").strip()
+    payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+    if action == "TRADE":
+        sig = "|".join(
+            [
+                action,
+                msg_id,
+                str(payload.get("signal") or "").strip().upper(),
+                str(payload.get("symbol") or "").strip().upper(),
+                _norm_float(payload.get("volume")),
+                _norm_float(payload.get("sl_price")),
+                _norm_float(payload.get("tp_price")),
+                _norm_int(payload.get("magic")),
+                str(payload.get("comment") or ""),
+            ]
+        )
+    else:
+        sig = "|".join([action, msg_id])
+    return _fnv1a32_hex(sig)
+
+
+def build_response_hash(reply: Dict[str, Any]) -> str:
+    status = str(reply.get("status") or "").strip().upper()
+    correlation_id = str(reply.get("correlation_id") or "").strip()
+    action = str(reply.get("action") or "").strip().upper()
+    details = reply.get("details") if isinstance(reply.get("details"), dict) else {}
+    sig = "|".join(
+        [
+            status,
+            correlation_id,
+            action,
+            _norm_int(details.get("retcode")),
+            str(details.get("retcode_str") or ""),
+            _norm_int(details.get("order")),
+            _norm_int(details.get("deal")),
+            str(details.get("comment") or ""),
+            str(details.get("symbol") or ""),
+            str(reply.get("error") or ""),
+            str(reply.get("request_hash") or ""),
+        ]
+    )
+    return _fnv1a32_hex(sig)
 
 
 class ZMQBridge:
@@ -72,7 +142,7 @@ class ZMQBridge:
             return
         
         log_entry = {
-            "timestamp_utc": datetime.utcnow().isoformat(),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "event_type": event_type,
             "message_id": message_id,
             "data": data
@@ -147,15 +217,19 @@ class ZMQBridge:
 
         original_command = dict(command)
         original_command.setdefault("__v", PROTOCOL_VERSION)
+        original_command.setdefault("schema_version", PROTOCOL_VERSION)
         if "msg_id" not in original_command:
             original_command["msg_id"] = str(uuid.uuid4())
         msg_id = str(original_command["msg_id"])
+        original_command["request_hash"] = str(build_request_hash(original_command))
+        original_command.setdefault("request_ts_utc", datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
 
         for attempt in range(self.req_retries):
             try:
                 logging.debug(f"Wysyłanie komendy (próba {attempt + 1}/{self.req_retries}): {original_command}")
                 self._write_audit_log("COMMAND_SENT", msg_id, original_command)
                 message = json.dumps(original_command, separators=(",", ":"))
+                t0 = time.perf_counter()
                 self.req_socket.send_string(message)
 
                 if self.req_socket.poll(self.req_timeout_ms):
@@ -165,8 +239,43 @@ class ZMQBridge:
                         reply_data = json.loads(reply_message)
                         correlation_id = reply_data.get('correlation_id')
                         self._write_audit_log("REPLY_RECEIVED", correlation_id or "unknown", reply_data)
-                        
+                         
                         if correlation_id == msg_id:
+                            req_hash_reply = str(reply_data.get("request_hash") or "")
+                            req_hash_sent = str(original_command.get("request_hash") or "")
+                            if req_hash_reply and req_hash_reply != req_hash_sent:
+                                logging.warning(
+                                    "Hash request mismatch in reply. expected=%s got=%s",
+                                    req_hash_sent,
+                                    req_hash_reply,
+                                )
+                                self._write_audit_log(
+                                    "REPLY_REQUEST_HASH_MISMATCH",
+                                    msg_id,
+                                    {"expected": req_hash_sent, "got": req_hash_reply},
+                                )
+                                continue
+
+                            got_resp_hash = str(reply_data.get("response_hash") or "")
+                            if got_resp_hash:
+                                exp_resp_hash = str(build_response_hash(reply_data))
+                                if got_resp_hash != exp_resp_hash:
+                                    logging.warning(
+                                        "Response hash mismatch. expected=%s got=%s",
+                                        exp_resp_hash,
+                                        got_resp_hash,
+                                    )
+                                    self._write_audit_log(
+                                        "REPLY_RESPONSE_HASH_MISMATCH",
+                                        msg_id,
+                                        {"expected": exp_resp_hash, "got": got_resp_hash},
+                                    )
+                                    continue
+                            else:
+                                logging.warning("Reply missing response_hash for msg_id=%s", msg_id)
+
+                            rtt_ms = int((time.perf_counter() - t0) * 1000.0)
+                            logging.info("ZMQ_RTT msg_id=%s rtt_ms=%s action=%s", msg_id, rtt_ms, str(original_command.get("action") or ""))
                             return reply_data
                         else:
                             logging.warning(f"Odebrano odpowiedź z nieprawidłowym correlation_id. Oczekiwano {msg_id}, otrzymano {correlation_id}.")

@@ -95,7 +95,7 @@ try:
     from .oanda_limits_guard import OandaLimitsGuard
     from .config_manager import ConfigManager
     from .risk_manager import RiskManager
-    from .zeromq_bridge import ZMQBridge
+    from .zeromq_bridge import ZMQBridge, build_request_hash, build_response_hash
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
@@ -107,6 +107,7 @@ except Exception:  # pragma: no cover
     from oanda_limits_guard import OandaLimitsGuard
     from config_manager import ConfigManager
     from risk_manager import RiskManager
+    from zeromq_bridge import ZMQBridge, build_request_hash, build_response_hash
 try:
     from .runtime_root import (
         REQUIRED_OANDA_MT5_EXE,
@@ -173,7 +174,13 @@ class CFG:
     # - prefer M5 bars from MQL5 snapshots (ZMQ BAR) instead of Python -> mt5.copy_rates
     # - strict mode blocks fallback fetches when snapshot history is missing
     hybrid_use_zmq_m5_bars: bool = True
+    # Prefer indicator features delivered by MQL5 (BAR message with sma_fast/adx/atr).
+    hybrid_use_zmq_m5_features: bool = True
+    # Reuse M5 store to synthesize H4/D1 bars for trend (no direct mt5.copy_rates when possible).
+    hybrid_use_mtf_resample_from_m5_store: bool = True
     hybrid_m5_no_fetch_strict: bool = False
+    # Maximum accepted age of incoming market snapshots in decision path.
+    hybrid_snapshot_max_age_sec: int = 180
     # Legacy pull cadence values still referenced in strategy hot/warm/eco path.
     # Keep explicit defaults aligned with CONFIG/scheduler.json.
     m5_pull_sec_hot: int = 60
@@ -2873,6 +2880,47 @@ class M5BarsStore:
             return None
         return out[["time", "open", "high", "low", "close"]].reset_index(drop=True)
 
+    def read_resampled_df(self, base_symbol: str, timeframe_min: int, limit: int) -> Optional["pd.DataFrame"]:
+        """
+        Build synthetic higher timeframe bars from stored M5 stream.
+        Used as no-fetch fallback for trend inputs (H4/D1).
+        """
+        tf = max(1, int(timeframe_min))
+        lim = max(1, int(limit))
+        m5_per_bar = max(1, int(round(tf / 5.0)))
+        pull_n = max(lim * m5_per_bar + (m5_per_bar * 8), 512)
+        with self._lock:
+            rows = sqlite_exec_retry(
+                self.conn,
+                "SELECT t_utc,o,h,l,c FROM m5_bars WHERE symbol=? ORDER BY t_utc DESC LIMIT ?",
+                (str(base_symbol), int(pull_n)),
+            ).fetchall()
+        if not rows:
+            return None
+        rows = list(reversed(rows))
+        out = pd.DataFrame(rows, columns=["t_utc", "open", "high", "low", "close"])
+        out["time_utc"] = pd.to_datetime(out["t_utc"], utc=True, errors="coerce")
+        out = out.dropna(subset=["time_utc"]).copy()
+        if out.empty:
+            return None
+        for c in ("open", "high", "low", "close"):
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+        out = out.dropna(subset=["open", "high", "low", "close"]).copy()
+        if out.empty:
+            return None
+
+        out = out.set_index("time_utc")
+        rs = out.resample(f"{tf}min", label="right", closed="right").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last"}
+        )
+        rs = rs.dropna(subset=["open", "high", "low", "close"]).copy()
+        if rs.empty:
+            return None
+        rs = rs.tail(lim)
+        rs = rs.reset_index()
+        rs["time"] = rs["time_utc"].dt.tz_convert(TZ_PL)
+        return rs[["time", "open", "high", "low", "close"]].reset_index(drop=True)
+
     
 
 class RequestGovernor:
@@ -3521,24 +3569,68 @@ class ExecutionEngine:
             tf_i = int(getattr(CFG, "timeframe_trade", 5))
         want_n = max(1, int(n))
         trade_tf = int(getattr(CFG, "timeframe_trade", 5))
-        if (
-            bool(getattr(CFG, "hybrid_use_zmq_m5_bars", True))
-            and tf_i == trade_tf
-            and getattr(self, "bars_store", None) is not None
-        ):
+
+        def _tf_minutes(tf: int) -> Optional[int]:
+            # MQL5 timeframe enum fallback mapping used in this codebase.
+            if tf in (1,):
+                return 1
+            if tf in (5,):
+                return 5
+            if tf in (15,):
+                return 15
+            if tf in (30,):
+                return 30
+            if tf in (60,):
+                return 60
+            if tf in (240, 16388):
+                return 240
+            if tf in (1440, 16408):
+                return 1440
+            return None
+
+        use_store = bool(getattr(CFG, "hybrid_use_zmq_m5_bars", True)) and getattr(self, "bars_store", None) is not None
+        need_tf_min = _tf_minutes(tf_i)
+        can_resample = bool(getattr(CFG, "hybrid_use_mtf_resample_from_m5_store", True))
+        if use_store and need_tf_min is not None:
+            df_store = None
             try:
-                df_store = self.bars_store.read_recent_df(symbol_base(symbol), want_n)
+                if int(need_tf_min) == int(trade_tf):
+                    df_store = self.bars_store.read_recent_df(symbol_base(symbol), want_n)
+                elif can_resample and int(need_tf_min) > int(trade_tf):
+                    df_store = self.bars_store.read_resampled_df(symbol_base(symbol), need_tf_min, want_n)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                 df_store = None
+
             if df_store is not None and len(df_store) >= want_n:
-                logging.debug(
-                    "COPY_RATES_SOURCE source=ZMQ_STORE symbol=%s tf=%s rows=%s",
-                    symbol,
-                    tf_i,
-                    int(len(df_store)),
-                )
-                return df_store.tail(want_n).reset_index(drop=True)
+                fresh_ok = True
+                try:
+                    ts = pd.Timestamp(df_store["time"].iloc[-1])
+                    if ts.tzinfo is None:
+                        ts = ts.tz_localize(TZ_PL)
+                    age_s = max(0.0, time.time() - float(ts.tz_convert(UTC).timestamp()))
+                    max_age = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+                    if age_s > float(max_age):
+                        fresh_ok = False
+                        logging.warning(
+                            "COPY_RATES_STORE_STALE symbol=%s tf=%s age_s=%.1f max_age=%s",
+                            symbol,
+                            tf_i,
+                            float(age_s),
+                            int(max_age),
+                        )
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    fresh_ok = False
+
+                if fresh_ok:
+                    logging.debug(
+                        "COPY_RATES_SOURCE source=ZMQ_STORE symbol=%s tf=%s rows=%s",
+                        symbol,
+                        tf_i,
+                        int(len(df_store)),
+                    )
+                    return df_store.tail(want_n).reset_index(drop=True)
             if bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)):
                 logging.info(
                     "COPY_RATES_STRICT_NOFETCH_SKIP symbol=%s tf=%s need_rows=%s have_rows=%s",
@@ -4480,6 +4572,7 @@ class StandardStrategy:
         self.dispatch_order_hook = dispatch_order_hook
         self.cache = StrategyCache()
         self.last_indicators: Dict[str, Dict[str, Any]] = {}
+        self.zmq_feature_cache: Optional[Dict[str, Dict[str, Any]]] = None
         self._scan_meta: Dict[str, Any] = {}
         self.decision_store: Optional[DecisionEventStore] = None
         self._last_eval_price_before: Optional[int] = None
@@ -4865,6 +4958,48 @@ class StandardStrategy:
                 f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_WAIT_NEW_BAR wait_s={wait_s}"
             )
             return None
+
+        if bool(getattr(CFG, "hybrid_use_zmq_m5_features", True)):
+            fcache = self.zmq_feature_cache if isinstance(self.zmq_feature_cache, dict) else None
+            fres = None
+            if fcache is not None:
+                fres = fcache.get(symbol_base(symbol)) or fcache.get(str(symbol).upper())
+            if isinstance(fres, dict):
+                try:
+                    ts_msg = float(fres.get("recv_ts") or 0.0)
+                    max_age = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+                    age_s = max(0.0, now_ts - ts_msg)
+                    if age_s <= float(max_age):
+                        last_bar = pd.Timestamp(fres.get("bar_time_pl"))
+                        prev_bar = self.cache.last_m5_bar_time.get(symbol)
+                        if prev_bar is not None and last_bar == prev_bar:
+                            self._metric_inc_skip("M5_SAME_BAR")
+                            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_SAME_BAR")
+                            return None
+                        self.cache.last_m5_calc_ts[symbol] = now_ts
+                        self.cache.last_m5_bar_time[symbol] = last_bar
+                        self.cache.next_m5_fetch_ts[symbol] = float(now_ts) + float(max(1, int(getattr(CFG, "timeframe_trade", 5))) * 60)
+                        ind = {
+                            "close": float(fres.get("close")),
+                            "open": float(fres.get("open")),
+                            "sma": float(fres.get("sma_fast")),
+                            "adx": float(fres.get("adx")),
+                            "atr": float(fres.get("atr")),
+                        }
+                        self.last_indicators[symbol_base(symbol)] = dict(ind)
+                        logging.info(
+                            "ENTRY_READY source=ZMQ_FEATURE symbol=%s grp=%s mode=%s adx=%.2f close=%.6f sma=%.6f open=%.6f",
+                            symbol,
+                            grp,
+                            mode,
+                            float(ind["adx"]),
+                            float(ind["close"]),
+                            float(ind["sma"]),
+                            float(ind["open"]),
+                        )
+                        return ind
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
         if df is None or len(df) < 60:
@@ -5681,6 +5816,9 @@ class SafetyBot:
         self.decision_store = DecisionEventStore(self.db_dir)
         self.bars_store = M5BarsStore(self.db_dir)
         self.execution_engine.bars_store = self.bars_store
+        self._zmq_m5_feature_cache: Dict[str, Dict[str, Any]] = {}
+        self._zmq_last_tick_ts: Dict[str, float] = {}
+        self._zmq_last_bar_ts: Dict[str, float] = {}
 
         # --- strategy / controller ---
         self.ctrl = ActivityController(self.db, self.config)
@@ -5695,6 +5833,7 @@ class SafetyBot:
             dispatch_order_hook=self._dispatch_order,
         )
         self.strategy.decision_store = self.decision_store
+        self.strategy.zmq_feature_cache = self._zmq_m5_feature_cache
         self.resolved_symbols = {}
         # Cache of last known open positions; used by guard polling cadence.
         self._positions_cache: Dict[str, List] = {}
@@ -6983,6 +7122,30 @@ class SafetyBot:
         else:
             logging.critical("WINDOW_CLOSEOUT_INCOMPLETE reason=%s", str(reason))
 
+    def _hybrid_snapshot_health(self, symbols: List[str]) -> Dict[str, Any]:
+        max_age = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+        now_ts = float(time.time())
+        stale_tick = 0
+        stale_bar = 0
+        total = 0
+        for sym in symbols:
+            base = symbol_base(sym)
+            total += 1
+            t_tick = float(self._zmq_last_tick_ts.get(base, 0.0) or 0.0)
+            t_bar = float(self._zmq_last_bar_ts.get(base, 0.0) or 0.0)
+            if (now_ts - t_tick) > float(max_age):
+                stale_tick += 1
+            if (now_ts - t_bar) > float(max_age):
+                stale_bar += 1
+        critical = bool(total > 0 and (stale_tick == total or stale_bar == total))
+        return {
+            "max_age_sec": int(max_age),
+            "symbols_total": int(total),
+            "stale_tick": int(stale_tick),
+            "stale_bar": int(stale_bar),
+            "critical": bool(critical),
+        }
+
     def scan_once(self):
         st = self.gov.day_state()
 
@@ -7274,6 +7437,18 @@ class SafetyBot:
         if self._manual_kill_switch_active():
             return
 
+        snapshot_health = self._hybrid_snapshot_health([sym for (_raw, sym, _grp) in self.universe])
+        snapshot_block_new_entries = bool(snapshot_health.get("critical"))
+        if snapshot_block_new_entries:
+            global_mode = "ECO"
+            logging.warning(
+                "SNAPSHOT_HEALTH_DEGRADED stale_tick=%s stale_bar=%s total=%s max_age_sec=%s => NO_NEW_ENTRIES",
+                int(snapshot_health.get("stale_tick", 0)),
+                int(snapshot_health.get("stale_bar", 0)),
+                int(snapshot_health.get("symbols_total", 0)),
+                int(snapshot_health.get("max_age_sec", 0)),
+            )
+
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
         for raw, sym, grp in self.universe:
             # Trade window routing: in ACTIVE we trade only the active group (FX_AM => FX, METAL_PM => METAL).
@@ -7319,6 +7494,8 @@ class SafetyBot:
 
         # V1.10: Spend-down — niewielki boost liczby symboli, jeśli i tak budżet by się zmarnował.
         n_limit = int(n_max) + (int(CFG.spenddown_extra_symbols) if spenddown_active else 0)
+        if snapshot_block_new_entries:
+            n_limit = 0
         if warn_degrade_active and bool(getattr(CFG, "oanda_warn_degrade_enabled", True)):
             n_limit = min(int(n_limit), max(0, int(getattr(CFG, "oanda_warn_symbols_cap", 1))))
         if canary_signal.canary_active:
@@ -7395,6 +7572,8 @@ class SafetyBot:
                 "drift_active": bool(drift_signal.active),
                 "drift_reasons": list(drift_signal.reasons),
                 "drift_zscore": float(drift_signal.zscore),
+                "snapshot_health": dict(snapshot_health),
+                "snapshot_block_new_entries": bool(snapshot_block_new_entries),
                 "learner_qa_light": str(learner_qa_light),
                 "topk_base": [{"prio": float(p), "raw": r, "sym": s, "grp": g} for (p, r, s, g) in base_topk],
                 "topk_final": [{"prio": float(p), "raw": r, "sym": s, "grp": g} for (p, r, s, g) in final_topk],
@@ -7444,6 +7623,7 @@ class SafetyBot:
                 })
             snapshot = {
                 'version': '1.0',
+                'schema_version': '1.0',
                 'ts_utc': now_iso,
                 'ttl_sec': SCOUT_MAX_AGE_SEC,
                 'server_time_anchor': self.time_anchor.server_now_utc().replace(tzinfo=UTC).isoformat().replace('+00:00','Z'),
@@ -7459,6 +7639,8 @@ class SafetyBot:
                 'canary_pause': (self.strategy._scan_meta.get('canary_pause') if hasattr(self.strategy, '_scan_meta') else None),
                 'drift_active': (self.strategy._scan_meta.get('drift_active') if hasattr(self.strategy, '_scan_meta') else None),
                 'drift_zscore': (self.strategy._scan_meta.get('drift_zscore') if hasattr(self.strategy, '_scan_meta') else None),
+                'snapshot_health': (self.strategy._scan_meta.get('snapshot_health') if hasattr(self.strategy, '_scan_meta') else None),
+                'snapshot_block_new_entries': (self.strategy._scan_meta.get('snapshot_block_new_entries') if hasattr(self.strategy, '_scan_meta') else None),
                 'learner_qa_light': (self.strategy._scan_meta.get('learner_qa_light') if hasattr(self.strategy, '_scan_meta') else None),
                 'topk': topk_for_snapshot,
             }
@@ -7536,6 +7718,9 @@ class SafetyBot:
 
         command = {
             "action": "TRADE",
+            "msg_id": str(uuid.uuid4()),
+            "schema_version": "1.0",
+            "policy_version": "runtime.v1",
             "payload": {
                 "signal": str(signal).upper(),
                 "symbol": str(symbol).upper(),
@@ -7546,6 +7731,7 @@ class SafetyBot:
                 "comment": str(comment),
             }
         }
+        command["request_hash"] = str(build_request_hash(command))
         logging.info(
             "ZMQ_SEND | action=TRADE signal=%s symbol=%s volume=%.6f",
             command["payload"]["signal"],
@@ -7555,6 +7741,33 @@ class SafetyBot:
         reply = self.zmq_bridge.send_command(command)
         if not isinstance(reply, dict):
             logging.error("ZMQ_SEND_FAIL | No reply from MQL5 for TRADE command.")
+            return None
+        if str(reply.get("correlation_id") or "") != str(command.get("msg_id") or ""):
+            logging.error(
+                "ZMQ_REPLY_FAIL | correlation mismatch expected=%s got=%s",
+                str(command.get("msg_id") or ""),
+                str(reply.get("correlation_id") or ""),
+            )
+            return None
+        req_hash_reply = str(reply.get("request_hash") or "")
+        if req_hash_reply and req_hash_reply != str(command.get("request_hash") or ""):
+            logging.error(
+                "ZMQ_REPLY_FAIL | request_hash mismatch expected=%s got=%s",
+                str(command.get("request_hash") or ""),
+                req_hash_reply,
+            )
+            return None
+        got_resp_hash = str(reply.get("response_hash") or "")
+        if not got_resp_hash:
+            logging.error("ZMQ_REPLY_FAIL | missing response_hash")
+            return None
+        exp_resp_hash = str(build_response_hash(reply))
+        if got_resp_hash != exp_resp_hash:
+            logging.error(
+                "ZMQ_REPLY_FAIL | response_hash mismatch expected=%s got=%s",
+                exp_resp_hash,
+                got_resp_hash,
+            )
             return None
         logging.info(
             "ZMQ_REPLY | status=%s correlation_id=%s",
@@ -7570,25 +7783,53 @@ class SafetyBot:
         """
         msg_type = data.get("type")
         symbol = data.get("symbol")
+        schema_v = str(data.get("schema_version") or data.get("__v") or "").strip()
         
         if not symbol:
             return
+        if schema_v and schema_v != "1.0":
+            logging.warning("ZMQ_DATA_SCHEMA_MISMATCH symbol=%s type=%s schema_version=%s", symbol, msg_type, schema_v)
+            return
+
+        base_symbol = symbol_base(symbol)
+        now_ts = float(time.time())
 
         # Aktualizacja cache'u ticków dla silnika wykonawczego
         if msg_type == "TICK":
             # Wstrzykujemy tick do cache'u silnika
             if hasattr(self.execution_engine, "_zmq_tick_cache"):
                 self.execution_engine._zmq_tick_cache[symbol] = data
+            self._zmq_last_tick_ts[base_symbol] = now_ts
             logging.debug(f"ZMQ_TICK | {symbol} | Bid: {data.get('bid')} Ask: {data.get('ask')}")
 
         # Przetwarzanie danych barowych (M5)
         elif msg_type == "BAR":
+            self._zmq_last_bar_ts[base_symbol] = now_ts
             persisted = False
             try:
                 if getattr(self, "bars_store", None) is not None:
-                    persisted = bool(self.bars_store.upsert_bar_snapshot(symbol_base(symbol), data))
+                    persisted = bool(self.bars_store.upsert_bar_snapshot(base_symbol, data))
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+            # Optional fast-feature payload from MQL5 (sma_fast/adx/atr on closed M5 bar).
+            try:
+                if all(k in data for k in ("open", "close", "sma_fast", "adx", "atr", "time")):
+                    ts = int(data.get("time") or 0)
+                    if ts > 0:
+                        bar_ts_pl = pd.Timestamp(dt.datetime.fromtimestamp(ts, tz=UTC).astimezone(TZ_PL))
+                        self._zmq_m5_feature_cache[base_symbol] = {
+                            "recv_ts": now_ts,
+                            "bar_time_pl": bar_ts_pl,
+                            "open": float(data.get("open")),
+                            "close": float(data.get("close")),
+                            "sma_fast": float(data.get("sma_fast")),
+                            "adx": float(data.get("adx")),
+                            "atr": float(data.get("atr")),
+                        }
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
             logging.info(
                 "ZMQ_BAR | %s | Time: %s Close: %s persisted=%s",
                 symbol,
@@ -7621,10 +7862,18 @@ class SafetyBot:
                 # 2. Synchronous heartbeat over REQ/REP
                 if (now - last_heartbeat_ts) >= heartbeat_interval:
                     hb_reply = self.zmq_bridge.send_command({"action": "HEARTBEAT"})
+                    hb_hash_ok = False
+                    try:
+                        hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
+                        hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        hb_hash_ok = False
                     hb_ok = (
                         isinstance(hb_reply, dict)
                         and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
                         and str(hb_reply.get("status") or "").upper() == "OK"
+                        and bool(hb_hash_ok)
                     )
                     if hb_ok:
                         if heartbeat_fail_safe_active or heartbeat_failures > 0:
@@ -7807,7 +8056,13 @@ if __name__ == "__main__":
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
     CFG.hybrid_use_zmq_m5_bars = _cfg_bool("hybrid_use_zmq_m5_bars", CFG.hybrid_use_zmq_m5_bars)
+    CFG.hybrid_use_zmq_m5_features = _cfg_bool("hybrid_use_zmq_m5_features", CFG.hybrid_use_zmq_m5_features)
+    CFG.hybrid_use_mtf_resample_from_m5_store = _cfg_bool(
+        "hybrid_use_mtf_resample_from_m5_store",
+        CFG.hybrid_use_mtf_resample_from_m5_store,
+    )
     CFG.hybrid_m5_no_fetch_strict = _cfg_bool("hybrid_m5_no_fetch_strict", CFG.hybrid_m5_no_fetch_strict)
+    CFG.hybrid_snapshot_max_age_sec = _cfg_int("hybrid_snapshot_max_age_sec", CFG.hybrid_snapshot_max_age_sec)
     CFG.time_anchor_max_backward_sec = _cfg_int("time_anchor_max_backward_sec", CFG.time_anchor_max_backward_sec)
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)

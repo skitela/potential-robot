@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from BIN.zeromq_bridge import PROTOCOL_VERSION, ZMQBridge
+from BIN.zeromq_bridge import PROTOCOL_VERSION, ZMQBridge, build_request_hash, build_response_hash
 
 
 class TestZMQBridgeE2E(unittest.TestCase):
@@ -24,28 +24,34 @@ class TestZMQBridgeE2E(unittest.TestCase):
 
     def test_send_command_success_with_matching_correlation_id(self):
         bridge = self._build_bridge(retries=1)
-        bridge.req_socket.poll.side_effect = [True]
-        bridge.req_socket.recv_string.side_effect = [
-            json.dumps(
-                {
-                    "status": "PROCESSED",
-                    "correlation_id": "msg-1",
-                    "details": {"retcode": 10009, "order": 123, "deal": 456},
-                }
-            )
-        ]
+        command = {"action": "TRADE", "msg_id": "msg-1", "payload": {"symbol": "EURUSD"}}
+        request_hash = build_request_hash(command)
+        reply = {
+            "status": "PROCESSED",
+            "correlation_id": "msg-1",
+            "action": "TRADE_REPLY",
+            "request_hash": request_hash,
+            "details": {"retcode": 10009, "order": 123, "deal": 456},
+            "error": "",
+        }
+        reply["response_hash"] = build_response_hash(reply)
 
-        result = bridge.send_command({"action": "TRADE", "msg_id": "msg-1", "payload": {"symbol": "EURUSD"}})
+        bridge.req_socket.poll.side_effect = [True]
+        bridge.req_socket.recv_string.side_effect = [json.dumps(reply)]
+
+        result = bridge.send_command(command)
 
         self.assertIsInstance(result, dict)
         self.assertEqual("PROCESSED", result.get("status"))
         self.assertEqual("msg-1", result.get("correlation_id"))
+        self.assertEqual(request_hash, result.get("request_hash"))
         self.assertEqual(1, bridge.req_socket.send_string.call_count)
 
         sent_raw = bridge.req_socket.send_string.call_args.args[0]
         sent_obj = json.loads(sent_raw)
         self.assertEqual("msg-1", sent_obj.get("msg_id"))
         self.assertEqual(PROTOCOL_VERSION, sent_obj.get("__v"))
+        self.assertEqual(request_hash, sent_obj.get("request_hash"))
 
     def test_send_command_timeout_retries_and_fails(self):
         bridge = self._build_bridge(retries=3)
@@ -72,6 +78,27 @@ class TestZMQBridgeE2E(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(2, bridge.req_socket.send_string.call_count)
         self.assertEqual(0, bridge._reconnect_req_socket.call_count)
+
+    def test_send_command_rejects_mismatched_response_hash(self):
+        bridge = self._build_bridge(retries=2)
+        bridge.req_socket.poll.side_effect = [True, True]
+        command = {"action": "TRADE", "msg_id": "msg-2", "payload": {"symbol": "EURUSD"}}
+        request_hash = build_request_hash(command)
+        bad_reply = {
+            "status": "PROCESSED",
+            "correlation_id": "msg-2",
+            "action": "TRADE_REPLY",
+            "request_hash": request_hash,
+            "details": {"retcode": 10009, "order": 1, "deal": 2},
+            "error": "",
+            "response_hash": "DEADBEEF",
+        }
+        bridge.req_socket.recv_string.side_effect = [json.dumps(bad_reply), json.dumps(bad_reply)]
+
+        result = bridge.send_command(command)
+
+        self.assertIsNone(result)
+        self.assertEqual(2, bridge.req_socket.send_string.call_count)
 
 
 if __name__ == "__main__":
