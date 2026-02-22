@@ -1,187 +1,159 @@
 //+------------------------------------------------------------------+
 //|                                               zeromq_bridge.mqh |
-//|                      Komponent mostu komunikacyjnego dla MQL5 |
-//|                                     https://github.com/gemini |
+//|            Minimal ZeroMQ C-API bridge for HybridAgent (MQL5)   |
 //+------------------------------------------------------------------+
-/*
-  OPIS:
-  Ten plik nagłówkowy stanowi warstwę pośredniczącą do komunikacji z backendem w Pythonie
-  przy użyciu biblioteki ZeroMQ. Upraszcza on proces wysyłania danych rynkowych
-  i odbierania komend transakcyjnych w niezawodny sposób (REQ/REP).
+#property strict
 
-  KRYTYCZNA ZALEŻNOŚĆ:
-  Ten kod wymaga zewnętrznej biblioteki ZeroMQ dla MQL5. Należy ją pobrać i zainstalować
-  zanim spróbujesz skompilować lub uruchomić ten kod.
-  
-  Rekomendowana biblioteka: dingmaotu/mql-zmq
-  Link: https://github.com/dingmaotu/mql-zmq
+#define ZMQ_REQ 3
+#define ZMQ_REP 4
+#define ZMQ_PUSH 8
+#define ZMQ_DONTWAIT 1
 
-  INSTRUKCJA INSTALACJI BIBLIOTEKI (dingmaotu/mql-zmq):
-  1. Pobierz najnowszą wersję z podanego linku (zakładka "Releases").
-  2. Rozpakuj archiwum.
-  3. Skopiuj zawartość katalogu 'MQL5/Include' z archiwum do katalogu 'MQL5/Include'
-     Twojego terminala MetaTrader 5 (dostęp przez: Plik -> Otwórz Folder Danych).
-  4. Skopiuj plik 'libzmq.dll' z katalogu 'MQL5/Libraries' z archiwum do katalogu
-     'MQL5/Libraries' Twojego terminala.
+#import "libzmq.dll"
+long zmq_ctx_new();
+int zmq_ctx_term(long context);
+long zmq_socket(long context, int type);
+int zmq_close(long socket);
+int zmq_connect(long socket, const uchar &addr[]);
+int zmq_send(long socket, const uchar &buf[], long len, int flags);
+int zmq_recv(long socket, uchar &buf[], long len, int flags);
+int zmq_errno();
+#import
 
-  UPEWNIJ SIĘ, że w opcjach Expert Advisora w terminalu MT5 (Narzędzia -> Opcje -> Expert Advisors)
-  zaznaczona jest opcja "Zezwalaj na import DLL".
-*/
-#property copyright "Gemini"
-#property link      "https://github.com/gemini"
+long G_ZmqContext = 0;
+long G_PushSocket = 0;
+long G_RepSocket = 0;
 
-#include <Zmq/Zmq.mqh> // Dołączamy główny plik biblioteki ZMQ
+bool _ZmqConnect(long socket_ref, string address)
+{
+  uchar addr[];
+  int n = StringToCharArray(address, addr, 0, -1, CP_UTF8);
+  if(n <= 0)
+    return false;
+  return (zmq_connect(socket_ref, addr) == 0);
+}
 
-// --- Zmienne globalne dla kontekstu i gniazd ZMQ ---
-int G_ZmqContext = -1; // Uchwyt do kontekstu ZMQ
-int G_PushSocket = -1; // Uchwyt do gniazda PUSH (wysyłanie danych telemetrycznych do Pythona)
-int G_RepSocket = -1;  // Uchwyt do gniazda REP (odbieranie komend i wysyłanie odpowiedzi)
+bool _ZmqSend(long socket_ref, string payload, bool nonblock)
+{
+  uchar data[];
+  int n = StringToCharArray(payload, data, 0, -1, CP_UTF8);
+  if(n <= 0)
+    return false;
 
-//+------------------------------------------------------------------+
-//| Inicjalizuje most ZMQ                                            |
-//+------------------------------------------------------------------+
+  long msg_len = (long)(n - 1); // drop null terminator
+  int flags = nonblock ? ZMQ_DONTWAIT : 0;
+  return (zmq_send(socket_ref, data, msg_len, flags) >= 0);
+}
+
+bool _ZmqRecv(long socket_ref, string &payload, bool nonblock)
+{
+  payload = "";
+  uchar data[];
+  ArrayResize(data, 65536);
+
+  int flags = nonblock ? ZMQ_DONTWAIT : 0;
+  int rc = zmq_recv(socket_ref, data, (long)ArraySize(data), flags);
+  if(rc <= 0)
+    return false;
+
+  payload = CharArrayToString(data, 0, rc, CP_UTF8);
+  return true;
+}
+
 bool Zmq_Init(string python_host = "127.0.0.1", int data_port = 5555, int rep_port = 5556)
 {
-  // 1. Utwórz kontekst ZMQ
-  G_ZmqContext = ZmqContextNew();
-  if(G_ZmqContext < 0)
-  {
-    Print("Błąd: Nie udało się utworzyć kontekstu ZMQ.");
-    return(false);
-  }
-  Print("Kontekst ZMQ utworzony pomyślnie.");
+  Zmq_Deinit();
 
-  // 2. Utwórz gniazdo PUSH do wysyłania danych do Pythona
-  G_PushSocket = ZmqSocketNew(G_ZmqContext, ZMQ_PUSH);
-  if(G_PushSocket < 0)
+  if(MQLInfoInteger(MQL_DLLS_ALLOWED) == 0)
   {
-    Print("Błąd: Nie udało się utworzyć gniazda PUSH.");
-    ZmqContextDestroy(G_ZmqContext);
-    return(false);
+    Print("ZMQ_INIT_FAIL reason=DLL_IMPORT_DISABLED");
+    return false;
   }
-  Print("Gniazdo PUSH utworzone pomyślnie.");
 
-  // 3. Połącz gniazdo PUSH z serwerem Pythona
+  G_ZmqContext = zmq_ctx_new();
+  if(G_ZmqContext == 0)
+  {
+    Print("ZMQ_INIT_FAIL reason=CTX_NEW errno=", zmq_errno());
+    return false;
+  }
+
+  G_PushSocket = zmq_socket(G_ZmqContext, ZMQ_PUSH);
+  if(G_PushSocket == 0)
+  {
+    Print("ZMQ_INIT_FAIL reason=PUSH_NEW errno=", zmq_errno());
+    Zmq_Deinit();
+    return false;
+  }
+
+  G_RepSocket = zmq_socket(G_ZmqContext, ZMQ_REP);
+  if(G_RepSocket == 0)
+  {
+    Print("ZMQ_INIT_FAIL reason=REP_NEW errno=", zmq_errno());
+    Zmq_Deinit();
+    return false;
+  }
+
   string push_address = "tcp://" + python_host + ":" + IntegerToString(data_port);
-  if(!ZmqConnect(G_PushSocket, push_address))
+  if(!_ZmqConnect(G_PushSocket, push_address))
   {
-    Print("Błąd: Nie udało się połączyć gniazda PUSH z adresem ", push_address);
-    ZmqSocketClose(G_PushSocket);
-    ZmqContextDestroy(G_ZmqContext);
-    return(false);
+    Print("ZMQ_INIT_FAIL reason=PUSH_CONNECT addr=", push_address, " errno=", zmq_errno());
+    Zmq_Deinit();
+    return false;
   }
-  Print("Gniazdo PUSH połączone z ", push_address);
 
-  // 4. Utwórz gniazdo REP do odbierania komend i wysyłania odpowiedzi
-  G_RepSocket = ZmqSocketNew(G_ZmqContext, ZMQ_REP);
-  if(G_RepSocket < 0)
-  {
-    Print("Błąd: Nie udało się utworzyć gniazda REP.");
-    ZmqSocketClose(G_PushSocket);
-    ZmqContextDestroy(G_ZmqContext);
-    return(false);
-  }
-  Print("Gniazdo REP utworzone pomyślnie.");
-  
-  // 5. Połącz gniazdo REP z serwerem Pythona
   string rep_address = "tcp://" + python_host + ":" + IntegerToString(rep_port);
-  if(!ZmqConnect(G_RepSocket, rep_address))
+  if(!_ZmqConnect(G_RepSocket, rep_address))
   {
-    Print("Błąd: Nie udało się połączyć gniazda REP z adresem ", rep_address);
-    ZmqSocketClose(G_PushSocket);
-    ZmqSocketClose(G_RepSocket);
-    ZmqContextDestroy(G_ZmqContext);
-    return(false);
+    Print("ZMQ_INIT_FAIL reason=REP_CONNECT addr=", rep_address, " errno=", zmq_errno());
+    Zmq_Deinit();
+    return false;
   }
-  Print("Gniazdo REP połączone z ", rep_address);
 
-  Print("Most komunikacyjny ZMQ (PUSH & REP) zainicjalizowany pomyślnie.");
-  return(true);
+  Print("ZMQ_INIT_OK push=", push_address, " rep=", rep_address);
+  return true;
 }
 
-//+------------------------------------------------------------------+
-//| Zamyka most ZMQ i zwalnia zasoby                                 |
-//+------------------------------------------------------------------+
 void Zmq_Deinit()
 {
-  Print("Rozpoczynanie zamykania mostu ZMQ...");
-  // Zamknij gniazda
-  if(G_PushSocket >= 0)
+  if(G_PushSocket != 0)
   {
-    ZmqSocketClose(G_PushSocket);
-    G_PushSocket = -1;
-    Print("Gniazdo PUSH zamknięte.");
+    zmq_close(G_PushSocket);
+    G_PushSocket = 0;
   }
-  if(G_RepSocket >= 0)
+
+  if(G_RepSocket != 0)
   {
-    ZmqSocketClose(G_RepSocket);
-    G_RepSocket = -1;
-    Print("Gniazdo REP zamknięte.");
+    zmq_close(G_RepSocket);
+    G_RepSocket = 0;
   }
-  // Zniszcz kontekst
-  if(G_ZmqContext >= 0)
+
+  if(G_ZmqContext != 0)
   {
-    ZmqContextDestroy(G_ZmqContext);
-    G_ZmqContext = -1;
-    Print("Kontekst ZMQ zniszczony.");
+    zmq_ctx_term(G_ZmqContext);
+    G_ZmqContext = 0;
   }
-  Print("Most ZMQ zamknięty.");
 }
 
-//+------------------------------------------------------------------+
-//| Wysyła dane telemetryczne (jako string JSON) do Pythona          |
-//+------------------------------------------------------------------+
 bool Zmq_SendData(string &data_json)
 {
-  if(G_PushSocket < 0)
-  {
-    Print("Błąd wysyłania danych: Gniazdo PUSH nie jest zainicjalizowane.");
-    return(false);
-  }
-
-  // Używamy ZMQ_DONTWAIT, aby uniknąć blokowania, jeśli kolejka jest pełna
-  return(ZmqSend(G_PushSocket, data_json, ZMQ_DONTWAIT));
+  if(G_PushSocket == 0)
+    return false;
+  return _ZmqSend(G_PushSocket, data_json, true);
 }
 
-//+------------------------------------------------------------------+
-//| Odbiera żądanie (jako string JSON) od Pythona                    |
-//+------------------------------------------------------------------+
 bool Zmq_ReceiveRequest(string &result_json)
 {
-  if(G_RepSocket < 0)
+  if(G_RepSocket == 0)
   {
-    Print("Błąd odbioru żądania: Gniazdo REP nie jest zainicjalizowane.");
     result_json = "";
-    return(false);
+    return false;
   }
-
-  // Używamy ZMQ_DONTWAIT, aby Expert Advisor nigdy nie był blokowany
-  // podczas oczekiwania na komendę.
-  if(ZmqRecv(G_RepSocket, result_json, ZMQ_DONTWAIT))
-  {
-    // Wiadomość została odebrana
-    return(true);
-  }
-  
-  // Brak wiadomości w kolejce
-  result_json = "";
-  return(false);
+  return _ZmqRecv(G_RepSocket, result_json, true);
 }
 
-//+------------------------------------------------------------------+
-//| Wysyła odpowiedź (jako string JSON) do Pythona                   |
-//+------------------------------------------------------------------+
 bool Zmq_SendReply(string &reply_json)
 {
-  if(G_RepSocket < 0)
-  {
-    Print("Błąd wysyłania odpowiedzi: Gniazdo REP nie jest zainicjalizowane.");
-    return(false);
-  }
-
-  // Wysyłamy odpowiedź. To musi być operacja blokująca, aby zapewnić dostarczenie
-  // i zachować poprawny stan maszyny stanów REQ/REP.
-  return(ZmqSend(G_RepSocket, reply_json, 0));
+  if(G_RepSocket == 0)
+    return false;
+  return _ZmqSend(G_RepSocket, reply_json, false);
 }
-//+------------------------------------------------------------------+
-

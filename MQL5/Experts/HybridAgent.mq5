@@ -71,7 +71,42 @@ string NormFloat8(double value)
 
 string NormInt(long value)
 {
-  return LongToString(value);
+  return StringFormat("%I64d", value);
+}
+
+bool JsonNodeValid(JSONNode *node)
+{
+  return (node != NULL && CheckPointer(node) != POINTER_INVALID);
+}
+
+string JsonGetString(JSONNode *node, string key, string def_value = "")
+{
+  if(!JsonNodeValid(node))
+    return def_value;
+  JSONNode *value = node.HasKey(key);
+  if(!JsonNodeValid(value))
+    return def_value;
+  return value.ToString();
+}
+
+double JsonGetDouble(JSONNode *node, string key, double def_value = 0.0)
+{
+  if(!JsonNodeValid(node))
+    return def_value;
+  JSONNode *value = node.HasKey(key);
+  if(!JsonNodeValid(value))
+    return def_value;
+  return value.ToDouble();
+}
+
+long JsonGetLong(JSONNode *node, string key, long def_value = 0)
+{
+  if(!JsonNodeValid(node))
+    return def_value;
+  JSONNode *value = node.HasKey(key);
+  if(!JsonNodeValid(value))
+    return def_value;
+  return value.ToInteger();
 }
 
 string Fnv1a32Hex(string text)
@@ -438,8 +473,10 @@ void CloseAllOpenPositions(string reason)
     if(symbol != G_Symbol)
       continue;
 
-    MqlTradeRequest req = {0};
-    MqlTradeResult  res = {0};
+    MqlTradeRequest req;
+    MqlTradeResult  res;
+    ZeroMemory(req);
+    ZeroMemory(res);
 
     req.action = TRADE_ACTION_DEAL;
     req.position = ticket;
@@ -710,8 +747,10 @@ void ExecuteTrade(
     return;
   }
 
-  MqlTradeRequest request = {0};
-  MqlTradeResult result = {0};
+  MqlTradeRequest request;
+  MqlTradeResult result;
+  ZeroMemory(request);
+  ZeroMemory(result);
 
   request.action = TRADE_ACTION_DEAL;
   request.symbol = symbol;
@@ -759,8 +798,8 @@ void ProcessCommands()
 
   G_LastPythonMessageTime = (ulong)GetTickCount();
 
-  Json json;
-  if(!json.Parse(command_json))
+  JSONNode json;
+  if(!json.Deserialize(command_json, CP_UTF8))
   {
     string bad_msg_id = "unknown";
     int pos = StringFind(command_json, "\"msg_id\":\"");
@@ -783,7 +822,8 @@ void ProcessCommands()
     return;
   }
 
-  string msg_id = json.Get("msg_id");
+  JSONNode *root = GetPointer(json);
+  string msg_id = JsonGetString(root, "msg_id", "");
   if(msg_id == "")
     msg_id = StringFormat("missing-%d", (int)GetTickCount());
 
@@ -795,10 +835,10 @@ void ProcessCommands()
     return;
   }
 
-  string action = ToUpperAscii(json.Get("action"));
-  string contract_v = json.Get("__v");
-  string schema_v = json.Get("schema_version");
-  string request_hash = json.Get("request_hash");
+  string action = ToUpperAscii(JsonGetString(root, "action", ""));
+  string contract_v = JsonGetString(root, "__v", "");
+  string schema_v = JsonGetString(root, "schema_version", "");
+  string request_hash = JsonGetString(root, "request_hash", "");
 
   if(contract_v == "")
     Print("WARN: Missing __v in command msg_id=", msg_id);
@@ -838,8 +878,10 @@ void ProcessCommands()
 
   if(action == "TRADE")
   {
-    Json payload = json.GetNode("payload");
-    if(!payload.IsObject())
+    JSONNode *payload = NULL;
+    if(JsonNodeValid(root))
+      payload = root.HasKey("payload", Object);
+    if(!JsonNodeValid(payload))
     {
       SendReplyEnvelope(
         "ERROR", msg_id, "TRADE_REPLY",
@@ -853,13 +895,13 @@ void ProcessCommands()
       return;
     }
 
-    string signal = ToUpperAscii(payload.Get("signal"));
-    string symbol = ToUpperAscii(payload.Get("symbol"));
-    double volume = payload.Get("volume");
-    double sl_price = payload.Get("sl_price");
-    double tp_price = payload.Get("tp_price");
-    long magic = (long)payload.Get("magic");
-    string comment = payload.Get("comment");
+    string signal = ToUpperAscii(JsonGetString(payload, "signal", ""));
+    string symbol = ToUpperAscii(JsonGetString(payload, "symbol", ""));
+    double volume = JsonGetDouble(payload, "volume", 0.0);
+    double sl_price = JsonGetDouble(payload, "sl_price", 0.0);
+    double tp_price = JsonGetDouble(payload, "tp_price", 0.0);
+    long magic = JsonGetLong(payload, "magic", 0);
+    string comment = JsonGetString(payload, "comment", "");
 
     string expected_hash = BuildRequestHashTrade(
       action,

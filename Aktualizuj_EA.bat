@@ -30,6 +30,27 @@ if not exist "%SOURCE_DIR%\Experts\HybridAgent.mq5" (
     exit /b 1
 )
 
+if not exist "%SOURCE_DIR%\Include\Json\Json.mqh" (
+    echo [ERROR] Krytyczny blad: Brak parsera JSON Include\Json\Json.mqh.
+    echo [ERROR] Proces przerwany.
+    pause
+    exit /b 3
+)
+
+if not exist "%SOURCE_DIR%\Libraries\libzmq.dll" (
+    echo [ERROR] Krytyczny blad: Brak biblioteki libzmq.dll w MQL5\Libraries.
+    echo [ERROR] Proces przerwany.
+    pause
+    exit /b 4
+)
+
+if not exist "%SOURCE_DIR%\Libraries\libsodium.dll" (
+    echo [ERROR] Krytyczny blad: Brak biblioteki libsodium.dll w MQL5\Libraries.
+    echo [ERROR] Proces przerwany.
+    pause
+    exit /b 5
+)
+
 if not exist "%TARGET_DIR%" (
     echo [ERROR] Krytyczny blad: Sciezka docelowa dla MetaTrader 5 nie istnieje!
     echo [ERROR] Sciezka: %TARGET_DIR%
@@ -54,13 +75,30 @@ if %errorlevel% neq 0 (
     echo [SUCCESS] Skopiowano HybridAgent.mq5.
 )
 
-:: Kopiowanie plikow includowanych (np. kontrakty, helpery)
+:: Kopiowanie glownych include
 echo [COPY] Kopiowanie: MQL5\Include\*.mqh
 xcopy "%SOURCE_DIR%\Include\*.mqh" "%TARGET_DIR%\Include\" /Y /Q /F
 if %errorlevel% neq 0 (
-    echo [ERROR] Nie udalo sie skopiowac plikow z folderu Include.
+    echo [ERROR] Nie udalo sie skopiowac plikow glownych Include.
 ) else (
-    echo [SUCCESS] Skopiowano wszystkie pliki .mqh z folderu Include.
+    echo [SUCCESS] Skopiowano glowny plik Include.
+)
+
+echo [COPY] Kopiowanie: MQL5\Include\Json\*
+xcopy "%SOURCE_DIR%\Include\Json\*" "%TARGET_DIR%\Include\Json\" /E /I /Y /Q /F
+if %errorlevel% neq 0 (
+    echo [ERROR] Nie udalo sie skopiowac zaleznosci Include\Json.
+) else (
+    echo [SUCCESS] Skopiowano Include\Json.
+)
+
+:: Kopiowanie bibliotek DLL wymaganych przez ZMQ
+echo [COPY] Kopiowanie: MQL5\Libraries\*.dll
+xcopy "%SOURCE_DIR%\Libraries\*.dll" "%TARGET_DIR%\Libraries\" /Y /Q /F
+if %errorlevel% neq 0 (
+    echo [ERROR] Nie udalo sie skopiowac bibliotek DLL do MQL5\Libraries.
+) else (
+    echo [SUCCESS] Skopiowano biblioteki DLL do MQL5\Libraries.
 )
 
 echo.
