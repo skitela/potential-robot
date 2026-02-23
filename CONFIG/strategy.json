@@ -78,6 +78,24 @@
   "fx_budget_pacing_phase1_ratio": 0.25,
   "fx_budget_pacing_phase2_ratio": 0.70,
   "fx_budget_pacing_slack": 0.05,
+  "metal_signal_score_enabled": true,
+  "metal_signal_score_threshold": 76,
+  "metal_signal_score_hot_relaxed_enabled": true,
+  "metal_signal_score_hot_relaxed_threshold": 70,
+  "metal_spread_cap_points_default": 120.0,
+  "metal_atr_points_min": 120.0,
+  "metal_atr_points_max": 900.0,
+  "metal_impulse_atr_fraction_min": 0.07,
+  "metal_body_range_ratio_min": 0.45,
+  "metal_body_vs_atr_clip_max": 2.8,
+  "metal_wick_rejection_ratio_min": 1.2,
+  "metal_retest_distance_atr_max": 0.35,
+  "metal_budget_pacing_enabled": true,
+  "metal_budget_pacing_phase1_progress": 0.25,
+  "metal_budget_pacing_phase2_progress": 0.6667,
+  "metal_budget_pacing_phase1_ratio": 0.25,
+  "metal_budget_pacing_phase2_ratio": 0.70,
+  "metal_budget_pacing_slack": 0.05,
   "scan_interval_sec": 30,
   "usb_watch_check_interval_sec": 30,
   "fx_only_mode": false,
@@ -227,10 +245,14 @@
       "fx_spread_cap_points": 20
     },
     "XAUUSD": {
+      "metal_spread_cap_points": 90,
       "position_time_stop_hot_min": 15,
       "position_time_stop_warm_min": 25,
       "partial_tp_r": 0.68,
       "trailing_activation_r": 0.5
+    },
+    "XAGUSD": {
+      "metal_spread_cap_points": 130
     },
     "US500": {
       "m5_pull_sec_hot": 120,

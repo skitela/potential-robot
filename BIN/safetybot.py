@@ -423,6 +423,28 @@ class CFG:
     fx_budget_pacing_phase2_ratio: float = 0.70
     fx_budget_pacing_slack: float = 0.05
 
+    # METAL_PM scoring gate (popołudniowa sesja metali): deterministic quality score.
+    metal_signal_score_enabled: bool = True
+    metal_signal_score_threshold: int = 76
+    metal_signal_score_hot_relaxed_enabled: bool = True
+    metal_signal_score_hot_relaxed_threshold: int = 70
+    metal_spread_cap_points_default: float = 120.0
+    metal_atr_points_min: float = 120.0
+    metal_atr_points_max: float = 900.0
+    metal_impulse_atr_fraction_min: float = 0.07
+    metal_body_range_ratio_min: float = 0.45
+    metal_body_vs_atr_clip_max: float = 2.8
+    metal_wick_rejection_ratio_min: float = 1.20
+    metal_retest_distance_atr_max: float = 0.35
+
+    # METAL_PM pacing gate for ORDER budget usage inside 14:00-17:00 PL window.
+    metal_budget_pacing_enabled: bool = True
+    metal_budget_pacing_phase1_progress: float = 0.25
+    metal_budget_pacing_phase2_progress: float = 0.6667
+    metal_budget_pacing_phase1_ratio: float = 0.25
+    metal_budget_pacing_phase2_ratio: float = 0.70
+    metal_budget_pacing_slack: float = 0.05
+
     # Self-heal guard (fast pause after local degradation; does not alter risk % policy).
     self_heal_enabled: bool = True
     self_heal_lookback_sec: int = 10800
@@ -1185,18 +1207,36 @@ def window_progress_ratio(
     return float(elapsed_s / total_s)
 
 
-def fx_pacing_limit_ratio(progress: float) -> float:
-    """Piecewise ORDER-budget pacing target for FX_AM session."""
+def _session_pacing_limit_ratio(
+    progress: float,
+    phase1_progress: float,
+    phase2_progress: float,
+    phase1_ratio: float,
+    phase2_ratio: float,
+) -> float:
     p = float(max(0.0, min(1.0, float(progress))))
-    p1 = float(max(0.0, min(1.0, float(getattr(CFG, "fx_budget_pacing_phase1_progress", 0.25) or 0.25))))
-    p2 = float(max(p1, min(1.0, float(getattr(CFG, "fx_budget_pacing_phase2_progress", 0.6667) or 0.6667))))
-    r1 = float(max(0.0, min(1.0, float(getattr(CFG, "fx_budget_pacing_phase1_ratio", 0.25) or 0.25))))
-    r2 = float(max(r1, min(1.0, float(getattr(CFG, "fx_budget_pacing_phase2_ratio", 0.70) or 0.70))))
+    p1 = float(max(0.0, min(1.0, float(phase1_progress))))
+    p2 = float(max(p1, min(1.0, float(phase2_progress))))
+    r1 = float(max(0.0, min(1.0, float(phase1_ratio))))
+    r2 = float(max(r1, min(1.0, float(phase2_ratio))))
     if p <= p1:
         return r1
     if p <= p2:
         return r2
     return 1.0
+
+
+def fx_pacing_limit_ratio(progress: float) -> float:
+    """Piecewise ORDER-budget pacing target for FX_AM session."""
+    return float(
+        _session_pacing_limit_ratio(
+            progress=progress,
+            phase1_progress=float(getattr(CFG, "fx_budget_pacing_phase1_progress", 0.25) or 0.25),
+            phase2_progress=float(getattr(CFG, "fx_budget_pacing_phase2_progress", 0.6667) or 0.6667),
+            phase1_ratio=float(getattr(CFG, "fx_budget_pacing_phase1_ratio", 0.25) or 0.25),
+            phase2_ratio=float(getattr(CFG, "fx_budget_pacing_phase2_ratio", 0.70) or 0.70),
+        )
+    )
 
 
 def fx_budget_pacing_allows_entry(
@@ -1381,6 +1421,248 @@ def score_fx_entry_signal(
     parts["spread_p80"] = float(p80)
     parts["spread_cap_points"] = float(cap)
     parts["atr_points"] = float(atr_pts) if atr_pts is not None and np.isfinite(atr_pts) else -1.0
+    parts["adx_threshold"] = float(adx_thr)
+    parts["adx_range_max"] = float(adx_rng)
+    return score_clamped, parts
+
+
+def metal_spread_cap_points(symbol: str, grp: Optional[str] = "METAL") -> float:
+    """Per-symbol hard spread cap in points for METAL scoring gate."""
+    default_cap = float(max(1.0, float(getattr(CFG, "metal_spread_cap_points_default", 120.0) or 120.0)))
+    cap = _cfg_group_float(grp, "metal_spread_cap_points", default_cap, symbol=symbol)
+    try:
+        return float(max(1.0, float(cap)))
+    except Exception:
+        return default_cap
+
+
+def metal_score_threshold_for_mode(mode: str) -> int:
+    base_thr = int(max(0, int(getattr(CFG, "metal_signal_score_threshold", 76) or 76)))
+    if bool(getattr(CFG, "metal_signal_score_hot_relaxed_enabled", True)) and str(mode).upper() == "HOT":
+        hot_thr = int(max(0, int(getattr(CFG, "metal_signal_score_hot_relaxed_threshold", 70) or 70)))
+        return int(min(base_thr, hot_thr))
+    return int(base_thr)
+
+
+def metal_pacing_limit_ratio(progress: float) -> float:
+    """Piecewise ORDER-budget pacing target for METAL_PM session."""
+    return float(
+        _session_pacing_limit_ratio(
+            progress=progress,
+            phase1_progress=float(getattr(CFG, "metal_budget_pacing_phase1_progress", 0.25) or 0.25),
+            phase2_progress=float(getattr(CFG, "metal_budget_pacing_phase2_progress", 0.6667) or 0.6667),
+            phase1_ratio=float(getattr(CFG, "metal_budget_pacing_phase1_ratio", 0.25) or 0.25),
+            phase2_ratio=float(getattr(CFG, "metal_budget_pacing_phase2_ratio", 0.70) or 0.70),
+        )
+    )
+
+
+def metal_budget_pacing_allows_entry(
+    gov: "RequestGovernor",
+    db: "Persistence",
+    now_dt: Optional[dt.datetime] = None,
+) -> Tuple[bool, Dict[str, float]]:
+    """
+    Gate entries when ORDER budget for METAL is consumed too quickly early in METAL_PM.
+    """
+    if not bool(getattr(CFG, "metal_budget_pacing_enabled", True)):
+        return True, {"enabled": 0.0}
+    if gov is None or db is None:
+        return True, {"enabled": 1.0, "reason": "MISSING_STATE"}  # type: ignore[dict-item]
+
+    now_u = now_dt if isinstance(now_dt, dt.datetime) else now_utc()
+    now_pl_dt = now_u.astimezone(TZ_PL)
+    win = (getattr(CFG, "trade_windows", {}) or {}).get("METAL_PM", {})
+    if not isinstance(win, dict):
+        win = {}
+    start_hm = win.get("start_hm", (14, 0))
+    end_hm = win.get("end_hm", (17, 0))
+    try:
+        sh = (int(start_hm[0]), int(start_hm[1]))
+        eh = (int(end_hm[0]), int(end_hm[1]))
+    except Exception:
+        sh, eh = (14, 0), (17, 0)
+
+    progress = window_progress_ratio(now_pl_dt, sh, eh)
+    cap = int(max(0, int(gov.order_group_cap("METAL")) + int(gov.order_group_borrow_allowance("METAL"))))
+    used = int(max(0, int(db.get_order_group_actions_day("METAL", now_dt=now_u, emergency=False))))
+    if cap <= 0:
+        return False, {
+            "enabled": 1.0,
+            "progress": float(progress),
+            "limit_ratio": 0.0,
+            "slack": float(getattr(CFG, "metal_budget_pacing_slack", 0.05)),
+            "used_ratio": 1.0,
+            "used": float(used),
+            "cap": float(cap),
+            "reason": "METAL_ORDER_CAP_ZERO",  # type: ignore[dict-item]
+        }
+    used_ratio = float(used) / float(cap)
+    limit_ratio = float(metal_pacing_limit_ratio(progress))
+    slack = float(max(0.0, float(getattr(CFG, "metal_budget_pacing_slack", 0.05) or 0.05)))
+    ok = bool(used_ratio <= (limit_ratio + slack))
+    return ok, {
+        "enabled": 1.0,
+        "progress": float(progress),
+        "limit_ratio": float(limit_ratio),
+        "slack": float(slack),
+        "used_ratio": float(used_ratio),
+        "used": float(used),
+        "cap": float(cap),
+    }
+
+
+def score_metal_entry_signal(
+    *,
+    symbol: str,
+    grp: str,
+    mode: str,
+    signal: str,
+    signal_reason: str,
+    trend_h4: str,
+    structure_h4: str,
+    regime: str,
+    close_price: float,
+    open_price: float,
+    high_price: Optional[float],
+    low_price: Optional[float],
+    sma_fast_value: float,
+    adx_value: float,
+    atr_value: Optional[float],
+    point: float,
+    spread_points: float,
+    spread_p80: float,
+    execution_error_recent: int = 0,
+) -> Tuple[int, Dict[str, float]]:
+    """
+    Deterministic METAL signal scoring (0..100) for popołudniowa sesja metali.
+    """
+    parts: Dict[str, float] = {}
+    score = 0.0
+
+    trend = str(trend_h4).upper()
+    struct = str(structure_h4).upper()
+    reg = str(regime).upper()
+    sig = str(signal).upper()
+    sig_reason = str(signal_reason).upper()
+    mode_u = str(mode).upper()
+
+    # A) Regime + direction (max 25)
+    a = 0.0
+    if trend in {"BUY", "SELL"}:
+        a += 8.0
+    if struct in {"BUY", "SELL"} and struct == trend:
+        a += 7.0
+    adx_thr = float(max(0.0, _cfg_group_float(grp, "adx_threshold", float(getattr(CFG, "adx_threshold", 17)), symbol=symbol)))
+    adx_rng = float(max(0.0, _cfg_group_float(grp, "adx_range_max", float(getattr(CFG, "adx_range_max", 11)), symbol=symbol)))
+    if reg == "TREND" and np.isfinite(adx_value) and float(adx_value) >= float(adx_thr):
+        a += 10.0
+    elif reg == "RANGE" and np.isfinite(adx_value) and float(adx_value) <= float(adx_rng):
+        a += 8.0
+    parts["A_regime_direction"] = float(min(25.0, a))
+    score += parts["A_regime_direction"]
+
+    # B) Trigger quality with wick/retest checks (max 25)
+    b = 0.0
+    if sig in {"BUY", "SELL"} and sig_reason not in {"", "NO_TREND_SIGNAL", "NO_RANGE_SIGNAL"}:
+        b += 10.0
+
+    body = abs(float(close_price) - float(open_price))
+    rng = None
+    upper_wick = 0.0
+    lower_wick = 0.0
+    try:
+        if high_price is not None and low_price is not None:
+            h = float(high_price)
+            l = float(low_price)
+            o = float(open_price)
+            c = float(close_price)
+            rng_val = abs(h - l)
+            if np.isfinite(rng_val) and rng_val > 0.0:
+                rng = float(rng_val)
+            upper_wick = max(0.0, h - max(o, c))
+            lower_wick = max(0.0, min(o, c) - l)
+    except Exception:
+        rng = None
+        upper_wick = 0.0
+        lower_wick = 0.0
+
+    body_ratio_min = float(max(0.0, min(1.0, float(getattr(CFG, "metal_body_range_ratio_min", 0.45) or 0.45))))
+    if rng is not None and rng > 0.0 and (float(body) / float(rng)) >= body_ratio_min:
+        b += 6.0
+    elif atr_value is not None and np.isfinite(float(atr_value)) and float(atr_value) > 0.0:
+        if (float(body) / float(atr_value)) >= 0.15:
+            b += 6.0
+
+    wick_need = float(max(0.0, float(getattr(CFG, "metal_wick_rejection_ratio_min", 1.20) or 1.20)))
+    if body > 0.0:
+        wick_ratio = (lower_wick / body) if sig == "BUY" else (upper_wick / body)
+        if float(wick_ratio) >= wick_need:
+            b += 5.0
+    else:
+        wick_ratio = 0.0
+
+    if atr_value is not None and np.isfinite(float(atr_value)) and float(atr_value) > 0.0:
+        retest_max = float(max(0.0, float(getattr(CFG, "metal_retest_distance_atr_max", 0.35) or 0.35)))
+        dist_sma = abs(float(close_price) - float(sma_fast_value))
+        if dist_sma <= (retest_max * float(atr_value)):
+            b += 4.0
+    parts["B_trigger"] = float(min(25.0, b))
+    score += parts["B_trigger"]
+
+    # C) Cost & liquidity (max 20)
+    c = 0.0
+    spread_gate_hot = _cfg_group_float(grp, "spread_gate_hot_factor", float(getattr(CFG, "spread_gate_hot_factor", 1.4)), symbol=symbol)
+    spread_gate_warm = _cfg_group_float(grp, "spread_gate_warm_factor", float(getattr(CFG, "spread_gate_warm_factor", 2.0)), symbol=symbol)
+    spread_gate_eco = _cfg_group_float(grp, "spread_gate_eco_factor", float(getattr(CFG, "spread_gate_eco_factor", 2.5)), symbol=symbol)
+    if mode_u == "HOT":
+        gate = float(spread_gate_hot)
+    elif mode_u == "WARM":
+        gate = float(spread_gate_warm)
+    else:
+        gate = float(spread_gate_eco)
+    sp = float(spread_points if np.isfinite(spread_points) else 0.0)
+    p80 = float(spread_p80 if np.isfinite(spread_p80) else 0.0)
+    if p80 > 0.0 and sp > 0.0 and sp <= (gate * p80):
+        c += 12.0
+    cap = float(metal_spread_cap_points(symbol, grp=grp))
+    if sp > 0.0 and sp <= cap:
+        c += 8.0
+    parts["C_cost"] = float(min(20.0, c))
+    score += parts["C_cost"]
+
+    # D) Volatility quality (max 15)
+    d = 0.0
+    atr_pts = None
+    if atr_value is not None and np.isfinite(float(atr_value)) and float(atr_value) > 0.0 and float(point) > 0.0:
+        atr_pts = float(atr_value) / float(point)
+        atr_min_pts = float(max(1.0, float(getattr(CFG, "metal_atr_points_min", 120.0) or 120.0)))
+        atr_max_pts = float(max(atr_min_pts, float(getattr(CFG, "metal_atr_points_max", 900.0) or 900.0)))
+        if atr_min_pts <= float(atr_pts) <= atr_max_pts:
+            d += 8.0
+        impulse_min = float(max(0.0, float(getattr(CFG, "metal_impulse_atr_fraction_min", 0.07) or 0.07)))
+        clip = float(max(1.0, float(getattr(CFG, "metal_body_vs_atr_clip_max", 2.8) or 2.8)))
+        if float(body) >= impulse_min * float(atr_value) and float(body) <= clip * float(atr_value):
+            d += 7.0
+    parts["D_volatility"] = float(min(15.0, d))
+    score += parts["D_volatility"]
+
+    # E) Execution/risk readiness (max 15)
+    e = 6.0
+    if int(max(0, int(execution_error_recent))) == 0:
+        e += 5.0
+    if sig in {"BUY", "SELL"} and trend == sig:
+        e += 4.0
+    parts["E_exec_risk"] = float(min(15.0, e))
+    score += parts["E_exec_risk"]
+
+    score_clamped = int(max(0, min(100, int(round(score)))))
+    parts["score_total"] = float(score_clamped)
+    parts["spread_points"] = float(sp)
+    parts["spread_p80"] = float(p80)
+    parts["spread_cap_points"] = float(cap)
+    parts["atr_points"] = float(atr_pts) if atr_pts is not None and np.isfinite(atr_pts) else -1.0
+    parts["wick_ratio"] = float(wick_ratio)
     parts["adx_threshold"] = float(adx_thr)
     parts["adx_range_max"] = float(adx_rng)
     return score_clamped, parts
@@ -6044,6 +6326,15 @@ class StandardStrategy:
 
         if signal:
             grp_u = str(grp).upper()
+            exec_err_recent = 0
+            try:
+                lookback = max(1.0, float(getattr(CFG, "execution_burst_lookback_sec", 120) or 120))
+                ts_now = float(time.time())
+                src = list(getattr(self.engine, "_exec_error_ts", []) or [])
+                exec_err_recent = int(sum(1 for t in src if (ts_now - float(t)) <= lookback))
+            except Exception:
+                exec_err_recent = 0
+
             if grp_u == "FX":
                 pace_ok, pace_meta = fx_budget_pacing_allows_entry(self.gov, self.db, now_dt=now_utc())
                 if not pace_ok:
@@ -6066,14 +6357,6 @@ class StandardStrategy:
                 if bool(getattr(CFG, "fx_signal_score_enabled", True)):
                     spread_hint = float(getattr(info, "spread", 0.0) or 0.0)
                     spread_p80 = float(self.db.get_p80_spread(symbol) or 0.0)
-                    exec_err_recent = 0
-                    try:
-                        lookback = max(1.0, float(getattr(CFG, "execution_burst_lookback_sec", 120) or 120))
-                        ts_now = float(time.time())
-                        src = list(getattr(self.engine, "_exec_error_ts", []) or [])
-                        exec_err_recent = int(sum(1 for t in src if (ts_now - float(t)) <= lookback))
-                    except Exception:
-                        exec_err_recent = 0
                     fx_score, fx_parts = score_fx_entry_signal(
                         symbol=symbol,
                         grp=grp,
@@ -6122,6 +6405,81 @@ class StandardStrategy:
                             grp,
                             mode,
                             int(fx_score),
+                            int(min_score),
+                        )
+                        return
+
+            elif grp_u == "METAL":
+                pace_ok, pace_meta = metal_budget_pacing_allows_entry(self.gov, self.db, now_dt=now_utc())
+                if not pace_ok:
+                    self._metric_inc_skip("METAL_BUDGET_PACING")
+                    logging.info(
+                        "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=METAL_BUDGET_PACING used=%s cap=%s "
+                        "used_ratio=%.3f limit_ratio=%.3f progress=%.3f slack=%.3f",
+                        symbol,
+                        grp,
+                        mode,
+                        int(pace_meta.get("used", 0.0)),
+                        int(pace_meta.get("cap", 0.0)),
+                        float(pace_meta.get("used_ratio", 0.0)),
+                        float(pace_meta.get("limit_ratio", 0.0)),
+                        float(pace_meta.get("progress", 0.0)),
+                        float(pace_meta.get("slack", 0.0)),
+                    )
+                    return
+
+                if bool(getattr(CFG, "metal_signal_score_enabled", True)):
+                    spread_hint = float(getattr(info, "spread", 0.0) or 0.0)
+                    spread_p80 = float(self.db.get_p80_spread(symbol) or 0.0)
+                    metal_score, metal_parts = score_metal_entry_signal(
+                        symbol=symbol,
+                        grp=grp,
+                        mode=mode,
+                        signal=signal,
+                        signal_reason=signal_reason,
+                        trend_h4=trend_h4,
+                        structure_h4=structure_h4,
+                        regime=regime,
+                        close_price=float(ind["close"]),
+                        open_price=float(ind["open"]),
+                        high_price=float(ind.get("high")) if ind.get("high") is not None else None,
+                        low_price=float(ind.get("low")) if ind.get("low") is not None else None,
+                        sma_fast_value=float(ind["sma"]),
+                        adx_value=adx_value,
+                        atr_value=float(ind.get("atr")) if ind.get("atr") is not None else None,
+                        point=float(getattr(info, "point", 0.0) or 0.0),
+                        spread_points=spread_hint,
+                        spread_p80=spread_p80,
+                        execution_error_recent=exec_err_recent,
+                    )
+                    min_score = int(metal_score_threshold_for_mode(mode))
+                    logging.info(
+                        "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
+                        "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f wick=%.2f",
+                        symbol,
+                        grp,
+                        mode,
+                        int(metal_score),
+                        int(min_score),
+                        float(metal_parts.get("A_regime_direction", 0.0)),
+                        float(metal_parts.get("B_trigger", 0.0)),
+                        float(metal_parts.get("C_cost", 0.0)),
+                        float(metal_parts.get("D_volatility", 0.0)),
+                        float(metal_parts.get("E_exec_risk", 0.0)),
+                        float(metal_parts.get("spread_points", 0.0)),
+                        float(metal_parts.get("spread_p80", 0.0)),
+                        float(metal_parts.get("spread_cap_points", 0.0)),
+                        float(metal_parts.get("atr_points", -1.0)),
+                        float(metal_parts.get("wick_ratio", 0.0)),
+                    )
+                    if int(metal_score) < int(min_score):
+                        self._metric_inc_skip("METAL_SCORE_BELOW_THRESHOLD")
+                        logging.info(
+                            "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=METAL_SCORE_BELOW_THRESHOLD score=%s min_score=%s",
+                            symbol,
+                            grp,
+                            mode,
+                            int(metal_score),
                             int(min_score),
                         )
                         return
@@ -8810,6 +9168,44 @@ if __name__ == "__main__":
         "fx_budget_pacing_phase2_ratio", CFG.fx_budget_pacing_phase2_ratio
     )
     CFG.fx_budget_pacing_slack = _cfg_float("fx_budget_pacing_slack", CFG.fx_budget_pacing_slack)
+    CFG.metal_signal_score_enabled = _cfg_bool("metal_signal_score_enabled", CFG.metal_signal_score_enabled)
+    CFG.metal_signal_score_threshold = _cfg_int("metal_signal_score_threshold", CFG.metal_signal_score_threshold)
+    CFG.metal_signal_score_hot_relaxed_enabled = _cfg_bool(
+        "metal_signal_score_hot_relaxed_enabled", CFG.metal_signal_score_hot_relaxed_enabled
+    )
+    CFG.metal_signal_score_hot_relaxed_threshold = _cfg_int(
+        "metal_signal_score_hot_relaxed_threshold", CFG.metal_signal_score_hot_relaxed_threshold
+    )
+    CFG.metal_spread_cap_points_default = _cfg_float(
+        "metal_spread_cap_points_default", CFG.metal_spread_cap_points_default
+    )
+    CFG.metal_atr_points_min = _cfg_float("metal_atr_points_min", CFG.metal_atr_points_min)
+    CFG.metal_atr_points_max = _cfg_float("metal_atr_points_max", CFG.metal_atr_points_max)
+    CFG.metal_impulse_atr_fraction_min = _cfg_float(
+        "metal_impulse_atr_fraction_min", CFG.metal_impulse_atr_fraction_min
+    )
+    CFG.metal_body_range_ratio_min = _cfg_float("metal_body_range_ratio_min", CFG.metal_body_range_ratio_min)
+    CFG.metal_body_vs_atr_clip_max = _cfg_float("metal_body_vs_atr_clip_max", CFG.metal_body_vs_atr_clip_max)
+    CFG.metal_wick_rejection_ratio_min = _cfg_float(
+        "metal_wick_rejection_ratio_min", CFG.metal_wick_rejection_ratio_min
+    )
+    CFG.metal_retest_distance_atr_max = _cfg_float(
+        "metal_retest_distance_atr_max", CFG.metal_retest_distance_atr_max
+    )
+    CFG.metal_budget_pacing_enabled = _cfg_bool("metal_budget_pacing_enabled", CFG.metal_budget_pacing_enabled)
+    CFG.metal_budget_pacing_phase1_progress = _cfg_float(
+        "metal_budget_pacing_phase1_progress", CFG.metal_budget_pacing_phase1_progress
+    )
+    CFG.metal_budget_pacing_phase2_progress = _cfg_float(
+        "metal_budget_pacing_phase2_progress", CFG.metal_budget_pacing_phase2_progress
+    )
+    CFG.metal_budget_pacing_phase1_ratio = _cfg_float(
+        "metal_budget_pacing_phase1_ratio", CFG.metal_budget_pacing_phase1_ratio
+    )
+    CFG.metal_budget_pacing_phase2_ratio = _cfg_float(
+        "metal_budget_pacing_phase2_ratio", CFG.metal_budget_pacing_phase2_ratio
+    )
+    CFG.metal_budget_pacing_slack = _cfg_float("metal_budget_pacing_slack", CFG.metal_budget_pacing_slack)
     CFG.usb_watch_check_interval_sec = _cfg_int(
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
