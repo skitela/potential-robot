@@ -1932,13 +1932,19 @@ class Persistence:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
-    def group_price_used_today(self, grp: str) -> int:
+    def group_req_used_today(self, category: str, grp: str) -> int:
         ny_date, _ = ny_day_hour_key()
         c = self.conn.cursor()
         c.execute("""SELECT COALESCE(SUM(count), 0) FROM req_hourly
-                     WHERE ny_date=? AND category='PRICE' AND grp=?""", (ny_date, grp))
+                     WHERE ny_date=? AND category=? AND grp=?""", (ny_date, str(category).upper(), grp))
         row = c.fetchone()
         return int(row[0] if row else 0)
+
+    def group_price_used_today(self, grp: str) -> int:
+        return int(self.group_req_used_today("PRICE", grp))
+
+    def group_sys_used_today(self, grp: str) -> int:
+        return int(self.group_req_used_today("SYS", grp))
 
     def log_spread(self, symbol: str, spread_points: float):
         ts = int(time.time())
@@ -3126,6 +3132,49 @@ class RequestGovernor:
             unused_other += max(0, cap_g - used_g)
         return int(unused_other * frac)
 
+    def sys_group_cap(self, grp: str) -> int:
+        """Dzienny cap SYS dla grupy, liczony z puli sys_trade_budget wg udziałów grup."""
+        shares = dict(getattr(CFG, "group_price_shares", {}) or {})
+        if not shares:
+            return int(self.sys_trade_budget)
+        total = 0.0
+        for v in shares.values():
+            try:
+                total += max(0.0, float(v))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                total += 0.0
+        if total <= 0.0:
+            return int(self.sys_trade_budget)
+        try:
+            w = max(0.0, float(shares.get(grp, 0.0))) / total
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            w = 0.0
+        return max(0, int(self.sys_trade_budget * w))
+
+    def sys_group_borrow_allowance(self, grp: str) -> int:
+        """Ile grupa SYS może pożyczyć z niewykorzystanej puli innych grup."""
+        shares = dict(getattr(CFG, "group_price_shares", {}) or {})
+        if not shares:
+            return 0
+        try:
+            frac = float(getattr(CFG, "group_borrow_fraction", 0.0) or 0.0)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            frac = 0.0
+        frac = max(0.0, min(1.0, frac))
+        if frac <= 0.0:
+            return 0
+        unused_other = 0
+        for g in shares.keys():
+            if g == grp:
+                continue
+            cap_g = int(self.sys_group_cap(g))
+            used_g = int(self.db.group_sys_used_today(g))
+            unused_other += max(0, cap_g - used_g)
+        return int(unused_other * frac)
+
 
     def day_state(self) -> Dict[str, int]:
         # Day keys (analytics + enforcement)
@@ -3305,6 +3354,11 @@ class RequestGovernor:
             else:
                 if st["sys_remaining"] < cost:
                     return False
+                if grp in CFG.group_price_shares:
+                    used_g = self.db.group_sys_used_today(grp)
+                    cap_g = self.sys_group_cap(grp)
+                    if used_g + cost > cap_g + self.sys_group_borrow_allowance(grp):
+                        return False
         return True
 
     def consume(self, grp: str, symbol: str, kind: str, cost: int = 1, emergency: bool = False) -> bool:
@@ -4064,7 +4118,7 @@ class ExecutionEngine:
             return None
 
         # SYS: fresh symbol_info right before order_send (not counted as PRICE request)
-        if not self.gov.consume("SYS", symbol, "symbol_info", 1, emergency=bool(emergency)):
+        if not self.gov.consume(grp, symbol, "symbol_info", 1, emergency=bool(emergency)):
             logging.info(f"SKIP_SYS_BUDGET symbol={symbol} kind=symbol_info emergency={int(bool(emergency))}")
             return None
         info = mt5.symbol_info(symbol)
@@ -4487,7 +4541,7 @@ class ExecutionEngine:
             # Optional broker-side preflight on the exact request payload.
             # WHY: catches invalid stops/fill/permissions before consuming ORDER action budget.
             if (not emergency) and bool(getattr(CFG, "use_order_check", True)) and hasattr(mt5, "order_check"):
-                if not self.gov.consume("SYS", symbol, "order_check", 1, emergency=False):
+                if not self.gov.consume(grp, symbol, "order_check", 1, emergency=False):
                     logging.info(f"SKIP_SYS_BUDGET symbol={symbol} kind=order_check emergency=0")
                     return None
                 t_check0 = time.perf_counter()
