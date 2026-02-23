@@ -246,8 +246,12 @@ class CFG:
     sys_soft_fraction: float = 0.90
     sys_emergency_reserve: int = 40  # stała rezerwa awaryjna SYS (w ramach sys_budget_day)
 
-    # Progi ECO (P0): ECO gdy dowolny licznik >= eco_threshold_pct swojego budżetu
+    # Progi ECO (P0): ECO gdy licznik przekroczy próg.
+    # Dopuszczamy osobne progi per kategoria, żeby nie dusić scalpingu przez SYS.
     eco_threshold_pct: float = 0.80
+    eco_threshold_price_pct: float = 0.80
+    eco_threshold_order_pct: float = 0.80
+    eco_threshold_sys_pct: float = 0.80
 
     # --- Backward-compat aliases (do not use in new code) ---
     price_day_cap_fraction: float = 0.40  # 400/1000 (kept for legacy references)
@@ -2276,10 +2280,10 @@ def build_runtime_boot_snapshot_payload(runtime_root: Path, universe: List[Tuple
         "runtime_root": str(Path(runtime_root)),
         "bot_version": str(getattr(CFG, "BOT_VERSION", "")),
         "limits": {
-            "house_price_warn_per_day": int(getattr(CFG, "house_price_warn_per_day", 0)),
-            "house_price_hard_stop_per_day": int(getattr(CFG, "house_price_hard_stop_per_day", 0)),
-            "house_orders_per_sec": int(getattr(CFG, "house_orders_per_sec", 0)),
-            "house_positions_pending_limit": int(getattr(CFG, "house_positions_pending_limit", 0)),
+            "house_price_warn_per_day": int(getattr(CFG, "oanda_price_warning_per_day", 0)),
+            "house_price_hard_stop_per_day": int(getattr(CFG, "oanda_price_cutoff_per_day", 0)),
+            "house_orders_per_sec": int(getattr(CFG, "oanda_market_orders_per_sec", 0)),
+            "house_positions_pending_limit": int(getattr(CFG, "oanda_positions_pending_limit", 0)),
             "price_budget_day": int(getattr(CFG, "price_budget_day", 0)),
             "order_budget_day": int(getattr(CFG, "order_budget_day", 0)),
             "sys_budget_day": int(getattr(CFG, "sys_budget_day", 0)),
@@ -7274,17 +7278,20 @@ class SafetyBot:
         sys_pct = 0.0
         order_pct = 0.0
         try:
-            thr = float(getattr(CFG, "eco_threshold_pct", getattr(CFG, "order_eco_threshold_pct", 0.80)))
+            thr_default = float(getattr(CFG, "eco_threshold_pct", getattr(CFG, "order_eco_threshold_pct", 0.80)))
+            thr_price = float(getattr(CFG, "eco_threshold_price_pct", thr_default))
+            thr_order = float(getattr(CFG, "eco_threshold_order_pct", thr_default))
+            thr_sys = float(getattr(CFG, "eco_threshold_sys_pct", thr_default))
             price_pct = (float(st.get("price_requests_day") or 0) / float(max(1, st.get("price_budget") or 1)))
             sys_pct = (float(st.get("sys_requests_day") or 0) / float(max(1, st.get("sys_budget") or 1)))
             order_pct = (float(st.get("order_actions_day") or 0) / float(max(1, st.get("order_budget") or 1)))
 
             reasons = []
-            if price_pct >= thr:
+            if price_pct >= thr_price:
                 reasons.append("PRICE")
-            if sys_pct >= thr:
+            if sys_pct >= thr_sys:
                 reasons.append("SYS")
-            if order_pct >= thr:
+            if order_pct >= thr_order:
                 reasons.append("ORDER")
 
             if reasons:
@@ -7340,7 +7347,8 @@ class SafetyBot:
 
         if eco_by_budget:
             logging.warning(
-                f"ECO_MODE reason={eco_reason} price_pct={price_pct:.3f} sys_pct={sys_pct:.3f} order_pct={order_pct:.3f}"
+                f"ECO_MODE reason={eco_reason} price_pct={price_pct:.3f} sys_pct={sys_pct:.3f} order_pct={order_pct:.3f} "
+                f"thr_price={thr_price:.3f} thr_sys={thr_sys:.3f} thr_order={thr_order:.3f}"
             )
         self._emit_runtime_metrics(st, eco_active=bool(eco_by_budget), warn_active=bool(warn_degrade_active))
 
@@ -8193,6 +8201,11 @@ if __name__ == "__main__":
     CFG.runtime_metrics_interval_sec = _cfg_int(
         "runtime_metrics_interval_sec", CFG.runtime_metrics_interval_sec
     )
+    CFG.min_seconds_between_orders = _cfg_float(
+        "min_seconds_between_orders", CFG.min_seconds_between_orders
+    )
+    CFG.max_orders_per_minute = _cfg_int("max_orders_per_minute", CFG.max_orders_per_minute)
+    CFG.max_orders_per_hour = _cfg_int("max_orders_per_hour", CFG.max_orders_per_hour)
     CFG.usb_watch_check_interval_sec = _cfg_int(
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
@@ -8222,6 +8235,9 @@ if __name__ == "__main__":
     )
     CFG.time_anchor_max_backward_sec = _cfg_int("time_anchor_max_backward_sec", CFG.time_anchor_max_backward_sec)
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
+    CFG.eco_threshold_price_pct = _cfg_float("eco_threshold_price_pct", CFG.eco_threshold_price_pct)
+    CFG.eco_threshold_order_pct = _cfg_float("eco_threshold_order_pct", CFG.eco_threshold_order_pct)
+    CFG.eco_threshold_sys_pct = _cfg_float("eco_threshold_sys_pct", CFG.eco_threshold_sys_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)
     CFG.price_emergency_reserve_fraction = _cfg_float(
         "price_emergency_reserve_fraction", CFG.price_emergency_reserve_fraction
