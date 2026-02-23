@@ -243,8 +243,13 @@ class CFG:
     # Wymuszenie 45/45/10: 10% rezerwy awaryjnej (domknięcia/kill-switch), 90% na trading.
     price_emergency_reserve_fraction: float = 0.10
 
+    # ORDER: 90% na handel, 10% na awaryjne domknięcia.
+    order_emergency_reserve_fraction: float = 0.10
+
     sys_soft_fraction: float = 0.90
-    sys_emergency_reserve: int = 40  # stała rezerwa awaryjna SYS (w ramach sys_budget_day)
+    # SYS: preferowany podział procentowy, z dolnym zabezpieczeniem stałym.
+    sys_emergency_reserve_fraction: float = 0.10
+    sys_emergency_reserve: int = 40  # minimalna stała rezerwa awaryjna SYS
 
     # Progi ECO (P0): ECO gdy licznik przekroczy próg.
     # Dopuszczamy osobne progi per kategoria, żeby nie dusić scalpingu przez SYS.
@@ -1715,6 +1720,14 @@ class Persistence:
             dtp = "utc"
         return f"order_actions_{dtp}:{day}"
 
+    def _order_group_actions_key(self, day_type: str, day: str, grp: str, emergency: bool = False) -> str:
+        dtp = str(day_type).lower().strip()
+        if dtp not in ("ny", "utc", "pl"):
+            dtp = "utc"
+        g = str(grp or "OTHER").strip().upper() or "OTHER"
+        pref = "order_actions_em_" if bool(emergency) else "order_actions_"
+        return f"{pref}{dtp}:{day}:{g}"
+
     def get_order_actions_state(self, now_dt: Optional[dt.datetime] = None) -> Dict[str, int]:
         """Return ORDER action counters for NY/UTC/PL and strict-guard used=max(ny, utc, pl)."""
         if now_dt is None:
@@ -1765,6 +1778,69 @@ class Persistence:
         self._state_inc_int(self._order_actions_key("pl", pl_day), int(n))
 
         st2 = self.get_order_actions_state(now_dt=now_dt)
+        return int(st2.get("used") or 0)
+
+    def get_order_group_actions_state(
+        self,
+        grp: str,
+        now_dt: Optional[dt.datetime] = None,
+        emergency: bool = False,
+    ) -> Dict[str, int]:
+        """ORDER actions/day for a specific group with strict day-key guard."""
+        if now_dt is None:
+            now_dt = now_utc()
+        day_ny, _ = ny_day_hour_key(now_dt)
+        utc_day = utc_day_key(now_dt)
+        pl_day = pl_day_key(now_dt)
+
+        def _get(dtp: str, day: str) -> int:
+            v = self._state_get(self._order_group_actions_key(dtp, day, grp=grp, emergency=bool(emergency)), "0")
+            try:
+                return int(float(v))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                return 0
+
+        ny = _get("ny", day_ny)
+        utc = _get("utc", utc_day)
+        pl = _get("pl", pl_day)
+        used = max(int(ny), int(utc), int(pl))
+        return {
+            "day_ny": day_ny,
+            "utc_day": utc_day,
+            "pl_day": pl_day,
+            "ny": int(ny),
+            "utc": int(utc),
+            "pl": int(pl),
+            "used": int(used),
+        }
+
+    def get_order_group_actions_day(
+        self,
+        grp: str,
+        now_dt: Optional[dt.datetime] = None,
+        emergency: bool = False,
+    ) -> int:
+        st = self.get_order_group_actions_state(grp=grp, now_dt=now_dt, emergency=bool(emergency))
+        return int(st.get("used") or 0)
+
+    def inc_order_group_action(
+        self,
+        grp: str,
+        n: int = 1,
+        now_dt: Optional[dt.datetime] = None,
+        emergency: bool = False,
+    ) -> int:
+        if now_dt is None:
+            now_dt = now_utc()
+        st = self.get_order_group_actions_state(grp=grp, now_dt=now_dt, emergency=bool(emergency))
+        day_ny = str(st["day_ny"])
+        utc_day = str(st["utc_day"])
+        pl_day = str(st["pl_day"])
+        self._state_inc_int(self._order_group_actions_key("ny", day_ny, grp=grp, emergency=bool(emergency)), int(n))
+        self._state_inc_int(self._order_group_actions_key("utc", utc_day, grp=grp, emergency=bool(emergency)), int(n))
+        self._state_inc_int(self._order_group_actions_key("pl", pl_day, grp=grp, emergency=bool(emergency)), int(n))
+        st2 = self.get_order_group_actions_state(grp=grp, now_dt=now_dt, emergency=bool(emergency))
         return int(st2.get("used") or 0)
 
 
@@ -2951,8 +3027,16 @@ class RequestGovernor:
         self.price_trade_budget = max(0, self.price_day_cap - self.price_emergency)
         self.price_soft = int(self.price_trade_budget * CFG.price_soft_fraction)
 
+        self.order_day_cap = int(CFG.order_budget_day)
+        self.order_emergency = int(max(0, self.order_day_cap * float(getattr(CFG, "order_emergency_reserve_fraction", 0.10))))
+        self.order_emergency = int(min(self.order_day_cap, self.order_emergency))
+        self.order_trade_budget = max(0, self.order_day_cap - self.order_emergency)
+
         self.sys_day_cap = int(getattr(CFG, 'sys_budget_day', CFG.sys_day_cap))
-        self.sys_emergency = int(min(int(getattr(CFG, 'sys_emergency_reserve', 0)), max(0, self.sys_day_cap)))
+        sys_em_abs = int(max(0, int(getattr(CFG, "sys_emergency_reserve", 0))))
+        sys_em_frac = float(max(0.0, float(getattr(CFG, "sys_emergency_reserve_fraction", 0.0))))
+        sys_em_from_frac = int(max(0, self.sys_day_cap * sys_em_frac))
+        self.sys_emergency = int(min(max(sys_em_abs, sys_em_from_frac), max(0, self.sys_day_cap)))
         self.sys_trade_budget = max(0, self.sys_day_cap - self.sys_emergency)
         self.sys_soft = int(self.sys_trade_budget * CFG.sys_soft_fraction)
     def _group_price_cap(self, grp: str) -> int:
@@ -2996,6 +3080,49 @@ class RequestGovernor:
                 continue
             cap_g = int(self._group_price_cap(g))
             used_g = int(self.db.group_price_used_today(g))
+            unused_other += max(0, cap_g - used_g)
+        return int(unused_other * frac)
+
+    def order_group_cap(self, grp: str) -> int:
+        """Dzienny cap ORDER dla grupy, liczony z puli order_trade_budget wg udziałów grup."""
+        shares = dict(getattr(CFG, "group_price_shares", {}) or {})
+        if not shares:
+            return int(self.order_trade_budget)
+        total = 0.0
+        for v in shares.values():
+            try:
+                total += max(0.0, float(v))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                total += 0.0
+        if total <= 0.0:
+            return int(self.order_trade_budget)
+        try:
+            w = max(0.0, float(shares.get(grp, 0.0))) / total
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            w = 0.0
+        return max(0, int(self.order_trade_budget * w))
+
+    def order_group_borrow_allowance(self, grp: str) -> int:
+        """Ile grupa ORDER może pożyczyć z niewykorzystanej puli innych grup."""
+        shares = dict(getattr(CFG, "group_price_shares", {}) or {})
+        if not shares:
+            return 0
+        try:
+            frac = float(getattr(CFG, "group_borrow_fraction", 0.0) or 0.0)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            frac = 0.0
+        frac = max(0.0, min(1.0, frac))
+        if frac <= 0.0:
+            return 0
+        unused_other = 0
+        for g in shares.keys():
+            if g == grp:
+                continue
+            cap_g = int(self.order_group_cap(g))
+            used_g = int(self.db.get_order_group_actions_day(g))
             unused_other += max(0, cap_g - used_g)
         return int(unused_other * frac)
 
@@ -3105,6 +3232,8 @@ class RequestGovernor:
             # ORDER actions/day
             "order_actions_day": int(order_actions_day),
             "order_budget": int(CFG.order_budget_day),
+            "order_trade_budget": int(self.order_trade_budget),
+            "order_em_budget": int(self.order_emergency),
 
             "order_actions_ny": int(order_st.get("ny") or 0),
             "order_actions_utc": int(order_st.get("utc") or 0),
@@ -4185,24 +4314,45 @@ class ExecutionEngine:
 
         # ORDER budget check (non-emergency; strict-guard across NY/UTC/PL)
         if not emergency:
+            order_trade_cap = int(getattr(self.gov, "order_trade_budget", int(CFG.order_budget_day)))
             order_st = self.gov.db.get_order_actions_state(now_dt=now_dt)
             used = int(order_st.get("used") or 0)
-            if used >= int(CFG.order_budget_day):
+            if used >= int(order_trade_cap):
                 exhausted = []
-                if int(order_st.get("ny") or 0) >= int(CFG.order_budget_day):
+                if int(order_st.get("ny") or 0) >= int(order_trade_cap):
                     exhausted.append(_seconds_until_next_ny_midnight(now_dt))
-                if int(order_st.get("utc") or 0) >= int(CFG.order_budget_day):
+                if int(order_st.get("utc") or 0) >= int(order_trade_cap):
                     exhausted.append(_seconds_until_next_utc_midnight(now_dt))
-                if int(order_st.get("pl") or 0) >= int(CFG.order_budget_day):
+                if int(order_st.get("pl") or 0) >= int(order_trade_cap):
                     exhausted.append(_seconds_until_next_pl_midnight(now_dt))
                 cooldown_s = int(min(exhausted) if exhausted else _seconds_until_next_ny_midnight(now_dt))
                 self.gov.db.set_cooldown(symbol, cooldown_s, "order_budget_exhausted")
                 logging.info(
-                    f"SKIP_ORDER_BUDGET symbol={symbol} order_actions_day={used} order_budget={int(CFG.order_budget_day)} "
+                    f"SKIP_ORDER_BUDGET symbol={symbol} order_actions_day={used} order_trade_budget={int(order_trade_cap)} "
                     f"order_ny={int(order_st.get('ny') or 0)} order_utc={int(order_st.get('utc') or 0)} order_pl={int(order_st.get('pl') or 0)} "
                     f"cooldown_s={cooldown_s}"
                 )
                 return None
+            try:
+                if str(grp).upper() in getattr(CFG, "group_price_shares", {}):
+                    used_g = int(self.gov.db.get_order_group_actions_day(str(grp).upper(), now_dt=now_dt, emergency=False))
+                    cap_g = int(self.gov.order_group_cap(str(grp).upper()))
+                    borrow_g = int(self.gov.order_group_borrow_allowance(str(grp).upper()))
+                    if used_g >= (cap_g + borrow_g):
+                        cooldown_s = int(_seconds_until_next_pl_midnight(now_dt))
+                        self.gov.db.set_cooldown(symbol, cooldown_s, "order_group_budget_exhausted")
+                        logging.info(
+                            "SKIP_ORDER_GROUP_BUDGET symbol=%s grp=%s used=%s cap=%s borrow=%s cooldown_s=%s",
+                            symbol,
+                            str(grp).upper(),
+                            int(used_g),
+                            int(cap_g),
+                            int(borrow_g),
+                            int(cooldown_s),
+                        )
+                        return None
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
 # Deterministic retries + closed GLOBAL_BACKOFF list
         retry_left = {
@@ -4293,24 +4443,46 @@ class ExecutionEngine:
         while True:
             # Budget check per attempt (non-emergency; strict-guard across NY/UTC/PL)
             if not emergency:
+                order_trade_cap = int(getattr(self.gov, "order_trade_budget", int(CFG.order_budget_day)))
                 order_st = self.gov.db.get_order_actions_state(now_dt=now_dt)
                 used = int(order_st.get("used") or 0)
-                if (used + 1) > int(CFG.order_budget_day):
+                if (used + 1) > int(order_trade_cap):
                     exhausted = []
-                    if int(order_st.get("ny") or 0) >= int(CFG.order_budget_day):
+                    if int(order_st.get("ny") or 0) >= int(order_trade_cap):
                         exhausted.append(_seconds_until_next_ny_midnight(now_dt))
-                    if int(order_st.get("utc") or 0) >= int(CFG.order_budget_day):
+                    if int(order_st.get("utc") or 0) >= int(order_trade_cap):
                         exhausted.append(_seconds_until_next_utc_midnight(now_dt))
-                    if int(order_st.get("pl") or 0) >= int(CFG.order_budget_day):
+                    if int(order_st.get("pl") or 0) >= int(order_trade_cap):
                         exhausted.append(_seconds_until_next_pl_midnight(now_dt))
                     cooldown_s = int(min(exhausted) if exhausted else _seconds_until_next_ny_midnight(now_dt))
                     self.gov.db.set_cooldown(symbol, cooldown_s, "order_budget_exhausted")
                     logging.info(
-                        f"SKIP_ORDER_BUDGET symbol={symbol} order_actions_day={used} order_budget={int(CFG.order_budget_day)} "
+                        f"SKIP_ORDER_BUDGET symbol={symbol} order_actions_day={used} order_trade_budget={int(order_trade_cap)} "
                         f"order_ny={int(order_st.get('ny') or 0)} order_utc={int(order_st.get('utc') or 0)} order_pl={int(order_st.get('pl') or 0)} "
                         f"cooldown_s={cooldown_s}"
                     )
                     return None
+                try:
+                    grp_u = str(grp).upper()
+                    if grp_u in getattr(CFG, "group_price_shares", {}):
+                        used_g = int(self.gov.db.get_order_group_actions_day(grp_u, now_dt=now_dt, emergency=False))
+                        cap_g = int(self.gov.order_group_cap(grp_u))
+                        borrow_g = int(self.gov.order_group_borrow_allowance(grp_u))
+                        if (used_g + 1) > (cap_g + borrow_g):
+                            cooldown_s = int(_seconds_until_next_pl_midnight(now_dt))
+                            self.gov.db.set_cooldown(symbol, cooldown_s, "order_group_budget_exhausted")
+                            logging.info(
+                                "SKIP_ORDER_GROUP_BUDGET symbol=%s grp=%s used=%s cap=%s borrow=%s cooldown_s=%s",
+                                symbol,
+                                grp_u,
+                                int(used_g),
+                                int(cap_g),
+                                int(borrow_g),
+                                int(cooldown_s),
+                            )
+                            return None
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
             # Optional broker-side preflight on the exact request payload.
             # WHY: catches invalid stops/fill/permissions before consuming ORDER action budget.
@@ -4368,6 +4540,7 @@ class ExecutionEngine:
 
             # Count every mt5.order_send call as ORDER action/day (P0)
             self.gov.db.inc_order_action(1, now_dt=now_dt)
+            self.gov.db.inc_order_group_action(str(grp).upper(), 1, now_dt=now_dt, emergency=bool(emergency))
 
             attempt += 1
             # Appendix 4: market orders/sec guard
@@ -7132,8 +7305,9 @@ class SafetyBot:
         self.db.set_last_ts("last_trade_window_off_sys_ts", now_ts)
 
         # Minimal SYS snapshot: if anything is open, close it (emergency).
-        positions_map = self.positions_snapshot(mode_global="ECO", force=False)
-        pending_map = self.pending_snapshot(mode_global="ECO", force=False)
+        # Outside trading windows use emergency SYS pool for safety reconciliation.
+        positions_map = self.positions_snapshot(mode_global="ECO", force=True)
+        pending_map = self.pending_snapshot(mode_global="ECO", force=True)
         open_total = 0
         pend_total = 0
         try:
@@ -8191,6 +8365,7 @@ if __name__ == "__main__":
     CFG.sys_budget_day = _cfg_int("sys_budget_day", CFG.sys_budget_day)
     CFG.price_budget_day = _cfg_int("price_budget_day", CFG.price_budget_day)
     CFG.order_budget_day = _cfg_int("order_budget_day", CFG.order_budget_day)
+    CFG.sys_emergency_reserve = _cfg_int("sys_emergency_reserve", CFG.sys_emergency_reserve)
     CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
     CFG.zmq_heartbeat_interval_sec = _cfg_int(
         "zmq_heartbeat_interval_sec", CFG.zmq_heartbeat_interval_sec
@@ -8239,6 +8414,12 @@ if __name__ == "__main__":
     CFG.eco_threshold_order_pct = _cfg_float("eco_threshold_order_pct", CFG.eco_threshold_order_pct)
     CFG.eco_threshold_sys_pct = _cfg_float("eco_threshold_sys_pct", CFG.eco_threshold_sys_pct)
     CFG.price_soft_fraction = _cfg_float("price_soft_fraction", CFG.price_soft_fraction)
+    CFG.order_emergency_reserve_fraction = _cfg_float(
+        "order_emergency_reserve_fraction", CFG.order_emergency_reserve_fraction
+    )
+    CFG.sys_emergency_reserve_fraction = _cfg_float(
+        "sys_emergency_reserve_fraction", CFG.sys_emergency_reserve_fraction
+    )
     CFG.price_emergency_reserve_fraction = _cfg_float(
         "price_emergency_reserve_fraction", CFG.price_emergency_reserve_fraction
     )
