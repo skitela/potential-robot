@@ -2,7 +2,8 @@ param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$Mt5TerminalRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
     [int]$IntervalSec = 2,
-    [int]$PulseEverySec = 30
+    [int]$PulseEverySec = 30,
+    [int]$StallAlertSec = 900
 )
 
 Set-StrictMode -Version Latest
@@ -84,6 +85,10 @@ $tradePattern = [regex]'(?i)\b(buy|sell|order|open|close|filled|reject|deal|retc
 $excludePattern = [regex]'(?i)\b(budget|price used|oanda_price_breakdown|runtime_metrics_10m|status_pulse|heartbeat status=alive|monitor aktywny)\b'
 $buyPattern = [regex]'(?i)\b(buy)\b'
 $sellPattern = [regex]'(?i)\b(sell)\b'
+$scanPattern = [regex]'(?i)\bSCAN_LIMIT\b'
+$entrySignalPattern = [regex]'(?i)\bENTRY_SIGNAL\b'
+$orderExecPattern = [regex]'(?i)\b(Order executed|ORDER_SENT|ORDER_SEND|DEAL_ADD|deal)\b'
+$skipReasonPattern = [regex]'(?i)\bENTRY_SKIP(?:_PRE)?\b.*?\breason=([A-Z0-9_]+)\b'
 
 $tracked = @(
     @{ name = "SAFETY"; path = (Join-Path $runtimeRoot "LOGS\safetybot.log") },
@@ -100,6 +105,22 @@ $totals = @{
 }
 $lastPulse = Get-Date
 $currentMt5Path = ""
+$lastScanAt = $null
+$lastTradeIntentAt = $null
+$skipReasons = @{}
+
+function Format-TopSkipReasons {
+    param([hashtable]$ReasonCounts, [int]$Top = 3)
+    if (-not $ReasonCounts -or $ReasonCounts.Count -eq 0) {
+        return "n/a"
+    }
+    $pairs = @()
+    foreach ($k in $ReasonCounts.Keys) {
+        $pairs += [PSCustomObject]@{ reason = [string]$k; count = [int]$ReasonCounts[$k] }
+    }
+    $topPairs = $pairs | Sort-Object -Property count -Descending | Select-Object -First ([Math]::Max(1, [int]$Top))
+    return (($topPairs | ForEach-Object { "{0}:{1}" -f $_.reason, $_.count }) -join ", ")
+}
 
 Write-Host ("[MONITOR] start root={0} interval={1}s" -f $runtimeRoot, $interval) -ForegroundColor Cyan
 Write-Host ("[MONITOR] filters=buy/sell/order/open/close/filled/reject/deal/retcode/entry/exit/no-trade/fail-safe") -ForegroundColor Cyan
@@ -136,6 +157,25 @@ while ($true) {
                     continue
                 }
 
+                if ($name -eq "SAFETY") {
+                    if ($scanPattern.IsMatch($msg)) {
+                        $lastScanAt = Get-Date
+                    }
+                    if ($entrySignalPattern.IsMatch($msg) -or $orderExecPattern.IsMatch($msg)) {
+                        $lastTradeIntentAt = Get-Date
+                    }
+                    $m = $skipReasonPattern.Match($msg)
+                    if ($m.Success) {
+                        $reason = [string]$m.Groups[1].Value
+                        if (-not [string]::IsNullOrWhiteSpace($reason)) {
+                            if (-not $skipReasons.ContainsKey($reason)) {
+                                $skipReasons[$reason] = 0
+                            }
+                            $skipReasons[$reason] = [int]$skipReasons[$reason] + 1
+                        }
+                    }
+                }
+
                 $totals.events = [int]$totals.events + 1
                 if ($buyPattern.IsMatch($msg)) {
                     $totals.buy = [int]$totals.buy + 1
@@ -155,6 +195,14 @@ while ($true) {
         $now = Get-Date
         if ((New-TimeSpan -Start $lastPulse -End $now).TotalSeconds -ge $pulseEvery) {
             Write-Host ("[{0}] [PULSE] events={1} buy={2} sell={3}" -f ($now.ToString("HH:mm:ss")), $totals.events, $totals.buy, $totals.sell) -ForegroundColor Cyan
+            if ($null -ne $lastScanAt) {
+                $scanAge = [int](New-TimeSpan -Start $lastScanAt -End $now).TotalSeconds
+                $tradeAge = if ($null -eq $lastTradeIntentAt) { -1 } else { [int](New-TimeSpan -Start $lastTradeIntentAt -End $now).TotalSeconds }
+                if ($scanAge -le ([Math]::Max(60, [int]$StallAlertSec) * 2) -and ($tradeAge -lt 0 -or $tradeAge -ge [Math]::Max(60, [int]$StallAlertSec))) {
+                    $top = Format-TopSkipReasons -ReasonCounts $skipReasons -Top 4
+                    Write-Host ("[{0}] [STALL_ALERT] no ENTRY_SIGNAL/order for {1}s while scans are active | top_skip_reasons={2}" -f ($now.ToString("HH:mm:ss")), ([Math]::Max(0, $tradeAge)), $top) -ForegroundColor Yellow
+                }
+            }
             $lastPulse = $now
         }
     } catch {
@@ -163,4 +211,3 @@ while ($true) {
 
     Start-Sleep -Seconds $interval
 }
-

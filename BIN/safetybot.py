@@ -184,6 +184,8 @@ class CFG:
     hybrid_no_mt5_data_fetch_hard: bool = True
     # Maximum accepted age of incoming market snapshots in decision path.
     hybrid_snapshot_max_age_sec: int = 180
+    # BAR snapshots are M5-based and naturally older than tick stream; keep a wider age budget.
+    hybrid_snapshot_bar_max_age_sec: int = 900
     # Snapshot freshness windows for symbol/account metadata channels.
     hybrid_symbol_snapshot_max_age_sec: int = 300
     hybrid_account_snapshot_max_age_sec: int = 30
@@ -2450,28 +2452,12 @@ def apply_scout_tiebreak(candidates: List[Tuple[float, str, str, str]],
     if not scout:
         return candidates
 
+    if not has_near_tie_in_topk(candidates, top_k):
+        return candidates
+
     view = candidates[:top_k]
     rest = candidates[top_k:]
     if len(view) < 2:
-        return candidates
-
-    def _median(vals: List[float]) -> float:
-        v = sorted(float(x) for x in vals)
-        n = len(v)
-        if n <= 0:
-            return 0.0
-        mid = n // 2
-        return v[mid] if (n % 2 == 1) else 0.5 * (v[mid - 1] + v[mid])
-
-    # Near-tie detector (no fixed epsilon): compare gap(top1-top2) to median gap across Top-K
-    prios = [float(x[0]) for x in view]
-    pr_sorted = sorted(prios, reverse=True)
-    gaps = [pr_sorted[i] - pr_sorted[i + 1] for i in range(len(pr_sorted) - 1)]
-    gap12 = pr_sorted[0] - pr_sorted[1]
-    med_gap = _median(gaps) if gaps else 0.0
-    near_tie = (len(gaps) == 0) or (gap12 <= med_gap)
-
-    if not near_tie:
         return candidates
 
     a_raw = str(view[0][1]).strip().upper()
@@ -2569,6 +2555,24 @@ def apply_scout_tiebreak(candidates: List[Tuple[float, str, str, str]],
     bumped[idx] = (max_prio + 0.001, raw, sym, grp)
     bumped.sort(key=lambda x: x[0], reverse=True)
     return bumped + rest
+
+def has_near_tie_in_topk(candidates: List[Tuple[float, str, str, str]], top_k: int) -> bool:
+    """Near-tie detector used to decide whether SCUD tie-break path is worth consulting."""
+    if not candidates or int(top_k) <= 1:
+        return False
+    view = candidates[:int(top_k)]
+    if len(view) < 2:
+        return False
+    prios = sorted((float(x[0]) for x in view), reverse=True)
+    gaps = [prios[i] - prios[i + 1] for i in range(len(prios) - 1)]
+    if not gaps:
+        return True
+    gap12 = prios[0] - prios[1]
+    sorted_gaps = sorted(float(x) for x in gaps)
+    n = len(sorted_gaps)
+    mid = n // 2
+    med_gap = sorted_gaps[mid] if (n % 2 == 1) else 0.5 * (sorted_gaps[mid - 1] + sorted_gaps[mid])
+    return bool(gap12 <= med_gap)
 def is_price_kind(kind: str) -> bool:
     return kind == "tick" or kind.startswith("rates_")
 
@@ -7205,7 +7209,11 @@ class SafetyBot:
             logging.critical("WINDOW_CLOSEOUT_INCOMPLETE reason=%s", str(reason))
 
     def _hybrid_snapshot_health(self, symbols: List[str]) -> Dict[str, Any]:
-        max_age = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+        tick_max_age = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+        bar_max_age = max(
+            int(tick_max_age),
+            int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)),
+        )
         now_ts = float(time.time())
         stale_tick = 0
         stale_bar = 0
@@ -7215,13 +7223,14 @@ class SafetyBot:
             total += 1
             t_tick = float(self._zmq_last_tick_ts.get(base, 0.0) or 0.0)
             t_bar = float(self._zmq_last_bar_ts.get(base, 0.0) or 0.0)
-            if (now_ts - t_tick) > float(max_age):
+            if (now_ts - t_tick) > float(tick_max_age):
                 stale_tick += 1
-            if (now_ts - t_bar) > float(max_age):
+            if (now_ts - t_bar) > float(bar_max_age):
                 stale_bar += 1
         critical = bool(total > 0 and (stale_tick == total or stale_bar == total))
         return {
-            "max_age_sec": int(max_age),
+            "max_age_sec": int(tick_max_age),
+            "bar_max_age_sec": int(bar_max_age),
             "symbols_total": int(total),
             "stale_tick": int(stale_tick),
             "stale_bar": int(stale_bar),
@@ -7432,15 +7441,15 @@ class SafetyBot:
                     )
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-        if bool(getattr(CFG, "learner_qa_gate_enabled", True)) and learner_qa_light == "RED" and bool(getattr(CFG, "learner_qa_red_to_eco", True)):
-            global_mode = "ECO"
-            logging.warning("LEARNER_QA_RED => ECO")
+        # Learner QA is telemetry-only for trading path. It must not block or downgrade entries.
+        if learner_qa_light == "RED":
+            logging.info("LEARNER_QA_RED telemetry_only=1 no_mode_override=1")
             try:
                 if self.incident_journal is not None:
                     self.incident_journal.note_guard(
                         guard="learner_qa",
-                        reason="RED",
-                        severity="WARN",
+                        reason="RED_TELEMETRY_ONLY",
+                        severity="INFO",
                         category="model",
                     )
             except Exception as e:
@@ -7524,11 +7533,12 @@ class SafetyBot:
         if snapshot_block_new_entries:
             global_mode = "ECO"
             logging.warning(
-                "SNAPSHOT_HEALTH_DEGRADED stale_tick=%s stale_bar=%s total=%s max_age_sec=%s => NO_NEW_ENTRIES",
+                "SNAPSHOT_HEALTH_DEGRADED stale_tick=%s stale_bar=%s total=%s tick_max_age_sec=%s bar_max_age_sec=%s => NO_NEW_ENTRIES",
                 int(snapshot_health.get("stale_tick", 0)),
                 int(snapshot_health.get("stale_bar", 0)),
                 int(snapshot_health.get("symbols_total", 0)),
                 int(snapshot_health.get("max_age_sec", 0)),
+                int(snapshot_health.get("bar_max_age_sec", 0)),
             )
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
@@ -7582,8 +7592,8 @@ class SafetyBot:
             n_limit = min(int(n_limit), max(0, int(getattr(CFG, "oanda_warn_symbols_cap", 1))))
         if canary_signal.canary_active:
             n_limit = min(int(n_limit), int(max(0, canary_signal.allowed_symbols)))
-        if bool(getattr(CFG, "learner_qa_gate_enabled", True)) and learner_qa_light == "YELLOW":
-            n_limit = min(int(n_limit), int(max(0, int(getattr(CFG, "learner_qa_yellow_symbol_cap", 1)))))
+        if learner_qa_light == "YELLOW":
+            logging.info("LEARNER_QA_YELLOW telemetry_only=1 no_scan_cap=1")
 
         if n_limit <= 0 and (not open_syms):
             probe_min = max(0, int(getattr(CFG, "eco_probe_symbols_when_flat", 1)))
@@ -7607,22 +7617,27 @@ class SafetyBot:
             f"canary_active={int(canary_signal.canary_active)} learner_qa={learner_qa_light}"
         )
 
-        # --- SCOUT read-only (tie-breaker rankingu shortlisty) ---
-        verdict = load_verdict(self.meta_dir)
-        scout = load_scout_advice(self.meta_dir)
-
         base_topk = candidates[:n_limit]
-        verdict_light = (verdict.get("light") if verdict else "INSUFFICIENT_DATA")
+        verdict_light = "INSUFFICIENT_DATA"
+        scout = None
 
-        # Tie-break (mode B): tylko gdy verdict GREEN oraz istnieje 'remis praktyczny' TOP-1 vs TOP-2 (działa także w LIVE)
-        candidates = apply_scout_tiebreak(
-            candidates=candidates,
-            scout=scout,
-            verdict=verdict,
-            top_k=n_limit,
-            is_live=(not self.is_paper),
-            run_dir=self.run_dir,
-        )
+        # Query SCUD/tie-break path only on real near-tie cases.
+        if has_near_tie_in_topk(candidates, n_limit):
+            verdict = load_verdict(self.meta_dir)
+            verdict_light = (verdict.get("light") if verdict else "INSUFFICIENT_DATA")
+            if verdict_light == "GREEN":
+                scout = load_scout_advice(self.meta_dir)
+                # Tie-break (mode B): only for GREEN + near-tie (also in LIVE).
+                candidates = apply_scout_tiebreak(
+                    candidates=candidates,
+                    scout=scout,
+                    verdict=verdict,
+                    top_k=n_limit,
+                    is_live=(not self.is_paper),
+                    run_dir=self.run_dir,
+                )
+            else:
+                logging.info(f"TIEBREAK_SKIP verdict_light={verdict_light} reason=not_green")
         final_topk = candidates[:n_limit]
 
         shadowB = None
@@ -8192,6 +8207,10 @@ if __name__ == "__main__":
         CFG.hybrid_no_mt5_data_fetch_hard,
     )
     CFG.hybrid_snapshot_max_age_sec = _cfg_int("hybrid_snapshot_max_age_sec", CFG.hybrid_snapshot_max_age_sec)
+    CFG.hybrid_snapshot_bar_max_age_sec = _cfg_int(
+        "hybrid_snapshot_bar_max_age_sec",
+        CFG.hybrid_snapshot_bar_max_age_sec,
+    )
     CFG.hybrid_symbol_snapshot_max_age_sec = _cfg_int(
         "hybrid_symbol_snapshot_max_age_sec",
         CFG.hybrid_symbol_snapshot_max_age_sec,

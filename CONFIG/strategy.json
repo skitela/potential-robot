@@ -45,6 +45,7 @@
   "hybrid_m5_no_fetch_strict": true,
   "hybrid_no_mt5_data_fetch_hard": true,
   "hybrid_snapshot_max_age_sec": 180,
+  "hybrid_snapshot_bar_max_age_sec": 900,
   "hybrid_symbol_snapshot_max_age_sec": 300,
   "hybrid_account_snapshot_max_age_sec": 30,
   "trade_closeout_buffer_min": 15,
