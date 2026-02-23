@@ -18,6 +18,8 @@ input int    InpDataPort   = 5555;
 input int    InpCmdPort    = 5556;
 input uint   InpTimerSec   = 1;     // EventSetTimer uses seconds
 input uint   InpPythonTimeoutSec = 180;
+input bool   InpEnablePythonTimeoutWatchdog = false;
+input bool   InpAutoRecoverFromTimeout = true;
 input uint   InpAccountPulseSec = 5;
 input uint   InpReplyCacheSize = 64;
 input int    InpSmaFastPeriod = 20;
@@ -672,26 +674,29 @@ void ExecuteTrade(
 {
   string action_reply = "TRADE_REPLY";
   signal = ToUpperAscii(signal);
-  symbol = ToUpperAscii(symbol);
+  string symbol_req = symbol;
+  StringTrimLeft(symbol_req);
+  StringTrimRight(symbol_req);
+  string symbol_key = ToUpperAscii(symbol_req);
 
   if(G_IsFailSafeActive)
   {
     SendReplyEnvelope(
       "REJECTED", msg_id, action_reply,
       50002, "CUSTOM_RETCODE_FAIL_SAFE_ACTIVE", 0, 0,
-      "Rejected due to active FAIL-SAFE mode.", symbol,
+      "Rejected due to active FAIL-SAFE mode.", symbol_req,
       "", request_hash, true
     );
     return;
   }
 
-  if(!IsCurrentSymbol(symbol))
+  if(symbol_req == "" || !SymbolSelect(symbol_req, true))
   {
     SendReplyEnvelope(
       "REJECTED", msg_id, action_reply,
       50004, "CUSTOM_RETCODE_INVALID_SYMBOL", 0, 0,
-      StringFormat("Invalid symbol. EA=%s command=%s", G_SymbolUpper, symbol),
-      symbol,
+      StringFormat("Invalid symbol in command: %s", symbol_req),
+      symbol_req,
       "Invalid symbol.", request_hash, true
     );
     return;
@@ -703,13 +708,14 @@ void ExecuteTrade(
     if(pos_ticket <= 0)
       continue;
 
-    if(IsCurrentSymbol(PositionGetString(POSITION_SYMBOL)) && (int)PositionGetInteger(POSITION_MAGIC) == magic)
+    string pos_symbol = ToUpperAscii(PositionGetString(POSITION_SYMBOL));
+    if(pos_symbol == symbol_key && (int)PositionGetInteger(POSITION_MAGIC) == magic)
     {
       SendReplyEnvelope(
         "REJECTED", msg_id, action_reply,
         50001, "CUSTOM_RETCODE_DUPLICATE_POSITION", 0, 0,
         "Position already exists for this magic number on the specified symbol.",
-        symbol,
+        symbol_req,
         "", request_hash, true
       );
       return;
@@ -722,12 +728,12 @@ void ExecuteTrade(
   if(signal == "BUY")
   {
     order_type = ORDER_TYPE_BUY;
-    price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    price = SymbolInfoDouble(symbol_req, SYMBOL_ASK);
   }
   else if(signal == "SELL")
   {
     order_type = ORDER_TYPE_SELL;
-    price = SymbolInfoDouble(symbol, SYMBOL_BID);
+    price = SymbolInfoDouble(symbol_req, SYMBOL_BID);
   }
   else
   {
@@ -735,7 +741,7 @@ void ExecuteTrade(
       "REJECTED", msg_id, action_reply,
       50005, "CUSTOM_RETCODE_UNKNOWN_SIGNAL", 0, 0,
       "Unknown signal type in command.",
-      symbol,
+      symbol_req,
       "Unknown signal type.", request_hash, true
     );
     return;
@@ -747,7 +753,7 @@ void ExecuteTrade(
       "REJECTED", msg_id, action_reply,
       50006, "CUSTOM_RETCODE_PRICE_UNAVAILABLE", 0, 0,
       "Could not fetch current price for symbol.",
-      symbol,
+      symbol_req,
       "Price unavailable.", request_hash, true
     );
     return;
@@ -759,7 +765,7 @@ void ExecuteTrade(
   ZeroMemory(result);
 
   request.action = TRADE_ACTION_DEAL;
-  request.symbol = G_Symbol;
+  request.symbol = symbol_req;
   request.volume = volume;
   request.price = price;
   request.sl = sl_price;
@@ -786,7 +792,7 @@ void ExecuteTrade(
     (long)result.order,
     (long)result.deal,
     result.comment,
-    symbol,
+    symbol_req,
     "",
     request_hash,
     true
@@ -902,7 +908,10 @@ void ProcessCommands()
     }
 
     string signal = ToUpperAscii(JsonGetString(payload, "signal", ""));
-    string symbol = ToUpperAscii(JsonGetString(payload, "symbol", ""));
+    string symbol = JsonGetString(payload, "symbol", "");
+    StringTrimLeft(symbol);
+    StringTrimRight(symbol);
+    string symbol_hash = ToUpperAscii(symbol);
     double volume = JsonGetDouble(payload, "volume", 0.0);
     double sl_price = JsonGetDouble(payload, "sl_price", 0.0);
     double tp_price = JsonGetDouble(payload, "tp_price", 0.0);
@@ -913,7 +922,7 @@ void ProcessCommands()
       action,
       msg_id,
       signal,
-      symbol,
+      symbol_hash,
       volume,
       sl_price,
       tp_price,
@@ -978,7 +987,13 @@ int OnInit()
   if(!InitIndicatorHandles())
     Print("WARN: indicator handles partially unavailable. BAR feature payload may be incomplete.");
 
-  Print("HybridAgent ready symbol=", G_SymbolUpper, " timer_sec=", InpTimerSec, " timeout_sec=", InpPythonTimeoutSec, " account_pulse_sec=", InpAccountPulseSec);
+  Print(
+    "HybridAgent ready symbol=", G_SymbolUpper,
+    " timer_sec=", InpTimerSec,
+    " timeout_sec=", InpPythonTimeoutSec,
+    " watchdog=", (InpEnablePythonTimeoutWatchdog ? "ON" : "OFF"),
+    " account_pulse_sec=", InpAccountPulseSec
+  );
   return INIT_SUCCEEDED;
 }
 
@@ -992,25 +1007,31 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
-  if(!G_IsFailSafeActive && InpPythonTimeoutSec > 0)
+  // Always service REQ/REP first so HEARTBEAT and TRADE replies stay responsive.
+  ProcessCommands();
+
+  if(InpEnablePythonTimeoutWatchdog && InpPythonTimeoutSec > 0)
   {
     ulong now_ms = (ulong)GetTickCount();
     ulong elapsed_ms = now_ms - G_LastPythonMessageTime;
-    if(elapsed_ms > (InpPythonTimeoutSec * 1000))
+    if(!G_IsFailSafeActive && elapsed_ms > (InpPythonTimeoutSec * 1000))
     {
       G_IsFailSafeActive = true;
       Alert("FAIL-SAFE ACTIVATED: Python timeout exceeded. Closing open positions.");
       CloseAllOpenPositions("FAIL_SAFE_TIMEOUT");
     }
+
+    if(G_IsFailSafeActive && InpAutoRecoverFromTimeout && elapsed_ms <= (InpPythonTimeoutSec * 1000))
+    {
+      G_IsFailSafeActive = false;
+      Print("FAIL-SAFE CLEARED: Python command channel recovered.");
+    }
   }
 
-  if(!G_IsFailSafeActive)
-  {
-    SendTickData();
-    SendBarData();
-    SendAccountData();
-    ProcessCommands();
-  }
+  // Keep snapshot stream alive even in FAIL-SAFE to avoid stale-data lockup on Python side.
+  SendTickData();
+  SendBarData();
+  SendAccountData();
 }
 
 // Intentionally empty: all logic is timer-driven for deterministic cadence.

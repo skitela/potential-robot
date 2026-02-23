@@ -7820,7 +7820,8 @@ class SafetyBot:
             "policy_version": "runtime.v1",
             "payload": {
                 "signal": str(signal).upper(),
-                "symbol": str(symbol).upper(),
+                # Preserve broker symbol casing/suffix as resolved by MT5 (e.g. ".pro").
+                "symbol": str(symbol).strip(),
                 "volume": _f(volume, 0.0),
                 "sl_price": _f(sl_price, 0.0),
                 "tp_price": _f(tp_price, 0.0),
