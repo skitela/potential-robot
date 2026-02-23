@@ -12,6 +12,8 @@ Set-StrictMode -Version Latest
 
 $ErrorActionPreference = "Stop"
 $Script:WmiOperationTimeoutSec = 6
+$Script:ControlLockHandle = $null
+$Script:ControlLockPath = ""
 
 function Resolve-Root {
     param([string]$InputRoot = "")
@@ -208,6 +210,83 @@ function Set-LockPid {
         return "written"
     } catch {
         return "write_failed"
+    }
+}
+
+function Acquire-ControlLock {
+    param(
+        [string]$RuntimeRoot,
+        [int]$TimeoutSec = 45
+    )
+    $lockPath = Join-Path $RuntimeRoot "RUN\system_control.action.lock"
+    $started = Get-Date
+    while (((Get-Date) - $started).TotalSeconds -lt [double]([Math]::Max(1, [int]$TimeoutSec))) {
+        try {
+            $fs = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            $payload = @{
+                pid = [int]$PID
+                ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+            } | ConvertTo-Json -Compress
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$payload)
+            $fs.Write($bytes, 0, $bytes.Length)
+            $fs.Flush()
+            $Script:ControlLockHandle = $fs
+            $Script:ControlLockPath = $lockPath
+            return @{
+                ok = $true
+                path = $lockPath
+                waited_sec = [double]((Get-Date) - $started).TotalSeconds
+                state = "acquired"
+            }
+        } catch {
+            try {
+                if (Test-Path $lockPath) {
+                    $lockPid = Get-LockPid -LockPath $lockPath
+                    if ($null -ne $lockPid) {
+                        if (-not (Test-PidRunning -ProcessId ([int]$lockPid))) {
+                            Remove-Item -Force $lockPath -ErrorAction SilentlyContinue
+                            Start-Sleep -Milliseconds 120
+                            continue
+                        }
+                    } else {
+                        $age = Get-FileAgeSec -Path $lockPath
+                        if ($null -ne $age -and [double]$age -gt 600.0) {
+                            Remove-Item -Force $lockPath -ErrorAction SilentlyContinue
+                            Start-Sleep -Milliseconds 120
+                            continue
+                        }
+                    }
+                }
+            } catch {
+                # ignore and retry
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    return @{
+        ok = $false
+        path = $lockPath
+        waited_sec = [double]((Get-Date) - $started).TotalSeconds
+        state = "timeout"
+    }
+}
+
+function Release-ControlLock {
+    if ($null -ne $Script:ControlLockHandle) {
+        try {
+            $Script:ControlLockHandle.Dispose()
+        } catch {
+            # ignore
+        }
+        $Script:ControlLockHandle = $null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Script:ControlLockPath)) {
+        try {
+            Remove-Item -Force $Script:ControlLockPath -ErrorAction SilentlyContinue
+        } catch {
+            # ignore
+        }
+        $Script:ControlLockPath = ""
     }
 }
 
@@ -540,141 +619,167 @@ $result = [ordered]@{
 }
 
 $hasError = $false
+$controlLock = @{
+    mode = "not_required"
+}
 
-switch ($Action) {
-    "status" {
-        foreach ($c in $components) {
-            $ids = Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
-            $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
-            $lockExists = if ($lockPath) { Test-Path $lockPath } else { $false }
-            $lockPid = $null
-            $lockPidRunning = $false
-            if ($lockPath -and $lockExists) {
-                try {
-                    $lockPid = Get-LockPid -LockPath $lockPath
-                    if ($null -ne $lockPid) {
-                        $lockPidRunning = Test-PidRunning -ProcessId ([int]$lockPid)
-                        if ($lockPidRunning -and ((@($ids) -notcontains [int]$lockPid))) {
-                            $ids += [int]$lockPid
-                            $ids = @($ids | Sort-Object -Unique)
+if ($Action -in @("start", "stop")) {
+    $controlLock = Acquire-ControlLock -RuntimeRoot $runtimeRoot -TimeoutSec 45
+    if (-not [bool]$controlLock.ok) {
+        $hasError = $true
+        $result.control_lock = $controlLock
+        $result.status = "FAIL"
+        $statusPath = Join-Path $runtimeRoot "RUN\system_control_last.json"
+        $writeOk = Write-JsonAtomic -Path $statusPath -Object $result
+        Write-Output ("SYSTEM_CONTROL action={0} status={1} dry_run={2} root={3}" -f $Action, $result.status, [int]([bool]$DryRun), $runtimeRoot)
+        if (-not $writeOk) {
+            Write-Warning ("SYSTEM_CONTROL: could not write status file at {0}" -f $statusPath)
+        }
+        exit 1
+    }
+}
+$result.control_lock = $controlLock
+
+try {
+    switch ($Action) {
+        "status" {
+            foreach ($c in $components) {
+                $ids = Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
+                $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
+                $lockExists = if ($lockPath) { Test-Path $lockPath } else { $false }
+                $lockPid = $null
+                $lockPidRunning = $false
+                if ($lockPath -and $lockExists) {
+                    try {
+                        $lockPid = Get-LockPid -LockPath $lockPath
+                        if ($null -ne $lockPid) {
+                            $lockPidRunning = Test-PidRunning -ProcessId ([int]$lockPid)
+                            if ($lockPidRunning -and ((@($ids) -notcontains [int]$lockPid))) {
+                                $ids += [int]$lockPid
+                                $ids = @($ids | Sort-Object -Unique)
+                            }
+                        }
+                    } catch {
+                        $lockPid = $null
+                        $lockPidRunning = $false
+                    }
+                }
+                $logPath = Get-ComponentLogPath -RuntimeRoot $runtimeRoot -CompName ([string]$c.Name)
+                $logAgeSec = if ($logPath) { Get-FileAgeSec -Path $logPath } else { $null }
+                $ttl = Get-ComponentLogTtlSec -CompName ([string]$c.Name)
+                $logFresh = $false
+                if ($null -ne $logAgeSec) {
+                    $logFresh = ([double]$logAgeSec -le [double]$ttl)
+                }
+                $runningByPid = [bool]((@($ids).Count -gt 0) -or $lockPidRunning)
+                # WMI can be restricted on some hosts; lock+fresh-log is accepted heartbeat fallback.
+                $runningByHeartbeat = $false
+                if ($lockPath) {
+                    $runningByHeartbeat = ([bool]$lockExists -and [bool]$logFresh)
+                } else {
+                    $runningByHeartbeat = [bool]$logFresh
+                }
+                $result.components += [ordered]@{
+                    name = [string]$c.Name
+                    script = [string]$c.Script
+                    running = ([bool]$runningByPid -or [bool]$runningByHeartbeat)
+                    running_by_pid = [bool]$runningByPid
+                    running_by_heartbeat = [bool]$runningByHeartbeat
+                    pids = @($ids)
+                    lock = $lockPath
+                    lock_exists = [bool]$lockExists
+                    lock_pid = $lockPid
+                    lock_pid_running = [bool]$lockPidRunning
+                    log_path = $logPath
+                    log_age_sec = $logAgeSec
+                    log_ttl_sec = [int]$ttl
+                }
+            }
+        }
+        "start" {
+            foreach ($c in $components) {
+                $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
+                $item = Start-Component -RuntimeRoot $runtimeRoot -PythonPath $pythonPath -Comp $c -LockPath $lockPath -Dry:$DryRun
+                $row = [ordered]@{
+                    name = [string]$c.Name
+                    script = [string]$c.Script
+                    result = $item
+                }
+                if (@("start_failed", "start_failed_exited", "missing_script", "blocked_active_lock", "blocked_stale_lock", "duplicate_running") -contains [string]$item.status) {
+                    $hasError = $true
+                }
+                $result.components += $row
+            }
+        }
+        "stop" {
+            foreach ($c in $components) {
+                $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
+                $initialPids = @()
+                $stopStates = @()
+                for ($pass = 1; $pass -le 3; $pass++) {
+                    $pids = @()
+                    if ($lockPath) {
+                        $lockPid = Get-LockPid -LockPath $lockPath
+                        if ($null -ne $lockPid -and [int]$lockPid -gt 0) {
+                            $pids += [int]$lockPid
                         }
                     }
-                } catch {
-                    $lockPid = $null
-                    $lockPidRunning = $false
+                    $pids += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
+                    $pids = @($pids | Sort-Object -Unique)
+                    if ($pass -eq 1) {
+                        $initialPids = @($pids)
+                    }
+                    if (@($pids).Count -eq 0) {
+                        break
+                    }
+                    foreach ($procId in $pids) {
+                        $stopStates += @{
+                            pass = [int]$pass
+                            pid = [int]$procId
+                            state = (Stop-PidSafely -ProcessId ([int]$procId) -Dry:$DryRun)
+                        }
+                    }
+                    if (-not $DryRun) {
+                        Start-Sleep -Milliseconds 350
+                    }
                 }
-            }
-            $logPath = Get-ComponentLogPath -RuntimeRoot $runtimeRoot -CompName ([string]$c.Name)
-            $logAgeSec = if ($logPath) { Get-FileAgeSec -Path $logPath } else { $null }
-            $ttl = Get-ComponentLogTtlSec -CompName ([string]$c.Name)
-            $logFresh = $false
-            if ($null -ne $logAgeSec) {
-                $logFresh = ([double]$logAgeSec -le [double]$ttl)
-            }
-            $runningByPid = [bool]((@($ids).Count -gt 0) -or $lockPidRunning)
-            # WMI can be restricted on some hosts; lock+fresh-log is accepted heartbeat fallback.
-            $runningByHeartbeat = $false
-            if ($lockPath) {
-                $runningByHeartbeat = ([bool]$lockExists -and [bool]$logFresh)
-            } else {
-                $runningByHeartbeat = [bool]$logFresh
-            }
-            $result.components += [ordered]@{
-                name = [string]$c.Name
-                script = [string]$c.Script
-                running = ([bool]$runningByPid -or [bool]$runningByHeartbeat)
-                running_by_pid = [bool]$runningByPid
-                running_by_heartbeat = [bool]$runningByHeartbeat
-                pids = @($ids)
-                lock = $lockPath
-                lock_exists = [bool]$lockExists
-                lock_pid = $lockPid
-                lock_pid_running = [bool]$lockPidRunning
-                log_path = $logPath
-                log_age_sec = $logAgeSec
-                log_ttl_sec = [int]$ttl
-            }
-        }
-    }
-    "start" {
-        foreach ($c in $components) {
-            $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
-            $item = Start-Component -RuntimeRoot $runtimeRoot -PythonPath $pythonPath -Comp $c -LockPath $lockPath -Dry:$DryRun
-            $row = [ordered]@{
-                name = [string]$c.Name
-                script = [string]$c.Script
-                result = $item
-            }
-            if (@("start_failed", "start_failed_exited", "missing_script", "blocked_active_lock", "blocked_stale_lock", "duplicate_running") -contains [string]$item.status) {
-                $hasError = $true
-            }
-            $result.components += $row
-        }
-    }
-    "stop" {
-        foreach ($c in $components) {
-            $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
-            $initialPids = @()
-            $stopStates = @()
-            for ($pass = 1; $pass -le 3; $pass++) {
-                $pids = @()
+
+                $remaining = @()
                 if ($lockPath) {
-                    $lockPid = Get-LockPid -LockPath $lockPath
-                    if ($null -ne $lockPid -and [int]$lockPid -gt 0) {
-                        $pids += [int]$lockPid
+                    $lockPidPost = Get-LockPid -LockPath $lockPath
+                    if ($null -ne $lockPidPost -and [int]$lockPidPost -gt 0 -and (Test-PidRunning -ProcessId ([int]$lockPidPost))) {
+                        $remaining += [int]$lockPidPost
                     }
                 }
-                $pids += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
-                $pids = @($pids | Sort-Object -Unique)
-                if ($pass -eq 1) {
-                    $initialPids = @($pids)
-                }
-                if (@($pids).Count -eq 0) {
-                    break
-                }
-                foreach ($procId in $pids) {
-                    $stopStates += @{
-                        pass = [int]$pass
-                        pid = [int]$procId
-                        state = (Stop-PidSafely -ProcessId ([int]$procId) -Dry:$DryRun)
-                    }
-                }
-                if (-not $DryRun) {
-                    Start-Sleep -Milliseconds 350
-                }
-            }
+                $remaining += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
+                $remaining = @($remaining | Sort-Object -Unique)
 
-            $remaining = @()
-            if ($lockPath) {
-                $lockPidPost = Get-LockPid -LockPath $lockPath
-                if ($null -ne $lockPidPost -and [int]$lockPidPost -gt 0 -and (Test-PidRunning -ProcessId ([int]$lockPidPost))) {
-                    $remaining += [int]$lockPidPost
+                $lockState = if ($lockPath) { Remove-LockSafe -LockPath $lockPath -Dry:$DryRun } else { "n/a" }
+                if ($stopStates | Where-Object { $_.state -eq "force_failed" }) {
+                    $hasError = $true
                 }
-            }
-            $remaining += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
-            $remaining = @($remaining | Sort-Object -Unique)
+                if ((-not $DryRun) -and (@($remaining).Count -gt 0)) {
+                    $hasError = $true
+                }
+                if ($lockState -eq "remove_failed") {
+                    $hasError = $true
+                }
 
-            $lockState = if ($lockPath) { Remove-LockSafe -LockPath $lockPath -Dry:$DryRun } else { "n/a" }
-            if ($stopStates | Where-Object { $_.state -eq "force_failed" }) {
-                $hasError = $true
-            }
-            if ((-not $DryRun) -and (@($remaining).Count -gt 0)) {
-                $hasError = $true
-            }
-            if ($lockState -eq "remove_failed") {
-                $hasError = $true
-            }
-
-            $result.components += [ordered]@{
-                name = [string]$c.Name
-                script = [string]$c.Script
-                pids = @($initialPids)
-                stop_states = @($stopStates)
-                remaining_pids = @($remaining)
-                lock = $lockPath
-                lock_cleanup = $lockState
+                $result.components += [ordered]@{
+                    name = [string]$c.Name
+                    script = [string]$c.Script
+                    pids = @($initialPids)
+                    stop_states = @($stopStates)
+                    remaining_pids = @($remaining)
+                    lock = $lockPath
+                    lock_cleanup = $lockState
+                }
             }
         }
+    }
+} finally {
+    if ($Action -in @("start", "stop")) {
+        Release-ControlLock
     }
 }
 
