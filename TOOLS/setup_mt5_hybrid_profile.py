@@ -24,6 +24,18 @@ from typing import Dict, List, Optional, Tuple
 DEFAULT_MT5_EXE = Path(r"C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe")
 DEFAULT_PROFILE_NAME = "OANDA_HYBRID_AUTO"
 SYMBOL_AUDIT_JSON = Path("RUN/symbols_audit_now.json")
+DEFAULT_BASE_SYMBOLS = [
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "USDCHF",
+    "USDCAD",
+    "AUDUSD",
+    "NZDUSD",
+    "EURGBP",
+    "XAUUSD",
+    "XAGUSD",
+]
 
 
 @dataclass
@@ -38,16 +50,16 @@ class SetupResult:
 def _load_strategy_symbols(root: Path) -> List[str]:
     cfg_path = root / "CONFIG" / "strategy.json"
     if not cfg_path.exists():
-        return ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURGBP", "XAUUSD", "XAGUSD"]
+        return list(DEFAULT_BASE_SYMBOLS)
     try:
         data = json.loads(cfg_path.read_text(encoding="utf-8"))
         raw = data.get("symbols_to_trade")
         if isinstance(raw, list):
             out = [str(x).strip().upper() for x in raw if str(x).strip()]
-            return out or ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURGBP", "XAUUSD", "XAGUSD"]
+            return out or list(DEFAULT_BASE_SYMBOLS)
     except Exception:
-        pass
-    return ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURGBP", "XAUUSD", "XAGUSD"]
+        return list(DEFAULT_BASE_SYMBOLS)
+    return list(DEFAULT_BASE_SYMBOLS)
 
 
 def _find_terminal_data_dir() -> Optional[Path]:
@@ -203,7 +215,7 @@ def _close_mt5_processes() -> None:
             stderr=subprocess.DEVNULL,
         )
     except Exception:
-        pass
+        return
 
 
 def _launch_mt5(mt5_exe: Path, profile_name: str) -> bool:
@@ -282,4 +294,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
