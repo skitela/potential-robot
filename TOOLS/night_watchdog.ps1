@@ -8,6 +8,11 @@ param(
     [string]$Mt5Path = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe",
     [int]$SystemControlTimeoutSec = 180,
     [int]$SmokeTimeoutSec = 120,
+    [int]$SafetyLogTtlSec = 600,
+    [int]$ScudLogTtlSec = 240,
+    [int]$InfoLogTtlSec = 300,
+    [int]$RepairLogTtlSec = 1200,
+    [int]$LearnerLogTtlSec = 4500,
     [switch]$DryRun
 )
 
@@ -181,6 +186,11 @@ $strikeLimit = [Math]::Max(1, [int]$UnhealthyStrike)
 $smokeEvery = [Math]::Max(5, [int]$SmokeEveryMin)
 $sysCtlTimeout = [Math]::Max(30, [int]$SystemControlTimeoutSec)
 $smokeTimeout = [Math]::Max(30, [int]$SmokeTimeoutSec)
+$safetyTtl = [Math]::Max(60, [int]$SafetyLogTtlSec)
+$scudTtl = [Math]::Max(60, [int]$ScudLogTtlSec)
+$infoTtl = [Math]::Max(60, [int]$InfoLogTtlSec)
+$repairTtl = [Math]::Max(60, [int]$RepairLogTtlSec)
+$learnerTtl = [Math]::Max(300, [int]$LearnerLogTtlSec)
 
 $evidenceDir = Join-Path $runtimeRoot "EVIDENCE\night_watch"
 New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
@@ -217,17 +227,22 @@ Write-EventJsonl -Path $jsonlPath -Payload @{
     smoke_every_min = $smokeEvery
     system_control_timeout_sec = $sysCtlTimeout
     smoke_timeout_sec = $smokeTimeout
+    ttl_safety_sec = $safetyTtl
+    ttl_scud_sec = $scudTtl
+    ttl_infobot_sec = $infoTtl
+    ttl_repair_sec = $repairTtl
+    ttl_learner_sec = $learnerTtl
     dry_run = [bool]$DryRun
 }
 
 while ((Get-Date) -lt $deadline) {
     try {
         $components = @(
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SafetyBot" -LockRel "RUN\safetybot.lock" -LogRel "LOGS\safetybot.log" -LogTtlSec 240),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SCUD" -LockRel "RUN\scudfab02.lock" -LogRel "LOGS\scudfab02.log" -LogTtlSec 240),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "InfoBot" -LockRel "RUN\infobot.lock" -LogRel "LOGS\infobot\infobot.log" -LogTtlSec 300),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "RepairAgent" -LockRel "RUN\repair_agent.lock" -LogRel "LOGS\repair_agent\repair_agent.log" -LogTtlSec 300),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "Learner" -LockRel "" -LogRel "LOGS\learner_offline.log" -LogTtlSec 900)
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SafetyBot" -LockRel "RUN\safetybot.lock" -LogRel "LOGS\safetybot.log" -LogTtlSec $safetyTtl),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SCUD" -LockRel "RUN\scudfab02.lock" -LogRel "LOGS\scudfab02.log" -LogTtlSec $scudTtl),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "InfoBot" -LockRel "RUN\infobot.lock" -LogRel "LOGS\infobot\infobot.log" -LogTtlSec $infoTtl),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "RepairAgent" -LockRel "RUN\repair_agent.lock" -LogRel "LOGS\repair_agent\repair_agent.log" -LogTtlSec $repairTtl),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "Learner" -LockRel "" -LogRel "LOGS\learner_offline.log" -LogTtlSec $learnerTtl)
         )
 
         $aliveCount = @($components | Where-Object { $_.alive }).Count
