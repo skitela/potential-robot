@@ -577,6 +577,62 @@ $status.server = [string]$envReady.server
 $status.status = "PASS_PRECHECK"
 $status.key_file_rel = "TOKEN\\BotKey.env"
 
+$profileSetupScript = Join-Path $runtimeRoot "TOOLS\setup_mt5_hybrid_profile.py"
+if (Test-Path $profileSetupScript) {
+    $profileArgs = @(
+        "-B",
+        $profileSetupScript,
+        "--root", $runtimeRoot,
+        "--profile", "OANDA_HYBRID_AUTO"
+    )
+    if ($DryRun) {
+        $profileArgs += "--no-launch"
+    }
+    $profileRc = 0
+    $profileOut = ""
+    $profileOk = $false
+    try {
+        $profileOut = (& py -3.12 @profileArgs 2>&1 | Out-String)
+        $profileRc = [int]$LASTEXITCODE
+        $profileOk = ($profileRc -eq 0)
+    } catch {
+        try {
+            $profileOut = (& python @profileArgs 2>&1 | Out-String)
+            $profileRc = [int]$LASTEXITCODE
+            $profileOk = ($profileRc -eq 0)
+        } catch {
+            $profileRc = 7
+            $profileOut = ("MT5 profile setup launch failed: " + $_.Exception.Message)
+            $profileOk = $false
+        }
+    }
+    $status.mt5_profile_setup = [ordered]@{
+        ok = [bool]$profileOk
+        exit_code = [int]$profileRc
+        output = [string]$profileOut
+        profile = "OANDA_HYBRID_AUTO"
+    }
+    if (-not $profileOk) {
+        $status.status = "FAIL"
+        $status.reason = "mt5_profile_setup_failed"
+        [void](Write-JsonAtomic -Path $statusPath -Object $status)
+        Write-Output ("START_WITH_OANDAKEY FAIL: MT5 profile setup failed rc={0}" -f $profileRc)
+        exit 7
+    }
+} else {
+    $status.mt5_profile_setup = [ordered]@{
+        ok = $false
+        exit_code = 6
+        output = "missing setup_mt5_hybrid_profile.py"
+        profile = "OANDA_HYBRID_AUTO"
+    }
+    $status.status = "FAIL"
+    $status.reason = "missing_mt5_profile_setup_script"
+    [void](Write-JsonAtomic -Path $statusPath -Object $status)
+    Write-Output ("START_WITH_OANDAKEY FAIL: missing script {0}" -f $profileSetupScript)
+    exit 6
+}
+
 $systemControl = Join-Path $runtimeRoot "TOOLS\SYSTEM_CONTROL.ps1"
 if (-not (Test-Path $systemControl)) {
     $status.status = "FAIL"
