@@ -1,8 +1,10 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$Mt5TerminalRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
+    [ValidateSet("single", "cycle")]
+    [string]$Mode = "cycle",
     [int]$PollSec = 5,
-    [int]$TimeoutHours = 8
+    [int]$TimeoutHours = 0
 )
 
 Set-StrictMode -Version Latest
@@ -265,11 +267,18 @@ if ($phaseLine -match "phase=([A-Z_]+)\s+window=([A-Z0-9_]+|NONE)") {
 
 $needNonActiveBeforeTrigger = ($lastPhase -eq "ACTIVE")
 $seenNonActive = (-not $needNonActiveBeforeTrigger)
-$deadline = (Get-Date).AddHours([Math]::Max(1, [int]$TimeoutHours))
+$useDeadline = ([int]$TimeoutHours -gt 0)
+$deadline = if ($useDeadline) { (Get-Date).AddHours([int]$TimeoutHours) } else { [datetime]::MaxValue }
+$passCount = 0
 
-Write-Host ("[ACTIVE_CHECKLIST] watcher started root={0} last_phase={1} last_window={2}" -f $runtimeRoot, $lastPhase, $lastWindow) -ForegroundColor Cyan
+Write-Host ("[ACTIVE_CHECKLIST] watcher started root={0} mode={1} last_phase={2} last_window={3}" -f $runtimeRoot, $Mode, $lastPhase, $lastWindow) -ForegroundColor Cyan
 
-while ((Get-Date) -lt $deadline) {
+while ($true) {
+    if ($useDeadline -and (Get-Date) -ge $deadline) {
+        Write-Host "[ACTIVE_CHECKLIST] timeout reached without ACTIVE transition." -ForegroundColor Yellow
+        exit 2
+    }
+
     $lines = Read-AppendedLines -Path $safetyLog -Offsets $offsets
     foreach ($line in $lines) {
         $msg = [string]$line
@@ -290,11 +299,14 @@ while ((Get-Date) -lt $deadline) {
 
         if ($phase -eq "ACTIVE" -and $seenNonActive) {
             $null = Invoke-ActiveChecklist -RuntimeRoot $runtimeRoot -TerminalRoot $Mt5TerminalRoot -WindowId $window -TriggerLine $msg
-            exit 0
+            $passCount = [int]$passCount + 1
+            Write-Host ("[ACTIVE_CHECKLIST] pass_count={0} mode={1}" -f $passCount, $Mode) -ForegroundColor Cyan
+            if ($Mode -eq "single") {
+                exit 0
+            }
+            # In cycle mode wait for next non-active -> active transition.
+            $seenNonActive = $false
         }
     }
     Start-Sleep -Seconds ([Math]::Max(1, [int]$PollSec))
 }
-
-Write-Host "[ACTIVE_CHECKLIST] timeout reached without ACTIVE transition." -ForegroundColor Yellow
-exit 2
