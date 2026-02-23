@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import platform
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,41 @@ from BIN import common_guards as cg
 
 def now_id() -> str:
     return time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+
+
+def _reexec_with_py312_if_available() -> int | None:
+    """
+    On Windows, if current interpreter cannot import MetaTrader5 (e.g. Python 3.14),
+    re-run this script via `py -3.12` once.
+    """
+    if platform.system().lower() != "windows":
+        return None
+    if str(os.environ.get("OANDA_MT5_PY312_REEXEC", "0")).strip() == "1":
+        return None
+    argv0 = str(sys.argv[0] if sys.argv else "").strip()
+    script_path = Path(argv0)
+    if not script_path.is_file():
+        return None
+    try:
+        chk = subprocess.run(
+            ["py", "-3.12", "-c", "import MetaTrader5 as mt5; print(mt5.__version__)"],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+    except Exception:
+        return None
+    if int(chk.returncode) != 0:
+        return None
+    env = dict(os.environ)
+    env["OANDA_MT5_PY312_REEXEC"] = "1"
+    cmd = ["py", "-3.12", str(script_path)] + list(sys.argv[1:])
+    try:
+        cp = subprocess.run(cmd, env=env, check=False)
+        return int(cp.returncode)
+    except Exception:
+        return None
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -71,6 +107,9 @@ def main() -> int:
         import MetaTrader5 as mt5
     except Exception as e:
         cg.tlog(None, "WARN", "SMOKE_EXC", "nonfatal exception swallowed", e)
+        rc = _reexec_with_py312_if_available()
+        if rc is not None:
+            return int(rc)
         if bool(args.offline_sim):
             report["result"] = "DO_WERYFIKACJI_ONLINE"
             report["error"] = f"Offline sim: MetaTrader5 unavailable: {e}"
