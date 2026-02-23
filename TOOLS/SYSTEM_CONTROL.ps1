@@ -11,7 +11,7 @@ param(
 Set-StrictMode -Version Latest
 
 $ErrorActionPreference = "Stop"
-$Script:WmiOperationTimeoutSec = 2
+$Script:WmiOperationTimeoutSec = 6
 
 function Resolve-Root {
     param([string]$InputRoot = "")
@@ -75,24 +75,40 @@ function Get-LockPid {
     return $null
 }
 
+function Get-ComponentProcessRows {
+    param(
+        [string]$RuntimeRoot,
+        [string]$ScriptName
+    )
+    $binPath = (Join-Path $RuntimeRoot ("BIN\" + $ScriptName))
+    $binPathEsc = [regex]::Escape($binPath)
+    $scriptEsc = [regex]::Escape([string]$ScriptName)
+
+    $attempt = 0
+    while ($attempt -lt 3) {
+        try {
+            $rows = @(Get-CimInstance Win32_Process -OperationTimeoutSec $Script:WmiOperationTimeoutSec -ErrorAction Stop | Where-Object {
+                $_.CommandLine -and (
+                    ($_.CommandLine -match $binPathEsc) -or
+                    ($_.CommandLine -match $scriptEsc)
+                )
+            })
+            return @($rows)
+        } catch {
+            Start-Sleep -Milliseconds (250 * ($attempt + 1))
+            $attempt += 1
+        }
+    }
+    return @()
+}
+
 function Get-ComponentProcessIds {
     param(
         [string]$RuntimeRoot,
         [string]$ScriptName
     )
-    $ids = @()
-    try {
-        $binPath = (Join-Path $RuntimeRoot ("BIN\" + $ScriptName)).Replace("\", "\\")
-        $procs = Get-CimInstance Win32_Process -OperationTimeoutSec $Script:WmiOperationTimeoutSec -ErrorAction Stop | Where-Object {
-            $_.CommandLine -and (
-                $_.CommandLine -like "*$binPath*" -or
-                $_.CommandLine -like "*" + $ScriptName + "*"
-            )
-        }
-        $ids = @($procs | ForEach-Object { [int]$_.ProcessId } | Sort-Object -Unique)
-    } catch {
-        $ids = @()
-    }
+    $rows = Get-ComponentProcessRows -RuntimeRoot $RuntimeRoot -ScriptName $ScriptName
+    $ids = @($rows | ForEach-Object { [int]$_.ProcessId } | Sort-Object -Unique)
     return @($ids)
 }
 
@@ -175,6 +191,84 @@ function Test-PidRunning {
     return ($null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue))
 }
 
+function Set-LockPid {
+    param(
+        [string]$LockPath,
+        [int]$LockPidValue,
+        [switch]$Dry
+    )
+    if (-not $LockPath) {
+        return "n/a"
+    }
+    if ($Dry) {
+        return "dry_run"
+    }
+    try {
+        [System.IO.File]::WriteAllText($LockPath, ([string]$LockPidValue))
+        return "written"
+    } catch {
+        return "write_failed"
+    }
+}
+
+function Deduplicate-ComponentInstances {
+    param(
+        [string]$RuntimeRoot,
+        [string]$ScriptName,
+        [string]$LockPath = "",
+        [switch]$Dry
+    )
+    $ids = Get-ComponentProcessIds -RuntimeRoot $RuntimeRoot -ScriptName $ScriptName
+    $uniq = @($ids | Sort-Object -Unique)
+    if (@($uniq).Count -le 1) {
+        return @{
+            status = "not_needed"
+            initial_pids = @($uniq)
+            keep_pid = if (@($uniq).Count -eq 1) { [int]$uniq[0] } else { $null }
+            stop_states = @()
+            remaining_pids = @($uniq)
+            lock_update = "n/a"
+        }
+    }
+
+    $keepPid = $null
+    $lockPid = $null
+    if ($LockPath -and (Test-Path $LockPath)) {
+        $lockPid = Get-LockPid -LockPath $LockPath
+    }
+    if ($null -ne $lockPid -and ((@($uniq) -contains [int]$lockPid)) -and (Test-PidRunning -ProcessId ([int]$lockPid))) {
+        $keepPid = [int]$lockPid
+    } else {
+        $keepPid = [int]((@($uniq | Sort-Object -Descending))[0])
+    }
+
+    $stopStates = @()
+    foreach ($procId in $uniq) {
+        if ([int]$procId -eq [int]$keepPid) {
+            continue
+        }
+        $stopStates += @{
+            pid = [int]$procId
+            state = (Stop-PidSafely -ProcessId ([int]$procId) -Dry:$Dry)
+        }
+    }
+
+    if (-not $Dry) {
+        Start-Sleep -Milliseconds 350
+    }
+    $remaining = if ($Dry) { @($uniq) } else { @(Get-ComponentProcessIds -RuntimeRoot $RuntimeRoot -ScriptName $ScriptName) }
+    $lockUpdate = if ($LockPath -and $keepPid -gt 0) { Set-LockPid -LockPath $LockPath -LockPidValue ([int]$keepPid) -Dry:$Dry } else { "n/a" }
+    $ok = (@($remaining).Count -le 1)
+    return @{
+        status = if ($ok) { "deduplicated" } else { "dedupe_failed" }
+        initial_pids = @($uniq)
+        keep_pid = [int]$keepPid
+        stop_states = @($stopStates)
+        remaining_pids = @($remaining | Sort-Object -Unique)
+        lock_update = $lockUpdate
+    }
+}
+
 function Cleanup-StaleLock {
     param(
         [string]$LockPath,
@@ -238,6 +332,21 @@ function Start-Component {
     )
     $existing = Get-ComponentProcessIds -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script)
     if (@($existing).Count -gt 0) {
+        if (@($existing).Count -gt 1) {
+            $dedupe = Deduplicate-ComponentInstances -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script) -LockPath $LockPath -Dry:$Dry
+            if ($dedupe.status -eq "dedupe_failed") {
+                return @{
+                    status = "duplicate_running"
+                    pids = @($existing)
+                    dedupe = $dedupe
+                }
+            }
+            return @{
+                status = "deduplicated_running"
+                pids = @($dedupe.remaining_pids)
+                dedupe = $dedupe
+            }
+        }
         return @{
             status = "already_running"
             pids = @($existing)
@@ -496,7 +605,7 @@ switch ($Action) {
                 script = [string]$c.Script
                 result = $item
             }
-            if (@("start_failed", "start_failed_exited", "missing_script", "blocked_active_lock", "blocked_stale_lock") -contains [string]$item.status) {
+            if (@("start_failed", "start_failed_exited", "missing_script", "blocked_active_lock", "blocked_stale_lock", "duplicate_running") -contains [string]$item.status) {
                 $hasError = $true
             }
             $result.components += $row
@@ -505,26 +614,51 @@ switch ($Action) {
     "stop" {
         foreach ($c in $components) {
             $lockPath = if ([string]::IsNullOrWhiteSpace([string]$c.Lock)) { "" } else { Join-Path $runtimeRoot ([string]$c.Lock) }
-            $pids = @()
-            if ($lockPath) {
-                $lockPid = Get-LockPid -LockPath $lockPath
-                if ($null -ne $lockPid -and [int]$lockPid -gt 0) {
-                    $pids += [int]$lockPid
-                }
-            }
-            $pids += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
-            $pids = @($pids | Sort-Object -Unique)
-
+            $initialPids = @()
             $stopStates = @()
-            foreach ($procId in $pids) {
-                $stopStates += @{
-                    pid = [int]$procId
-                    state = (Stop-PidSafely -ProcessId ([int]$procId) -Dry:$DryRun)
+            for ($pass = 1; $pass -le 3; $pass++) {
+                $pids = @()
+                if ($lockPath) {
+                    $lockPid = Get-LockPid -LockPath $lockPath
+                    if ($null -ne $lockPid -and [int]$lockPid -gt 0) {
+                        $pids += [int]$lockPid
+                    }
+                }
+                $pids += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
+                $pids = @($pids | Sort-Object -Unique)
+                if ($pass -eq 1) {
+                    $initialPids = @($pids)
+                }
+                if (@($pids).Count -eq 0) {
+                    break
+                }
+                foreach ($procId in $pids) {
+                    $stopStates += @{
+                        pass = [int]$pass
+                        pid = [int]$procId
+                        state = (Stop-PidSafely -ProcessId ([int]$procId) -Dry:$DryRun)
+                    }
+                }
+                if (-not $DryRun) {
+                    Start-Sleep -Milliseconds 350
                 }
             }
+
+            $remaining = @()
+            if ($lockPath) {
+                $lockPidPost = Get-LockPid -LockPath $lockPath
+                if ($null -ne $lockPidPost -and [int]$lockPidPost -gt 0 -and (Test-PidRunning -ProcessId ([int]$lockPidPost))) {
+                    $remaining += [int]$lockPidPost
+                }
+            }
+            $remaining += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
+            $remaining = @($remaining | Sort-Object -Unique)
 
             $lockState = if ($lockPath) { Remove-LockSafe -LockPath $lockPath -Dry:$DryRun } else { "n/a" }
             if ($stopStates | Where-Object { $_.state -eq "force_failed" }) {
+                $hasError = $true
+            }
+            if ((-not $DryRun) -and (@($remaining).Count -gt 0)) {
                 $hasError = $true
             }
             if ($lockState -eq "remove_failed") {
@@ -534,8 +668,9 @@ switch ($Action) {
             $result.components += [ordered]@{
                 name = [string]$c.Name
                 script = [string]$c.Script
-                pids = @($pids)
+                pids = @($initialPids)
                 stop_states = @($stopStates)
+                remaining_pids = @($remaining)
                 lock = $lockPath
                 lock_cleanup = $lockState
             }

@@ -6,6 +6,8 @@ param(
     [int]$UnhealthyStrike = 3,
     [int]$SmokeEveryMin = 30,
     [string]$Mt5Path = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe",
+    [int]$SystemControlTimeoutSec = 180,
+    [int]$SmokeTimeoutSec = 120,
     [switch]$DryRun
 )
 
@@ -38,6 +40,105 @@ function Write-EventJsonl {
     )
     $line = ($Payload | ConvertTo-Json -Compress)
     Add-Content -Path $Path -Value $line -Encoding UTF8
+}
+
+function Invoke-ToolCommand {
+    param(
+        [string]$ExePath,
+        [string[]]$ArgumentList,
+        [string]$WorkingDir,
+        [int]$TimeoutSec,
+        [string]$StdOutPath,
+        [string]$StdErrPath
+    )
+    $safeTimeout = [Math]::Max(5, [int]$TimeoutSec)
+    try {
+        $outDir = Split-Path -Parent $StdOutPath
+        if ($outDir) {
+            New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+        }
+        $errDir = Split-Path -Parent $StdErrPath
+        if ($errDir) {
+            New-Item -ItemType Directory -Path $errDir -Force | Out-Null
+        }
+        $proc = Start-Process -FilePath $ExePath -ArgumentList $ArgumentList -WorkingDirectory $WorkingDir -WindowStyle Hidden -RedirectStandardOutput $StdOutPath -RedirectStandardError $StdErrPath -PassThru -ErrorAction Stop
+    } catch {
+        return @{
+            ok = $false
+            timed_out = $false
+            exit_code = $null
+            pid = $null
+            stdout = $StdOutPath
+            stderr = $StdErrPath
+            error = $_.Exception.Message
+        }
+    }
+
+    $timedOut = $false
+    try {
+        Wait-Process -Id $proc.Id -Timeout $safeTimeout -ErrorAction Stop
+    } catch {
+        $timedOut = $true
+    }
+    if ($timedOut) {
+        try {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        } catch {
+            # best-effort terminate
+        }
+        return @{
+            ok = $false
+            timed_out = $true
+            exit_code = $null
+            pid = [int]$proc.Id
+            stdout = $StdOutPath
+            stderr = $StdErrPath
+            error = "timeout"
+        }
+    }
+    $proc.Refresh()
+    $rc = [int]$proc.ExitCode
+    return @{
+        ok = ($rc -eq 0)
+        timed_out = $false
+        exit_code = $rc
+        pid = [int]$proc.Id
+        stdout = $StdOutPath
+        stderr = $StdErrPath
+        error = $null
+    }
+}
+
+function Invoke-SystemControlAction {
+    param(
+        [string]$PwshExe,
+        [string]$SystemControlPath,
+        [string]$RuntimeRoot,
+        [string]$ActionName,
+        [int]$TimeoutSec,
+        [string]$EvidenceDir
+    )
+    $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $outPath = Join-Path $EvidenceDir ("system_control_" + $ActionName + "_" + $stamp + "_out.log")
+    $errPath = Join-Path $EvidenceDir ("system_control_" + $ActionName + "_" + $stamp + "_err.log")
+    $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $SystemControlPath, "-Action", $ActionName, "-Root", $RuntimeRoot, "-Profile", "full")
+    return (Invoke-ToolCommand -ExePath $PwshExe -ArgumentList $args -WorkingDir $RuntimeRoot -TimeoutSec $TimeoutSec -StdOutPath $outPath -StdErrPath $errPath)
+}
+
+function Invoke-SmokeRun {
+    param(
+        [string]$RuntimeRoot,
+        [string]$SmokeScriptPath,
+        [string]$SmokeOutPath,
+        [string]$Mt5TerminalPath,
+        [int]$TimeoutSec,
+        [string]$EvidenceDir
+    )
+    $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $outPath = Join-Path $EvidenceDir ("smoke_exec_" + $stamp + "_out.log")
+    $errPath = Join-Path $EvidenceDir ("smoke_exec_" + $stamp + "_err.log")
+    $args = @("-3.12", "-B", $SmokeScriptPath, "--mt5-path", $Mt5TerminalPath, "--out", $SmokeOutPath)
+    return (Invoke-ToolCommand -ExePath "py" -ArgumentList $args -WorkingDir $RuntimeRoot -TimeoutSec $TimeoutSec -StdOutPath $outPath -StdErrPath $errPath)
 }
 
 function Test-ComponentAlive {
@@ -78,6 +179,8 @@ $duration = [Math]::Max(1, [int]$DurationHours)
 $minAliveCount = [Math]::Max(1, [int]$MinAlive)
 $strikeLimit = [Math]::Max(1, [int]$UnhealthyStrike)
 $smokeEvery = [Math]::Max(5, [int]$SmokeEveryMin)
+$sysCtlTimeout = [Math]::Max(30, [int]$SystemControlTimeoutSec)
+$smokeTimeout = [Math]::Max(30, [int]$SmokeTimeoutSec)
 
 $evidenceDir = Join-Path $runtimeRoot "EVIDENCE\night_watch"
 New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
@@ -89,6 +192,10 @@ $lastSmokePath = Join-Path $evidenceDir ("night_watch_" + $runId + "_last_smoke.
 
 $systemControl = Join-Path $runtimeRoot "TOOLS\SYSTEM_CONTROL.ps1"
 $smokeScript = Join-Path $runtimeRoot "TOOLS\online_smoke_mt5.py"
+$pwshExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+if (-not (Test-Path $pwshExe)) {
+    $pwshExe = "powershell"
+}
 
 $deadline = (Get-Date).AddHours($duration)
 $nextSmoke = Get-Date
@@ -108,106 +215,162 @@ Write-EventJsonl -Path $jsonlPath -Payload @{
     min_alive = $minAliveCount
     strike_limit = $strikeLimit
     smoke_every_min = $smokeEvery
+    system_control_timeout_sec = $sysCtlTimeout
+    smoke_timeout_sec = $smokeTimeout
     dry_run = [bool]$DryRun
 }
 
 while ((Get-Date) -lt $deadline) {
-    $components = @(
-        (Test-ComponentAlive -RootPath $runtimeRoot -Name "SafetyBot" -LockRel "RUN\safetybot.lock" -LogRel "LOGS\safetybot.log" -LogTtlSec 240),
-        (Test-ComponentAlive -RootPath $runtimeRoot -Name "SCUD" -LockRel "RUN\scudfab02.lock" -LogRel "LOGS\scudfab02.log" -LogTtlSec 240),
-        (Test-ComponentAlive -RootPath $runtimeRoot -Name "InfoBot" -LockRel "RUN\infobot.lock" -LogRel "LOGS\infobot\infobot.log" -LogTtlSec 300),
-        (Test-ComponentAlive -RootPath $runtimeRoot -Name "RepairAgent" -LockRel "RUN\repair_agent.lock" -LogRel "LOGS\repair_agent\repair_agent.log" -LogTtlSec 300),
-        (Test-ComponentAlive -RootPath $runtimeRoot -Name "Learner" -LockRel "" -LogRel "LOGS\learner_offline.log" -LogTtlSec 900)
-    )
+    try {
+        $components = @(
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SafetyBot" -LockRel "RUN\safetybot.lock" -LogRel "LOGS\safetybot.log" -LogTtlSec 240),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SCUD" -LockRel "RUN\scudfab02.lock" -LogRel "LOGS\scudfab02.log" -LogTtlSec 240),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "InfoBot" -LockRel "RUN\infobot.lock" -LogRel "LOGS\infobot\infobot.log" -LogTtlSec 300),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "RepairAgent" -LockRel "RUN\repair_agent.lock" -LogRel "LOGS\repair_agent\repair_agent.log" -LogTtlSec 300),
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "Learner" -LockRel "" -LogRel "LOGS\learner_offline.log" -LogTtlSec 900)
+        )
 
-    $aliveCount = @($components | Where-Object { $_.alive }).Count
-    $healthy = ($aliveCount -ge $minAliveCount)
-    if ($healthy) { $unhealthyStreak = 0 } else { $unhealthyStreak += 1 }
+        $aliveCount = @($components | Where-Object { $_.alive }).Count
+        $healthy = ($aliveCount -ge $minAliveCount)
+        if ($healthy) { $unhealthyStreak = 0 } else { $unhealthyStreak += 1 }
 
-    $mt5Log = Get-LatestMt5Log -RootPath "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
-    $mt5Alert = $null
-    if ($null -ne $mt5Log) {
-        try {
-            $hits = Select-String -Path $mt5Log.FullName -Pattern "FAIL-SAFE ACTIVATED|ZMQ_INIT_FAIL" -ErrorAction Stop | Select-Object -Last 1
-            if ($null -ne $hits) {
-                $sig = [string]$hits.Line
-                if ($sig -ne $lastMt5AlertSig) {
-                    $lastMt5AlertSig = $sig
-                    $mt5Alert = $sig
+        $mt5Log = Get-LatestMt5Log -RootPath "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
+        $mt5Alert = $null
+        if ($null -ne $mt5Log) {
+            try {
+                $hits = Select-String -Path $mt5Log.FullName -Pattern "FAIL-SAFE ACTIVATED|ZMQ_INIT_FAIL" -ErrorAction Stop | Select-Object -Last 1
+                if ($null -ne $hits) {
+                    $sig = [string]$hits.Line
+                    if ($sig -ne $lastMt5AlertSig) {
+                        $lastMt5AlertSig = $sig
+                        $mt5Alert = $sig
+                    }
+                }
+            } catch {
+                $mt5Alert = $null
+            }
+        }
+
+        $tick = @{
+            ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+            event = "tick"
+            run_id = $runId
+            alive_count = [int]$aliveCount
+            min_alive = [int]$minAliveCount
+            healthy = [bool]$healthy
+            unhealthy_streak = [int]$unhealthyStreak
+            components = $components
+        }
+        if ($mt5Alert) { $tick.mt5_alert = $mt5Alert }
+        Write-EventJsonl -Path $jsonlPath -Payload $tick
+
+        $status = @{
+            ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+            run_id = $runId
+            healthy = [bool]$healthy
+            alive_count = [int]$aliveCount
+            unhealthy_streak = [int]$unhealthyStreak
+            deadline_utc = $deadline.ToUniversalTime().ToString("o")
+            jsonl = $jsonlPath
+        }
+        $status | ConvertTo-Json -Depth 8 | Set-Content -Path $statusPath -Encoding UTF8
+
+        if ($unhealthyStreak -ge $strikeLimit) {
+            $evt = @{
+                ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+                event = "restart_trigger"
+                run_id = $runId
+                reason = "unhealthy_streak"
+                unhealthy_streak = [int]$unhealthyStreak
+                dry_run = [bool]$DryRun
+            }
+            Write-EventJsonl -Path $jsonlPath -Payload $evt
+            if (-not $DryRun) {
+                $stopRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -ActionName "stop" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
+                Write-EventJsonl -Path $jsonlPath -Payload @{
+                    ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+                    event = "restart_step"
+                    run_id = $runId
+                    action = "stop"
+                    ok = [bool]$stopRes.ok
+                    timed_out = [bool]$stopRes.timed_out
+                    exit_code = $stopRes.exit_code
+                    error = $stopRes.error
+                    stdout = $stopRes.stdout
+                    stderr = $stopRes.stderr
+                }
+
+                Start-Sleep -Seconds 3
+
+                $startRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -ActionName "start" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
+                Write-EventJsonl -Path $jsonlPath -Payload @{
+                    ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+                    event = "restart_step"
+                    run_id = $runId
+                    action = "start"
+                    ok = [bool]$startRes.ok
+                    timed_out = [bool]$startRes.timed_out
+                    exit_code = $startRes.exit_code
+                    error = $startRes.error
+                    stdout = $startRes.stdout
+                    stderr = $startRes.stderr
+                }
+
+                $statusRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -ActionName "status" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
+                Write-EventJsonl -Path $jsonlPath -Payload @{
+                    ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+                    event = "restart_step"
+                    run_id = $runId
+                    action = "status"
+                    ok = [bool]$statusRes.ok
+                    timed_out = [bool]$statusRes.timed_out
+                    exit_code = $statusRes.exit_code
+                    error = $statusRes.error
+                    stdout = $statusRes.stdout
+                    stderr = $statusRes.stderr
                 }
             }
-        } catch {
-            $mt5Alert = $null
+            $unhealthyStreak = 0
         }
-    }
 
-    $tick = @{
-        ts_utc = (Get-Date).ToUniversalTime().ToString("o")
-        event = "tick"
-        run_id = $runId
-        alive_count = [int]$aliveCount
-        min_alive = [int]$minAliveCount
-        healthy = [bool]$healthy
-        unhealthy_streak = [int]$unhealthyStreak
-        components = $components
-    }
-    if ($mt5Alert) { $tick.mt5_alert = $mt5Alert }
-    Write-EventJsonl -Path $jsonlPath -Payload $tick
-
-    $status = @{
-        ts_utc = (Get-Date).ToUniversalTime().ToString("o")
-        run_id = $runId
-        healthy = [bool]$healthy
-        alive_count = [int]$aliveCount
-        unhealthy_streak = [int]$unhealthyStreak
-        deadline_utc = $deadline.ToUniversalTime().ToString("o")
-        jsonl = $jsonlPath
-    }
-    $status | ConvertTo-Json -Depth 8 | Set-Content -Path $statusPath -Encoding UTF8
-
-    if ($unhealthyStreak -ge $strikeLimit) {
-        $evt = @{
-            ts_utc = (Get-Date).ToUniversalTime().ToString("o")
-            event = "restart_trigger"
-            run_id = $runId
-            reason = "unhealthy_streak"
-            unhealthy_streak = [int]$unhealthyStreak
-            dry_run = [bool]$DryRun
-        }
-        Write-EventJsonl -Path $jsonlPath -Payload $evt
-        if (-not $DryRun) {
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $systemControl -Action stop -Root $runtimeRoot -Profile full | Out-Null
-            Start-Sleep -Seconds 5
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $systemControl -Action start -Root $runtimeRoot -Profile full | Out-Null
-        }
-        $unhealthyStreak = 0
-    }
-
-    if ((Get-Date) -ge $nextSmoke) {
-        $smokeOut = Join-Path $evidenceDir ("smoke_" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ") + ".json")
-        $smokeRc = -1
-        $smokeErr = $null
-        if (-not $DryRun) {
-            try {
-                & py -3.12 -B $smokeScript --mt5-path $Mt5Path --out $smokeOut
-                $smokeRc = [int]$LASTEXITCODE
-            } catch {
-                $smokeRc = -1
-                $smokeErr = $_.Exception.Message
+        if ((Get-Date) -ge $nextSmoke) {
+            $smokeOut = Join-Path $evidenceDir ("smoke_" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ") + ".json")
+            $smokeRc = -1
+            $smokeErr = $null
+            $smokeExecOut = $null
+            $smokeExecErr = $null
+            $smokeTimedOut = $false
+            if (-not $DryRun) {
+                $smokeRes = Invoke-SmokeRun -RuntimeRoot $runtimeRoot -SmokeScriptPath $smokeScript -SmokeOutPath $smokeOut -Mt5TerminalPath $Mt5Path -TimeoutSec $smokeTimeout -EvidenceDir $evidenceDir
+                $smokeTimedOut = [bool]$smokeRes.timed_out
+                $smokeRc = if ($null -eq $smokeRes.exit_code) { -1 } else { [int]$smokeRes.exit_code }
+                $smokeErr = $smokeRes.error
+                $smokeExecOut = $smokeRes.stdout
+                $smokeExecErr = $smokeRes.stderr
             }
+            $smokeEvt = @{
+                ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+                event = "smoke"
+                run_id = $runId
+                rc = [int]$smokeRc
+                out = $smokeOut
+                err = $smokeErr
+                timed_out = [bool]$smokeTimedOut
+                exec_stdout = $smokeExecOut
+                exec_stderr = $smokeExecErr
+                dry_run = [bool]$DryRun
+            }
+            Write-EventJsonl -Path $jsonlPath -Payload $smokeEvt
+            $smokeEvt | ConvertTo-Json -Depth 8 | Set-Content -Path $lastSmokePath -Encoding UTF8
+            $nextSmoke = (Get-Date).AddMinutes($smokeEvery)
         }
-        $smokeEvt = @{
+    } catch {
+        Write-EventJsonl -Path $jsonlPath -Payload @{
             ts_utc = (Get-Date).ToUniversalTime().ToString("o")
-            event = "smoke"
+            event = "loop_error"
             run_id = $runId
-            rc = [int]$smokeRc
-            out = $smokeOut
-            err = $smokeErr
-            dry_run = [bool]$DryRun
+            error = $_.Exception.Message
         }
-        Write-EventJsonl -Path $jsonlPath -Payload $smokeEvt
-        $smokeEvt | ConvertTo-Json -Depth 8 | Set-Content -Path $lastSmokePath -Encoding UTF8
-        $nextSmoke = (Get-Date).AddMinutes($smokeEvery)
     }
 
     Start-Sleep -Seconds $interval
