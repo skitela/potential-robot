@@ -62,6 +62,22 @@
   "min_seconds_between_orders": 0.25,
   "max_orders_per_minute": 120,
   "max_orders_per_hour": 1500,
+  "fx_signal_score_enabled": true,
+  "fx_signal_score_threshold": 74,
+  "fx_signal_score_hot_relaxed_enabled": true,
+  "fx_signal_score_hot_relaxed_threshold": 68,
+  "fx_spread_cap_points_default": 24.0,
+  "fx_atr_points_min": 70.0,
+  "fx_atr_points_max": 220.0,
+  "fx_impulse_atr_fraction_min": 0.05,
+  "fx_body_range_ratio_min": 0.55,
+  "fx_body_vs_atr_clip_max": 2.2,
+  "fx_budget_pacing_enabled": true,
+  "fx_budget_pacing_phase1_progress": 0.25,
+  "fx_budget_pacing_phase2_progress": 0.6667,
+  "fx_budget_pacing_phase1_ratio": 0.25,
+  "fx_budget_pacing_phase2_ratio": 0.70,
+  "fx_budget_pacing_slack": 0.05,
   "scan_interval_sec": 30,
   "usb_watch_check_interval_sec": 30,
   "fx_only_mode": false,
@@ -186,6 +202,30 @@
     }
   },
   "per_symbol": {
+    "EURUSD": {
+      "fx_spread_cap_points": 18
+    },
+    "GBPUSD": {
+      "fx_spread_cap_points": 22
+    },
+    "USDJPY": {
+      "fx_spread_cap_points": 20
+    },
+    "USDCHF": {
+      "fx_spread_cap_points": 22
+    },
+    "USDCAD": {
+      "fx_spread_cap_points": 24
+    },
+    "AUDUSD": {
+      "fx_spread_cap_points": 22
+    },
+    "NZDUSD": {
+      "fx_spread_cap_points": 24
+    },
+    "EURGBP": {
+      "fx_spread_cap_points": 20
+    },
     "XAUUSD": {
       "position_time_stop_hot_min": 15,
       "position_time_stop_warm_min": 25,
