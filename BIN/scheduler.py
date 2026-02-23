@@ -1,13 +1,20 @@
 from __future__ import annotations
 import numpy as np
 import datetime as dt
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 from zoneinfo import ZoneInfo
 
 # These helpers were moved from safetybot.py
 TZ_NY = ZoneInfo("America/New_York")
 TZ_PL = ZoneInfo("Europe/Warsaw")
 UTC = dt.timezone.utc
+
+# Keep fallback windows aligned with SafetyBot defaults so "strategy.json missing"
+# does not silently revert to an old session profile.
+DEFAULT_GROUP_WINDOWS: Dict[str, List[Tuple[ZoneInfo, tuple[int, int], tuple[int, int]]]] = {
+    "FX": [(TZ_PL, (9, 0), (12, 0))],
+    "METAL": [(TZ_PL, (14, 0), (17, 0))],
+}
 
 def now_utc() -> dt.datetime:
     # In the future, this should use the time anchor from the main bot
@@ -22,7 +29,17 @@ def now_pl() -> dt.datetime:
 def in_window(local_dt: dt.datetime, start_hm: tuple[int, int], end_hm: tuple[int, int]) -> bool:
     s = local_dt.replace(hour=start_hm[0], minute=start_hm[1], second=0, microsecond=0)
     e = local_dt.replace(hour=end_hm[0], minute=end_hm[1], second=0, microsecond=0)
-    return s <= local_dt <= e
+    if (start_hm[0], start_hm[1]) == (end_hm[0], end_hm[1]):
+        return True
+    if e >= s:
+        return bool(s <= local_dt <= e)
+
+    # Overnight window support (e.g. 22:00-02:00).
+    e = e + dt.timedelta(days=1)
+    ref = local_dt
+    if ref < s:
+        ref = ref + dt.timedelta(days=1)
+    return bool(s <= ref <= e)
 
 # Forward-declare for type hinting
 class Persistence:
@@ -33,18 +50,81 @@ class ActivityController:
         self.db = db
         self.config = config
 
+    @staticmethod
+    def _norm_group(value: str) -> str:
+        g = str(value or "").strip().upper()
+        if g in {"METALS", "XAU"}:
+            return "METAL"
+        if g in {"INDICES"}:
+            return "INDEX"
+        return g
+
+    @staticmethod
+    def _parse_hm(raw: object, default_hm: tuple[int, int]) -> tuple[int, int]:
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            try:
+                hh = int(raw[0])
+                mm = int(raw[1])
+                if 0 <= hh <= 23 and 0 <= mm <= 59:
+                    return int(hh), int(mm)
+            except Exception:
+                return default_hm
+        if isinstance(raw, str) and ":" in raw:
+            try:
+                hh_s, mm_s = raw.split(":", 1)
+                hh = int(str(hh_s).strip())
+                mm = int(str(mm_s).strip())
+                if 0 <= hh <= 23 and 0 <= mm <= 59:
+                    return int(hh), int(mm)
+            except Exception:
+                return default_hm
+        return default_hm
+
+    def _group_trade_windows(self, grp: str) -> List[Tuple[ZoneInfo, tuple[int, int], tuple[int, int]]]:
+        """
+        Dynamic windows from strategy.json are the source of truth.
+        """
+        out: List[Tuple[ZoneInfo, tuple[int, int], tuple[int, int]]] = []
+        g = self._norm_group(grp)
+        try:
+            strategy = getattr(self.config, "strategy", {}) or {}
+        except Exception:
+            strategy = {}
+        raw = strategy.get("trade_windows", {}) if isinstance(strategy, dict) else {}
+        if not isinstance(raw, dict):
+            return out
+        for _wid, w in raw.items():
+            if not isinstance(w, dict):
+                continue
+            wg = self._norm_group(str(w.get("group") or ""))
+            if wg != g:
+                continue
+            tz_name = str(w.get("anchor_tz") or "Europe/Warsaw")
+            try:
+                tz = ZoneInfo(tz_name)
+            except Exception:
+                tz = TZ_PL
+            start_hm = self._parse_hm(w.get("start_hm"), (0, 0))
+            end_hm = self._parse_hm(w.get("end_hm"), (23, 59))
+            out.append((tz, start_hm, end_hm))
+        if not out:
+            out.extend(DEFAULT_GROUP_WINDOWS.get(g, []))
+        return out
+
     def time_weight(self, grp: str, symbol: str) -> float:
         n = now_ny()
         p = now_pl()
-        if grp == "FX":
-            if in_window(n, (8, 0), (12, 0)): return 1.0
-            if in_window(n, (3, 0), (8, 0)) or in_window(n, (12, 0), (16, 0)): return 0.6
+        g = self._norm_group(grp)
+        # Runtime-configured trade windows are the source of truth.
+        dynamic_windows = self._group_trade_windows(g)
+        if dynamic_windows:
+            now_ref_utc = now_utc()
+            for tz, start_hm, end_hm in dynamic_windows:
+                local_dt = now_ref_utc.astimezone(tz)
+                if in_window(local_dt, start_hm, end_hm):
+                    return 1.0
             return 0.25
-        if grp == "METAL":
-            if in_window(n, (7, 0), (13, 0)): return 1.0
-            if in_window(n, (3, 0), (7, 0)) or in_window(n, (13, 0), (16, 30)): return 0.6
-            return 0.25
-        if grp == "INDEX":
+        if g == "INDEX":
             prof = self.config.index_profile_map.get(symbol_base(symbol), "GEN")
             if prof == "EU":
                 if in_window(p, (9, 0), (12, 0)): return 0.9

@@ -782,7 +782,16 @@ def _in_window(local_now: dt.datetime, start_hm: Tuple[int, int], end_hm: Tuple[
     e_h, e_m = int(end_hm[0]), int(end_hm[1])
     start = local_now.replace(hour=s_h, minute=s_m, second=0, microsecond=0)
     end = local_now.replace(hour=e_h, minute=e_m, second=0, microsecond=0)
-    return bool(start <= local_now <= end)
+    if (s_h, s_m) == (e_h, e_m):
+        return True
+    if end >= start:
+        return bool(start <= local_now <= end)
+    # Overnight window support (e.g. 22:00-02:00).
+    end = end + dt.timedelta(days=1)
+    ref = local_now
+    if ref < start:
+        ref = ref + dt.timedelta(days=1)
+    return bool(start <= ref <= end)
 
 
 def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
