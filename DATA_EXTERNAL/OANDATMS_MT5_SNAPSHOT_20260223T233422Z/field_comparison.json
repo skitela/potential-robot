@@ -1,0 +1,76 @@
+{
+  "mt5_rates_fields": [
+    "close",
+    "high",
+    "low",
+    "open",
+    "real_volume",
+    "spread",
+    "tick_volume",
+    "time"
+  ],
+  "mt5_ticks_fields": [
+    "ask",
+    "bid",
+    "flags",
+    "last",
+    "time",
+    "time_msc",
+    "volume",
+    "volume_real"
+  ],
+  "internal_m5_bars_fields": [
+    "c",
+    "h",
+    "l",
+    "o",
+    "symbol",
+    "t_utc"
+  ],
+  "internal_decision_events_fields": [
+    "choice_A",
+    "choice_shadowB",
+    "entry_price",
+    "event_id",
+    "is_paper",
+    "mt5_deal",
+    "mt5_order",
+    "outcome_closed_ts_utc",
+    "outcome_commission",
+    "outcome_fee",
+    "outcome_pnl_net",
+    "outcome_profit",
+    "outcome_swap",
+    "price_requests_trade",
+    "price_used",
+    "server_time_anchor",
+    "signal",
+    "sl",
+    "spread_points",
+    "sys_used",
+    "topk_json",
+    "tp",
+    "ts_utc",
+    "verdict_light",
+    "volume"
+  ],
+  "missing_in_internal_for_rates": [
+    "close",
+    "high",
+    "low",
+    "open",
+    "real_volume",
+    "spread",
+    "tick_volume",
+    "time"
+  ],
+  "missing_in_internal_for_ticks": [
+    "ask",
+    "bid",
+    "flags",
+    "last",
+    "time",
+    "time_msc",
+    "volume_real"
+  ]
+}

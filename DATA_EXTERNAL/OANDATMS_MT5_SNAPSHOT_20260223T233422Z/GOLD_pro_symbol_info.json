@@ -1,0 +1,16 @@
+{
+  "name": "GOLD.pro",
+  "path": "PRO\\Noble\\GOLD.pro",
+  "digits": 2,
+  "point": 0.01,
+  "spread": 99,
+  "spread_float": true,
+  "trade_mode": 4,
+  "trade_execution": 2,
+  "trade_stops_level": 0,
+  "trade_freeze_level": 0,
+  "volume_min": 0.001,
+  "volume_max": 15.0,
+  "volume_step": 0.001,
+  "contract_size": 100.0
+}

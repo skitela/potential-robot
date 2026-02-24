@@ -4411,14 +4411,22 @@ class ExecutionEngine:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                 df_store = None
 
-            if df_store is not None and len(df_store) >= want_n:
+            strict_no_fetch = bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)) or bool(
+                getattr(CFG, "hybrid_no_mt5_data_fetch_hard", False)
+            )
+            if df_store is not None and len(df_store) > 0:
                 fresh_ok = True
                 try:
                     ts = pd.Timestamp(df_store["time"].iloc[-1])
                     if ts.tzinfo is None:
                         ts = ts.tz_localize(TZ_PL)
                     age_s = max(0.0, time.time() - float(ts.tz_convert(UTC).timestamp()))
-                    max_age = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+                    max_age_base = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+                    max_age_bar = max(max_age_base, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)))
+                    if need_tf_min is not None and int(need_tf_min) > int(trade_tf):
+                        max_age = max(max_age_bar, int(need_tf_min) * 60 + max(120, int(trade_tf) * 60))
+                    else:
+                        max_age = max_age_bar
                     if age_s > float(max_age):
                         fresh_ok = False
                         logging.warning(
@@ -4433,16 +4441,24 @@ class ExecutionEngine:
                     fresh_ok = False
 
                 if fresh_ok:
-                    logging.debug(
-                        "COPY_RATES_SOURCE source=ZMQ_STORE symbol=%s tf=%s rows=%s",
-                        symbol,
-                        tf_i,
-                        int(len(df_store)),
-                    )
-                    return df_store.tail(want_n).reset_index(drop=True)
-            strict_no_fetch = bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)) or bool(
-                getattr(CFG, "hybrid_no_mt5_data_fetch_hard", False)
-            )
+                    rows = int(len(df_store))
+                    if rows >= int(want_n):
+                        logging.debug(
+                            "COPY_RATES_SOURCE source=ZMQ_STORE symbol=%s tf=%s rows=%s",
+                            symbol,
+                            tf_i,
+                            rows,
+                        )
+                        return df_store.tail(want_n).reset_index(drop=True)
+                    if strict_no_fetch:
+                        logging.info(
+                            "COPY_RATES_STRICT_NOFETCH_PARTIAL symbol=%s tf=%s need_rows=%s have_rows=%s",
+                            symbol,
+                            tf_i,
+                            int(want_n),
+                            rows,
+                        )
+                        return df_store.tail(rows).reset_index(drop=True)
             if strict_no_fetch:
                 logging.info(
                     "COPY_RATES_STRICT_NOFETCH_SKIP symbol=%s tf=%s need_rows=%s have_rows=%s",
@@ -5764,17 +5780,62 @@ class StandardStrategy:
             _cfg_group_int(grp, "sma_structure_slow", int(getattr(CFG, "sma_structure_slow", 200)), symbol=symbol),
         )
 
-        df_h4 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_h4, 260)
-        df_d1 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_d1, 260)
         slow_need = max(int(sma_trend_win), int(sma_struct_slow_win))
-        min_rows = max(220, slow_need + 20)
-        if df_h4 is None or df_d1 is None or len(df_h4) < min_rows or len(df_d1) < min_rows:
+        req_h4 = max(80, slow_need + 20)
+        req_d1 = max(80, int(sma_trend_win) + 20)
+        df_h4 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_h4, req_h4)
+        df_d1 = self.engine.copy_rates(symbol, grp, CFG.timeframe_trend_d1, req_d1)
+        if df_h4 is None or df_d1 is None:
             return "NEUTRAL", "NEUTRAL", "NEUTRAL"
 
-        df_h4["sma_trend"] = ta.trend.sma_indicator(df_h4["close"], window=sma_trend_win)
-        df_d1["sma_trend"] = ta.trend.sma_indicator(df_d1["close"], window=sma_trend_win)
-        df_h4["sma_struct_fast"] = ta.trend.sma_indicator(df_h4["close"], window=sma_struct_fast_win)
-        df_h4["sma_struct_slow"] = ta.trend.sma_indicator(df_h4["close"], window=sma_struct_slow_win)
+        rows_h4 = int(len(df_h4))
+        rows_d1 = int(len(df_d1))
+        min_h4_rows = max(40, int(sma_struct_fast_win) + 5)
+        min_d1_rows = 40
+        if rows_h4 < min_h4_rows or rows_d1 < min_d1_rows:
+            logging.info(
+                "TREND_DATA_SHORT symbol=%s grp=%s rows_h4=%s rows_d1=%s min_h4=%s min_d1=%s",
+                symbol,
+                grp,
+                rows_h4,
+                rows_d1,
+                min_h4_rows,
+                min_d1_rows,
+            )
+            return "NEUTRAL", "NEUTRAL", "NEUTRAL"
+
+        trend_win_h4 = min(int(sma_trend_win), max(20, rows_h4 - 5))
+        trend_win_d1 = min(int(sma_trend_win), max(20, rows_d1 - 5))
+        struct_fast_eff = min(int(sma_struct_fast_win), max(10, rows_h4 - 10))
+        struct_slow_eff = min(int(sma_struct_slow_win), max(struct_fast_eff + 1, rows_h4 - 5))
+        if trend_win_h4 < 20 or trend_win_d1 < 20 or struct_slow_eff <= struct_fast_eff:
+            return "NEUTRAL", "NEUTRAL", "NEUTRAL"
+
+        if (
+            trend_win_h4 != int(sma_trend_win)
+            or trend_win_d1 != int(sma_trend_win)
+            or struct_fast_eff != int(sma_struct_fast_win)
+            or struct_slow_eff != int(sma_struct_slow_win)
+        ):
+            logging.info(
+                "TREND_WARMUP_ADAPT symbol=%s grp=%s trend_cfg=%s trend_h4=%s trend_d1=%s struct_fast_cfg=%s struct_fast=%s struct_slow_cfg=%s struct_slow=%s rows_h4=%s rows_d1=%s",
+                symbol,
+                grp,
+                int(sma_trend_win),
+                int(trend_win_h4),
+                int(trend_win_d1),
+                int(sma_struct_fast_win),
+                int(struct_fast_eff),
+                int(sma_struct_slow_win),
+                int(struct_slow_eff),
+                rows_h4,
+                rows_d1,
+            )
+
+        df_h4["sma_trend"] = ta.trend.sma_indicator(df_h4["close"], window=trend_win_h4)
+        df_d1["sma_trend"] = ta.trend.sma_indicator(df_d1["close"], window=trend_win_d1)
+        df_h4["sma_struct_fast"] = ta.trend.sma_indicator(df_h4["close"], window=struct_fast_eff)
+        df_h4["sma_struct_slow"] = ta.trend.sma_indicator(df_h4["close"], window=struct_slow_eff)
 
         trend_h4 = "BUY" if float(df_h4["close"].iloc[-1]) > float(df_h4["sma_trend"].iloc[-1]) else "SELL"
         trend_d1 = "BUY" if float(df_d1["close"].iloc[-1]) > float(df_d1["sma_trend"].iloc[-1]) else "SELL"

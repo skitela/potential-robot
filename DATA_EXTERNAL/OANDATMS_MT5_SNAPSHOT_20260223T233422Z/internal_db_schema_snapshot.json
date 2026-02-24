@@ -1,0 +1,442 @@
+{
+  "decision_events.sqlite": {
+    "budget_day": [
+      {
+        "cid": 0,
+        "name": "ny_date",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "price_count",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 2,
+        "name": "price_emergency",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 3,
+        "name": "sys_count",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 4,
+        "name": "sys_emergency",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      }
+    ],
+    "deals_log": [
+      {
+        "cid": 0,
+        "name": "deal_ticket",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "time",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 2,
+        "name": "ny_date",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 3,
+        "name": "ny_hour",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 4,
+        "name": "grp",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 5,
+        "name": "symbol",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 6,
+        "name": "profit",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 7,
+        "name": "commission",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 8,
+        "name": "swap",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      }
+    ],
+    "decision_events": [
+      {
+        "cid": 0,
+        "name": "event_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "ts_utc",
+        "type": "TEXT",
+        "notnull": 1,
+        "pk": 0
+      },
+      {
+        "cid": 2,
+        "name": "server_time_anchor",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 3,
+        "name": "topk_json",
+        "type": "TEXT",
+        "notnull": 1,
+        "pk": 0
+      },
+      {
+        "cid": 4,
+        "name": "choice_A",
+        "type": "TEXT",
+        "notnull": 1,
+        "pk": 0
+      },
+      {
+        "cid": 5,
+        "name": "choice_shadowB",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 6,
+        "name": "verdict_light",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 7,
+        "name": "signal",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 8,
+        "name": "sl",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 9,
+        "name": "tp",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 10,
+        "name": "entry_price",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 11,
+        "name": "volume",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 12,
+        "name": "spread_points",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 13,
+        "name": "price_used",
+        "type": "INT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 14,
+        "name": "price_requests_trade",
+        "type": "INT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 15,
+        "name": "sys_used",
+        "type": "INT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 16,
+        "name": "is_paper",
+        "type": "INT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 17,
+        "name": "mt5_order",
+        "type": "INT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 18,
+        "name": "mt5_deal",
+        "type": "INT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 19,
+        "name": "outcome_pnl_net",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 20,
+        "name": "outcome_profit",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 21,
+        "name": "outcome_commission",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 22,
+        "name": "outcome_swap",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 23,
+        "name": "outcome_fee",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 24,
+        "name": "outcome_closed_ts_utc",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      }
+    ],
+    "req_hourly": [
+      {
+        "cid": 0,
+        "name": "ny_date",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "ny_hour",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 2
+      },
+      {
+        "cid": 2,
+        "name": "category",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 3
+      },
+      {
+        "cid": 3,
+        "name": "grp",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 4
+      },
+      {
+        "cid": 4,
+        "name": "symbol",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 5
+      },
+      {
+        "cid": 5,
+        "name": "kind",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 6
+      },
+      {
+        "cid": 6,
+        "name": "count",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      }
+    ],
+    "spread_history": [
+      {
+        "cid": 0,
+        "name": "symbol",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 1,
+        "name": "timestamp",
+        "type": "INTEGER",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 2,
+        "name": "spread_points",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      }
+    ],
+    "system_state": [
+      {
+        "cid": 0,
+        "name": "key",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "value",
+        "type": "TEXT",
+        "notnull": 0,
+        "pk": 0
+      }
+    ],
+    "xcross_writer_events": [
+      {
+        "cid": 0,
+        "name": "ts_utc",
+        "type": "TEXT",
+        "notnull": 1,
+        "pk": 0
+      },
+      {
+        "cid": 1,
+        "name": "seq",
+        "type": "INTEGER",
+        "notnull": 1,
+        "pk": 0
+      },
+      {
+        "cid": 2,
+        "name": "note",
+        "type": "TEXT",
+        "notnull": 1,
+        "pk": 0
+      }
+    ]
+  },
+  "m5_bars.sqlite": {
+    "m5_bars": [
+      {
+        "cid": 0,
+        "name": "symbol",
+        "type": "TEXT",
+        "notnull": 1,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "t_utc",
+        "type": "TEXT",
+        "notnull": 1,
+        "pk": 2
+      },
+      {
+        "cid": 2,
+        "name": "o",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 3,
+        "name": "h",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 4,
+        "name": "l",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      },
+      {
+        "cid": 5,
+        "name": "c",
+        "type": "REAL",
+        "notnull": 0,
+        "pk": 0
+      }
+    ]
+  }
+}

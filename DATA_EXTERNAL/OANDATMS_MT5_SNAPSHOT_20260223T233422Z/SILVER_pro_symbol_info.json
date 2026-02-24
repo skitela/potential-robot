@@ -1,0 +1,16 @@
+{
+  "name": "SILVER.pro",
+  "path": "PRO\\Noble\\SILVER.pro",
+  "digits": 3,
+  "point": 0.001,
+  "spread": 86,
+  "spread_float": true,
+  "trade_mode": 4,
+  "trade_execution": 2,
+  "trade_stops_level": 0,
+  "trade_freeze_level": 0,
+  "volume_min": 0.001,
+  "volume_max": 5.0,
+  "volume_step": 0.001,
+  "contract_size": 5000.0
+}

@@ -466,6 +466,43 @@ string GetRetcodeString(uint retcode)
   }
 }
 
+ENUM_ORDER_TYPE_FILLING ResolveOrderFilling(const string symbol)
+{
+  long fm = 0;
+  if(SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE, fm))
+  {
+    if((fm & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK)
+      return ORDER_FILLING_FOK;
+    if((fm & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC)
+      return ORDER_FILLING_IOC;
+#ifdef ORDER_FILLING_RETURN
+    if((fm & SYMBOL_FILLING_RETURN) == SYMBOL_FILLING_RETURN)
+      return ORDER_FILLING_RETURN;
+#endif
+  }
+  return ORDER_FILLING_FOK;
+}
+
+string BuildTradeDiag(const string symbol, const ENUM_ORDER_TYPE_FILLING req_fill)
+{
+  const int term_allowed = (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) != 0 ? 1 : 0);
+  const int mql_allowed = (MQLInfoInteger(MQL_TRADE_ALLOWED) != 0 ? 1 : 0);
+  const int acc_allowed = (AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) != 0 ? 1 : 0);
+  const long acc_mode = (long)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+  const long sym_mode = (long)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+  const long sym_fill = (long)SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+  return StringFormat(
+    "term=%d mql=%d acc=%d acc_mode=%I64d sym_mode=%I64d sym_fill=%I64d req_fill=%d",
+    term_allowed,
+    mql_allowed,
+    acc_allowed,
+    acc_mode,
+    sym_mode,
+    sym_fill,
+    (int)req_fill
+  );
+}
+
 //+------------------------------------------------------------------+
 //| Fail-safe closeout                                                |
 //+------------------------------------------------------------------+
@@ -492,7 +529,7 @@ void CloseAllOpenPositions(string reason)
     req.volume = PositionGetDouble(POSITION_VOLUME);
     req.magic = (long)PositionGetInteger(POSITION_MAGIC);
     req.comment = reason;
-    req.type_filling = ORDER_FILLING_IOC;
+    req.type_filling = ResolveOrderFilling(symbol);
     req.deviation = 25;
 
     long pos_type = PositionGetInteger(POSITION_TYPE);
@@ -515,7 +552,12 @@ void CloseAllOpenPositions(string reason)
 
     if(!OrderSend(req, res))
     {
-      Print("FAIL_SAFE_CLOSE_FAIL ticket=", (long)ticket, " err=", GetLastError(), " retcode=", (long)res.retcode);
+      Print(
+        "FAIL_SAFE_CLOSE_FAIL ticket=", (long)ticket,
+        " err=", GetLastError(),
+        " retcode=", (long)res.retcode,
+        " ", BuildTradeDiag(symbol, req.type_filling)
+      );
     }
     else
     {
@@ -764,6 +806,24 @@ void ExecuteTrade(
   ZeroMemory(request);
   ZeroMemory(result);
 
+  const ENUM_ORDER_TYPE_FILLING req_fill = ResolveOrderFilling(symbol_req);
+  const int term_allowed = (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) != 0 ? 1 : 0);
+  const int mql_allowed = (MQLInfoInteger(MQL_TRADE_ALLOWED) != 0 ? 1 : 0);
+  const int acc_allowed = (AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) != 0 ? 1 : 0);
+  const string trade_diag = BuildTradeDiag(symbol_req, req_fill);
+  if(term_allowed == 0 || mql_allowed == 0 || acc_allowed == 0)
+  {
+    Print("ORDER_PRECHECK_BLOCK msg_id=", msg_id, " ", trade_diag);
+    SendReplyEnvelope(
+      "REJECTED", msg_id, action_reply,
+      10017, "TRADE_RETCODE_TRADE_DISABLED", 0, 0,
+      trade_diag,
+      symbol_req,
+      trade_diag, request_hash, true
+    );
+    return;
+  }
+
   request.action = TRADE_ACTION_DEAL;
   request.symbol = symbol_req;
   request.volume = volume;
@@ -773,17 +833,33 @@ void ExecuteTrade(
   request.magic = magic;
   request.comment = comment;
   request.type = order_type;
-  request.type_filling = ORDER_FILLING_FOK;
+  request.type_filling = req_fill;
   request.deviation = 10;
 
   if(!OrderSend(request, result))
   {
-    Print("ORDER_SEND_FAIL msg_id=", msg_id, " err=", GetLastError(), " retcode=", (long)result.retcode);
+    Print(
+      "ORDER_SEND_FAIL msg_id=", msg_id,
+      " err=", GetLastError(),
+      " retcode=", (long)result.retcode,
+      " ", trade_diag,
+      " comment=", result.comment
+    );
   }
 
   long rc = (long)result.retcode;
   if(rc <= 0)
     rc = 10011;
+  if(rc != 10009 && rc != 10008)
+  {
+    Print(
+      "ORDER_SEND_RESULT msg_id=", msg_id,
+      " retcode=", rc,
+      " retcode_name=", GetRetcodeString((uint)rc),
+      " ", trade_diag,
+      " comment=", result.comment
+    );
+  }
 
   SendReplyEnvelope(
     "PROCESSED", msg_id, action_reply,

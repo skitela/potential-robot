@@ -1,0 +1,22 @@
+{
+  "rates_dtype": [
+    "time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "tick_volume",
+    "spread",
+    "real_volume"
+  ],
+  "ticks_dtype": [
+    "time",
+    "bid",
+    "ask",
+    "last",
+    "volume",
+    "time_msc",
+    "flags",
+    "volume_real"
+  ]
+}

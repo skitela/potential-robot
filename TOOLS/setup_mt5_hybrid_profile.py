@@ -106,21 +106,27 @@ def _resolve_symbol(base: str, available: List[str]) -> str:
     b = str(base).strip().upper()
     av_map = {s.upper(): s for s in available}
 
+    def _norm_case(sym: str) -> str:
+        s = str(sym or "").strip()
+        if s.upper().endswith(".PRO"):
+            return s[:-4] + ".pro"
+        return s
+
     # Metals aliases used by broker.
     if b == "XAUUSD":
         for cand in ("GOLD.PRO", "GOLD", "XAUUSD.PRO", "XAUUSD"):
             if cand in av_map:
-                return av_map[cand]
+                return _norm_case(av_map[cand])
         return "GOLD.pro"
     if b == "XAGUSD":
         for cand in ("SILVER.PRO", "SILVER", "XAGUSD.PRO", "XAGUSD"):
             if cand in av_map:
-                return av_map[cand]
+                return _norm_case(av_map[cand])
         return "SILVER.pro"
 
     for cand in (f"{b}.PRO", b):
         if cand in av_map:
-            return av_map[cand]
+            return _norm_case(av_map[cand])
     # Fallback: use .pro style (what OANDA MT5 uses in this environment).
     return f"{b}.pro"
 

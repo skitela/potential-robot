@@ -169,14 +169,26 @@ class ZMQBridge:
 
             # Gniazdo REQ do wysyłania komend i odbierania potwierdzeń
             self.req_socket = self.context.socket(zmq.REQ)
+            self._configure_req_socket(self.req_socket)
             self.req_socket.bind(f"tcp://127.0.0.1:{self.req_port}")
-            self.req_socket.setsockopt(zmq.LINGER, 0)
             logging.info(f"ZMQ REQ socket gotowy do wysyłania na tcp://127.0.0.1:{self.req_port}")
 
         except zmq.ZMQError as e:
             logging.error(f"Nie udało się powiązać gniazd ZMQ: {e}")
             logging.error(f"Sprawdź, czy inny proces nie używa portów {self.pull_port}/{self.req_port}.")
             raise
+
+    def _configure_req_socket(self, sock: zmq.Socket) -> None:
+        """
+        Konfiguracja REQ pod odporno?? na brak po??czenia z EA:
+        - ograniczone timeouty send/recv (brak zawieszania),
+        - IMMEDIATE=1 (nie blokuj wysy?ki bez peera),
+        - LINGER=0 (szybkie zamykanie przy reconnect).
+        """
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.setsockopt(zmq.SNDTIMEO, int(max(1, self.req_timeout_ms)))
+        sock.setsockopt(zmq.RCVTIMEO, int(max(1, self.req_timeout_ms)))
+        sock.setsockopt(zmq.IMMEDIATE, 1)
 
     def receive_data(self, timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
@@ -289,11 +301,21 @@ class ZMQBridge:
                     self._reconnect_req_socket()
 
             except (TypeError, json.JSONDecodeError) as e:
-                logging.error(f"Błąd serializacji komendy do JSON: {e}")
+                logging.error(f"B??d serializacji komendy do JSON: {e}")
                 self._write_audit_log("COMMAND_SERIALIZATION_ERROR", msg_id, {"error": str(e)})
                 return None
+            except zmq.Again:
+                logging.warning(
+                    f"Timeout wysylki REQ (pr?ba {attempt + 1}). Brak aktywnego peera dla msg_id: {msg_id}."
+                )
+                self._write_audit_log(
+                    "COMMAND_SEND_TIMEOUT",
+                    msg_id,
+                    {"attempt": attempt + 1, "timeout_ms": self.req_timeout_ms},
+                )
+                self._reconnect_req_socket()
             except zmq.ZMQError as e:
-                logging.error(f"Błąd gniazda ZMQ podczas wysyłania komendy: {e}")
+                logging.error(f"B??d gniazda ZMQ podczas wysy?ania komendy: {e}")
                 self._reconnect_req_socket()
         
         logging.error(f"Nie udało się wysłać komendy i otrzymać odpowiedzi po {self.req_retries} próbach dla msg_id: {msg_id}.")
@@ -307,7 +329,7 @@ class ZMQBridge:
             self.req_socket.close()
         
         self.req_socket = self.context.socket(zmq.REQ)
-        self.req_socket.setsockopt(zmq.LINGER, 0)
+        self._configure_req_socket(self.req_socket)
         self.req_socket.bind(f"tcp://127.0.0.1:{self.req_port}")
         logging.info("Gniazdo REQ zostało zresetowane i ponownie powiązane.")
 

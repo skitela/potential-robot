@@ -1,0 +1,729 @@
+{
+  "generated_utc": "2026-02-23T23:46:28.045549Z",
+  "days": 21,
+  "timezone": "Europe/Warsaw",
+  "symbols": {
+    "GOLD.pro": {
+      "rows": 20280,
+      "point": 0.01,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 21.522,
+          "spread_med": 23.0,
+          "range_med": 495.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 19.583,
+          "spread_med": 24.0,
+          "range_med": 470.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 14.755,
+          "spread_med": 26.5,
+          "range_med": 391.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 15,
+          "edge_proxy": 12.661,
+          "spread_med": 28.0,
+          "range_med": 354.5,
+          "n": 900
+        },
+        {
+          "hour_pl": 3,
+          "edge_proxy": 9.813,
+          "spread_med": 40.0,
+          "range_med": 392.5,
+          "n": 900
+        },
+        {
+          "hour_pl": 10,
+          "edge_proxy": 9.411,
+          "spread_med": 28.0,
+          "range_med": 263.5,
+          "n": 900
+        }
+      ]
+    },
+    "SILVER.pro": {
+      "rows": 20280,
+      "point": 0.001,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 16,
+          "edge_proxy": 6.741,
+          "spread_med": 29.0,
+          "range_med": 195.5,
+          "n": 900
+        },
+        {
+          "hour_pl": 17,
+          "edge_proxy": 6.422,
+          "spread_med": 32.0,
+          "range_med": 205.5,
+          "n": 900
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 4.838,
+          "spread_med": 34.0,
+          "range_med": 164.5,
+          "n": 900
+        },
+        {
+          "hour_pl": 15,
+          "edge_proxy": 4.742,
+          "spread_med": 31.0,
+          "range_med": 147.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 3.861,
+          "spread_med": 36.0,
+          "range_med": 139.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 20,
+          "edge_proxy": 3.833,
+          "spread_med": 36.0,
+          "range_med": 138.0,
+          "n": 900
+        }
+      ]
+    },
+    "COPPER-US.pro": {
+      "rows": 20320,
+      "point": 1e-05,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 3.647,
+          "spread_med": 150.0,
+          "range_med": 547.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 3.48,
+          "spread_med": 150.0,
+          "range_med": 522.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 15,
+          "edge_proxy": 3.307,
+          "spread_med": 150.0,
+          "range_med": 496.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 2.98,
+          "spread_med": 150.0,
+          "range_med": 447.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 2.313,
+          "spread_med": 150.0,
+          "range_med": 347.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 14,
+          "edge_proxy": 2.313,
+          "spread_med": 150.0,
+          "range_med": 347.0,
+          "n": 900
+        }
+      ]
+    },
+    "PLATIN.pro": {
+      "rows": 20337,
+      "point": 0.1,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 0.774,
+          "spread_med": 53.0,
+          "range_med": 41.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 0.774,
+          "spread_med": 53.0,
+          "range_med": 41.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 15,
+          "edge_proxy": 0.679,
+          "spread_med": 53.0,
+          "range_med": 36.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 0.651,
+          "spread_med": 53.0,
+          "range_med": 34.5,
+          "n": 900
+        },
+        {
+          "hour_pl": 3,
+          "edge_proxy": 0.604,
+          "spread_med": 53.0,
+          "range_med": 32.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 0.547,
+          "spread_med": 53.0,
+          "range_med": 29.0,
+          "n": 900
+        }
+      ]
+    },
+    "PALLAD.pro": {
+      "rows": 20245,
+      "point": 0.1,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 1.579,
+          "spread_med": 19.0,
+          "range_med": 30.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 1.579,
+          "spread_med": 19.0,
+          "range_med": 30.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 15,
+          "edge_proxy": 1.421,
+          "spread_med": 19.0,
+          "range_med": 27.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 1.316,
+          "spread_med": 19.0,
+          "range_med": 25.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 1.053,
+          "spread_med": 19.0,
+          "range_med": 20.0,
+          "n": 900
+        },
+        {
+          "hour_pl": 10,
+          "edge_proxy": 0.621,
+          "spread_med": 29.0,
+          "range_med": 18.0,
+          "n": 900
+        }
+      ]
+    },
+    "BTCUSD": {
+      "rows": 28328,
+      "point": 0.01,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 57.75,
+          "spread_med": 200.0,
+          "range_med": 11550.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 48.25,
+          "spread_med": 200.0,
+          "range_med": 9650.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 46.25,
+          "spread_med": 200.0,
+          "range_med": 9250.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 43.5,
+          "spread_med": 200.0,
+          "range_med": 8700.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 20,
+          "edge_proxy": 40.75,
+          "spread_med": 200.0,
+          "range_med": 8150.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 21,
+          "edge_proxy": 36.0,
+          "spread_med": 200.0,
+          "range_med": 7200.0,
+          "n": 1260
+        }
+      ]
+    },
+    "ETHUSD": {
+      "rows": 28328,
+      "point": 0.01,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 26.267,
+          "spread_med": 15.0,
+          "range_med": 394.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 23.2,
+          "spread_med": 15.0,
+          "range_med": 348.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 21.267,
+          "spread_med": 15.0,
+          "range_med": 319.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 20.533,
+          "spread_med": 15.0,
+          "range_med": 308.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 20,
+          "edge_proxy": 20.0,
+          "spread_med": 15.0,
+          "range_med": 300.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 15,
+          "edge_proxy": 17.0,
+          "spread_med": 15.0,
+          "range_med": 255.0,
+          "n": 1260
+        }
+      ]
+    },
+    "LTCUSD": {
+      "rows": 28319,
+      "point": 0.001,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 2.833,
+          "spread_med": 30.0,
+          "range_med": 85.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 2.5,
+          "spread_med": 30.0,
+          "range_med": 75.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 2.333,
+          "spread_med": 30.0,
+          "range_med": 70.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 2.333,
+          "spread_med": 30.0,
+          "range_med": 70.0,
+          "n": 1259
+        },
+        {
+          "hour_pl": 20,
+          "edge_proxy": 2.167,
+          "spread_med": 30.0,
+          "range_med": 65.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 21,
+          "edge_proxy": 1.833,
+          "spread_med": 30.0,
+          "range_med": 55.0,
+          "n": 1260
+        }
+      ]
+    },
+    "ADAUSD": {
+      "rows": 28107,
+      "point": 0.0001,
+      "top_hours_by_edge_proxy": [
+        {
+          "hour_pl": 17,
+          "edge_proxy": 2.5,
+          "spread_med": 2.0,
+          "range_med": 5.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 18,
+          "edge_proxy": 2.5,
+          "spread_med": 2.0,
+          "range_med": 5.0,
+          "n": 1259
+        },
+        {
+          "hour_pl": 16,
+          "edge_proxy": 2.0,
+          "spread_med": 2.0,
+          "range_med": 4.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 19,
+          "edge_proxy": 2.0,
+          "spread_med": 2.0,
+          "range_med": 4.0,
+          "n": 1258
+        },
+        {
+          "hour_pl": 20,
+          "edge_proxy": 2.0,
+          "spread_med": 2.0,
+          "range_med": 4.0,
+          "n": 1260
+        },
+        {
+          "hour_pl": 22,
+          "edge_proxy": 1.5,
+          "spread_med": 2.0,
+          "range_med": 3.0,
+          "n": 1256
+        }
+      ]
+    }
+  },
+  "windows": {
+    "GOLD.pro": [
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 18.62
+      },
+      {
+        "start_hour_pl": 15,
+        "end_hour_pl": 18,
+        "hours_pl": [
+          15,
+          16,
+          17
+        ],
+        "avg_edge_proxy": 17.922
+      },
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 14.955
+      }
+    ],
+    "SILVER.pro": [
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 6.0
+      },
+      {
+        "start_hour_pl": 15,
+        "end_hour_pl": 18,
+        "hours_pl": [
+          15,
+          16,
+          17
+        ],
+        "avg_edge_proxy": 5.968
+      },
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 5.04
+      }
+    ],
+    "COPPER-US.pro": [
+      {
+        "start_hour_pl": 15,
+        "end_hour_pl": 18,
+        "hours_pl": [
+          15,
+          16,
+          17
+        ],
+        "avg_edge_proxy": 3.478
+      },
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 3.369
+      },
+      {
+        "start_hour_pl": 14,
+        "end_hour_pl": 17,
+        "hours_pl": [
+          14,
+          15,
+          16
+        ],
+        "avg_edge_proxy": 3.033
+      }
+    ],
+    "PLATIN.pro": [
+      {
+        "start_hour_pl": 15,
+        "end_hour_pl": 18,
+        "hours_pl": [
+          15,
+          16,
+          17
+        ],
+        "avg_edge_proxy": 0.742
+      },
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 0.733
+      },
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 0.657
+      }
+    ],
+    "PALLAD.pro": [
+      {
+        "start_hour_pl": 15,
+        "end_hour_pl": 18,
+        "hours_pl": [
+          15,
+          16,
+          17
+        ],
+        "avg_edge_proxy": 1.526
+      },
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 1.491
+      },
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 1.316
+      }
+    ],
+    "BTCUSD": [
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 50.75
+      },
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 49.833
+      },
+      {
+        "start_hour_pl": 15,
+        "end_hour_pl": 18,
+        "hours_pl": [
+          15,
+          16,
+          17
+        ],
+        "avg_edge_proxy": 46.333
+      }
+    ],
+    "ETHUSD": [
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 23.578
+      },
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 23.333
+      },
+      {
+        "start_hour_pl": 15,
+        "end_hour_pl": 18,
+        "hours_pl": [
+          15,
+          16,
+          17
+        ],
+        "avg_edge_proxy": 21.511
+      }
+    ],
+    "LTCUSD": [
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 2.556
+      },
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 2.556
+      },
+      {
+        "start_hour_pl": 18,
+        "end_hour_pl": 21,
+        "hours_pl": [
+          18,
+          19,
+          20
+        ],
+        "avg_edge_proxy": 2.333
+      }
+    ],
+    "ADAUSD": [
+      {
+        "start_hour_pl": 17,
+        "end_hour_pl": 20,
+        "hours_pl": [
+          17,
+          18,
+          19
+        ],
+        "avg_edge_proxy": 2.333
+      },
+      {
+        "start_hour_pl": 16,
+        "end_hour_pl": 19,
+        "hours_pl": [
+          16,
+          17,
+          18
+        ],
+        "avg_edge_proxy": 2.333
+      },
+      {
+        "start_hour_pl": 18,
+        "end_hour_pl": 21,
+        "hours_pl": [
+          18,
+          19,
+          20
+        ],
+        "avg_edge_proxy": 2.167
+      }
+    ]
+  }
+}
