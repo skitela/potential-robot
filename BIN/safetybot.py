@@ -307,6 +307,7 @@ class CFG:
         "FX_AM": {"group": "FX", "anchor_tz": "Europe/Warsaw", "start_hm": (9, 0), "end_hm": (12, 0)},
         "METAL_PM": {"group": "METAL", "anchor_tz": "Europe/Warsaw", "start_hm": (14, 0), "end_hm": (17, 0)},
     }
+    trade_window_strict_group_routing: bool = True
     trade_closeout_buffer_min: int = 15
     hard_no_mt5_outside_windows: bool = True
     # Outside windows we still do minimal SYS reconciliation (positions/orders) for safety.
@@ -326,13 +327,25 @@ class CFG:
         "XAGUSD": "METAL",
         "GOLD": "METAL",
         "SILVER": "METAL",
+        "PLATIN": "METAL",
+        "PALLAD": "METAL",
+        "COPPER-US": "METAL",
         "DAX40": "INDEX",
         "DE40": "INDEX",
         "DE30": "INDEX",
         "GER40": "INDEX",
         "GER30": "INDEX",
+        "EU50": "INDEX",
         "US500": "INDEX",
         "SPX500": "INDEX",
+        "US100": "INDEX",
+        "NAS100": "INDEX",
+        "US30": "INDEX",
+        "WS30": "INDEX",
+        "BTCUSD": "CRYPTO",
+        "ETHUSD": "CRYPTO",
+        "LTCUSD": "CRYPTO",
+        "XRPUSD": "CRYPTO",
     }
     index_profile_map = {
         "DAX40": "EU",
@@ -340,8 +353,13 @@ class CFG:
         "DE30": "EU",
         "GER40": "EU",
         "GER30": "EU",
+        "EU50": "EU",
         "US500": "US",
         "SPX500": "US",
+        "US100": "US",
+        "NAS100": "US",
+        "US30": "US",
+        "WS30": "US",
     }
     # Broker-specific base aliases (OANDA TMS MT5 may expose DE30/GOLD names).
     symbol_alias_map: Dict[str, Tuple[str, ...]] = {
@@ -355,24 +373,35 @@ class CFG:
         "EURGBP": ("EURGBP",),
         "XAUUSD": ("XAUUSD", "GOLD"),
         "XAGUSD": ("XAGUSD", "SILVER"),
+        "PLATIN": ("PLATIN",),
+        "PALLAD": ("PALLAD",),
+        "COPPER-US": ("COPPER-US",),
         "DAX40": ("DAX40", "DE40", "DE30", "GER40", "GER30"),
+        "EU50": ("EU50",),
         "US500": ("US500", "SPX500"),
+        "US100": ("US100", "NAS100"),
+        "US30": ("US30", "WS30"),
+        "BTCUSD": ("BTCUSD",),
+        "ETHUSD": ("ETHUSD",),
+        "LTCUSD": ("LTCUSD",),
+        "XRPUSD": ("XRPUSD",),
     }
     symbol_suffixes: Tuple[str, ...] = ("", ".pro", ".stp", ".pl")
     # OANDA MT5 policy guard: block accidental algo on equity/ETF/ETN symbols (non-close only).
     symbol_policy_enabled: bool = True
     symbol_policy_fail_on_other_group: bool = True
-    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX", "METAL")
+    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX", "METAL", "INDEX", "CRYPTO")
     symbol_policy_forbidden_symbol_markers: Tuple[str, ...] = (".ETF", "_CFD.ETF", ".ETN", "_CFD.ETN")
     symbol_policy_forbidden_path_markers: Tuple[str, ...] = ("STOCK", "AKCJE", "EQUITY", "ETF", "ETN")
 
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
     # 45/45/10: przy price_emergency_reserve_fraction=0.10, równe udziały FX/METAL dają 45%/45% (z 90% puli trade).
-    group_price_shares = {"FX": 1.0, "METAL": 1.0}
+    group_price_shares = {"FX": 1.0, "METAL": 1.0, "INDEX": 0.8, "CRYPTO": 0.6}
     per_group: Dict[str, Dict[str, Any]] = {}
     per_symbol: Dict[str, Dict[str, Any]] = {}
     # Brak pożyczania: trzymamy sztywny podział budżetu między FX i METAL.
     group_borrow_fraction: float = 0.0  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
+    group_borrow_unlock_power: float = 1.0  # 1.0=linear unlock by session progress
 
     # --- Strategia ---
     timeframe_trade = getattr(mt5, "TIMEFRAME_M5", 5)
@@ -994,6 +1023,10 @@ def _group_key(group: Optional[str]) -> str:
         return "METAL"
     if g in {"INDICES"}:
         return "INDEX"
+    if g in {"CRYPTOS", "CRYPTOCURRENCY", "CRYPTOCURRENCIES"}:
+        return "CRYPTO"
+    if g in {"EQUITIES", "STOCKS"}:
+        return "EQUITY"
     return g
 
 
@@ -1275,7 +1308,11 @@ def fx_budget_pacing_allows_entry(
         sh, eh = (9, 0), (12, 0)
 
     progress = window_progress_ratio(now_pl_dt, sh, eh)
-    cap = int(max(0, int(gov.order_group_cap("FX")) + int(gov.order_group_borrow_allowance("FX"))))
+    try:
+        borrow = int(gov.order_group_borrow_allowance("FX", now_dt=now_u))
+    except TypeError:
+        borrow = int(gov.order_group_borrow_allowance("FX"))
+    cap = int(max(0, int(gov.order_group_cap("FX")) + int(borrow)))
     used = int(max(0, int(db.get_order_group_actions_day("FX", now_dt=now_u, emergency=False))))
     if cap <= 0:
         return False, {
@@ -1493,7 +1530,11 @@ def metal_budget_pacing_allows_entry(
         sh, eh = (14, 0), (17, 0)
 
     progress = window_progress_ratio(now_pl_dt, sh, eh)
-    cap = int(max(0, int(gov.order_group_cap("METAL")) + int(gov.order_group_borrow_allowance("METAL"))))
+    try:
+        borrow = int(gov.order_group_borrow_allowance("METAL", now_dt=now_u))
+    except TypeError:
+        borrow = int(gov.order_group_borrow_allowance("METAL"))
+    cap = int(max(0, int(gov.order_group_cap("METAL")) + int(borrow)))
     used = int(max(0, int(db.get_order_group_actions_day("METAL", now_dt=now_u, emergency=False))))
     if cap <= 0:
         return False, {
@@ -2622,7 +2663,7 @@ def symbol_policy_block_reason(
     grp_u = str(grp or "").strip().upper()
     allowed_groups = {
         str(x).strip().upper()
-        for x in (getattr(CFG, "symbol_policy_allowed_groups", ("FX", "METAL", "INDEX")) or ())
+        for x in (getattr(CFG, "symbol_policy_allowed_groups", ("FX", "METAL", "INDEX", "CRYPTO", "EQUITY")) or ())
         if str(x).strip()
     }
     if bool(getattr(CFG, "symbol_policy_fail_on_other_group", True)) and grp_u not in allowed_groups:
@@ -2891,7 +2932,7 @@ def atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
 def build_runtime_boot_snapshot_payload(runtime_root: Path, universe: List[Tuple[str, str, str]]) -> Dict[str, Any]:
     allowed_groups = [
         str(x).strip().upper()
-        for x in (getattr(CFG, "symbol_policy_allowed_groups", ("FX", "METAL", "INDEX")) or ())
+        for x in (getattr(CFG, "symbol_policy_allowed_groups", ("FX", "METAL", "INDEX", "CRYPTO", "EQUITY")) or ())
         if str(x).strip()
     ]
     uni = []
@@ -3614,7 +3655,76 @@ class RequestGovernor:
         cap = int(self.price_trade_budget * w)
         return max(0, cap)
 
-    def _group_borrow_allowance(self, grp: str) -> int:
+    def _group_window_unlock_ratio(self, grp: str, now_dt: Optional[dt.datetime] = None) -> float:
+        """
+        Session-aware unlock ratio [0..1] for a group.
+        - before group window starts: 0.0
+        - in window: proportional unlock
+        - after window end: 1.0
+        If group has no configured windows, fallback to PL-day progress.
+        """
+        now_u = now_dt if isinstance(now_dt, dt.datetime) else now_utc()
+        tw = getattr(CFG, "trade_windows", {}) or {}
+        gk = _group_key(grp)
+
+        windows: List[Tuple[ZoneInfo, Tuple[int, int], Tuple[int, int]]] = []
+        if isinstance(tw, dict):
+            for _wid, w in tw.items():
+                if not isinstance(w, dict):
+                    continue
+                if _group_key(str(w.get("group") or "")) != gk:
+                    continue
+                try:
+                    tz = ZoneInfo(str(w.get("anchor_tz") or "Europe/Warsaw"))
+                except Exception:
+                    tz = TZ_PL
+                start_raw = w.get("start_hm", (0, 0))
+                end_raw = w.get("end_hm", (23, 59))
+                try:
+                    sh = (int(start_raw[0]), int(start_raw[1]))
+                    eh = (int(end_raw[0]), int(end_raw[1]))
+                except Exception:
+                    sh, eh = (0, 0), (23, 59)
+                windows.append((tz, sh, eh))
+
+        if not windows:
+            now_pl = now_u.astimezone(TZ_PL)
+            day_start = now_pl.replace(hour=0, minute=0, second=0, microsecond=0)
+            elapsed = float((now_pl - day_start).total_seconds())
+            ratio = max(0.0, min(1.0, elapsed / 86400.0))
+        else:
+            total_s = 0.0
+            elapsed_s = 0.0
+            for tz, sh, eh in windows:
+                local_now = now_u.astimezone(tz)
+                start = local_now.replace(hour=int(sh[0]), minute=int(sh[1]), second=0, microsecond=0)
+                end = local_now.replace(hour=int(eh[0]), minute=int(eh[1]), second=0, microsecond=0)
+                if (int(sh[0]), int(sh[1])) == (int(eh[0]), int(eh[1])):
+                    return 1.0
+                ref = local_now
+                if end <= start:
+                    end = end + dt.timedelta(days=1)
+                    if ref < start:
+                        ref = ref + dt.timedelta(days=1)
+                dur = float((end - start).total_seconds())
+                if dur <= 0.0:
+                    continue
+                total_s += dur
+                elapsed = float((ref - start).total_seconds())
+                if elapsed <= 0.0:
+                    continue
+                elapsed_s += min(dur, elapsed)
+            ratio = 1.0 if total_s <= 0.0 else max(0.0, min(1.0, elapsed_s / total_s))
+
+        try:
+            unlock_power = float(getattr(CFG, "group_borrow_unlock_power", 1.0) or 1.0)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            unlock_power = 1.0
+        unlock_power = max(0.05, min(4.0, unlock_power))
+        return float(max(0.0, min(1.0, float(ratio) ** float(unlock_power))))
+
+    def _group_borrow_allowance(self, grp: str, now_dt: Optional[dt.datetime] = None) -> int:
         """Ile grupa może \"pożyczyć\" z niewykorzystanych capów innych grup (CFG.group_borrow_fraction)."""
         shares = dict(getattr(CFG, "group_price_shares", {}) or {})
         if not shares:
@@ -3627,14 +3737,16 @@ class RequestGovernor:
         frac = max(0.0, min(1.0, frac))
         if frac <= 0.0:
             return 0
-        unused_other = 0
+        unused_other = 0.0
         for g in shares.keys():
             if g == grp:
                 continue
             cap_g = int(self._group_price_cap(g))
             used_g = int(self.db.group_price_used_today(g))
-            unused_other += max(0, cap_g - used_g)
-        return int(unused_other * frac)
+            unlocked = int(float(cap_g) * self._group_window_unlock_ratio(g, now_dt=now_dt))
+            transferable = max(0, min(cap_g, unlocked) - used_g)
+            unused_other += float(transferable)
+        return int(unused_other * float(frac))
 
     def order_group_cap(self, grp: str) -> int:
         """Dzienny cap ORDER dla grupy, liczony z puli order_trade_budget wg udziałów grup."""
@@ -3657,7 +3769,7 @@ class RequestGovernor:
             w = 0.0
         return max(0, int(self.order_trade_budget * w))
 
-    def order_group_borrow_allowance(self, grp: str) -> int:
+    def order_group_borrow_allowance(self, grp: str, now_dt: Optional[dt.datetime] = None) -> int:
         """Ile grupa ORDER może pożyczyć z niewykorzystanej puli innych grup."""
         shares = dict(getattr(CFG, "group_price_shares", {}) or {})
         if not shares:
@@ -3670,14 +3782,16 @@ class RequestGovernor:
         frac = max(0.0, min(1.0, frac))
         if frac <= 0.0:
             return 0
-        unused_other = 0
+        unused_other = 0.0
         for g in shares.keys():
             if g == grp:
                 continue
             cap_g = int(self.order_group_cap(g))
             used_g = int(self.db.get_order_group_actions_day(g))
-            unused_other += max(0, cap_g - used_g)
-        return int(unused_other * frac)
+            unlocked = int(float(cap_g) * self._group_window_unlock_ratio(g, now_dt=now_dt))
+            transferable = max(0, min(cap_g, unlocked) - used_g)
+            unused_other += float(transferable)
+        return int(unused_other * float(frac))
 
     def sys_group_cap(self, grp: str) -> int:
         """Dzienny cap SYS dla grupy, liczony z puli sys_trade_budget wg udziałów grup."""
@@ -3700,7 +3814,7 @@ class RequestGovernor:
             w = 0.0
         return max(0, int(self.sys_trade_budget * w))
 
-    def sys_group_borrow_allowance(self, grp: str) -> int:
+    def sys_group_borrow_allowance(self, grp: str, now_dt: Optional[dt.datetime] = None) -> int:
         """Ile grupa SYS może pożyczyć z niewykorzystanej puli innych grup."""
         shares = dict(getattr(CFG, "group_price_shares", {}) or {})
         if not shares:
@@ -3713,14 +3827,16 @@ class RequestGovernor:
         frac = max(0.0, min(1.0, frac))
         if frac <= 0.0:
             return 0
-        unused_other = 0
+        unused_other = 0.0
         for g in shares.keys():
             if g == grp:
                 continue
             cap_g = int(self.sys_group_cap(g))
             used_g = int(self.db.group_sys_used_today(g))
-            unused_other += max(0, cap_g - used_g)
-        return int(unused_other * frac)
+            unlocked = int(float(cap_g) * self._group_window_unlock_ratio(g, now_dt=now_dt))
+            transferable = max(0, min(cap_g, unlocked) - used_g)
+            unused_other += float(transferable)
+        return int(unused_other * float(frac))
 
 
     def day_state(self) -> Dict[str, int]:
@@ -3880,6 +3996,7 @@ class RequestGovernor:
     def can_consume(self, grp: str, symbol: str, kind: str, cost: int = 1, emergency: bool = False) -> bool:
         cat = "PRICE" if is_price_kind(kind) else "SYS"
         st = self.day_state()
+        now_ref = now_utc()
 
         if cat == "PRICE":
             if emergency:
@@ -3892,7 +4009,7 @@ class RequestGovernor:
                 if grp in CFG.group_price_shares:
                     used_g = self.db.group_price_used_today(grp)
                     cap_g = self._group_price_cap(grp)
-                    if used_g + cost > cap_g + self._group_borrow_allowance(grp):
+                    if used_g + cost > cap_g + self._group_borrow_allowance(grp, now_dt=now_ref):
                         return False
         else:
             if emergency:
@@ -3904,7 +4021,7 @@ class RequestGovernor:
                 if grp in CFG.group_price_shares:
                     used_g = self.db.group_sys_used_today(grp)
                     cap_g = self.sys_group_cap(grp)
-                    if used_g + cost > cap_g + self.sys_group_borrow_allowance(grp):
+                    if used_g + cost > cap_g + self.sys_group_borrow_allowance(grp, now_dt=now_ref):
                         return False
         return True
 
@@ -4954,7 +5071,7 @@ class ExecutionEngine:
                 if str(grp).upper() in getattr(CFG, "group_price_shares", {}):
                     used_g = int(self.gov.db.get_order_group_actions_day(str(grp).upper(), now_dt=now_dt, emergency=False))
                     cap_g = int(self.gov.order_group_cap(str(grp).upper()))
-                    borrow_g = int(self.gov.order_group_borrow_allowance(str(grp).upper()))
+                    borrow_g = int(self.gov.order_group_borrow_allowance(str(grp).upper(), now_dt=now_dt))
                     if used_g >= (cap_g + borrow_g):
                         cooldown_s = int(_seconds_until_next_pl_midnight(now_dt))
                         self.gov.db.set_cooldown(symbol, cooldown_s, "order_group_budget_exhausted")
@@ -5084,7 +5201,7 @@ class ExecutionEngine:
                     if grp_u in getattr(CFG, "group_price_shares", {}):
                         used_g = int(self.gov.db.get_order_group_actions_day(grp_u, now_dt=now_dt, emergency=False))
                         cap_g = int(self.gov.order_group_cap(grp_u))
-                        borrow_g = int(self.gov.order_group_borrow_allowance(grp_u))
+                        borrow_g = int(self.gov.order_group_borrow_allowance(grp_u, now_dt=now_dt))
                         if (used_g + 1) > (cap_g + borrow_g):
                             cooldown_s = int(_seconds_until_next_pl_midnight(now_dt))
                             self.gov.db.set_cooldown(symbol, cooldown_s, "order_group_budget_exhausted")
@@ -8243,12 +8360,13 @@ class SafetyBot:
     def scan_once(self):
         st = self.gov.day_state()
 
-        # Trade windows (P0): strict time windows (PL) + group routing (FX vs METAL).
+        # Trade windows (P0): time windows + optional strict group routing.
         tw_ctx = trade_window_ctx(now_utc())
         tw_phase = str(tw_ctx.get("phase") or "OFF").upper()
         tw_window_id = str(tw_ctx.get("window_id") or "")
         tw_group = str(tw_ctx.get("group") or "").upper()
         tw_entry_allowed = bool(tw_ctx.get("entry_allowed"))
+        tw_strict_group = bool(getattr(CFG, "trade_window_strict_group_routing", True))
 
         # Log only on transition (avoid spam).
         try:
@@ -8260,11 +8378,12 @@ class SafetyBot:
                 setattr(self, "_last_tw_window_id", tw_window_id)
                 setattr(self, "_last_tw_group", tw_group)
                 logging.info(
-                    "WINDOW_PHASE phase=%s window=%s group=%s entry_allowed=%s pl_now=%s",
+                    "WINDOW_PHASE phase=%s window=%s group=%s entry_allowed=%s strict_group=%s pl_now=%s",
                     tw_phase,
                     tw_window_id or "NONE",
                     tw_group or "NONE",
                     int(bool(tw_entry_allowed)),
+                    int(bool(tw_strict_group)),
                     str(tw_ctx.get("pl_now")),
                 )
         except Exception as e:
@@ -8550,8 +8669,8 @@ class SafetyBot:
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
         for raw, sym, grp in self.universe:
-            # Trade window routing: in ACTIVE we trade only the active group (FX_AM => FX, METAL_PM => METAL).
-            if tw_group and str(grp).upper() != tw_group:
+            # With strict routing enabled we trade only the active window group.
+            if tw_strict_group and tw_group and str(grp).upper() != tw_group:
                 continue
             # priorytet: time_weight * score_factor (+ bonus, jeśli mamy otwartą pozycję)
             prio = self.ctrl.time_weight(grp, sym) * self.ctrl.score_factor(grp, sym)
@@ -9319,6 +9438,10 @@ if __name__ == "__main__":
         "price_emergency_reserve_fraction", CFG.price_emergency_reserve_fraction
     )
     CFG.group_borrow_fraction = _cfg_float("group_borrow_fraction", CFG.group_borrow_fraction)
+    CFG.group_borrow_unlock_power = _cfg_float("group_borrow_unlock_power", CFG.group_borrow_unlock_power)
+    CFG.trade_window_strict_group_routing = _cfg_bool(
+        "trade_window_strict_group_routing", CFG.trade_window_strict_group_routing
+    )
     CFG.trade_closeout_buffer_min = _cfg_int("trade_closeout_buffer_min", CFG.trade_closeout_buffer_min)
     CFG.hard_no_mt5_outside_windows = _cfg_bool(
         "hard_no_mt5_outside_windows", CFG.hard_no_mt5_outside_windows
@@ -9389,7 +9512,7 @@ if __name__ == "__main__":
         groups_out: List[str] = []
         for item in raw_groups:
             g = _group_key(str(item or ""))
-            if g in {"FX", "METAL", "INDEX"}:
+            if g in {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}:
                 groups_out.append(g)
         if groups_out:
             CFG.symbol_policy_allowed_groups = tuple(groups_out)
@@ -9401,7 +9524,7 @@ if __name__ == "__main__":
         shares_out: Dict[str, float] = {}
         for k, v in raw_shares.items():
             g = _group_key(str(k or ""))
-            if g not in {"FX", "METAL", "INDEX"}:
+            if g not in {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}:
                 continue
             try:
                 shares_out[g] = float(v)
@@ -9440,8 +9563,10 @@ if __name__ == "__main__":
             grp = _group_key(str(w.get("group") or ""))
             # Allow null/empty group for "all groups" or "no specific group" windows
             # but enforce valid group if specified.
-            if grp and grp not in {"FX", "METAL", "INDEX"}:
-                raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_windows.{wid}.group must be FX, METAL or INDEX")
+            if grp and grp not in {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}:
+                raise SystemExit(
+                    f"CONFIG_STRATEGY_FAIL: trade_windows.{wid}.group must be FX, METAL, INDEX, CRYPTO or EQUITY"
+                )
             anchor_tz = str(w.get("anchor_tz") or "Europe/Warsaw")
             start_hm = _hm(w.get("start_hm"), label="start_hm")
             end_hm = _hm(w.get("end_hm"), label="end_hm")

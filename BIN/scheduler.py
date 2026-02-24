@@ -13,7 +13,9 @@ UTC = dt.timezone.utc
 # does not silently revert to an old session profile.
 DEFAULT_GROUP_WINDOWS: Dict[str, List[Tuple[ZoneInfo, tuple[int, int], tuple[int, int]]]] = {
     "FX": [(TZ_PL, (9, 0), (12, 0))],
+    "INDEX": [(TZ_PL, (12, 0), (14, 0)), (TZ_PL, (17, 0), (20, 0))],
     "METAL": [(TZ_PL, (14, 0), (17, 0))],
+    "CRYPTO": [(TZ_PL, (20, 0), (23, 59)), (TZ_PL, (0, 0), (9, 0))],
 }
 
 def now_utc() -> dt.datetime:
@@ -57,6 +59,10 @@ class ActivityController:
             return "METAL"
         if g in {"INDICES"}:
             return "INDEX"
+        if g in {"CRYPTOS", "CRYPTOCURRENCY", "CRYPTOCURRENCIES"}:
+            return "CRYPTO"
+        if g in {"EQUITIES", "STOCKS"}:
+            return "EQUITY"
         return g
 
     @staticmethod
