@@ -12,6 +12,9 @@
   "sys_emergency_reserve": 40,
   "group_borrow_fraction": 0.65,
   "group_borrow_unlock_power": 1.2,
+  "group_priority_min_factor": 0.7,
+  "group_priority_max_factor": 1.35,
+  "group_priority_pressure_weight": 0.45,
   "group_price_shares": {
     "FX": 1.0,
     "METAL": 0.9,
@@ -239,7 +242,8 @@
       "spread_gate_hot_factor": 1.2,
       "spread_gate_warm_factor": 1.6,
       "spread_gate_eco_factor": 2.0,
-      "order_deviation_points": 20
+      "order_deviation_points": 20,
+      "priority_boost": 1.05
     },
     "INDEX": {
       "m5_pull_sec_hot": 90,
@@ -259,7 +263,8 @@
       "spread_gate_hot_factor": 1.6,
       "spread_gate_warm_factor": 2.2,
       "spread_gate_eco_factor": 2.8,
-      "order_deviation_points": 35
+      "order_deviation_points": 35,
+      "priority_boost": 1.02
     },
     "CRYPTO": {
       "m5_pull_sec_hot": 120,
@@ -279,7 +284,8 @@
       "spread_gate_hot_factor": 1.4,
       "spread_gate_warm_factor": 1.9,
       "spread_gate_eco_factor": 2.4,
-      "order_deviation_points": 45
+      "order_deviation_points": 45,
+      "priority_boost": 0.95
     },
     "METAL": {
       "m5_pull_sec_hot": 60,
@@ -299,7 +305,8 @@
       "spread_gate_hot_factor": 1.4,
       "spread_gate_warm_factor": 2.0,
       "spread_gate_eco_factor": 2.5,
-      "order_deviation_points": 30
+      "order_deviation_points": 30,
+      "priority_boost": 1.0
     }
   },
   "per_symbol": {

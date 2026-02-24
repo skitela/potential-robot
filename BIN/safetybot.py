@@ -402,6 +402,9 @@ class CFG:
     # Brak pożyczania: trzymamy sztywny podział budżetu między FX i METAL.
     group_borrow_fraction: float = 0.0  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
     group_borrow_unlock_power: float = 1.0  # 1.0=linear unlock by session progress
+    group_priority_min_factor: float = 0.65
+    group_priority_max_factor: float = 1.30
+    group_priority_pressure_weight: float = 0.45
 
     # --- Strategia ---
     timeframe_trade = getattr(mt5, "TIMEFRAME_M5", 5)
@@ -3838,6 +3841,114 @@ class RequestGovernor:
             unused_other += float(transferable)
         return int(unused_other * float(frac))
 
+    def group_budget_state(self, grp: str, now_dt: Optional[dt.datetime] = None) -> Dict[str, float]:
+        """
+        Compact per-group budget snapshot used by arbitration and telemetry.
+        Values are safe-clamped and include borrow allowances at current session progress.
+        """
+        g = _group_key(grp)
+        now_u = now_dt if isinstance(now_dt, dt.datetime) else now_utc()
+        unlock = float(self._group_window_unlock_ratio(g, now_dt=now_u))
+
+        price_cap = int(max(0, self._group_price_cap(g)))
+        order_cap = int(max(0, self.order_group_cap(g)))
+        sys_cap = int(max(0, self.sys_group_cap(g)))
+
+        price_borrow = int(max(0, self._group_borrow_allowance(g, now_dt=now_u)))
+        order_borrow = int(max(0, self.order_group_borrow_allowance(g, now_dt=now_u)))
+        sys_borrow = int(max(0, self.sys_group_borrow_allowance(g, now_dt=now_u)))
+
+        try:
+            price_used = int(max(0, self.db.group_price_used_today(g)))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            price_used = 0
+        try:
+            order_used = int(max(0, self.db.get_order_group_actions_day(g, now_dt=now_u, emergency=False)))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            order_used = 0
+        try:
+            sys_used = int(max(0, self.db.group_sys_used_today(g)))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            sys_used = 0
+
+        def _ratio(used: int, cap: int, borrow: int) -> float:
+            denom = max(1, int(cap) + int(borrow))
+            return float(max(0.0, min(2.0, float(used) / float(denom))))
+
+        price_usage = _ratio(price_used, price_cap, price_borrow)
+        order_usage = _ratio(order_used, order_cap, order_borrow)
+        sys_usage = _ratio(sys_used, sys_cap, sys_borrow)
+
+        return {
+            "unlock_ratio": float(unlock),
+            "price_used": float(price_used),
+            "price_cap": float(price_cap),
+            "price_borrow": float(price_borrow),
+            "price_usage_ratio": float(price_usage),
+            "price_remaining": float(max(0, (price_cap + price_borrow) - price_used)),
+            "order_used": float(order_used),
+            "order_cap": float(order_cap),
+            "order_borrow": float(order_borrow),
+            "order_usage_ratio": float(order_usage),
+            "order_remaining": float(max(0, (order_cap + order_borrow) - order_used)),
+            "sys_used": float(sys_used),
+            "sys_cap": float(sys_cap),
+            "sys_borrow": float(sys_borrow),
+            "sys_usage_ratio": float(sys_usage),
+            "sys_remaining": float(max(0, (sys_cap + sys_borrow) - sys_used)),
+        }
+
+    def group_priority_factor(self, grp: str, now_dt: Optional[dt.datetime] = None) -> float:
+        """
+        Dynamic group arbitration factor:
+        - penalizes groups already near their effective budgets
+        - allows per-group priority_boost tuning via CFG.per_group.<GROUP>.priority_boost
+        """
+        g = _group_key(grp)
+        st = self.group_budget_state(g, now_dt=now_dt)
+        pressure = float(
+            max(
+                float(st.get("price_usage_ratio", 0.0)),
+                float(st.get("order_usage_ratio", 0.0)),
+                float(st.get("sys_usage_ratio", 0.0)),
+            )
+        )
+        unlock = float(st.get("unlock_ratio", 0.0))
+
+        try:
+            boost = float(_cfg_group_float(g, "priority_boost", 1.0))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            boost = 1.0
+
+        try:
+            w = float(getattr(CFG, "group_priority_pressure_weight", 0.45) or 0.45)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            w = 0.45
+        w = max(0.0, min(1.0, w))
+
+        # Small uplift for unlocked low-pressure windows to reduce idle budget.
+        uplift = 0.12 * max(0.0, 1.0 - pressure) * max(0.0, min(1.0, unlock))
+        raw = float(boost) * (1.0 - (w * pressure) + uplift)
+
+        try:
+            f_min = float(getattr(CFG, "group_priority_min_factor", 0.65) or 0.65)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            f_min = 0.65
+        try:
+            f_max = float(getattr(CFG, "group_priority_max_factor", 1.30) or 1.30)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            f_max = 1.30
+        lo = max(0.30, min(float(f_min), float(f_max)))
+        hi = max(lo, min(2.00, float(f_max)))
+        return float(max(lo, min(hi, raw)))
+
 
     def day_state(self) -> Dict[str, int]:
         # Day keys (analytics + enforcement)
@@ -6956,6 +7067,7 @@ class SafetyBot:
         self._metrics_warn_scans_day = 0
         self._metrics_10m_last_emit_ts = 0.0
         self._metrics_10m_anchor: Dict[str, Any] = {}
+        self._last_group_budget_log_ts = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -8427,6 +8539,47 @@ class SafetyBot:
             f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
         )
 
+        # Group-level arbitration snapshot (budget pressure + dynamic priority factor).
+        group_arb: Dict[str, Dict[str, float]] = {}
+        try:
+            now_arb = now_utc()
+            groups_cfg = sorted(
+                {
+                    _group_key(str(g))
+                    for g in (getattr(CFG, "group_price_shares", {}) or {}).keys()
+                    if str(g).strip()
+                }
+            )
+            for g in groups_cfg:
+                st_g = self.gov.group_budget_state(g, now_dt=now_arb)
+                st_g["priority_factor"] = float(self.gov.group_priority_factor(g, now_dt=now_arb))
+                group_arb[g] = st_g
+
+            log_interval_s = max(60, int(getattr(CFG, "scan_interval_sec", 30)) * 4)
+            now_ts = float(time.time())
+            if (now_ts - float(getattr(self, "_last_group_budget_log_ts", 0.0))) >= float(log_interval_s):
+                self._last_group_budget_log_ts = now_ts
+                for g in sorted(group_arb.keys()):
+                    gs = group_arb[g]
+                    logging.info(
+                        "GROUP_ARB grp=%s prio_factor=%.3f unlock=%.3f "
+                        "price=%s/%s+%s order=%s/%s+%s sys=%s/%s+%s",
+                        g,
+                        float(gs.get("priority_factor", 1.0)),
+                        float(gs.get("unlock_ratio", 0.0)),
+                        int(gs.get("price_used", 0.0)),
+                        int(gs.get("price_cap", 0.0)),
+                        int(gs.get("price_borrow", 0.0)),
+                        int(gs.get("order_used", 0.0)),
+                        int(gs.get("order_cap", 0.0)),
+                        int(gs.get("order_borrow", 0.0)),
+                        int(gs.get("sys_used", 0.0)),
+                        int(gs.get("sys_cap", 0.0)),
+                        int(gs.get("sys_borrow", 0.0)),
+                    )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
         warn_degrade_active = False
         # OANDA warning threshold (price requests/day): emit one warning per primary day key.
         try:
@@ -8673,7 +8826,13 @@ class SafetyBot:
             if tw_strict_group and tw_group and str(grp).upper() != tw_group:
                 continue
             # priorytet: time_weight * score_factor (+ bonus, jeśli mamy otwartą pozycję)
-            prio = self.ctrl.time_weight(grp, sym) * self.ctrl.score_factor(grp, sym)
+            grp_u = _group_key(grp)
+            try:
+                group_factor = float(group_arb.get(grp_u, {}).get("priority_factor", self.gov.group_priority_factor(grp_u)))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                group_factor = 1.0
+            prio = self.ctrl.time_weight(grp, sym) * self.ctrl.score_factor(grp, sym) * float(group_factor)
             if sym in open_syms:
                 prio += 5.0
             candidates.append((prio, raw, sym, grp))
@@ -9439,6 +9598,11 @@ if __name__ == "__main__":
     )
     CFG.group_borrow_fraction = _cfg_float("group_borrow_fraction", CFG.group_borrow_fraction)
     CFG.group_borrow_unlock_power = _cfg_float("group_borrow_unlock_power", CFG.group_borrow_unlock_power)
+    CFG.group_priority_min_factor = _cfg_float("group_priority_min_factor", CFG.group_priority_min_factor)
+    CFG.group_priority_max_factor = _cfg_float("group_priority_max_factor", CFG.group_priority_max_factor)
+    CFG.group_priority_pressure_weight = _cfg_float(
+        "group_priority_pressure_weight", CFG.group_priority_pressure_weight
+    )
     CFG.trade_window_strict_group_routing = _cfg_bool(
         "trade_window_strict_group_routing", CFG.trade_window_strict_group_routing
     )
