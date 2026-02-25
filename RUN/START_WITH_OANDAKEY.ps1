@@ -337,6 +337,72 @@ function Assert-DriveFormatReady {
     }
 }
 
+function Read-JsonFileSafe {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $null }
+    try {
+        $raw = Get-Content -Raw -Encoding UTF8 -Path $Path
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        return ($raw | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Start-RiskPopupGuard {
+    param([string]$RuntimeRoot)
+    $scriptPath = Join-Path $RuntimeRoot "TOOLS\mt5_risk_popup_guard.ps1"
+    $pidPath = Join-Path $RuntimeRoot "RUN\mt5_risk_guard.pid"
+    if (-not (Test-Path $scriptPath)) {
+        return [ordered]@{
+            ok = $false
+            status = "missing_script"
+            script = $scriptPath
+        }
+    }
+
+    $pidObj = Read-JsonFileSafe -Path $pidPath
+    $existingPid = $null
+    if ($null -ne $pidObj -and $null -ne $pidObj.pid) {
+        try { $existingPid = [int]$pidObj.pid } catch { $existingPid = $null }
+    }
+    if ($null -ne $existingPid) {
+        $proc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
+        if ($null -ne $proc) {
+            return [ordered]@{
+                ok = $true
+                status = "already_running"
+                pid = $existingPid
+                pid_file = $pidPath
+            }
+        }
+    }
+
+    try {
+        $argList = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $scriptPath,
+            "-Root", $RuntimeRoot
+        )
+        $proc = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WorkingDirectory $RuntimeRoot -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 400
+        return [ordered]@{
+            ok = $true
+            status = "started"
+            pid = [int]$proc.Id
+            pid_file = $pidPath
+        }
+    } catch {
+        return [ordered]@{
+            ok = $false
+            status = "start_failed"
+            error = $_.Exception.Message
+            script = $scriptPath
+        }
+    }
+}
+
 function Read-KeyEnv {
     param([Parameter(Mandatory = $true)][string]$Path)
     $cfg = [ordered]@{}
@@ -661,6 +727,14 @@ $status.start_exit_code = $rc
 [void](Write-JsonAtomic -Path $statusPath -Object $status)
 
 if ($rc -eq 0) {
+    $riskGuard = Start-RiskPopupGuard -RuntimeRoot $runtimeRoot
+    $status.risk_popup_guard = $riskGuard
+    [void](Write-JsonAtomic -Path $statusPath -Object $status)
+    if (-not [bool]$riskGuard.ok) {
+        Write-Output ("START_WITH_OANDAKEY WARN: risk popup guard failed status={0}" -f [string]$riskGuard.status)
+    } else {
+        Write-Output ("START_WITH_OANDAKEY RISK_GUARD status={0} pid={1}" -f [string]$riskGuard.status, [string]$riskGuard.pid)
+    }
     Write-Output ("START_WITH_OANDAKEY PASS drive={0} dry_run={1}" -f $drive, [int]([bool]$DryRun))
     exit 0
 }
