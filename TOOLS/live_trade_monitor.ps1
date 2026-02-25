@@ -165,6 +165,18 @@ while ($true) {
                 if ([string]::IsNullOrWhiteSpace($msg)) {
                     continue
                 }
+
+                if ($name -eq "SAFETY") {
+                    $phaseMatchPre = $windowPattern.Match($msg)
+                    if ($phaseMatchPre.Success) {
+                        $lastPhase = [string]$phaseMatchPre.Groups[1].Value
+                        $lastWindow = [string]$phaseMatchPre.Groups[2].Value
+                    }
+                    if ($scanPattern.IsMatch($msg)) {
+                        $lastScanAt = Get-Date
+                    }
+                }
+
                 if (-not $tradePattern.IsMatch($msg)) {
                     continue
                 }
@@ -173,14 +185,6 @@ while ($true) {
                 }
 
                 if ($name -eq "SAFETY") {
-                    $phaseMatch = $windowPattern.Match($msg)
-                    if ($phaseMatch.Success) {
-                        $lastPhase = [string]$phaseMatch.Groups[1].Value
-                        $lastWindow = [string]$phaseMatch.Groups[2].Value
-                    }
-                    if ($scanPattern.IsMatch($msg)) {
-                        $lastScanAt = Get-Date
-                    }
                     if ($entrySignalPattern.IsMatch($msg)) {
                         $totals.entry_signal = [int]$totals.entry_signal + 1
                         $lastTradeIntentAt = Get-Date
