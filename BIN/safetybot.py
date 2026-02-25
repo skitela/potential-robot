@@ -196,6 +196,8 @@ class CFG:
     m5_pull_sec_hot: int = 60
     m5_pull_sec_warm: int = 120
     m5_pull_sec_eco: int = 300
+    # Guardrail for stale/future next-bar deadlines caused by clock/epoch drift.
+    m5_wait_new_bar_max_sec: int = 900
     # If ECO limits collapse to zero while flat, keep at least minimal market probing alive.
     eco_probe_symbols_when_flat: int = 1
 
@@ -3846,7 +3848,14 @@ class M5BarsStore:
             ts = int(bar.get("time") or 0)
             if ts <= 0:
                 return False
-            t_utc = dt.datetime.fromtimestamp(ts, tz=UTC).replace(microsecond=0)
+            # Some MT5 servers expose epoch-like values shifted by server timezone.
+            # Reuse common offset detector/converter before persisting BAR history.
+            _maybe_update_mt5_server_epoch_offset(
+                int(ts),
+                source="zmq_bar",
+                max_age_s=max(300, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900))),
+            )
+            t_utc = mt5_epoch_to_utc_dt(int(ts)).replace(microsecond=0)
             row = (
                 str(base_symbol),
                 t_utc.isoformat().replace("+00:00", "Z"),
@@ -6434,6 +6443,17 @@ class StandardStrategy:
 
     def m5_indicators_if_due(self, symbol: str, grp: str, mode: str) -> Optional[Dict]:
         now_ts = time.time()
+        tf_min = max(1, int(getattr(CFG, "timeframe_trade", 5)))
+        default_wait_max = max(600, int(tf_min) * 2 * 60)
+        wait_new_bar_max = max(
+            int(tf_min) * 60,
+            _cfg_group_int(
+                grp,
+                "m5_wait_new_bar_max_sec",
+                int(getattr(CFG, "m5_wait_new_bar_max_sec", default_wait_max)),
+                symbol=symbol,
+            ),
+        )
         try:
             sch = getattr(self.config, "scheduler", {}) or {}
             if mode == "ECO":
@@ -6455,12 +6475,28 @@ class StandardStrategy:
 
         next_fetch_ts = float(self.cache.next_m5_fetch_ts.get(symbol, 0.0) or 0.0)
         if next_fetch_ts > now_ts:
-            wait_s = int(max(0, next_fetch_ts - now_ts))
-            self._metric_inc_skip("M5_WAIT_NEW_BAR")
-            logging.info(
-                f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_WAIT_NEW_BAR wait_s={wait_s}"
-            )
-            return None
+            wait_raw_s = float(next_fetch_ts - now_ts)
+            if wait_raw_s > float(wait_new_bar_max):
+                # Defensive reset: do not freeze scans for ~hour due to future-shifted bar clocks.
+                logging.warning(
+                    "M5_WAIT_NEW_BAR_GUARD_RESET symbol=%s grp=%s mode=%s wait_raw_s=%s max_wait_s=%s tf_min=%s next_fetch_ts=%s now_ts=%s",
+                    symbol,
+                    grp,
+                    mode,
+                    int(wait_raw_s),
+                    int(wait_new_bar_max),
+                    int(tf_min),
+                    int(next_fetch_ts),
+                    int(now_ts),
+                )
+                self.cache.next_m5_fetch_ts[symbol] = float(now_ts)
+            else:
+                wait_s = int(max(0, wait_raw_s))
+                self._metric_inc_skip("M5_WAIT_NEW_BAR")
+                logging.info(
+                    f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_WAIT_NEW_BAR wait_s={wait_s}"
+                )
+                return None
 
         if bool(getattr(CFG, "hybrid_use_zmq_m5_features", True)):
             fcache = self.zmq_feature_cache if isinstance(self.zmq_feature_cache, dict) else None
@@ -6517,12 +6553,25 @@ class StandardStrategy:
         self.cache.last_m5_calc_ts[symbol] = now_ts
         last_bar = df["time"].iloc[-1]
         try:
-            tf_min = max(1, int(getattr(CFG, "timeframe_trade", 5)))
             ts_bar = pd.Timestamp(last_bar)
             if ts_bar.tzinfo is None:
                 ts_bar = ts_bar.tz_localize(TZ_PL)
             ts_utc = ts_bar.tz_convert(UTC)
-            self.cache.next_m5_fetch_ts[symbol] = float(ts_utc.timestamp()) + float(tf_min * 60)
+            next_fetch = float(ts_utc.timestamp()) + float(tf_min * 60)
+            wait_raw_s = float(next_fetch - now_ts)
+            if wait_raw_s > float(wait_new_bar_max):
+                logging.warning(
+                    "M5_NEXT_FETCH_CLAMP symbol=%s grp=%s mode=%s wait_raw_s=%s max_wait_s=%s tf_min=%s bar_ts_utc=%s",
+                    symbol,
+                    grp,
+                    mode,
+                    int(wait_raw_s),
+                    int(wait_new_bar_max),
+                    int(tf_min),
+                    ts_utc.replace(microsecond=0).isoformat(),
+                )
+                next_fetch = float(now_ts) + float(tf_min * 60)
+            self.cache.next_m5_fetch_ts[symbol] = float(next_fetch)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         prev_bar = self.cache.last_m5_bar_time.get(symbol)
@@ -9810,7 +9859,12 @@ class SafetyBot:
                 if all(k in data for k in ("open", "close", "sma_fast", "adx", "atr", "time")):
                     ts = int(data.get("time") or 0)
                     if ts > 0:
-                        bar_ts_pl = pd.Timestamp(dt.datetime.fromtimestamp(ts, tz=UTC).astimezone(TZ_PL))
+                        _maybe_update_mt5_server_epoch_offset(
+                            int(ts),
+                            source="zmq_feature_bar",
+                            max_age_s=max(300, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900))),
+                        )
+                        bar_ts_pl = pd.Timestamp(mt5_epoch_to_utc_dt(int(ts)).astimezone(TZ_PL))
                         self._zmq_m5_feature_cache[base_symbol] = {
                             "recv_ts": now_ts,
                             "bar_time_pl": bar_ts_pl,
@@ -10053,6 +10107,10 @@ if __name__ == "__main__":
     CFG.order_budget_day = _cfg_int("order_budget_day", CFG.order_budget_day)
     CFG.sys_emergency_reserve = _cfg_int("sys_emergency_reserve", CFG.sys_emergency_reserve)
     CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
+    CFG.m5_wait_new_bar_max_sec = _cfg_int(
+        "m5_wait_new_bar_max_sec",
+        CFG.m5_wait_new_bar_max_sec,
+    )
     CFG.zmq_heartbeat_interval_sec = _cfg_int(
         "zmq_heartbeat_interval_sec", CFG.zmq_heartbeat_interval_sec
     )

@@ -154,6 +154,7 @@
   "metal_budget_pacing_phase2_ratio": 0.7,
   "metal_budget_pacing_slack": 0.05,
   "scan_interval_sec": 30,
+  "m5_wait_new_bar_max_sec": 900,
   "usb_watch_check_interval_sec": 30,
   "fx_only_mode": false,
   "symbols_to_trade": [
