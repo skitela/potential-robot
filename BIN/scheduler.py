@@ -117,16 +117,81 @@ class ActivityController:
             out.extend(DEFAULT_GROUP_WINDOWS.get(g, []))
         return out
 
+    def _strategy_bool(self, key: str, default: bool) -> bool:
+        try:
+            strategy = getattr(self.config, "strategy", {}) or {}
+        except Exception:
+            strategy = {}
+        raw = strategy.get(key, default) if isinstance(strategy, dict) else default
+        if isinstance(raw, bool):
+            return bool(raw)
+        txt = str(raw).strip().lower()
+        if txt in {"1", "true", "yes", "y", "on"}:
+            return True
+        if txt in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+
     def time_weight(self, grp: str, symbol: str) -> float:
-        n = now_ny()
-        p = now_pl()
+        ref = now_utc().astimezone(UTC)
+        n = ref.astimezone(TZ_NY)
+        p = ref.astimezone(TZ_PL)
+        u = ref.astimezone(UTC)
         g = self._norm_group(grp)
-        # Runtime-configured trade windows are the source of truth.
+
+        if self._strategy_bool("policy_windows_v2_enabled", True):
+            if g == "FX":
+                if in_window(n, (8, 0), (12, 0)):
+                    return 1.00
+                if in_window(n, (3, 0), (8, 0)) or in_window(n, (12, 0), (16, 0)):
+                    return 0.60
+                return 0.25
+            if g == "METAL":
+                if in_window(n, (7, 0), (13, 0)):
+                    return 1.00
+                if in_window(n, (3, 0), (7, 0)) or in_window(n, (13, 0), (16, 30)):
+                    return 0.60
+                return 0.25
+            if g == "INDEX":
+                prof = self.config.index_profile_map.get(symbol_base(symbol), "GEN")
+                if prof == "EU":
+                    if in_window(p, (9, 0), (12, 0)):
+                        return 0.90
+                    if in_window(p, (12, 0), (15, 0)):
+                        return 0.60
+                    if in_window(p, (15, 0), (17, 35)):
+                        return 1.00
+                    return 0.25
+                if prof == "US":
+                    if in_window(n, (9, 30), (11, 0)) or in_window(n, (15, 0), (16, 0)):
+                        return 1.00
+                    if in_window(n, (11, 0), (15, 0)):
+                        return 0.60
+                    return 0.25
+                return 0.35
+            if g == "CRYPTO":
+                if in_window(u, (21, 0), (7, 0)):
+                    return 1.00
+                if in_window(u, (7, 0), (14, 30)):
+                    return 0.70
+                if in_window(u, (14, 30), (21, 0)):
+                    return 0.45
+                return 0.55
+            if g == "EQUITY":
+                if in_window(n, (9, 30), (11, 0)) or in_window(n, (15, 0), (16, 0)):
+                    return 1.00
+                if in_window(n, (11, 0), (15, 0)):
+                    return 0.65
+                if in_window(n, (4, 0), (9, 30)) or in_window(n, (16, 0), (20, 0)):
+                    return 0.35
+                return 0.15
+            return 0.20
+
+        # Legacy path: dynamic trade windows from strategy.
         dynamic_windows = self._group_trade_windows(g)
         if dynamic_windows:
-            now_ref_utc = now_utc()
             for tz, start_hm, end_hm in dynamic_windows:
-                local_dt = now_ref_utc.astimezone(tz)
+                local_dt = ref.astimezone(tz)
                 if in_window(local_dt, start_hm, end_hm):
                     return 1.0
             return 0.25

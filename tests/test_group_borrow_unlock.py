@@ -44,7 +44,10 @@ class TestGroupBorrowUnlock(unittest.TestCase):
         return (
             safetybot.CFG.group_price_shares,
             safetybot.CFG.group_borrow_fraction,
+            safetybot.CFG.group_borrow_fraction_by_group,
             safetybot.CFG.group_borrow_unlock_power,
+            safetybot.CFG.policy_group_arbitration_enabled,
+            safetybot.CFG.policy_shadow_mode_enabled,
             safetybot.CFG.trade_windows,
             safetybot.CFG.price_budget_day,
             safetybot.CFG.price_emergency_reserve_fraction,
@@ -61,7 +64,10 @@ class TestGroupBorrowUnlock(unittest.TestCase):
         (
             safetybot.CFG.group_price_shares,
             safetybot.CFG.group_borrow_fraction,
+            safetybot.CFG.group_borrow_fraction_by_group,
             safetybot.CFG.group_borrow_unlock_power,
+            safetybot.CFG.policy_group_arbitration_enabled,
+            safetybot.CFG.policy_shadow_mode_enabled,
             safetybot.CFG.trade_windows,
             safetybot.CFG.price_budget_day,
             safetybot.CFG.price_emergency_reserve_fraction,
@@ -77,7 +83,10 @@ class TestGroupBorrowUnlock(unittest.TestCase):
     def _configure_simple_budgets(self) -> None:
         safetybot.CFG.group_price_shares = {"FX": 1.0, "INDEX": 1.0, "METAL": 1.0}
         safetybot.CFG.group_borrow_fraction = 1.0
+        safetybot.CFG.group_borrow_fraction_by_group = {"FX": 1.0, "INDEX": 1.0, "METAL": 1.0}
         safetybot.CFG.group_borrow_unlock_power = 1.0
+        safetybot.CFG.policy_group_arbitration_enabled = True
+        safetybot.CFG.policy_shadow_mode_enabled = False
         safetybot.CFG.trade_windows = {
             "FX_AM": {"group": "FX", "anchor_tz": "Europe/Warsaw", "start_hm": (9, 0), "end_hm": (12, 0)},
             "INDEX_MD": {"group": "INDEX", "anchor_tz": "Europe/Warsaw", "start_hm": (12, 0), "end_hm": (15, 0)},

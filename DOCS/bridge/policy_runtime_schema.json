@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oanda://bridge/policy_runtime_schema_v1",
+  "title": "OANDA Policy Runtime Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_version",
+    "ts_utc",
+    "flags",
+    "us_overlap_active",
+    "groups"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "policy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ts_utc": {
+      "type": "string",
+      "minLength": 1
+    },
+    "flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_windows_v2_enabled",
+        "policy_risk_windows_enabled",
+        "policy_group_arbitration_enabled",
+        "policy_overlap_arbitration_enabled",
+        "policy_shadow_mode_enabled"
+      ],
+      "properties": {
+        "policy_windows_v2_enabled": { "type": "boolean" },
+        "policy_risk_windows_enabled": { "type": "boolean" },
+        "policy_group_arbitration_enabled": { "type": "boolean" },
+        "policy_overlap_arbitration_enabled": { "type": "boolean" },
+        "policy_shadow_mode_enabled": { "type": "boolean" }
+      }
+    },
+    "us_overlap_active": {
+      "type": "boolean"
+    },
+    "groups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["FX", "METAL", "INDEX", "CRYPTO", "EQUITY"],
+      "properties": {
+        "FX": { "$ref": "#/$defs/groupPolicyState" },
+        "METAL": { "$ref": "#/$defs/groupPolicyState" },
+        "INDEX": { "$ref": "#/$defs/groupPolicyState" },
+        "CRYPTO": { "$ref": "#/$defs/groupPolicyState" },
+        "EQUITY": { "$ref": "#/$defs/groupPolicyState" }
+      }
+    }
+  },
+  "$defs": {
+    "groupPolicyState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry_allowed",
+        "borrow_blocked",
+        "priority_factor",
+        "reason",
+        "risk_friday",
+        "risk_reopen",
+        "price_cap",
+        "price_used",
+        "price_borrow",
+        "order_cap",
+        "order_used",
+        "order_borrow",
+        "sys_cap",
+        "sys_used",
+        "sys_borrow"
+      ],
+      "properties": {
+        "entry_allowed": { "type": "boolean" },
+        "borrow_blocked": { "type": "boolean" },
+        "priority_factor": { "type": "number", "minimum": 0.05, "maximum": 1.8 },
+        "reason": { "type": "string" },
+        "risk_friday": { "type": "boolean" },
+        "risk_reopen": { "type": "boolean" },
+        "price_cap": { "type": "integer", "minimum": 0 },
+        "price_used": { "type": "integer", "minimum": 0 },
+        "price_borrow": { "type": "integer", "minimum": 0 },
+        "order_cap": { "type": "integer", "minimum": 0 },
+        "order_used": { "type": "integer", "minimum": 0 },
+        "order_borrow": { "type": "integer", "minimum": 0 },
+        "sys_cap": { "type": "integer", "minimum": 0 },
+        "sys_used": { "type": "integer", "minimum": 0 },
+        "sys_borrow": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

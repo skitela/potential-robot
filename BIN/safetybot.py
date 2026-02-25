@@ -390,21 +390,53 @@ class CFG:
     # OANDA MT5 policy guard: block accidental algo on equity/ETF/ETN symbols (non-close only).
     symbol_policy_enabled: bool = True
     symbol_policy_fail_on_other_group: bool = True
-    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX", "METAL", "INDEX", "CRYPTO")
+    symbol_policy_allowed_groups: Tuple[str, ...] = ("FX", "METAL", "INDEX", "CRYPTO", "EQUITY")
     symbol_policy_forbidden_symbol_markers: Tuple[str, ...] = (".ETF", "_CFD.ETF", ".ETN", "_CFD.ETN")
     symbol_policy_forbidden_path_markers: Tuple[str, ...] = ("STOCK", "AKCJE", "EQUITY", "ETF", "ETN")
 
+    # Group-policy v2 (behavioral migration from R&D semantics).
+    # Feature flags: stage rollout via shadow mode.
+    policy_windows_v2_enabled: bool = True
+    policy_risk_windows_enabled: bool = True
+    policy_group_arbitration_enabled: bool = True
+    policy_overlap_arbitration_enabled: bool = True
+    policy_shadow_mode_enabled: bool = True
+    policy_runtime_emit_enabled: bool = True
+    policy_runtime_emit_interval_sec: int = 15
+    policy_runtime_file_name: str = "policy_runtime.json"
+    policy_runtime_emit_common_file: bool = True
+    policy_runtime_common_subdir: str = "OANDA_MT5_SYSTEM"
+
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
-    # 45/45/10: przy price_emergency_reserve_fraction=0.10, równe udziały FX/METAL dają 45%/45% (z 90% puli trade).
-    group_price_shares = {"FX": 1.0, "METAL": 1.0, "INDEX": 0.8, "CRYPTO": 0.6}
+    group_price_shares = {"FX": 0.45, "METAL": 0.25, "INDEX": 0.30, "CRYPTO": 0.00, "EQUITY": 0.00}
     per_group: Dict[str, Dict[str, Any]] = {}
     per_symbol: Dict[str, Dict[str, Any]] = {}
-    # Brak pożyczania: trzymamy sztywny podział budżetu między FX i METAL.
-    group_borrow_fraction: float = 0.0  # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
+    # ile z niewykorzystanych budżetów innych grup można "pożyczyć"
+    group_borrow_fraction: float = 0.15
+    group_borrow_fraction_by_group = {"FX": 0.15, "METAL": 0.15, "INDEX": 0.20, "CRYPTO": 0.25, "EQUITY": 0.20}
+    group_priority_boost = {"FX": 1.00, "METAL": 1.05, "INDEX": 1.10, "CRYPTO": 0.95, "EQUITY": 0.90}
+    group_overlap_priority_factor = {"FX": 0.90, "METAL": 1.00, "INDEX": 1.20, "CRYPTO": 0.85, "EQUITY": 1.05}
     group_borrow_unlock_power: float = 1.0  # 1.0=linear unlock by session progress
-    group_priority_min_factor: float = 0.65
-    group_priority_max_factor: float = 1.30
+    group_priority_min_factor: float = 0.40
+    group_priority_max_factor: float = 1.80
     group_priority_pressure_weight: float = 0.45
+
+    friday_risk_enabled: bool = True
+    friday_risk_ny_start_hm: Tuple[int, int] = (16, 0)
+    friday_risk_ny_end_hm: Tuple[int, int] = (17, 0)
+    friday_risk_groups: Tuple[str, ...] = ("FX", "METAL", "INDEX", "EQUITY")
+    friday_risk_close_only_groups: Tuple[str, ...] = ("FX", "METAL")
+    friday_risk_close_only: bool = True
+    friday_risk_borrow_block: bool = True
+    friday_risk_priority_factor: float = 0.60
+    reopen_guard_enabled: bool = True
+    reopen_guard_ny_start_hm: Tuple[int, int] = (17, 0)
+    reopen_guard_groups: Tuple[str, ...] = ("FX", "METAL", "INDEX", "EQUITY")
+    reopen_guard_minutes: int = 45
+    reopen_guard_close_only_groups: Tuple[str, ...] = ("FX", "METAL")
+    reopen_guard_close_only: bool = True
+    reopen_guard_borrow_block: bool = True
+    reopen_guard_priority_factor: float = 0.70
 
     # --- Strategia ---
     timeframe_trade = getattr(mt5, "TIMEFRAME_M5", 5)
@@ -1092,6 +1124,272 @@ def _cfg_group_bool(group: Optional[str], key: str, default: bool, symbol: Optio
     return bool(default)
 
 
+def _group_in_targets(grp: str, targets: Any) -> bool:
+    g = _group_key(grp)
+    vals: List[str] = []
+    if isinstance(targets, (list, tuple, set)):
+        for item in targets:
+            k = _group_key(str(item or ""))
+            if k:
+                vals.append(k)
+    if not vals:
+        return False
+    return bool(("ALL" in vals) or (g in vals))
+
+
+def _cfg_group_set(key: str, fallback: Tuple[str, ...]) -> set[str]:
+    raw = getattr(CFG, key, fallback)
+    vals: set[str] = set()
+    if isinstance(raw, (list, tuple, set)):
+        for x in raw:
+            g = _group_key(str(x or ""))
+            if g:
+                vals.add(g)
+    return vals
+
+
+def _cfg_group_map_float(key: str, grp: str, default: float) -> float:
+    try:
+        raw = getattr(CFG, key, {}) or {}
+        if isinstance(raw, dict):
+            val = raw.get(_group_key(grp), default)
+            return float(val)
+    except Exception:
+        return float(default)
+    return float(default)
+
+
+def us_overlap_window_active(now_dt: Optional[dt.datetime] = None) -> bool:
+    ref = (now_dt or now_utc()).astimezone(UTC)
+    return in_window(ref, (14, 30), (16, 30))
+
+
+def group_market_risk_state(grp: str, now_dt: Optional[dt.datetime] = None) -> Dict[str, Any]:
+    """
+    Unified market risk state by group.
+    Friday risk and Sunday reopen guard can independently:
+    - block new entries (close-only by group),
+    - block budget borrowing,
+    - dampen group priority factor.
+    """
+    ref = (now_dt or now_utc()).astimezone(UTC)
+    ny = ref.astimezone(TZ_NY)
+    grp_u = _group_key(grp)
+
+    risk_windows_on = bool(getattr(CFG, "policy_risk_windows_enabled", True))
+    if not risk_windows_on:
+        return {
+            "group": str(grp_u),
+            "friday_risk": False,
+            "reopen_guard": False,
+            "entry_allowed": True,
+            "borrow_blocked": False,
+            "priority_factor": 1.0,
+            "reason": "RISK_WINDOWS_DISABLED",
+        }
+
+    friday_targets = _cfg_group_set("friday_risk_groups", ("FX", "METAL", "INDEX", "EQUITY"))
+    friday_close_only_groups = _cfg_group_set("friday_risk_close_only_groups", ("FX", "METAL"))
+    reopen_targets = _cfg_group_set("reopen_guard_groups", ("FX", "METAL", "INDEX", "EQUITY"))
+    reopen_close_only_groups = _cfg_group_set("reopen_guard_close_only_groups", ("FX", "METAL"))
+
+    friday_risk = False
+    reopen_guard = False
+    close_only = False
+    borrow_blocked = False
+    priority_factor = 1.0
+    reasons: List[str] = []
+
+    friday_enabled = bool(
+        _cfg_group_bool(grp_u, "friday_risk_enabled", bool(getattr(CFG, "friday_risk_enabled", True)))
+    )
+    friday_borrow_block = bool(
+        _cfg_group_bool(grp_u, "friday_risk_borrow_block", bool(getattr(CFG, "friday_risk_borrow_block", True)))
+    )
+    friday_prio = float(
+        max(
+            0.05,
+            min(
+                1.80,
+                _cfg_group_float(
+                    grp_u,
+                    "friday_risk_priority_factor",
+                    float(getattr(CFG, "friday_risk_priority_factor", 0.60)),
+                ),
+            ),
+        )
+    )
+    fr_start = getattr(CFG, "friday_risk_ny_start_hm", (16, 0))
+    fr_end = getattr(CFG, "friday_risk_ny_end_hm", (17, 0))
+    try:
+        friday_start = (int(fr_start[0]), int(fr_start[1]))
+        friday_end = (int(fr_end[0]), int(fr_end[1]))
+    except Exception:
+        friday_start, friday_end = (16, 0), (17, 0)
+    if friday_enabled and grp_u in friday_targets and int(ny.weekday()) == 4:
+        try:
+            friday_risk = bool(in_window(ny, friday_start, friday_end))
+        except Exception:
+            friday_risk = False
+    if friday_risk:
+        reasons.append("FRIDAY_SPREAD_RISK")
+        if grp_u in friday_close_only_groups:
+            close_only = True
+        if friday_borrow_block:
+            borrow_blocked = True
+        priority_factor = min(priority_factor, friday_prio)
+
+    reopen_enabled = bool(
+        _cfg_group_bool(grp_u, "reopen_guard_enabled", bool(getattr(CFG, "reopen_guard_enabled", True)))
+    )
+    reopen_borrow_block = bool(
+        _cfg_group_bool(grp_u, "reopen_guard_borrow_block", bool(getattr(CFG, "reopen_guard_borrow_block", True)))
+    )
+    reopen_prio = float(
+        max(
+            0.05,
+            min(
+                1.80,
+                _cfg_group_float(
+                    grp_u,
+                    "reopen_guard_priority_factor",
+                    float(getattr(CFG, "reopen_guard_priority_factor", 0.70)),
+                ),
+            ),
+        )
+    )
+    reopen_minutes = int(
+        max(1, _cfg_group_int(grp_u, "reopen_guard_minutes", int(getattr(CFG, "reopen_guard_minutes", 45))))
+    )
+
+    re_start = getattr(CFG, "reopen_guard_ny_start_hm", (17, 0))
+    try:
+        reopen_hm = (int(re_start[0]), int(re_start[1]))
+    except Exception:
+        reopen_hm = (17, 0)
+    if reopen_enabled and grp_u in reopen_targets and int(ny.weekday()) == 6:
+        try:
+            start = ny.replace(hour=int(reopen_hm[0]), minute=int(reopen_hm[1]), second=0, microsecond=0)
+            end = start + dt.timedelta(minutes=int(reopen_minutes))
+            reopen_guard = bool(start <= ny <= end)
+        except Exception:
+            reopen_guard = False
+    if reopen_guard:
+        reasons.append("REOPEN_GAP_GUARD")
+        if grp_u in reopen_close_only_groups:
+            close_only = True
+        if reopen_borrow_block:
+            borrow_blocked = True
+        priority_factor = min(priority_factor, reopen_prio)
+
+    return {
+        "group": str(grp_u),
+        "friday_risk": bool(friday_risk),
+        "reopen_guard": bool(reopen_guard),
+        "entry_allowed": bool(not close_only),
+        "borrow_blocked": bool(borrow_blocked),
+        "priority_factor": float(max(0.05, min(1.80, priority_factor))),
+        "reason": ",".join(reasons) if reasons else "NONE",
+    }
+
+
+def group_window_weight(grp: str, symbol: str, now_dt: Optional[dt.datetime] = None) -> float:
+    ref = (now_dt or now_utc()).astimezone(UTC)
+    ny = ref.astimezone(TZ_NY)
+    pl = ref.astimezone(TZ_PL)
+    utc_local = ref.astimezone(UTC)
+    grp_u = _group_key(grp)
+
+    if grp_u == "FX":
+        if in_window(ny, (8, 0), (12, 0)):
+            return 1.00
+        if in_window(ny, (3, 0), (8, 0)) or in_window(ny, (12, 0), (16, 0)):
+            return 0.60
+        return 0.25
+
+    if grp_u == "METAL":
+        if in_window(ny, (7, 0), (13, 0)):
+            return 1.00
+        if in_window(ny, (3, 0), (7, 0)) or in_window(ny, (13, 0), (16, 30)):
+            return 0.60
+        return 0.25
+
+    if grp_u == "INDEX":
+        prof = index_profile(symbol)
+        if prof == "EU":
+            if in_window(pl, (9, 0), (12, 0)):
+                return 0.90
+            if in_window(pl, (12, 0), (15, 0)):
+                return 0.60
+            if in_window(pl, (15, 0), (17, 35)):
+                return 1.00
+            return 0.25
+        if prof == "US":
+            if in_window(ny, (9, 30), (11, 0)) or in_window(ny, (15, 0), (16, 0)):
+                return 1.00
+            if in_window(ny, (11, 0), (15, 0)):
+                return 0.60
+            return 0.25
+        return 0.35
+
+    if grp_u == "CRYPTO":
+        if in_window(utc_local, (21, 0), (7, 0)):
+            return 1.00
+        if in_window(utc_local, (7, 0), (14, 30)):
+            return 0.70
+        if in_window(utc_local, (14, 30), (21, 0)):
+            return 0.45
+        return 0.55
+
+    if grp_u == "EQUITY":
+        if in_window(ny, (9, 30), (11, 0)) or in_window(ny, (15, 0), (16, 0)):
+            return 1.00
+        if in_window(ny, (11, 0), (15, 0)):
+            return 0.65
+        if in_window(ny, (4, 0), (9, 30)) or in_window(ny, (16, 0), (20, 0)):
+            return 0.35
+        return 0.15
+
+    return 0.20
+
+
+def effective_group_priority_factor(grp: str, now_dt: Optional[dt.datetime] = None) -> float:
+    ref = (now_dt or now_utc()).astimezone(UTC)
+    grp_u = _group_key(grp)
+    base = _cfg_group_map_float("group_priority_boost", grp_u, 1.0)
+    overlap_mul = 1.0
+    if bool(getattr(CFG, "policy_overlap_arbitration_enabled", True)) and us_overlap_window_active(ref):
+        overlap_mul = _cfg_group_map_float("group_overlap_priority_factor", grp_u, 1.0)
+    risk = group_market_risk_state(grp_u, ref)
+    factor = float(base) * float(overlap_mul) * float(risk.get("priority_factor", 1.0))
+    lo = float(getattr(CFG, "group_priority_min_factor", 0.40) or 0.40)
+    hi = float(getattr(CFG, "group_priority_max_factor", 1.80) or 1.80)
+    lo = max(0.05, min(lo, hi))
+    hi = max(lo, hi)
+    return max(lo, min(hi, factor))
+
+
+def risk_window_skip_decision(
+    *,
+    symbol: str,
+    group: str,
+    risk_state: Dict[str, Any],
+    is_open_symbol: bool,
+    use_risk_windows_hard: bool,
+    policy_risk_windows_enabled: bool,
+) -> Tuple[bool, str]:
+    """Return (skip_entry, log_tag) for risk-window admission policy."""
+    if bool(is_open_symbol):
+        return False, ""
+    if bool(risk_state.get("entry_allowed", True)):
+        return False, ""
+    if bool(use_risk_windows_hard):
+        return True, "ENTRY_SKIP_RISK_WINDOW"
+    if bool(policy_risk_windows_enabled):
+        return False, "ENTRY_SKIP_RISK_WINDOW_SHADOW"
+    return False, ""
+
+
 def position_time_stop_minutes_for_mode(mode: str, grp: Optional[str] = None, symbol: Optional[str] = None) -> int:
     m = str(mode).upper()
     if m == "HOT":
@@ -1749,7 +2047,12 @@ def partial_close_volume(volume: float, fraction: float, vol_min: float, vol_ste
 def in_window(local_dt: dt.datetime, start_hm: Tuple[int, int], end_hm: Tuple[int, int]) -> bool:
     s = local_dt.replace(hour=start_hm[0], minute=start_hm[1], second=0, microsecond=0)
     e = local_dt.replace(hour=end_hm[0], minute=end_hm[1], second=0, microsecond=0)
-    return s <= local_dt <= e
+    if (start_hm[0], start_hm[1]) == (end_hm[0], end_hm[1]):
+        return True
+    if s <= e:
+        return bool(s <= local_dt <= e)
+    # Overnight window support (e.g. 21:00-07:00).
+    return bool(local_dt >= s or local_dt <= e)
 
 # =============================================================================
 # USB
@@ -2968,6 +3271,14 @@ def build_runtime_boot_snapshot_payload(runtime_root: Path, universe: List[Tuple
             "forbidden_symbol_markers": [str(x) for x in (getattr(CFG, "symbol_policy_forbidden_symbol_markers", ()) or ())],
             "forbidden_path_markers": [str(x) for x in (getattr(CFG, "symbol_policy_forbidden_path_markers", ()) or ())],
         },
+        "policy_windows_v2": {
+            "policy_windows_v2_enabled": bool(getattr(CFG, "policy_windows_v2_enabled", True)),
+            "policy_risk_windows_enabled": bool(getattr(CFG, "policy_risk_windows_enabled", True)),
+            "policy_group_arbitration_enabled": bool(getattr(CFG, "policy_group_arbitration_enabled", True)),
+            "policy_overlap_arbitration_enabled": bool(getattr(CFG, "policy_overlap_arbitration_enabled", True)),
+            "policy_shadow_mode_enabled": bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
+            "policy_runtime_file_name": str(getattr(CFG, "policy_runtime_file_name", "policy_runtime.json")),
+        },
         "execution_burst_guard": {
             "enabled": bool(getattr(CFG, "execution_burst_guard_enabled", True)),
             "lookback_sec": int(getattr(CFG, "execution_burst_lookback_sec", 0)),
@@ -3727,22 +4038,37 @@ class RequestGovernor:
         unlock_power = max(0.05, min(4.0, unlock_power))
         return float(max(0.0, min(1.0, float(ratio) ** float(unlock_power))))
 
+    def _borrow_fraction_for_group(self, grp: str, now_dt: Optional[dt.datetime] = None) -> float:
+        if not bool(getattr(CFG, "policy_group_arbitration_enabled", True)):
+            return 0.0
+        if bool(getattr(CFG, "policy_shadow_mode_enabled", True)):
+            return 0.0
+        base_frac = float(getattr(CFG, "group_borrow_fraction", 0.0) or 0.0)
+        grp_u = _group_key(grp)
+        frac = _cfg_group_map_float("group_borrow_fraction_by_group", grp_u, base_frac)
+        if bool(getattr(CFG, "policy_overlap_arbitration_enabled", True)) and us_overlap_window_active(now_dt):
+            if grp_u == "INDEX":
+                frac += 0.10
+            elif grp_u in {"FX", "CRYPTO"}:
+                frac *= 0.80
+        return float(max(0.0, min(1.0, frac)))
+
     def _group_borrow_allowance(self, grp: str, now_dt: Optional[dt.datetime] = None) -> int:
         """Ile grupa może \"pożyczyć\" z niewykorzystanych capów innych grup (CFG.group_borrow_fraction)."""
+        if not bool(getattr(CFG, "policy_group_arbitration_enabled", True)):
+            return 0
+        rs = group_market_risk_state(grp, now_dt=now_dt)
+        if bool(rs.get("borrow_blocked")):
+            return 0
         shares = dict(getattr(CFG, "group_price_shares", {}) or {})
         if not shares:
             return 0
-        try:
-            frac = float(getattr(CFG, "group_borrow_fraction", 0.0) or 0.0)
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            frac = 0.0
-        frac = max(0.0, min(1.0, frac))
+        frac = self._borrow_fraction_for_group(grp, now_dt=now_dt)
         if frac <= 0.0:
             return 0
         unused_other = 0.0
         for g in shares.keys():
-            if g == grp:
+            if _group_key(g) == _group_key(grp):
                 continue
             cap_g = int(self._group_price_cap(g))
             used_g = int(self.db.group_price_used_today(g))
@@ -3774,20 +4100,20 @@ class RequestGovernor:
 
     def order_group_borrow_allowance(self, grp: str, now_dt: Optional[dt.datetime] = None) -> int:
         """Ile grupa ORDER może pożyczyć z niewykorzystanej puli innych grup."""
+        if not bool(getattr(CFG, "policy_group_arbitration_enabled", True)):
+            return 0
+        rs = group_market_risk_state(grp, now_dt=now_dt)
+        if bool(rs.get("borrow_blocked")):
+            return 0
         shares = dict(getattr(CFG, "group_price_shares", {}) or {})
         if not shares:
             return 0
-        try:
-            frac = float(getattr(CFG, "group_borrow_fraction", 0.0) or 0.0)
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            frac = 0.0
-        frac = max(0.0, min(1.0, frac))
+        frac = self._borrow_fraction_for_group(grp, now_dt=now_dt)
         if frac <= 0.0:
             return 0
         unused_other = 0.0
         for g in shares.keys():
-            if g == grp:
+            if _group_key(g) == _group_key(grp):
                 continue
             cap_g = int(self.order_group_cap(g))
             used_g = int(self.db.get_order_group_actions_day(g))
@@ -3819,20 +4145,20 @@ class RequestGovernor:
 
     def sys_group_borrow_allowance(self, grp: str, now_dt: Optional[dt.datetime] = None) -> int:
         """Ile grupa SYS może pożyczyć z niewykorzystanej puli innych grup."""
+        if not bool(getattr(CFG, "policy_group_arbitration_enabled", True)):
+            return 0
+        rs = group_market_risk_state(grp, now_dt=now_dt)
+        if bool(rs.get("borrow_blocked")):
+            return 0
         shares = dict(getattr(CFG, "group_price_shares", {}) or {})
         if not shares:
             return 0
-        try:
-            frac = float(getattr(CFG, "group_borrow_fraction", 0.0) or 0.0)
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            frac = 0.0
-        frac = max(0.0, min(1.0, frac))
+        frac = self._borrow_fraction_for_group(grp, now_dt=now_dt)
         if frac <= 0.0:
             return 0
         unused_other = 0.0
         for g in shares.keys():
-            if g == grp:
+            if _group_key(g) == _group_key(grp):
                 continue
             cap_g = int(self.sys_group_cap(g))
             used_g = int(self.db.group_sys_used_today(g))
@@ -3841,7 +4167,7 @@ class RequestGovernor:
             unused_other += float(transferable)
         return int(unused_other * float(frac))
 
-    def group_budget_state(self, grp: str, now_dt: Optional[dt.datetime] = None) -> Dict[str, float]:
+    def group_budget_state(self, grp: str, now_dt: Optional[dt.datetime] = None) -> Dict[str, Any]:
         """
         Compact per-group budget snapshot used by arbitration and telemetry.
         Values are safe-clamped and include borrow allowances at current session progress.
@@ -3849,6 +4175,7 @@ class RequestGovernor:
         g = _group_key(grp)
         now_u = now_dt if isinstance(now_dt, dt.datetime) else now_utc()
         unlock = float(self._group_window_unlock_ratio(g, now_dt=now_u))
+        rs = group_market_risk_state(g, now_dt=now_u)
 
         price_cap = int(max(0, self._group_price_cap(g)))
         order_cap = int(max(0, self.order_group_cap(g)))
@@ -3883,7 +4210,14 @@ class RequestGovernor:
         sys_usage = _ratio(sys_used, sys_cap, sys_borrow)
 
         return {
+            "group": str(g),
             "unlock_ratio": float(unlock),
+            "risk_entry_allowed": float(1.0 if bool(rs.get("entry_allowed")) else 0.0),
+            "risk_borrow_blocked": float(1.0 if bool(rs.get("borrow_blocked")) else 0.0),
+            "risk_priority_factor": float(rs.get("priority_factor", 1.0)),
+            "risk_friday": float(1.0 if bool(rs.get("friday_risk")) else 0.0),
+            "risk_reopen": float(1.0 if bool(rs.get("reopen_guard")) else 0.0),
+            "risk_reason": str(rs.get("reason", "NONE")),
             "price_used": float(price_used),
             "price_cap": float(price_cap),
             "price_borrow": float(price_borrow),
@@ -3908,6 +4242,11 @@ class RequestGovernor:
         - allows per-group priority_boost tuning via CFG.per_group.<GROUP>.priority_boost
         """
         g = _group_key(grp)
+        if bool(getattr(CFG, "policy_group_arbitration_enabled", True)) and (
+            not bool(getattr(CFG, "policy_shadow_mode_enabled", True))
+        ):
+            return float(effective_group_priority_factor(g, now_dt=now_dt))
+
         st = self.group_budget_state(g, now_dt=now_dt)
         pressure = float(
             max(
@@ -3934,6 +4273,8 @@ class RequestGovernor:
         # Small uplift for unlocked low-pressure windows to reduce idle budget.
         uplift = 0.12 * max(0.0, 1.0 - pressure) * max(0.0, min(1.0, unlock))
         raw = float(boost) * (1.0 - (w * pressure) + uplift)
+        rs = group_market_risk_state(g, now_dt=now_dt)
+        raw *= float(rs.get("priority_factor", 1.0))
 
         try:
             f_min = float(getattr(CFG, "group_priority_min_factor", 0.65) or 0.65)
@@ -6431,6 +6772,10 @@ class StandardStrategy:
                     "sym": it.get("sym"),
                     "grp": it.get("grp"),
                     "prio": it.get("prio"),
+                    "risk_entry_allowed": it.get("risk_entry_allowed"),
+                    "risk_reason": it.get("risk_reason"),
+                    "risk_friday": it.get("risk_friday"),
+                    "risk_reopen": it.get("risk_reopen"),
                     "ind": ind,
                     "proposal": prop2,
                 })
@@ -7479,6 +7824,8 @@ class SafetyBot:
         # Position-close DEAL requests stay on legacy path to preserve behavior.
         if action == mt5.TRADE_ACTION_DEAL and close_ticket <= 0:
             signal = "BUY" if request.get("type") == mt5.ORDER_TYPE_BUY else "SELL"
+            grp_u = _group_key(grp)
+            risk_state = group_market_risk_state(grp_u)
             logging.info(f"HYBRID_DISPATCH | DEAL over ZMQ symbol={symbol} signal={signal}")
             reply = self._send_trade_command(
                 signal=signal,
@@ -7488,6 +7835,12 @@ class SafetyBot:
                 tp_price=request.get("tp"),
                 magic=request.get("magic"),
                 comment=request.get("comment"),
+                group=grp_u,
+                risk_entry_allowed=bool(risk_state.get("entry_allowed", True)),
+                risk_reason=str(risk_state.get("reason", "NONE")),
+                risk_friday=bool(risk_state.get("friday_risk", False)),
+                risk_reopen=bool(risk_state.get("reopen_guard", False)),
+                policy_shadow_mode=bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
             )
             if not isinstance(reply, dict):
                 logging.error(f"HYBRID_DISPATCH_FAIL | No valid reply for symbol={symbol}")
@@ -8469,6 +8822,99 @@ class SafetyBot:
             "critical": bool(critical),
         }
 
+    def _policy_runtime_common_path(self) -> Optional[Path]:
+        if not bool(getattr(CFG, "policy_runtime_emit_common_file", True)):
+            return None
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+        subdir = str(getattr(CFG, "policy_runtime_common_subdir", "OANDA_MT5_SYSTEM") or "OANDA_MT5_SYSTEM").strip()
+        fname = str(getattr(CFG, "policy_runtime_file_name", "policy_runtime.json") or "policy_runtime.json").strip()
+        if not fname:
+            fname = "policy_runtime.json"
+        return Path(appdata) / "MetaQuotes" / "Terminal" / "Common" / "Files" / subdir / fname
+
+    def _build_policy_runtime_payload(
+        self,
+        group_arb: Dict[str, Dict[str, Any]],
+        group_risk: Dict[str, Dict[str, Any]],
+        *,
+        now_dt: Optional[dt.datetime] = None,
+    ) -> Dict[str, Any]:
+        ref = (now_dt or now_utc()).astimezone(UTC)
+        baseline_groups = {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}
+        groups = sorted(set(list(group_arb.keys()) + list(group_risk.keys()) + list(baseline_groups)))
+        groups_payload: Dict[str, Any] = {}
+        for g in groups:
+            st = dict(group_arb.get(g) or {})
+            rs = dict(group_risk.get(g) or {})
+            groups_payload[g] = {
+                "entry_allowed": bool(rs.get("entry_allowed", True)),
+                "borrow_blocked": bool(rs.get("borrow_blocked", False)),
+                "priority_factor": float(st.get("priority_factor", rs.get("priority_factor", 1.0))),
+                "reason": str(rs.get("reason", "NONE")),
+                "risk_friday": bool(rs.get("friday_risk", False)),
+                "risk_reopen": bool(rs.get("reopen_guard", False)),
+                "price_cap": int(st.get("price_cap", 0)),
+                "price_used": int(st.get("price_used", 0)),
+                "price_borrow": int(st.get("price_borrow", 0)),
+                "order_cap": int(st.get("order_cap", 0)),
+                "order_used": int(st.get("order_used", 0)),
+                "order_borrow": int(st.get("order_borrow", 0)),
+                "sys_cap": int(st.get("sys_cap", 0)),
+                "sys_used": int(st.get("sys_used", 0)),
+                "sys_borrow": int(st.get("sys_borrow", 0)),
+            }
+
+        return {
+            "schema_version": "1.0",
+            "policy_version": "windows_v2",
+            "ts_utc": ref.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "flags": {
+                "policy_windows_v2_enabled": bool(getattr(CFG, "policy_windows_v2_enabled", True)),
+                "policy_risk_windows_enabled": bool(getattr(CFG, "policy_risk_windows_enabled", True)),
+                "policy_group_arbitration_enabled": bool(getattr(CFG, "policy_group_arbitration_enabled", True)),
+                "policy_overlap_arbitration_enabled": bool(getattr(CFG, "policy_overlap_arbitration_enabled", True)),
+                "policy_shadow_mode_enabled": bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
+            },
+            "us_overlap_active": bool(us_overlap_window_active(ref)),
+            "groups": groups_payload,
+        }
+
+    def _emit_policy_runtime(
+        self,
+        group_arb: Dict[str, Dict[str, Any]],
+        group_risk: Dict[str, Dict[str, Any]],
+        *,
+        now_dt: Optional[dt.datetime] = None,
+    ) -> None:
+        if not bool(getattr(CFG, "policy_runtime_emit_enabled", True)):
+            return
+        now_ts = float(time.time())
+        interval_s = max(1, int(getattr(CFG, "policy_runtime_emit_interval_sec", 15)))
+        last_ts = float(getattr(self, "_last_policy_runtime_emit_ts", 0.0))
+        if (now_ts - last_ts) < float(interval_s):
+            return
+        self._last_policy_runtime_emit_ts = now_ts
+
+        payload = self._build_policy_runtime_payload(group_arb, group_risk, now_dt=now_dt)
+        file_name = str(getattr(CFG, "policy_runtime_file_name", "policy_runtime.json") or "policy_runtime.json").strip()
+        if not file_name:
+            file_name = "policy_runtime.json"
+
+        try:
+            atomic_write_json(self.meta_dir / file_name, payload)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        common_path = self._policy_runtime_common_path()
+        if common_path is not None:
+            try:
+                common_path.parent.mkdir(parents=True, exist_ok=True)
+                common_path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
     def scan_once(self):
         st = self.gov.day_state()
 
@@ -8540,7 +8986,8 @@ class SafetyBot:
         )
 
         # Group-level arbitration snapshot (budget pressure + dynamic priority factor).
-        group_arb: Dict[str, Dict[str, float]] = {}
+        group_arb: Dict[str, Dict[str, Any]] = {}
+        group_risk: Dict[str, Dict[str, Any]] = {}
         try:
             now_arb = now_utc()
             groups_cfg = sorted(
@@ -8554,6 +9001,7 @@ class SafetyBot:
                 st_g = self.gov.group_budget_state(g, now_dt=now_arb)
                 st_g["priority_factor"] = float(self.gov.group_priority_factor(g, now_dt=now_arb))
                 group_arb[g] = st_g
+                group_risk[g] = group_market_risk_state(g, now_dt=now_arb)
 
             log_interval_s = max(60, int(getattr(CFG, "scan_interval_sec", 30)) * 4)
             now_ts = float(time.time())
@@ -8562,11 +9010,16 @@ class SafetyBot:
                 for g in sorted(group_arb.keys()):
                     gs = group_arb[g]
                     logging.info(
-                        "GROUP_ARB grp=%s prio_factor=%.3f unlock=%.3f "
-                        "price=%s/%s+%s order=%s/%s+%s sys=%s/%s+%s",
+                        "GROUP_ARB grp=%s prio_factor=%.3f unlock=%.3f risk_entry=%s risk_borrow_block=%s "
+                        "risk_friday=%s risk_reopen=%s reason=%s price=%s/%s+%s order=%s/%s+%s sys=%s/%s+%s",
                         g,
                         float(gs.get("priority_factor", 1.0)),
                         float(gs.get("unlock_ratio", 0.0)),
+                        int(gs.get("risk_entry_allowed", 1.0)),
+                        int(gs.get("risk_borrow_blocked", 0.0)),
+                        int(gs.get("risk_friday", 0.0)),
+                        int(gs.get("risk_reopen", 0.0)),
+                        str(gs.get("risk_reason", "NONE")),
                         int(gs.get("price_used", 0.0)),
                         int(gs.get("price_cap", 0.0)),
                         int(gs.get("price_borrow", 0.0)),
@@ -8577,6 +9030,7 @@ class SafetyBot:
                         int(gs.get("sys_cap", 0.0)),
                         int(gs.get("sys_borrow", 0.0)),
                     )
+            self._emit_policy_runtime(group_arb, group_risk, now_dt=now_arb)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -8821,23 +9275,63 @@ class SafetyBot:
             )
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
+        policy_shadow = bool(getattr(CFG, "policy_shadow_mode_enabled", True))
+        use_windows_v2_hard = bool(getattr(CFG, "policy_windows_v2_enabled", True)) and (not policy_shadow)
+        use_risk_windows_hard = bool(getattr(CFG, "policy_risk_windows_enabled", True)) and (not policy_shadow)
+        use_group_arb_hard = bool(getattr(CFG, "policy_group_arbitration_enabled", True)) and (not policy_shadow)
+        now_prio = now_utc()
         for raw, sym, grp in self.universe:
             # With strict routing enabled we trade only the active window group.
             if tw_strict_group and tw_group and str(grp).upper() != tw_group:
                 continue
-            # priorytet: time_weight * score_factor (+ bonus, jeśli mamy otwartą pozycję)
             grp_u = _group_key(grp)
+            risk_state = group_risk.get(grp_u) or group_market_risk_state(grp_u, now_dt=now_prio)
+            skip_entry, skip_tag = risk_window_skip_decision(
+                symbol=sym,
+                group=grp_u,
+                risk_state=risk_state,
+                is_open_symbol=(sym in open_syms),
+                use_risk_windows_hard=use_risk_windows_hard,
+                policy_risk_windows_enabled=bool(getattr(CFG, "policy_risk_windows_enabled", True)),
+            )
+            if skip_tag:
+                logging.info(
+                    "%s symbol=%s group=%s friday=%s reopen=%s reason=%s",
+                    skip_tag,
+                    sym,
+                    grp_u,
+                    int(bool(risk_state.get("friday_risk"))),
+                    int(bool(risk_state.get("reopen_guard"))),
+                    str(risk_state.get("reason", "NONE")),
+                )
+            if skip_entry:
+                continue
+
+            # priorytet: time_weight * score_factor * effective_group_priority_factor (+ bonus przy otwartej pozycji)
             try:
-                group_factor = float(group_arb.get(grp_u, {}).get("priority_factor", self.gov.group_priority_factor(grp_u)))
+                if use_group_arb_hard:
+                    group_factor = float(
+                        group_arb.get(grp_u, {}).get("priority_factor", effective_group_priority_factor(grp_u, now_dt=now_prio))
+                    )
+                else:
+                    group_factor = float(group_arb.get(grp_u, {}).get("priority_factor", self.gov.group_priority_factor(grp_u)))
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                 group_factor = 1.0
-            prio = self.ctrl.time_weight(grp, sym) * self.ctrl.score_factor(grp, sym) * float(group_factor)
+            if use_windows_v2_hard:
+                time_weight = float(group_window_weight(grp, sym, now_dt=now_prio))
+            else:
+                time_weight = float(self.ctrl.time_weight(grp, sym))
+            score_factor = float(self.ctrl.score_factor(grp, sym))
+            prio = float(time_weight) * float(score_factor) * float(group_factor)
             if sym in open_syms:
                 prio += 5.0
             candidates.append((prio, raw, sym, grp))
 
         candidates.sort(reverse=True, key=lambda x: x[0])
+        if not candidates:
+            logging.info("NO_CANDIDATES_AFTER_POLICY_FILTER")
+            return
 
         # V1.10: Spend-down pod koniec dnia NY — jeśli zostało dużo niewykorzystanego PRICE budżetu,
         # możemy chwilowo zwiększyć aktywność (bez podnoszenia CAP).
@@ -8935,10 +9429,36 @@ class SafetyBot:
 
         # Metadane dla logowania decyzji (Strategy.try_trade → DecisionEventStore)
         try:
+            def _topk_rows(src: List[Tuple[float, str, str, str]]) -> List[Dict[str, Any]]:
+                out: List[Dict[str, Any]] = []
+                for (p, r, s, g) in src:
+                    gk = _group_key(g)
+                    rs = group_risk.get(gk) or group_market_risk_state(gk)
+                    out.append(
+                        {
+                            "prio": float(p),
+                            "raw": r,
+                            "sym": s,
+                            "grp": g,
+                            "risk_entry_allowed": bool(rs.get("entry_allowed", True)),
+                            "risk_reason": str(rs.get("reason", "NONE")),
+                            "risk_friday": bool(rs.get("friday_risk", False)),
+                            "risk_reopen": bool(rs.get("reopen_guard", False)),
+                        }
+                    )
+                return out
+
             self.strategy._scan_meta = {
                 "server_time_anchor": self.time_anchor.server_now_utc().replace(tzinfo=UTC).isoformat().replace("+00:00", "Z"),
                 "verdict_light": verdict_light,
                 "choice_shadowB": shadowB,
+                "policy_shadow_mode": bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
+                "policy_flags": {
+                    "windows_v2_enabled": bool(getattr(CFG, "policy_windows_v2_enabled", True)),
+                    "risk_windows_enabled": bool(getattr(CFG, "policy_risk_windows_enabled", True)),
+                    "group_arbitration_enabled": bool(getattr(CFG, "policy_group_arbitration_enabled", True)),
+                    "overlap_arbitration_enabled": bool(getattr(CFG, "policy_overlap_arbitration_enabled", True)),
+                },
                 "black_swan_stress": float(black_swan_signal.stress_index),
                 "black_swan_flag": bool(black_swan_signal.black_swan),
                 "black_swan_precaution": bool(black_swan_signal.precaution),
@@ -8957,9 +9477,19 @@ class SafetyBot:
                 "snapshot_health": dict(snapshot_health),
                 "snapshot_block_new_entries": bool(snapshot_block_new_entries),
                 "learner_qa_light": str(learner_qa_light),
-                "topk_base": [{"prio": float(p), "raw": r, "sym": s, "grp": g} for (p, r, s, g) in base_topk],
-                "topk_final": [{"prio": float(p), "raw": r, "sym": s, "grp": g} for (p, r, s, g) in final_topk],
+                "topk_base": _topk_rows(base_topk),
+                "topk_final": _topk_rows(final_topk),
                 "proposals": {},
+                "group_arb": {
+                    str(g): {
+                        "risk_entry_allowed": bool((group_risk.get(str(g), {}) or {}).get("entry_allowed", True)),
+                        "risk_reason": str((group_risk.get(str(g), {}) or {}).get("reason", "NONE")),
+                        "risk_friday": bool((group_risk.get(str(g), {}) or {}).get("friday_risk", False)),
+                        "risk_reopen": bool((group_risk.get(str(g), {}) or {}).get("reopen_guard", False)),
+                        "priority_factor": float((group_arb.get(str(g), {}) or {}).get("priority_factor", 1.0)),
+                    }
+                    for g in sorted(set(list(group_arb.keys()) + list(group_risk.keys())))
+                },
             }
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
@@ -8995,6 +9525,8 @@ class SafetyBot:
             for (p, raw, sym, grp) in candidates[:n_limit]:
                 info = self.execution_engine.symbol_info_cached(sym, grp, self.db)
                 ind = self.strategy.last_indicators.get(str(raw)) if hasattr(self.strategy, 'last_indicators') else None
+                gk = _group_key(grp)
+                rs = group_risk.get(gk) or group_market_risk_state(gk)
                 topk_for_snapshot.append({
                     'raw': raw,
                     'sym': sym,
@@ -9002,6 +9534,10 @@ class SafetyBot:
                     'prio': float(p),
                     'adx': (ind.get('adx') if isinstance(ind, dict) else None),
                     'atr': (ind.get('atr') if isinstance(ind, dict) else None),
+                    'risk_entry_allowed': bool(rs.get("entry_allowed", True)),
+                    'risk_reason': str(rs.get("reason", "NONE")),
+                    'risk_friday': bool(rs.get("friday_risk", False)),
+                    'risk_reopen': bool(rs.get("reopen_guard", False)),
                 })
             snapshot = {
                 'version': '1.0',
@@ -9024,6 +9560,8 @@ class SafetyBot:
                 'snapshot_health': (self.strategy._scan_meta.get('snapshot_health') if hasattr(self.strategy, '_scan_meta') else None),
                 'snapshot_block_new_entries': (self.strategy._scan_meta.get('snapshot_block_new_entries') if hasattr(self.strategy, '_scan_meta') else None),
                 'learner_qa_light': (self.strategy._scan_meta.get('learner_qa_light') if hasattr(self.strategy, '_scan_meta') else None),
+                'policy_shadow_mode': (self.strategy._scan_meta.get('policy_shadow_mode') if hasattr(self.strategy, '_scan_meta') else None),
+                'policy_flags': (self.strategy._scan_meta.get('policy_flags') if hasattr(self.strategy, '_scan_meta') else None),
                 'topk': topk_for_snapshot,
             }
             # P0 numeric limits: truncate topk deterministically if needed
@@ -9084,6 +9622,12 @@ class SafetyBot:
         tp_price: float,
         magic: int,
         comment: str,
+        group: str = "",
+        risk_entry_allowed: bool = True,
+        risk_reason: str = "NONE",
+        risk_friday: bool = False,
+        risk_reopen: bool = False,
+        policy_shadow_mode: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """Sends a synchronous trade command to MQL5 and returns parsed reply."""
         def _f(v: Any, default: float = 0.0) -> float:
@@ -9112,6 +9656,12 @@ class SafetyBot:
                 "tp_price": _f(tp_price, 0.0),
                 "magic": _i(magic, 0),
                 "comment": str(comment),
+                "group": str(group or ""),
+                "risk_entry_allowed": bool(risk_entry_allowed),
+                "risk_reason": str(risk_reason or "NONE"),
+                "risk_friday": bool(risk_friday),
+                "risk_reopen": bool(risk_reopen),
+                "policy_shadow_mode": bool(policy_shadow_mode),
             }
         }
         command["request_hash"] = str(build_request_hash(command))
@@ -9458,6 +10008,22 @@ if __name__ == "__main__":
                 out.append(txt)
         return out or list(fallback)
 
+    def _cfg_hm(key: str, fallback: Tuple[int, int]) -> Tuple[int, int]:
+        raw = strategy_cfg.get(key, fallback)
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            try:
+                hh = int(raw[0])
+                mm = int(raw[1])
+            except Exception:
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be [HH,MM] or 'HH:MM'")
+            if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} invalid HH/MM")
+            return int(hh), int(mm)
+        if isinstance(raw, str) and ":" in raw:
+            hh, mm = _parse_hhmm(raw, default_hour=int(fallback[0]), default_minute=int(fallback[1]))
+            return int(hh), int(mm)
+        raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be [HH,MM] or 'HH:MM'")
+
     # Required runtime fields (previously declared-only) are now sourced from CONFIG/strategy.json.
     CFG.fixed_sl_points = _cfg_int("fixed_sl_points", CFG.fixed_sl_points)
     CFG.fixed_tp_points = _cfg_int("fixed_tp_points", CFG.fixed_tp_points)
@@ -9603,6 +10169,50 @@ if __name__ == "__main__":
     CFG.group_priority_pressure_weight = _cfg_float(
         "group_priority_pressure_weight", CFG.group_priority_pressure_weight
     )
+    CFG.policy_windows_v2_enabled = _cfg_bool("policy_windows_v2_enabled", CFG.policy_windows_v2_enabled)
+    CFG.policy_risk_windows_enabled = _cfg_bool("policy_risk_windows_enabled", CFG.policy_risk_windows_enabled)
+    CFG.policy_group_arbitration_enabled = _cfg_bool(
+        "policy_group_arbitration_enabled", CFG.policy_group_arbitration_enabled
+    )
+    CFG.policy_overlap_arbitration_enabled = _cfg_bool(
+        "policy_overlap_arbitration_enabled", CFG.policy_overlap_arbitration_enabled
+    )
+    if "policy_shadow_mode_enabled" in strategy_cfg:
+        CFG.policy_shadow_mode_enabled = _cfg_bool("policy_shadow_mode_enabled", CFG.policy_shadow_mode_enabled)
+    else:
+        CFG.policy_shadow_mode_enabled = bool(not _cfg_bool("paper_trading", False))
+    CFG.policy_runtime_emit_enabled = _cfg_bool("policy_runtime_emit_enabled", CFG.policy_runtime_emit_enabled)
+    CFG.policy_runtime_emit_interval_sec = _cfg_int(
+        "policy_runtime_emit_interval_sec", CFG.policy_runtime_emit_interval_sec
+    )
+    CFG.policy_runtime_file_name = str(strategy_cfg.get("policy_runtime_file_name", CFG.policy_runtime_file_name) or CFG.policy_runtime_file_name)
+    CFG.policy_runtime_emit_common_file = _cfg_bool(
+        "policy_runtime_emit_common_file", CFG.policy_runtime_emit_common_file
+    )
+    CFG.policy_runtime_common_subdir = str(
+        strategy_cfg.get("policy_runtime_common_subdir", CFG.policy_runtime_common_subdir)
+        or CFG.policy_runtime_common_subdir
+    )
+    CFG.friday_risk_enabled = _cfg_bool("friday_risk_enabled", CFG.friday_risk_enabled)
+    CFG.friday_risk_ny_start_hm = _cfg_hm("friday_risk_ny_start_hm", CFG.friday_risk_ny_start_hm)
+    CFG.friday_risk_ny_end_hm = _cfg_hm("friday_risk_ny_end_hm", CFG.friday_risk_ny_end_hm)
+    CFG.friday_risk_groups = tuple(_cfg_str_list("friday_risk_groups", list(CFG.friday_risk_groups)))
+    CFG.friday_risk_close_only_groups = tuple(
+        _cfg_str_list("friday_risk_close_only_groups", list(CFG.friday_risk_close_only_groups))
+    )
+    CFG.friday_risk_close_only = _cfg_bool("friday_risk_close_only", CFG.friday_risk_close_only)
+    CFG.friday_risk_borrow_block = _cfg_bool("friday_risk_borrow_block", CFG.friday_risk_borrow_block)
+    CFG.friday_risk_priority_factor = _cfg_float("friday_risk_priority_factor", CFG.friday_risk_priority_factor)
+    CFG.reopen_guard_enabled = _cfg_bool("reopen_guard_enabled", CFG.reopen_guard_enabled)
+    CFG.reopen_guard_ny_start_hm = _cfg_hm("reopen_guard_ny_start_hm", CFG.reopen_guard_ny_start_hm)
+    CFG.reopen_guard_groups = tuple(_cfg_str_list("reopen_guard_groups", list(CFG.reopen_guard_groups)))
+    CFG.reopen_guard_close_only_groups = tuple(
+        _cfg_str_list("reopen_guard_close_only_groups", list(CFG.reopen_guard_close_only_groups))
+    )
+    CFG.reopen_guard_minutes = _cfg_int("reopen_guard_minutes", CFG.reopen_guard_minutes)
+    CFG.reopen_guard_close_only = _cfg_bool("reopen_guard_close_only", CFG.reopen_guard_close_only)
+    CFG.reopen_guard_borrow_block = _cfg_bool("reopen_guard_borrow_block", CFG.reopen_guard_borrow_block)
+    CFG.reopen_guard_priority_factor = _cfg_float("reopen_guard_priority_factor", CFG.reopen_guard_priority_factor)
     CFG.trade_window_strict_group_routing = _cfg_bool(
         "trade_window_strict_group_routing", CFG.trade_window_strict_group_routing
     )
@@ -9696,6 +10306,33 @@ if __name__ == "__main__":
                 raise SystemExit(f"CONFIG_STRATEGY_FAIL: group_price_shares.{g} must be number")
         if shares_out:
             CFG.group_price_shares = dict(shares_out)
+
+    def _cfg_group_map(name: str, fallback: Dict[str, float]) -> Dict[str, float]:
+        raw = strategy_cfg.get(name, None)
+        if raw is None:
+            return dict(fallback)
+        if not isinstance(raw, dict):
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: {name} must be object")
+        out: Dict[str, float] = {}
+        for k, v in raw.items():
+            g = _group_key(str(k or ""))
+            if g not in {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}:
+                continue
+            try:
+                out[g] = float(v)
+            except Exception:
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: {name}.{g} must be number")
+        return dict(out) if out else dict(fallback)
+
+    CFG.group_borrow_fraction_by_group = _cfg_group_map(
+        "group_borrow_fraction_by_group", dict(getattr(CFG, "group_borrow_fraction_by_group", {}) or {})
+    )
+    CFG.group_priority_boost = _cfg_group_map(
+        "group_priority_boost", dict(getattr(CFG, "group_priority_boost", {}) or {})
+    )
+    CFG.group_overlap_priority_factor = _cfg_group_map(
+        "group_overlap_priority_factor", dict(getattr(CFG, "group_overlap_priority_factor", {}) or {})
+    )
 
     raw_tw = strategy_cfg.get("trade_windows", None)
     if raw_tw is not None:

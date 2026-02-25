@@ -39,6 +39,7 @@ class TestSchedulerTradeWindowsAlignment(unittest.TestCase):
     def test_time_weight_uses_dynamic_trade_windows_from_strategy(self) -> None:
         cfg = SimpleNamespace(
             strategy={
+                "policy_windows_v2_enabled": False,
                 "trade_windows": {
                     "FX_EVE": {
                         "group": "FX",
@@ -65,7 +66,7 @@ class TestSchedulerTradeWindowsAlignment(unittest.TestCase):
             scheduler.now_utc = original
 
     def test_time_weight_fallback_is_aligned_with_default_cfg_windows(self) -> None:
-        cfg = SimpleNamespace(strategy={}, index_profile_map={}, scheduler={})
+        cfg = SimpleNamespace(strategy={"policy_windows_v2_enabled": False}, index_profile_map={}, scheduler={})
         ctrl = ActivityController(_DB(), cfg)
 
         original = self._with_now_utc(_utc_from_local(2026, 2, 23, 10, 0, "Europe/Warsaw"))
@@ -82,7 +83,22 @@ class TestSchedulerTradeWindowsAlignment(unittest.TestCase):
         finally:
             scheduler.now_utc = original
 
+    def test_time_weight_v2_profile_uses_fx_ny_sessions(self) -> None:
+        cfg = SimpleNamespace(strategy={"policy_windows_v2_enabled": True}, index_profile_map={}, scheduler={})
+        ctrl = ActivityController(_DB(), cfg)
+
+        original = self._with_now_utc(_utc_from_local(2026, 2, 23, 10, 0, "America/New_York"))
+        try:
+            self.assertEqual(1.0, ctrl.time_weight("FX", "EURUSD"))
+        finally:
+            scheduler.now_utc = original
+
+        original = self._with_now_utc(_utc_from_local(2026, 2, 23, 2, 0, "America/New_York"))
+        try:
+            self.assertEqual(0.25, ctrl.time_weight("FX", "EURUSD"))
+        finally:
+            scheduler.now_utc = original
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
-
