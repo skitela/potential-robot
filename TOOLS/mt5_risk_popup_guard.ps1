@@ -91,7 +91,10 @@ function Read-NewLines {
     if ($len -lt $start) { $start = 0 }
     if ($len -eq $start) { return @() }
 
-    if (-not $Script:EncCache) { $Script:EncCache = @{} }
+    # StrictMode: referencing an unset variable is an error, so probe existence first.
+    if (-not (Get-Variable -Name EncCache -Scope Script -ErrorAction SilentlyContinue)) {
+        $Script:EncCache = @{}
+    }
     if (-not $Script:EncCache.ContainsKey($Path)) {
         $enc = [System.Text.Encoding]::UTF8
         try {
