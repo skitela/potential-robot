@@ -186,6 +186,8 @@ class CFG:
     hybrid_snapshot_max_age_sec: int = 180
     # BAR snapshots are M5-based and naturally older than tick stream; keep a wider age budget.
     hybrid_snapshot_bar_max_age_sec: int = 900
+    # If False, stale BAR stream alone does not hard-block new entries while tick stream is fresh.
+    hybrid_snapshot_block_on_bar_only: bool = True
     # Snapshot freshness windows for symbol/account metadata channels.
     hybrid_symbol_snapshot_max_age_sec: int = 300
     hybrid_account_snapshot_max_age_sec: int = 30
@@ -8813,6 +8815,9 @@ class SafetyBot:
             if (now_ts - t_bar) > float(bar_max_age):
                 stale_bar += 1
         critical = bool(total > 0 and (stale_tick == total or stale_bar == total))
+        if total > 0 and not bool(getattr(CFG, "hybrid_snapshot_block_on_bar_only", True)):
+            # In relaxed mode, block only when tick stream is stale for all tracked symbols.
+            critical = bool(stale_tick == total)
         return {
             "max_age_sec": int(tick_max_age),
             "bar_max_age_sec": int(bar_max_age),
@@ -10138,6 +10143,10 @@ if __name__ == "__main__":
     CFG.hybrid_snapshot_bar_max_age_sec = _cfg_int(
         "hybrid_snapshot_bar_max_age_sec",
         CFG.hybrid_snapshot_bar_max_age_sec,
+    )
+    CFG.hybrid_snapshot_block_on_bar_only = _cfg_bool(
+        "hybrid_snapshot_block_on_bar_only",
+        CFG.hybrid_snapshot_block_on_bar_only,
     )
     CFG.hybrid_symbol_snapshot_max_age_sec = _cfg_int(
         "hybrid_symbol_snapshot_max_age_sec",
