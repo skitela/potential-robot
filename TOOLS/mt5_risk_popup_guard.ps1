@@ -7,8 +7,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-Add-Type -AssemblyName System.Windows.Forms
-
 Add-Type -TypeDefinition @"
 using System;
 using System.Text;
@@ -19,11 +17,20 @@ public static class WinApi {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+    public const int BM_GETCHECK = 0x00F0;
+    public const int BM_SETCHECK = 0x00F1;
+    public const int BM_CLICK = 0x00F5;
+    public const int BST_UNCHECKED = 0x0000;
+    public const int BST_CHECKED = 0x0001;
 
     public static List<Tuple<IntPtr, uint, string>> EnumerateTopWindows() {
         var list = new List<Tuple<IntPtr, uint, string>>();
@@ -36,6 +43,22 @@ public static class WinApi {
             uint pid = 0;
             GetWindowThreadProcessId(h, out pid);
             list.Add(Tuple.Create(h, pid, sb.ToString()));
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
+    public static List<Tuple<IntPtr, string, string>> EnumerateChildWindows(IntPtr parent) {
+        var list = new List<Tuple<IntPtr, string, string>>();
+        EnumChildWindows(parent, (h, l) => {
+            var clsSb = new StringBuilder(256);
+            GetClassName(h, clsSb, clsSb.Capacity);
+            int len = GetWindowTextLength(h);
+            var txtSb = new StringBuilder(len + 1);
+            if (len > 0) {
+                GetWindowText(h, txtSb, txtSb.Capacity);
+            }
+            list.Add(Tuple.Create(h, clsSb.ToString(), txtSb.ToString()));
             return true;
         }, IntPtr.Zero);
         return list;
@@ -68,11 +91,44 @@ function Read-NewLines {
     if ($len -lt $start) { $start = 0 }
     if ($len -eq $start) { return @() }
 
+    if (-not $Script:EncCache) { $Script:EncCache = @{} }
+    if (-not $Script:EncCache.ContainsKey($Path)) {
+        $enc = [System.Text.Encoding]::UTF8
+        try {
+            $fs0 = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            try {
+                $bom = New-Object byte[] 4
+                [void]$fs0.Read($bom, 0, 4)
+                if ($bom[0] -eq 0xFF -and $bom[1] -eq 0xFE) { $enc = [System.Text.Encoding]::Unicode }
+                elseif ($bom[0] -eq 0xFE -and $bom[1] -eq 0xFF) { $enc = [System.Text.Encoding]::BigEndianUnicode }
+                elseif ($bom[0] -eq 0xEF -and $bom[1] -eq 0xBB -and $bom[2] -eq 0xBF) { $enc = [System.Text.Encoding]::UTF8 }
+            } finally {
+                $fs0.Dispose()
+            }
+        } catch {
+            $enc = [System.Text.Encoding]::UTF8
+        }
+        $Script:EncCache[$Path] = $enc
+    }
+
+    $encUse = [System.Text.Encoding]$Script:EncCache[$Path]
+    if (($encUse.WebName -match "utf-16") -and (($start % 2) -ne 0)) {
+        $start = [int64]([Math]::Max(0, $start - 1))
+    }
+
+    $txt = ""
     $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
     try {
         $fs.Seek($start, [System.IO.SeekOrigin]::Begin) | Out-Null
-        $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true, 4096, $true)
-        try { $txt = $sr.ReadToEnd() } finally { $sr.Dispose() }
+        $toRead = [int]([Math]::Max(0, [Math]::Min([int64]2147483647, ($len - $start))))
+        if ($toRead -gt 0) {
+            $buf = New-Object byte[] $toRead
+            $read = $fs.Read($buf, 0, $toRead)
+            if ($read -gt 0) {
+                if ($read -ne $toRead) { $buf = $buf[0..($read - 1)] }
+                $txt = $encUse.GetString($buf)
+            }
+        }
     } finally {
         $fs.Dispose()
     }
@@ -98,6 +154,53 @@ function Append-Line {
     param([string]$Path, [string]$Line)
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
     Add-Content -Path $Path -Value $Line -Encoding UTF8
+}
+
+function Invoke-Win32AcceptRiskPopup {
+    param(
+        [Parameter(Mandatory = $true)][IntPtr]$Hwnd,
+        [Parameter(Mandatory = $true)][string]$Title
+    )
+
+    try {
+        $children = [WinApi]::EnumerateChildWindows($Hwnd)
+        $okBtn = $null
+        $ackBtn = $null
+        $buttonTexts = @()
+
+        foreach ($it in $children) {
+            $cls = [string]$it.Item2
+            $txt = [string]$it.Item3
+            if ($cls -ne "Button") { continue }
+            $t = if ($null -eq $txt) { "" } else { [string]$txt }
+            $t = $t.Trim()
+            if ($t) { $buttonTexts += $t }
+            if ($t -match "^(?i)ok$") { $okBtn = $it.Item1; continue }
+            if ($t.ToLowerInvariant().Contains("zapozna")) { $ackBtn = $it.Item1; continue }
+        }
+
+        if ($null -eq $okBtn) {
+            $joined = ($buttonTexts -join "|")
+            return @{ ok = $false; mode = "win32"; error = ("no_ok_button texts=" + $joined) }
+        }
+
+        if ($null -ne $ackBtn) {
+            try {
+                $state = [int]([WinApi]::SendMessage($ackBtn, [WinApi]::BM_GETCHECK, [IntPtr]::Zero, [IntPtr]::Zero))
+                if ($state -ne [WinApi]::BST_CHECKED) {
+                    [void][WinApi]::SendMessage($ackBtn, [WinApi]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero)
+                    Start-Sleep -Milliseconds 80
+                }
+            } catch {
+                # best-effort
+            }
+        }
+
+        [void][WinApi]::SendMessage($okBtn, [WinApi]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero)
+        return @{ ok = $true; mode = "win32_click"; error = "" }
+    } catch {
+        return @{ ok = $false; mode = "win32"; error = $_.Exception.Message }
+    }
 }
 
 $runtimeRoot = Resolve-RootPath -Path $Root
@@ -190,14 +293,15 @@ while ($true) {
 
                 [WinApi]::SetForegroundWindow($hwnd) | Out-Null
                 Start-Sleep -Milliseconds 120
-                # Enter first (default button), then common Alt shortcuts.
-                [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-                Start-Sleep -Milliseconds 100
-                [System.Windows.Forms.SendKeys]::SendWait("%Y")
-                Start-Sleep -Milliseconds 80
-                [System.Windows.Forms.SendKeys]::SendWait("%A")
-                Start-Sleep -Milliseconds 80
-                [System.Windows.Forms.SendKeys]::SendWait("%O")
+
+                $res = Invoke-Win32AcceptRiskPopup -Hwnd $hwnd -Title $title
+                if (-not [bool]$res.ok) {
+                    Append-Line -Path $eventLog -Line ("[{0}] POPUP_ACCEPT_FAIL title=""{1}"" pid={2} hwnd={3} mode={4} err={5}" -f `
+                        (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $title, $wndPid, $hwndKey, $res.mode, $res.error)
+                } else {
+                    Append-Line -Path $eventLog -Line ("[{0}] POPUP_ACCEPT_OK title=""{1}"" pid={2} hwnd={3} mode={4}" -f `
+                        (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $title, $wndPid, $hwndKey, $res.mode)
+                }
 
                 $lastActionByHwnd[$hwndKey] = $now
                 $state.popup_actions = [int]$state.popup_actions + 1
