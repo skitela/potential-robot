@@ -3,7 +3,8 @@ param(
     [string]$Mt5TerminalRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
     [int]$IntervalSec = 2,
     [int]$PulseEverySec = 30,
-    [int]$StallAlertSec = 900
+    [int]$StallAlertSec = 900,
+    [string]$StatusPath = ""
 )
 
 Set-StrictMode -Version Latest
@@ -80,6 +81,9 @@ function Get-LatestMt5LogFile {
 $runtimeRoot = Resolve-RootPath -Path $Root
 $interval = [Math]::Max(1, [int]$IntervalSec)
 $pulseEvery = [Math]::Max(10, [int]$PulseEverySec)
+if ([string]::IsNullOrWhiteSpace($StatusPath)) {
+    $StatusPath = Join-Path $runtimeRoot "RUN\live_trade_monitor_status.json"
+}
 
 $tradePattern = [regex]'(?i)\b(buy|sell|order|open|close|filled|reject|deal|retcode|entry|exit|no[-_ ]?trade|fail[-_ ]?safe)\b'
 $excludePattern = [regex]'(?i)\b(budget|price used|oanda_price_breakdown|runtime_metrics_10m|status_pulse|heartbeat status=alive|monitor aktywny)\b'
@@ -87,7 +91,11 @@ $buyPattern = [regex]'(?i)\b(buy)\b'
 $sellPattern = [regex]'(?i)\b(sell)\b'
 $scanPattern = [regex]'(?i)\bSCAN_LIMIT\b'
 $entrySignalPattern = [regex]'(?i)\bENTRY_SIGNAL\b'
-$orderExecPattern = [regex]'(?i)\b(Order executed|ORDER_SENT|ORDER_SEND|DEAL_ADD|deal)\b'
+$orderExecPattern = [regex]'(?i)\b(Order executed|ORDER_EXECUTED|DEAL_ADD|DEAL_RESULT|TRADE_TRANSACTION_DEAL_ADD)\b'
+$dispatchPattern = [regex]'(?i)\bHYBRID_DISPATCH \| DEAL over ZMQ\b'
+$rejectPattern = [regex]'(?i)\bZMQ_REPLY \| status=REJECTED\b'
+$ret10017Pattern = [regex]'(?i)\bretcode=10017\b|Order failed:\s*10017'
+$windowPattern = [regex]'WINDOW_PHASE\s+phase=([A-Z_]+)\s+window=([A-Z0-9_]+|NONE)'
 $skipReasonPattern = [regex]'(?i)\bENTRY_SKIP(?:_PRE)?\b.*?\breason=([A-Z0-9_]+)\b'
 
 $tracked = @(
@@ -102,12 +110,19 @@ $totals = @{
     buy = 0
     sell = 0
     events = 0
+    entry_signal = 0
+    dispatch = 0
+    rejected = 0
+    retcode_10017 = 0
+    order_executed = 0
 }
 $lastPulse = Get-Date
 $currentMt5Path = ""
 $lastScanAt = $null
 $lastTradeIntentAt = $null
 $skipReasons = @{}
+$lastPhase = "UNKNOWN"
+$lastWindow = "NONE"
 
 function Format-TopSkipReasons {
     param([hashtable]$ReasonCounts, [int]$Top = 3)
@@ -158,10 +173,29 @@ while ($true) {
                 }
 
                 if ($name -eq "SAFETY") {
+                    $phaseMatch = $windowPattern.Match($msg)
+                    if ($phaseMatch.Success) {
+                        $lastPhase = [string]$phaseMatch.Groups[1].Value
+                        $lastWindow = [string]$phaseMatch.Groups[2].Value
+                    }
                     if ($scanPattern.IsMatch($msg)) {
                         $lastScanAt = Get-Date
                     }
-                    if ($entrySignalPattern.IsMatch($msg) -or $orderExecPattern.IsMatch($msg)) {
+                    if ($entrySignalPattern.IsMatch($msg)) {
+                        $totals.entry_signal = [int]$totals.entry_signal + 1
+                        $lastTradeIntentAt = Get-Date
+                    }
+                    if ($dispatchPattern.IsMatch($msg)) {
+                        $totals.dispatch = [int]$totals.dispatch + 1
+                    }
+                    if ($rejectPattern.IsMatch($msg)) {
+                        $totals.rejected = [int]$totals.rejected + 1
+                    }
+                    if ($ret10017Pattern.IsMatch($msg)) {
+                        $totals.retcode_10017 = [int]$totals.retcode_10017 + 1
+                    }
+                    if ($orderExecPattern.IsMatch($msg)) {
+                        $totals.order_executed = [int]$totals.order_executed + 1
                         $lastTradeIntentAt = Get-Date
                     }
                     $m = $skipReasonPattern.Match($msg)
@@ -194,7 +228,7 @@ while ($true) {
 
         $now = Get-Date
         if ((New-TimeSpan -Start $lastPulse -End $now).TotalSeconds -ge $pulseEvery) {
-            Write-Host ("[{0}] [PULSE] events={1} buy={2} sell={3}" -f ($now.ToString("HH:mm:ss")), $totals.events, $totals.buy, $totals.sell) -ForegroundColor Cyan
+            Write-Host ("[{0}] [PULSE] events={1} buy={2} sell={3} entry={4} dispatch={5} reject={6} ret10017={7} exec={8}" -f ($now.ToString("HH:mm:ss")), $totals.events, $totals.buy, $totals.sell, $totals.entry_signal, $totals.dispatch, $totals.rejected, $totals.retcode_10017, $totals.order_executed) -ForegroundColor Cyan
             if ($null -ne $lastScanAt) {
                 $scanAge = [int](New-TimeSpan -Start $lastScanAt -End $now).TotalSeconds
                 $tradeAge = if ($null -eq $lastTradeIntentAt) { -1 } else { [int](New-TimeSpan -Start $lastTradeIntentAt -End $now).TotalSeconds }
@@ -202,6 +236,24 @@ while ($true) {
                     $top = Format-TopSkipReasons -ReasonCounts $skipReasons -Top 4
                     Write-Host ("[{0}] [STALL_ALERT] no ENTRY_SIGNAL/order for {1}s while scans are active | top_skip_reasons={2}" -f ($now.ToString("HH:mm:ss")), ([Math]::Max(0, $tradeAge)), $top) -ForegroundColor Yellow
                 }
+            }
+            try {
+                $scanAgeOut = if ($null -eq $lastScanAt) { -1 } else { [int](New-TimeSpan -Start $lastScanAt -End $now).TotalSeconds }
+                $tradeAgeOut = if ($null -eq $lastTradeIntentAt) { -1 } else { [int](New-TimeSpan -Start $lastTradeIntentAt -End $now).TotalSeconds }
+                $status = @{
+                    ts_utc = $now.ToUniversalTime().ToString("o")
+                    root = $runtimeRoot
+                    phase = $lastPhase
+                    window = $lastWindow
+                    scan_age_sec = $scanAgeOut
+                    trade_intent_age_sec = $tradeAgeOut
+                    top_skip_reasons = (Format-TopSkipReasons -ReasonCounts $skipReasons -Top 5)
+                    totals = $totals
+                    mt5_log = $currentMt5Path
+                }
+                $status | ConvertTo-Json -Depth 8 | Set-Content -Path $StatusPath -Encoding UTF8
+            } catch {
+                Write-Host ("[{0}] [MONITOR_STATUS_ERR] {1}" -f ($now.ToString("HH:mm:ss")), $_.Exception.Message) -ForegroundColor Yellow
             }
             $lastPulse = $now
         }
