@@ -3157,7 +3157,7 @@ LEGACY_DB_NAMES = [
 ]
 
 # SQLite PRAGMA user_version target for decision_events.sqlite
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 SCOUT_MAX_BYTES = 256_000  # ochrona IO
@@ -3895,17 +3895,72 @@ class DecisionEventStore:
                 outcome_commission REAL,
                 outcome_swap REAL,
                 outcome_fee REAL,
-                outcome_closed_ts_utc TEXT
+                outcome_closed_ts_utc TEXT,
+                -- v3 (scalp-learning context; additive)
+                grp TEXT,
+                window_id TEXT,
+                window_phase TEXT,
+                window_group TEXT,
+                global_mode TEXT,
+                symbol_mode TEXT,
+                prio REAL,
+                time_weight REAL,
+                score_factor REAL,
+                group_factor REAL,
+                signal_reason TEXT,
+                regime TEXT,
+                adx REAL,
+                atr_points REAL,
+                spread_p80 REAL,
+                spread_cap_points REAL,
+                entry_score INT,
+                entry_min_score INT,
+                risk_entry_allowed INT,
+                risk_reason TEXT,
+                risk_friday INT,
+                risk_reopen INT,
+                eco_active INT,
+                black_swan_flag INT,
+                black_swan_precaution INT,
+                self_heal_active INT,
+                canary_active INT,
+                drift_active INT,
+                snapshot_block_new_entries INT,
+                fx_bucket_idx INT,
+                fx_bucket_count INT,
+                carryover_active INT,
+                mt5_retcode INT,
+                mt5_retcode_name TEXT,
+                bot_version TEXT,
+                policy_shadow_mode INT,
+                policy_windows_v2_enabled INT,
+                policy_risk_windows_enabled INT,
+                policy_group_arbitration_enabled INT,
+                policy_overlap_arbitration_enabled INT
             );"""
         )
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_ts ON decision_events(ts_utc);")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_choice ON decision_events(choice_A);")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_closed ON decision_events(outcome_closed_ts_utc);")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_grp_closed ON decision_events(grp, outcome_closed_ts_utc);")
 
     def insert_event(self, row: Dict[str, Any]) -> None:
         cols = [
             "event_id","ts_utc","server_time_anchor","topk_json","choice_A","choice_shadowB","verdict_light",
             "signal","sl","tp","entry_price","volume","spread_points",
             "price_used","price_requests_trade","sys_used","is_paper","mt5_order","mt5_deal",
-            "outcome_pnl_net","outcome_profit","outcome_commission","outcome_swap","outcome_fee","outcome_closed_ts_utc"
+            "outcome_pnl_net","outcome_profit","outcome_commission","outcome_swap","outcome_fee","outcome_closed_ts_utc",
+            # v3 (scalp-learning context)
+            "grp","window_id","window_phase","window_group","global_mode","symbol_mode",
+            "prio","time_weight","score_factor","group_factor",
+            "signal_reason","regime","adx","atr_points","spread_p80","spread_cap_points",
+            "entry_score","entry_min_score",
+            "risk_entry_allowed","risk_reason","risk_friday","risk_reopen",
+            "eco_active","black_swan_flag","black_swan_precaution","self_heal_active","canary_active","drift_active",
+            "snapshot_block_new_entries","fx_bucket_idx","fx_bucket_count","carryover_active",
+            "mt5_retcode","mt5_retcode_name","bot_version",
+            "policy_shadow_mode","policy_windows_v2_enabled","policy_risk_windows_enabled",
+            "policy_group_arbitration_enabled","policy_overlap_arbitration_enabled",
         ]
         vals = [row.get(c) for c in cols]
         q = "INSERT OR REPLACE INTO decision_events (" + ",".join(cols) + ") VALUES (" + ",".join(["?"]*len(cols)) + ")"
@@ -7105,17 +7160,122 @@ class StandardStrategy:
         shadowB = None
         verdict_light = None
         server_time_anchor = None
+        scan_meta: Dict[str, Any] = {}
+        proposals_src: Dict[str, Any] = {}
         try:
-            shadowB = self._scan_meta.get("choice_shadowB")
-            verdict_light = self._scan_meta.get("verdict_light")
-            server_time_anchor = self._scan_meta.get("server_time_anchor")
+            scan_meta = self._scan_meta if isinstance(getattr(self, "_scan_meta", None), dict) else {}
+            shadowB = scan_meta.get("choice_shadowB")
+            verdict_light = scan_meta.get("verdict_light")
+            server_time_anchor = scan_meta.get("server_time_anchor")
+            raw_props = scan_meta.get("proposals") if isinstance(scan_meta, dict) else None
+            proposals_src = raw_props if isinstance(raw_props, dict) else {}
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+        grp_u = _group_key(grp)
+        # --- scalp-learning context (v3 DB columns; best-effort, no new MT5 fetches) ---
+        tw_window_id = ""
+        tw_phase = ""
+        tw_group = ""
+        global_mode = ""
+        fx_bucket_idx = 0
+        fx_bucket_count = 0
+        carryover_active = 0
+        policy_shadow_mode = 1
+        p_windows_v2 = 0
+        p_risk_windows = 0
+        p_group_arb = 0
+        p_overlap_arb = 0
+        try:
+            tw_meta = scan_meta.get("trade_window") if isinstance(scan_meta, dict) else None
+            if isinstance(tw_meta, dict):
+                tw_window_id = str(tw_meta.get("window_id") or "")
+                tw_phase = str(tw_meta.get("phase") or "")
+                tw_group = str(tw_meta.get("group") or "")
+            global_mode = str(scan_meta.get("global_mode") or "")
+            fx_meta = scan_meta.get("fx_rotation") if isinstance(scan_meta, dict) else None
+            if isinstance(fx_meta, dict):
+                fx_bucket_idx = int(fx_meta.get("bucket_idx") or 0)
+                fx_bucket_count = int(fx_meta.get("bucket_count") or 0)
+            co_meta = scan_meta.get("carryover") if isinstance(scan_meta, dict) else None
+            if isinstance(co_meta, dict):
+                carryover_active = 1 if bool(co_meta.get("active")) else 0
+            policy_shadow_mode = 1 if bool(scan_meta.get("policy_shadow_mode", True)) else 0
+            flags = scan_meta.get("policy_flags") if isinstance(scan_meta, dict) else None
+            if isinstance(flags, dict):
+                p_windows_v2 = 1 if bool(flags.get("windows_v2_enabled", False)) else 0
+                p_risk_windows = 1 if bool(flags.get("risk_windows_enabled", False)) else 0
+                p_group_arb = 1 if bool(flags.get("group_arbitration_enabled", False)) else 0
+                p_overlap_arb = 1 if bool(flags.get("overlap_arbitration_enabled", False)) else 0
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        risk_entry_allowed = 1
+        risk_reason = "NONE"
+        risk_friday = 0
+        risk_reopen = 0
+        group_factor = 1.0
+        try:
+            gab = scan_meta.get("group_arb") if isinstance(scan_meta, dict) else None
+            if isinstance(gab, dict):
+                gmeta = gab.get(str(grp_u)) or {}
+                if isinstance(gmeta, dict):
+                    risk_entry_allowed = 1 if bool(gmeta.get("risk_entry_allowed", True)) else 0
+                    risk_reason = str(gmeta.get("risk_reason", "NONE"))
+                    risk_friday = 1 if bool(gmeta.get("risk_friday", False)) else 0
+                    risk_reopen = 1 if bool(gmeta.get("risk_reopen", False)) else 0
+                    group_factor = float(gmeta.get("priority_factor", 1.0))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        # Ranking decomposition (the exact same semantic used in scan_once).
+        now_rank = now_utc()
+        use_windows_v2_hard = bool(p_windows_v2) and (not bool(policy_shadow_mode))
+        try:
+            time_weight = float(group_window_weight(grp_u, symbol, now_dt=now_rank)) if use_windows_v2_hard else float(self.ctrl.time_weight(grp_u, symbol))
+        except Exception:
+            time_weight = 1.0
+        try:
+            score_factor = float(self.ctrl.score_factor(grp_u, symbol))
+        except Exception:
+            score_factor = 1.0
+        prio = float(time_weight) * float(score_factor) * float(group_factor)
+
+        # Proposal for chosen symbol (stored by evaluate_symbol)
+        prop_choice = proposals_src.get(base_choice) if isinstance(proposals_src, dict) else None
+        signal_reason = str(prop_choice.get("signal_reason")) if isinstance(prop_choice, dict) and prop_choice.get("signal_reason") is not None else None
+        regime = str(prop_choice.get("regime")) if isinstance(prop_choice, dict) and prop_choice.get("regime") is not None else None
+        entry_score = int(prop_choice.get("entry_score")) if isinstance(prop_choice, dict) and prop_choice.get("entry_score") is not None else None
+        entry_min_score = int(prop_choice.get("entry_min_score")) if isinstance(prop_choice, dict) and prop_choice.get("entry_min_score") is not None else None
+        spread_cap_points = None
+        try:
+            if isinstance(prop_choice, dict) and prop_choice.get("spread_cap_points") is not None:
+                spread_cap_points = float(prop_choice.get("spread_cap_points"))
+        except Exception:
+            spread_cap_points = None
+        if spread_cap_points is None:
+            try:
+                if grp_u == "FX":
+                    spread_cap_points = float(fx_spread_cap_points(symbol, grp=grp_u))
+                elif grp_u == "METAL":
+                    spread_cap_points = float(metal_spread_cap_points(symbol, grp=grp_u))
+            except Exception:
+                spread_cap_points = None
+
+        # Global guard states (from scan_meta)
+        black_swan_flag = 1 if bool(scan_meta.get("black_swan_flag", False)) else 0
+        black_swan_precaution = 1 if bool(scan_meta.get("black_swan_precaution", False)) else 0
+        self_heal_active = 1 if bool(scan_meta.get("self_heal_active", False)) else 0
+        canary_active = 1 if bool(scan_meta.get("canary_active", False)) else 0
+        drift_active = 1 if bool(scan_meta.get("drift_active", False)) else 0
+        snapshot_block_new_entries = 1 if bool(scan_meta.get("snapshot_block_new_entries", False)) else 0
+
+        eco_active = 1 if (str(global_mode).upper() == "ECO" or str(mode).upper() == "ECO") else 0
+
         topk_payload = []
         try:
-            topk_list = self._scan_meta.get("topk_final") or self._scan_meta.get("topk_base") or []
-            proposals = self._scan_meta.get("proposals") or {}
+            topk_list = scan_meta.get("topk_final") or scan_meta.get("topk_base") or []
+            proposals = proposals_src if isinstance(proposals_src, dict) else {}
             for it in topk_list:
                 raw = it.get("raw")
                 ind = self.last_indicators.get(str(raw))
@@ -7166,12 +7326,57 @@ class StandardStrategy:
                 "is_paper": int(1 if is_paper else 0),
                 "mt5_order": None,
                 "mt5_deal": None,
+                "mt5_retcode": None,
+                "mt5_retcode_name": None,
                 "outcome_pnl_net": None,
                 "outcome_profit": None,
                 "outcome_commission": None,
                 "outcome_swap": None,
                 "outcome_fee": None,
                 "outcome_closed_ts_utc": None,
+                # v3 scalp-learning context (additive)
+                "grp": str(grp_u),
+                "window_id": (tw_window_id or None),
+                "window_phase": (tw_phase or None),
+                "window_group": (tw_group or None),
+                "global_mode": (str(global_mode).upper() if global_mode else None),
+                "symbol_mode": str(mode).upper(),
+                "prio": float(prio),
+                "time_weight": float(time_weight),
+                "score_factor": float(score_factor),
+                "group_factor": float(group_factor),
+                "signal_reason": signal_reason,
+                "regime": regime,
+                "adx": (float(ind.get("adx")) if isinstance(ind, dict) and ind.get("adx") is not None else None),
+                "atr_points": (
+                    (float(atr_value) / float(point))
+                    if (atr_value is not None and float(point) > 0.0)
+                    else None
+                ),
+                "spread_p80": (float(p80) if p80 is not None else None),
+                "spread_cap_points": (float(spread_cap_points) if spread_cap_points is not None else None),
+                "entry_score": entry_score,
+                "entry_min_score": entry_min_score,
+                "risk_entry_allowed": int(risk_entry_allowed),
+                "risk_reason": str(risk_reason),
+                "risk_friday": int(risk_friday),
+                "risk_reopen": int(risk_reopen),
+                "eco_active": int(eco_active),
+                "black_swan_flag": int(black_swan_flag),
+                "black_swan_precaution": int(black_swan_precaution),
+                "self_heal_active": int(self_heal_active),
+                "canary_active": int(canary_active),
+                "drift_active": int(drift_active),
+                "snapshot_block_new_entries": int(snapshot_block_new_entries),
+                "fx_bucket_idx": int(fx_bucket_idx),
+                "fx_bucket_count": int(fx_bucket_count),
+                "carryover_active": int(carryover_active),
+                "bot_version": str(CFG.BOT_VERSION),
+                "policy_shadow_mode": int(policy_shadow_mode),
+                "policy_windows_v2_enabled": int(p_windows_v2),
+                "policy_risk_windows_enabled": int(p_risk_windows),
+                "policy_group_arbitration_enabled": int(p_group_arb),
+                "policy_overlap_arbitration_enabled": int(p_overlap_arb),
             }
             try:
                 self.decision_store.insert_event(row)
@@ -7204,6 +7409,84 @@ class StandardStrategy:
         if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
             self._metric_note_order_result(False, spread_points=float(spread_pts))
             logging.error(f"Order failed: {getattr(res, 'retcode', None)} {getattr(res, 'comment', '')}")
+            if event_id and getattr(self, "decision_store", None) is not None:
+                try:
+                    st2 = self.gov.day_state()
+                    rc = int(getattr(res, "retcode", 0) or 0) if res is not None else None
+                    self.decision_store.insert_event({
+                        "event_id": event_id,
+                        "ts_utc": now_utc().isoformat().replace("+00:00", "Z"),
+                        "server_time_anchor": server_time_anchor,
+                        "topk_json": json.dumps(topk_payload, ensure_ascii=False),
+                        "choice_A": base_choice,
+                        "choice_shadowB": shadowB,
+                        "verdict_light": verdict_light,
+                        "signal": signal,
+                        "sl": float(sl),
+                        "tp": float(tp),
+                        "entry_price": float(price),
+                        "volume": float(volume),
+                        "spread_points": float(spread_pts),
+                        "price_used": int(st2.get("price_used") or price_used_now),
+                        "price_requests_trade": int(max(1, int(st2.get("price_used") or price_used_now) - price_before)),
+                        "sys_used": int(st2.get("sys_used") or sys_used_now),
+                        "is_paper": 0,
+                        "mt5_order": int(getattr(res, "order", 0) or 0) if res is not None else 0,
+                        "mt5_deal": int(getattr(res, "deal", 0) or 0) if res is not None else 0,
+                        "mt5_retcode": rc,
+                        "mt5_retcode_name": (_retcode_name(int(rc)) if rc is not None else None),
+                        "outcome_pnl_net": None,
+                        "outcome_profit": None,
+                        "outcome_commission": None,
+                        "outcome_swap": None,
+                        "outcome_fee": None,
+                        "outcome_closed_ts_utc": None,
+                        # v3 context (same as pre-dispatch row)
+                        "grp": str(grp_u),
+                        "window_id": (tw_window_id or None),
+                        "window_phase": (tw_phase or None),
+                        "window_group": (tw_group or None),
+                        "global_mode": (str(global_mode).upper() if global_mode else None),
+                        "symbol_mode": str(mode).upper(),
+                        "prio": float(prio),
+                        "time_weight": float(time_weight),
+                        "score_factor": float(score_factor),
+                        "group_factor": float(group_factor),
+                        "signal_reason": signal_reason,
+                        "regime": regime,
+                        "adx": (float(ind.get("adx")) if isinstance(ind, dict) and ind.get("adx") is not None else None),
+                        "atr_points": (
+                            (float(atr_value) / float(point))
+                            if (atr_value is not None and float(point) > 0.0)
+                            else None
+                        ),
+                        "spread_p80": (float(p80) if p80 is not None else None),
+                        "spread_cap_points": (float(spread_cap_points) if spread_cap_points is not None else None),
+                        "entry_score": entry_score,
+                        "entry_min_score": entry_min_score,
+                        "risk_entry_allowed": int(risk_entry_allowed),
+                        "risk_reason": str(risk_reason),
+                        "risk_friday": int(risk_friday),
+                        "risk_reopen": int(risk_reopen),
+                        "eco_active": int(eco_active),
+                        "black_swan_flag": int(black_swan_flag),
+                        "black_swan_precaution": int(black_swan_precaution),
+                        "self_heal_active": int(self_heal_active),
+                        "canary_active": int(canary_active),
+                        "drift_active": int(drift_active),
+                        "snapshot_block_new_entries": int(snapshot_block_new_entries),
+                        "fx_bucket_idx": int(fx_bucket_idx),
+                        "fx_bucket_count": int(fx_bucket_count),
+                        "carryover_active": int(carryover_active),
+                        "bot_version": str(CFG.BOT_VERSION),
+                        "policy_shadow_mode": int(policy_shadow_mode),
+                        "policy_windows_v2_enabled": int(p_windows_v2),
+                        "policy_risk_windows_enabled": int(p_risk_windows),
+                        "policy_group_arbitration_enabled": int(p_group_arb),
+                        "policy_overlap_arbitration_enabled": int(p_overlap_arb),
+                    })
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             return
 
         # update decision event with MT5 ids
@@ -7230,12 +7513,57 @@ class StandardStrategy:
                     "is_paper": 0,
                     "mt5_order": int(getattr(res, "order", 0) or 0),
                     "mt5_deal": int(getattr(res, "deal", 0) or 0),
+                    "mt5_retcode": int(getattr(res, "retcode", 0) or 0),
+                    "mt5_retcode_name": _retcode_name(int(getattr(res, "retcode", 0) or 0)),
                     "outcome_pnl_net": None,
                     "outcome_profit": None,
                     "outcome_commission": None,
                     "outcome_swap": None,
                     "outcome_fee": None,
                     "outcome_closed_ts_utc": None,
+                    # v3 context (same as pre-dispatch row)
+                    "grp": str(grp_u),
+                    "window_id": (tw_window_id or None),
+                    "window_phase": (tw_phase or None),
+                    "window_group": (tw_group or None),
+                    "global_mode": (str(global_mode).upper() if global_mode else None),
+                    "symbol_mode": str(mode).upper(),
+                    "prio": float(prio),
+                    "time_weight": float(time_weight),
+                    "score_factor": float(score_factor),
+                    "group_factor": float(group_factor),
+                    "signal_reason": signal_reason,
+                    "regime": regime,
+                    "adx": (float(ind.get("adx")) if isinstance(ind, dict) and ind.get("adx") is not None else None),
+                    "atr_points": (
+                        (float(atr_value) / float(point))
+                        if (atr_value is not None and float(point) > 0.0)
+                        else None
+                    ),
+                    "spread_p80": (float(p80) if p80 is not None else None),
+                    "spread_cap_points": (float(spread_cap_points) if spread_cap_points is not None else None),
+                    "entry_score": entry_score,
+                    "entry_min_score": entry_min_score,
+                    "risk_entry_allowed": int(risk_entry_allowed),
+                    "risk_reason": str(risk_reason),
+                    "risk_friday": int(risk_friday),
+                    "risk_reopen": int(risk_reopen),
+                    "eco_active": int(eco_active),
+                    "black_swan_flag": int(black_swan_flag),
+                    "black_swan_precaution": int(black_swan_precaution),
+                    "self_heal_active": int(self_heal_active),
+                    "canary_active": int(canary_active),
+                    "drift_active": int(drift_active),
+                    "snapshot_block_new_entries": int(snapshot_block_new_entries),
+                    "fx_bucket_idx": int(fx_bucket_idx),
+                    "fx_bucket_count": int(fx_bucket_count),
+                    "carryover_active": int(carryover_active),
+                    "bot_version": str(CFG.BOT_VERSION),
+                    "policy_shadow_mode": int(policy_shadow_mode),
+                    "policy_windows_v2_enabled": int(p_windows_v2),
+                    "policy_risk_windows_enabled": int(p_risk_windows),
+                    "policy_group_arbitration_enabled": int(p_group_arb),
+                    "policy_overlap_arbitration_enabled": int(p_overlap_arb),
                 })
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
@@ -7341,6 +7669,9 @@ class StandardStrategy:
                 exec_err_recent = int(sum(1 for t in src if (ts_now - float(t)) <= lookback))
             except Exception:
                 exec_err_recent = 0
+            entry_score = None
+            entry_min_score = None
+            entry_spread_cap_points = None
 
             if grp_u == "FX":
                 pace_ok, pace_meta = fx_budget_pacing_allows_entry(self.gov, self.db, now_dt=now_utc())
@@ -7386,6 +7717,12 @@ class StandardStrategy:
                         execution_error_recent=exec_err_recent,
                     )
                     min_score = int(fx_score_threshold_for_mode(mode))
+                    entry_score = int(fx_score)
+                    entry_min_score = int(min_score)
+                    try:
+                        entry_spread_cap_points = float(fx_parts.get("spread_cap_points", 0.0) or 0.0)
+                    except Exception:
+                        entry_spread_cap_points = None
                     logging.info(
                         "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
                         "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f",
@@ -7460,6 +7797,12 @@ class StandardStrategy:
                         execution_error_recent=exec_err_recent,
                     )
                     min_score = int(metal_score_threshold_for_mode(mode))
+                    entry_score = int(metal_score)
+                    entry_min_score = int(min_score)
+                    try:
+                        entry_spread_cap_points = float(metal_parts.get("spread_cap_points", 0.0) or 0.0)
+                    except Exception:
+                        entry_spread_cap_points = None
                     logging.info(
                         "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
                         "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f wick=%.2f",
@@ -7536,8 +7879,11 @@ class StandardStrategy:
                     'tick_size': float(getattr(info, 'trade_tick_size', 0.0) or 0.0),
                     'tick_value': float(getattr(info, 'trade_tick_value', 0.0) or 0.0),
                     'spread_points': float(getattr(info, 'spread', 0.0) or 0.0),
+                    'spread_cap_points': float(entry_spread_cap_points) if entry_spread_cap_points is not None else None,
                     'regime': str(regime),
                     'signal_reason': str(signal_reason),
+                    'entry_score': int(entry_score) if entry_score is not None else None,
+                    'entry_min_score': int(entry_min_score) if entry_min_score is not None else None,
                 }
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
@@ -7629,6 +7975,94 @@ def _enforce_backup_retention(backups_root: Path, keep_dir: Optional[Path] = Non
     except Exception as e:
         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+def _sqlite_table_exists(cur: sqlite3.Cursor, table: str) -> bool:
+    try:
+        row = cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1;",
+            (str(table),),
+        ).fetchone()
+        return bool(row and row[0] == 1)
+    except Exception:
+        return False
+
+
+def _sqlite_table_cols(cur: sqlite3.Cursor, table: str) -> Set[str]:
+    try:
+        cols = cur.execute(f"PRAGMA table_info({table});").fetchall()
+        return {str(r[1]) for r in cols if r and r[1]}
+    except Exception:
+        return set()
+
+
+def _migrate_decision_events_schema_v3(cur: sqlite3.Cursor, log: logging.Logger) -> None:
+    """Schema v3: enrich decision_events with scalp-learning fields (additive, safe).
+
+    Must be idempotent. Safe to run even if table does not exist yet.
+    """
+    if not _sqlite_table_exists(cur, "decision_events"):
+        log.info("MIGRATE V3 | decision_events_missing=1 action=SKIP_STRUCTURAL")
+        return
+
+    cols = _sqlite_table_cols(cur, "decision_events")
+    # Additive columns only (no strategy behavior impact).
+    want: List[Tuple[str, str]] = [
+        ("grp", "TEXT"),
+        ("window_id", "TEXT"),
+        ("window_phase", "TEXT"),
+        ("window_group", "TEXT"),
+        ("global_mode", "TEXT"),
+        ("symbol_mode", "TEXT"),
+        ("prio", "REAL"),
+        ("time_weight", "REAL"),
+        ("score_factor", "REAL"),
+        ("group_factor", "REAL"),
+        ("signal_reason", "TEXT"),
+        ("regime", "TEXT"),
+        ("adx", "REAL"),
+        ("atr_points", "REAL"),
+        ("spread_p80", "REAL"),
+        ("spread_cap_points", "REAL"),
+        ("entry_score", "INT"),
+        ("entry_min_score", "INT"),
+        ("risk_entry_allowed", "INT"),
+        ("risk_reason", "TEXT"),
+        ("risk_friday", "INT"),
+        ("risk_reopen", "INT"),
+        ("eco_active", "INT"),
+        ("black_swan_flag", "INT"),
+        ("black_swan_precaution", "INT"),
+        ("self_heal_active", "INT"),
+        ("canary_active", "INT"),
+        ("drift_active", "INT"),
+        ("snapshot_block_new_entries", "INT"),
+        ("fx_bucket_idx", "INT"),
+        ("fx_bucket_count", "INT"),
+        ("carryover_active", "INT"),
+        ("mt5_retcode", "INT"),
+        ("mt5_retcode_name", "TEXT"),
+        ("bot_version", "TEXT"),
+        ("policy_shadow_mode", "INT"),
+        ("policy_windows_v2_enabled", "INT"),
+        ("policy_risk_windows_enabled", "INT"),
+        ("policy_group_arbitration_enabled", "INT"),
+        ("policy_overlap_arbitration_enabled", "INT"),
+    ]
+    added = 0
+    for name, typ in want:
+        if name in cols:
+            continue
+        cur.execute(f"ALTER TABLE decision_events ADD COLUMN {name} {typ};")
+        added += 1
+        cols.add(name)
+    log.info("MIGRATE V3 | decision_events_add_columns=%s", int(added))
+
+    # Helpful indexes for analytics/learner (idempotent).
+    cur.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_choice ON decision_events(choice_A);")
+    cur.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_closed ON decision_events(outcome_closed_ts_utc);")
+    if "grp" in cols:
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_grp_closed ON decision_events(grp, outcome_closed_ts_utc);")
+
+
 def ensure_db_ready(db_dir: Path, backups_dir: Path, release_id: str, log: logging.Logger) -> None:
     """Auto DB migration/compatibility per Rulebook v1.2. Stops on unsafe state."""
     t0 = time.time()
@@ -7706,6 +8140,8 @@ def ensure_db_ready(db_dir: Path, backups_dir: Path, release_id: str, log: loggi
             try:
                 # Migration step v -> v+1 (currently: only bump user_version; structural changes must be added here later)
                 nxt = v + 1
+                if v == 2 and nxt == 3:
+                    _migrate_decision_events_schema_v3(cur, log)
                 cur.execute(f"PRAGMA user_version={nxt};")
                 cur.execute("COMMIT;")
                 log.info(f"MIGRATE STEP | from={v} | to={nxt} | id=v{v}_to_v{nxt} | status=OK")
@@ -9687,6 +10123,10 @@ class SafetyBot:
         if tw_strict_group and tw_group:
             allowed_groups = {str(tw_group).upper()}
         allowed_symbols_by_group: Dict[str, set[str]] = {}
+        # Exposed to scan_meta (for DB/telemetry), even when trade is disabled.
+        carryover_active = 0
+        fx_bucket_idx = 0       # 1-based when active, else 0
+        fx_bucket_count = 0
 
         # Carryover: grace window after switch (optional limited cross-group entries).
         try:
@@ -9704,6 +10144,7 @@ class SafetyBot:
                 if sw_ts > 0:
                     carry_age_min = max(0.0, (time.time() - sw_ts) / 60.0)
                 if carry_age_min <= float(carry_min):
+                    carryover_active = 1
                     if (not carry_groups) or (_group_key(carry_prev_grp) in {_group_key(x) for x in carry_groups}):
                         # Select a small, deterministic shortlist from the previous group.
                         carry_rank: List[Tuple[float, str]] = []
@@ -9771,6 +10212,8 @@ class SafetyBot:
                         bucket_size=int(fx_bucket_size),
                         period_sec=int(fx_period),
                     )
+                    fx_bucket_idx = int(bidx) + 1
+                    fx_bucket_count = int(bcount)
                     allowed_symbols_by_group["FX"] = set(bucket_syms)
                     # Always keep open symbols visible to policy telemetry.
                     allowed_symbols_by_group["FX"].update({s for s in open_syms if str(s)})
@@ -10064,6 +10507,18 @@ class SafetyBot:
 
             self.strategy._scan_meta = {
                 "server_time_anchor": self.time_anchor.server_now_utc().replace(tzinfo=UTC).isoformat().replace("+00:00", "Z"),
+                "trade_window": {
+                    "phase": str(tw_phase),
+                    "window_id": str(tw_window_id),
+                    "group": str(tw_group),
+                    "entry_allowed": bool(tw_entry_allowed),
+                    "strict_group": bool(tw_strict_group),
+                },
+                "global_mode": str(global_mode),
+                "eco_by_budget": bool(eco_by_budget),
+                "eco_reason": str(eco_reason),
+                "fx_rotation": {"bucket_idx": int(fx_bucket_idx), "bucket_count": int(fx_bucket_count)},
+                "carryover": {"active": bool(carryover_active)},
                 "verdict_light": verdict_light,
                 "choice_shadowB": shadowB,
                 "policy_shadow_mode": bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
