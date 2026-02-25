@@ -1489,6 +1489,7 @@ def select_entry_signal(
     sma_fast_value: float,
     structure_filter_enabled: bool,
     mean_reversion_enabled: bool,
+    mode: str = "HOT",
 ) -> Tuple[Optional[str], str]:
     """Return (signal, reason_code) for trend/range routing."""
     trend = str(trend_h4).upper()
@@ -1498,10 +1499,20 @@ def select_entry_signal(
 
     reg = str(regime).upper()
     if reg == "TREND":
-        if trend == "BUY" and close_price > sma_fast_value and close_price > open_price:
+        strict_buy = bool(trend == "BUY" and close_price > sma_fast_value and close_price > open_price)
+        strict_sell = bool(trend == "SELL" and close_price < sma_fast_value and close_price < open_price)
+        if strict_buy:
             return "BUY", "TREND_BREAK_CONTINUATION"
-        if trend == "SELL" and close_price < sma_fast_value and close_price < open_price:
+        if strict_sell:
             return "SELL", "TREND_BREAK_CONTINUATION"
+        # WARM/ECO: keep trend direction, but allow one of the two short-term confirmations.
+        # This reduces missed entries without disabling trend discipline entirely.
+        m = str(mode).upper()
+        if m in {"WARM", "ECO"}:
+            if trend == "BUY" and (close_price > sma_fast_value or close_price > open_price):
+                return "BUY", "TREND_RELAXED_CONTINUATION"
+            if trend == "SELL" and (close_price < sma_fast_value or close_price < open_price):
+                return "SELL", "TREND_RELAXED_CONTINUATION"
         return None, "NO_TREND_SIGNAL"
 
     if reg == "RANGE" and mean_reversion_enabled:
@@ -6967,6 +6978,7 @@ class StandardStrategy:
             sma_fast_value=float(ind["sma"]),
             structure_filter_enabled=bool(getattr(CFG, "structure_filter_enabled", True)),
             mean_reversion_enabled=bool(getattr(CFG, "mean_reversion_enabled", True)),
+            mode=mode,
         )
 
         if signal:

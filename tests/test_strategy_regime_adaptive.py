@@ -66,6 +66,38 @@ class TestStrategyRegimeAdaptive(unittest.TestCase):
         self.assertIsNone(sig)
         self.assertEqual(reason, "STRUCTURE_MISMATCH")
 
+    def test_select_entry_signal_trend_relaxed_for_warm(self) -> None:
+        # Strict condition fails (close <= sma_fast), relaxed WARM path should still allow BUY.
+        sig, reason = safetybot.select_entry_signal(
+            trend_h4="BUY",
+            structure_h4="BUY",
+            regime="TREND",
+            close_price=1.1005,
+            open_price=1.1000,
+            sma_fast_value=1.1010,
+            structure_filter_enabled=False,
+            mean_reversion_enabled=True,
+            mode="WARM",
+        )
+        self.assertEqual(sig, "BUY")
+        self.assertEqual(reason, "TREND_RELAXED_CONTINUATION")
+
+    def test_select_entry_signal_trend_relaxed_not_applied_in_hot(self) -> None:
+        # The same setup in HOT must remain strict and return NO_TREND_SIGNAL.
+        sig, reason = safetybot.select_entry_signal(
+            trend_h4="BUY",
+            structure_h4="BUY",
+            regime="TREND",
+            close_price=1.1005,
+            open_price=1.1000,
+            sma_fast_value=1.1010,
+            structure_filter_enabled=False,
+            mean_reversion_enabled=True,
+            mode="HOT",
+        )
+        self.assertIsNone(sig)
+        self.assertEqual(reason, "NO_TREND_SIGNAL")
+
     def test_adaptive_exit_points_uses_atr(self) -> None:
         prev = (
             safetybot.CFG.fixed_sl_points,
