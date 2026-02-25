@@ -928,9 +928,16 @@ def load_tiebreak_request(run_dir: Path) -> Optional[Dict[str, Any]]:
         ttl = int(v.get("ttl_sec") or 30)
         ttl = min(max(1, ttl), 60)  # hard max
 
-        # Use mtime for robustness; ts_utc is informational
-        age = dt.datetime.now(dt.timezone.utc).timestamp() - path.stat().st_mtime
-        if age < 0 or age > ttl:
+        # Use mtime for robustness; ts_utc is informational.
+        # Tolerate small negative age due to filesystem timestamp granularity / clock jitter.
+        now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
+        mtime = float(path.stat().st_mtime)
+        age = float(now_ts - mtime)
+        if age < -1.0:
+            return None
+        if age < 0.0:
+            age = 0.0
+        if age > float(ttl):
             return None
 
         cands = v.get("cands") or []
