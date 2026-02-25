@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -22,7 +23,9 @@ from TOOLS import gh_v1_bridge_benchmark as bridge  # noqa: E402
 UTC = dt.timezone.utc
 METHOD_CONTRACT_REL = Path("SCHEMAS") / "ranking_benchmark_metodyka_v1.json"
 METHOD_DOC_REL = Path("DOCS") / "RANKING_BENCHMARK_METODYKA_V1.md"
-DEFAULT_GH_ROOT = Path(r"C:\GLOBALNY HANDEL VER1")
+DEFAULT_EXTERNAL_ROOT = Path((os.environ.get("OANDA_BENCHMARK_TARGET_ROOT") or "").strip()) if str(
+    os.environ.get("OANDA_BENCHMARK_TARGET_ROOT") or ""
+).strip() else None
 
 
 def now_utc_iso() -> str:
@@ -56,16 +59,18 @@ def load_method_contract(path: Path) -> Dict[str, Any]:
 
 
 def default_target_root() -> Path:
-    if str(ROOT).lower().rstrip("\\/") == str(DEFAULT_GH_ROOT).lower().rstrip("\\/"):
-        return ROOT
-    if DEFAULT_GH_ROOT.exists():
-        return DEFAULT_GH_ROOT
+    if DEFAULT_EXTERNAL_ROOT is not None and DEFAULT_EXTERNAL_ROOT.exists():
+        return DEFAULT_EXTERNAL_ROOT
     return ROOT
 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Unified benchmark/ranking runner (method V1).")
-    ap.add_argument("--target-root", default="", help="Target runtime root for scoring (default: GH V1 when available).")
+    ap.add_argument(
+        "--target-root",
+        default="",
+        help="Target runtime root for scoring (default: current repo or OANDA_BENCHMARK_TARGET_ROOT when set).",
+    )
     ap.add_argument("--out-json", default="", help="Optional output JSON path.")
     ap.add_argument("--out-md", default="", help="Optional output Markdown path.")
     ap.add_argument("--strict-contract", action="store_true", help="Fail if method contract file is missing/invalid.")

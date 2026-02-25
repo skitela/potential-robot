@@ -8,8 +8,9 @@ $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\")).Path
 
 if ([string]::IsNullOrWhiteSpace($TargetRoot)) {
-  if (Test-Path "C:\GLOBALNY HANDEL VER1") {
-    $TargetRoot = "C:\GLOBALNY HANDEL VER1"
+  $envTarget = [string]$env:OANDA_BENCHMARK_TARGET_ROOT
+  if (-not [string]::IsNullOrWhiteSpace($envTarget) -and (Test-Path $envTarget)) {
+    $TargetRoot = $envTarget
   } else {
     $TargetRoot = $Root
   }

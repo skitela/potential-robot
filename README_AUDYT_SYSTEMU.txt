@@ -44,4 +44,4 @@ Benchmark / Ranking V1 (wspolna metodyka OANDA + GH):
 - Komenda (ta sama w obu repo):
   python -B TOOLS/ranking_benchmark_v1.py
 - Wymuszenie targetu:
-  python -B TOOLS/ranking_benchmark_v1.py --target-root "C:\GLOBALNY HANDEL VER1"
+  python -B TOOLS/ranking_benchmark_v1.py --target-root "<zewnetrzny_root_RnD>"

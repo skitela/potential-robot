@@ -108,8 +108,8 @@ Jednolita komenda:
 - `python -B TOOLS/ranking_benchmark_v1.py`
 
 Tryb uruchomienia:
-- z OANDA_MT5_SYSTEM: domyslnie ocenia GH V1 (`C:\GLOBALNY HANDEL VER1`) jesli istnieje,
-- z GH_V1: domyslnie ocenia biezacy root GH_V1.
+- domyslnie ocenia biezacy root repo,
+- opcjonalnie mozna wskazac zewnetrzny root przez zmienna `OANDA_BENCHMARK_TARGET_ROOT`.
 
 Wymuszenie targetu:
-- `python -B TOOLS/ranking_benchmark_v1.py --target-root "C:\GLOBALNY HANDEL VER1"`
+- `python -B TOOLS/ranking_benchmark_v1.py --target-root "<zewnetrzny_root_RnD>"`

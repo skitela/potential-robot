@@ -118,7 +118,7 @@ def update_baseline_ewma(
 
 
 class BlackSwanGuard:
-    """Global stress guard adapted from GLOBALNY HANDEL VER1 risk layer."""
+    """Global stress guard adapted from the external R&D risk layer."""
 
     def __init__(
         self,
