@@ -4,8 +4,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Gemini"
 #property link      "https://github.com/gemini"
-#property version   "1.11"
-#property description "Hybrid execution agent with deterministic REQ/REP contract."
+#property version   "1.12"
+#property description "Hybrid execution agent with deterministic REQ/REP contract and runtime policy fail-safe."
 
 #include <zeromq_bridge.mqh>
 #include <Json/Json.mqh>
@@ -22,6 +22,11 @@ input bool   InpEnablePythonTimeoutWatchdog = false;
 input bool   InpAutoRecoverFromTimeout = true;
 input uint   InpAccountPulseSec = 5;
 input uint   InpReplyCacheSize = 64;
+input bool   InpPolicyRuntimeEnabled = true;
+input bool   InpPolicyRuntimeRequireFile = true;
+input bool   InpPolicyRuntimeEnforceEntry = true;
+input uint   InpPolicyRuntimeReloadSec = 5;
+input string InpPolicyRuntimeRelativePath = "OANDA_MT5_SYSTEM\\policy_runtime.json";
 input int    InpSmaFastPeriod = 20;
 input int    InpAdxPeriod = 14;
 input int    InpAtrPeriod = 14;
@@ -30,6 +35,12 @@ string G_Symbol = "";
 string G_SymbolUpper = "";
 ulong  G_LastPythonMessageTime = 0;
 bool   G_IsFailSafeActive = false;
+bool   G_PolicyRuntimeLoaded = false;
+bool   G_PolicyFailSafeNoTrade = false;
+bool   G_PolicyShadowMode = true;
+bool   G_PolicyRiskWindowsEnabled = true;
+string G_PolicyLastError = "";
+ulong  G_LastPolicyReloadMs = 0;
 
 int G_MAFastHandle = INVALID_HANDLE;
 int G_ADXHandle = INVALID_HANDLE;
@@ -38,6 +49,15 @@ int G_ATRHandle = INVALID_HANDLE;
 string G_ReplyCacheMsgId[];
 string G_ReplyCachePayload[];
 ulong  G_ReplyCacheTs[];
+
+#define POLICY_GROUP_COUNT 5
+string G_PolicyGroupNames[POLICY_GROUP_COUNT] = {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"};
+bool   G_PolicyEntryAllowed[POLICY_GROUP_COUNT];
+bool   G_PolicyBorrowBlocked[POLICY_GROUP_COUNT];
+double G_PolicyPriorityFactor[POLICY_GROUP_COUNT];
+string G_PolicyReason[POLICY_GROUP_COUNT];
+bool   G_PolicyRiskFriday[POLICY_GROUP_COUNT];
+bool   G_PolicyRiskReopen[POLICY_GROUP_COUNT];
 
 //+------------------------------------------------------------------+
 //| Utility helpers                                                   |
@@ -115,6 +135,357 @@ long JsonGetLong(JSONNode *node, string key, long def_value = 0)
   if(!JsonNodeValid(value))
     return def_value;
   return value.ToInteger();
+}
+
+bool JsonGetBool(JSONNode *node, string key, bool def_value = false)
+{
+  if(!JsonNodeValid(node))
+    return def_value;
+  JSONNode *value = node.HasKey(key);
+  if(!JsonNodeValid(value))
+    return def_value;
+  string raw = ToUpperAscii(value.ToString());
+  if(raw == "TRUE" || raw == "1" || raw == "YES" || raw == "Y" || raw == "ON")
+    return true;
+  if(raw == "FALSE" || raw == "0" || raw == "NO" || raw == "N" || raw == "OFF")
+    return false;
+  return (value.ToInteger() != 0);
+}
+
+string TrimString(string value)
+{
+  string out = value;
+  StringTrimLeft(out);
+  StringTrimRight(out);
+  return out;
+}
+
+int PolicyGroupIndex(string group_name)
+{
+  string g = ToUpperAscii(TrimString(group_name));
+  for(int i = 0; i < POLICY_GROUP_COUNT; i++)
+  {
+    if(g == G_PolicyGroupNames[i])
+      return i;
+  }
+  return -1;
+}
+
+void PolicyResetDefaults()
+{
+  for(int i = 0; i < POLICY_GROUP_COUNT; i++)
+  {
+    G_PolicyEntryAllowed[i] = true;
+    G_PolicyBorrowBlocked[i] = false;
+    G_PolicyPriorityFactor[i] = 1.0;
+    G_PolicyReason[i] = "NONE";
+    G_PolicyRiskFriday[i] = false;
+    G_PolicyRiskReopen[i] = false;
+  }
+  G_PolicyShadowMode = true;
+  G_PolicyRiskWindowsEnabled = true;
+}
+
+string SymbolBaseUpper(const string symbol_name)
+{
+  string out = ToUpperAscii(TrimString(symbol_name));
+  int dot_pos = StringFind(out, ".");
+  if(dot_pos > 0)
+    out = StringSubstr(out, 0, dot_pos);
+  return out;
+}
+
+bool IsLikelyFxSymbol(const string symbol_base)
+{
+  string s = SymbolBaseUpper(symbol_base);
+  if(StringLen(s) != 6)
+    return false;
+  for(int i = 0; i < 6; i++)
+  {
+    ushort ch = (ushort)StringGetCharacter(s, i);
+    if(ch < 65 || ch > 90)
+      return false;
+  }
+  return true;
+}
+
+string GuessGroupForSymbol(const string symbol_name)
+{
+  string base = SymbolBaseUpper(symbol_name);
+  if(base == "")
+    return "OTHER";
+
+  if(
+    StringFind(base, "XAU") >= 0 || StringFind(base, "XAG") >= 0 ||
+    StringFind(base, "GOLD") >= 0 || StringFind(base, "SILVER") >= 0 ||
+    StringFind(base, "PLATIN") >= 0 || StringFind(base, "PALLAD") >= 0 ||
+    StringFind(base, "COPPER") >= 0 || StringFind(base, "XPT") >= 0 || StringFind(base, "XPD") >= 0
+  )
+    return "METAL";
+
+  if(
+    StringFind(base, "BTC") >= 0 || StringFind(base, "ETH") >= 0 ||
+    StringFind(base, "LTC") >= 0 || StringFind(base, "XRP") >= 0 ||
+    StringFind(base, "DOGE") >= 0 || StringFind(base, "SOL") >= 0
+  )
+    return "CRYPTO";
+
+  if(
+    StringFind(base, "US500") >= 0 || StringFind(base, "US100") >= 0 ||
+    StringFind(base, "US30") >= 0 || StringFind(base, "NAS") >= 0 ||
+    StringFind(base, "SPX") >= 0 || StringFind(base, "DAX") >= 0 ||
+    StringFind(base, "DE40") >= 0 || StringFind(base, "EU50") >= 0 ||
+    StringFind(base, "JP225") >= 0 || StringFind(base, "UK100") >= 0
+  )
+    return "INDEX";
+
+  if(IsLikelyFxSymbol(base))
+    return "FX";
+
+  return "EQUITY";
+}
+
+string ResolveTradeGroup(const string payload_group, const string symbol_name)
+{
+  string g = ToUpperAscii(TrimString(payload_group));
+  if(PolicyGroupIndex(g) >= 0)
+    return g;
+  return GuessGroupForSymbol(symbol_name);
+}
+
+bool IsWindowActive(
+  datetime local_time,
+  int start_hour,
+  int start_minute,
+  int end_hour,
+  int end_minute
+)
+{
+  MqlDateTime ts;
+  TimeToStruct(local_time, ts);
+  int cur = ts.hour * 60 + ts.min;
+  int start = MathMax(0, MathMin(23, start_hour)) * 60 + MathMax(0, MathMin(59, start_minute));
+  int end = MathMax(0, MathMin(23, end_hour)) * 60 + MathMax(0, MathMin(59, end_minute));
+  if(start == end)
+    return true;
+  if(start < end)
+    return (cur >= start && cur <= end);
+  return (cur >= start || cur <= end);
+}
+
+bool LoadPolicyRuntimeFile(string &error_msg)
+{
+  error_msg = "";
+  PolicyResetDefaults();
+
+  string rel_path = TrimString(InpPolicyRuntimeRelativePath);
+  if(rel_path == "")
+  {
+    error_msg = "POLICY_RUNTIME_EMPTY_PATH";
+    return false;
+  }
+
+  int fh = FileOpen(rel_path, FILE_READ | FILE_BIN | FILE_COMMON);
+  if(fh == INVALID_HANDLE)
+  {
+    error_msg = StringFormat("POLICY_RUNTIME_OPEN_FAIL path=%s err=%d", rel_path, (int)GetLastError());
+    return false;
+  }
+
+  int sz = (int)FileSize(fh);
+  if(sz <= 0)
+  {
+    FileClose(fh);
+    error_msg = StringFormat("POLICY_RUNTIME_EMPTY path=%s", rel_path);
+    return false;
+  }
+
+  uchar bytes[];
+  ArrayResize(bytes, sz);
+  int read_n = FileReadArray(fh, bytes, 0, sz);
+  FileClose(fh);
+  if(read_n <= 0)
+  {
+    error_msg = StringFormat("POLICY_RUNTIME_READ_FAIL path=%s", rel_path);
+    return false;
+  }
+
+  string json_raw = CharArrayToString(bytes, 0, read_n, CP_UTF8);
+  JSONNode root;
+  if(!root.Deserialize(json_raw, CP_UTF8))
+  {
+    error_msg = StringFormat("POLICY_RUNTIME_PARSE_FAIL path=%s", rel_path);
+    return false;
+  }
+
+  JSONNode *root_ptr = GetPointer(root);
+  string schema_v = JsonGetString(root_ptr, "schema_version", "");
+  if(schema_v != "" && schema_v != PROTOCOL_VERSION)
+  {
+    error_msg = StringFormat("POLICY_RUNTIME_SCHEMA_MISMATCH got=%s expected=%s", schema_v, PROTOCOL_VERSION);
+    return false;
+  }
+
+  JSONNode *flags = root_ptr.HasKey("flags", Object);
+  if(JsonNodeValid(flags))
+  {
+    G_PolicyShadowMode = JsonGetBool(flags, "policy_shadow_mode_enabled", true);
+    G_PolicyRiskWindowsEnabled = JsonGetBool(flags, "policy_risk_windows_enabled", true);
+  }
+
+  JSONNode *groups = root_ptr.HasKey("groups", Object);
+  if(!JsonNodeValid(groups))
+  {
+    error_msg = "POLICY_RUNTIME_GROUPS_MISSING";
+    return false;
+  }
+
+  for(int i = 0; i < POLICY_GROUP_COUNT; i++)
+  {
+    JSONNode *node = groups.HasKey(G_PolicyGroupNames[i], Object);
+    if(!JsonNodeValid(node))
+      continue;
+
+    G_PolicyEntryAllowed[i] = JsonGetBool(node, "entry_allowed", true);
+    G_PolicyBorrowBlocked[i] = JsonGetBool(node, "borrow_blocked", false);
+    double pf = JsonGetDouble(node, "priority_factor", 1.0);
+    if(!MathIsValidNumber(pf))
+      pf = 1.0;
+    G_PolicyPriorityFactor[i] = MathMax(0.05, MathMin(1.80, pf));
+    string rs = JsonGetString(node, "reason", "NONE");
+    if(rs == "")
+      rs = "NONE";
+    G_PolicyReason[i] = rs;
+    G_PolicyRiskFriday[i] = JsonGetBool(node, "risk_friday", false);
+    G_PolicyRiskReopen[i] = JsonGetBool(node, "risk_reopen", false);
+  }
+
+  return true;
+}
+
+void RefreshPolicyRuntime()
+{
+  if(!InpPolicyRuntimeEnabled)
+    return;
+
+  uint reload_sec = (uint)MathMax(1, (int)InpPolicyRuntimeReloadSec);
+  ulong now_ms = (ulong)GetTickCount();
+  if(G_LastPolicyReloadMs > 0 && (now_ms - G_LastPolicyReloadMs) < ((ulong)reload_sec * 1000))
+    return;
+  G_LastPolicyReloadMs = now_ms;
+
+  string err = "";
+  bool ok = LoadPolicyRuntimeFile(err);
+  if(ok)
+  {
+    bool had_fail = G_PolicyFailSafeNoTrade;
+    G_PolicyRuntimeLoaded = true;
+    G_PolicyFailSafeNoTrade = false;
+    G_PolicyLastError = "";
+    if(had_fail)
+      Print("POLICY_RUNTIME_RECOVERED path=", TrimString(InpPolicyRuntimeRelativePath));
+    return;
+  }
+
+  G_PolicyRuntimeLoaded = false;
+  G_PolicyLastError = err;
+  if(InpPolicyRuntimeRequireFile)
+  {
+    G_PolicyFailSafeNoTrade = true;
+    Print("POLICY_RUNTIME_FAILSAFE reason=", err);
+  }
+  else
+  {
+    G_PolicyFailSafeNoTrade = false;
+    Print("POLICY_RUNTIME_WARN reason=", err);
+  }
+}
+
+bool IsRiskWindow(const string group_name, bool &is_friday, bool &is_reopen, string &reason)
+{
+  is_friday = false;
+  is_reopen = false;
+  reason = "NONE";
+
+  int idx = PolicyGroupIndex(group_name);
+  if(idx < 0)
+    return false;
+  if(!G_PolicyRuntimeLoaded || !G_PolicyRiskWindowsEnabled)
+    return false;
+
+  is_friday = G_PolicyRiskFriday[idx];
+  is_reopen = G_PolicyRiskReopen[idx];
+  if(is_friday || is_reopen)
+  {
+    reason = G_PolicyReason[idx];
+    if(reason == "")
+      reason = "RISK_WINDOW";
+    return true;
+  }
+  return false;
+}
+
+bool EntryAllowedForGroup(const string group_name, string &reason)
+{
+  reason = "NONE";
+  if(!InpPolicyRuntimeEnabled || !InpPolicyRuntimeEnforceEntry)
+    return true;
+
+  if(G_PolicyFailSafeNoTrade)
+  {
+    reason = (G_PolicyLastError == "" ? "POLICY_FAILSAFE" : G_PolicyLastError);
+    return false;
+  }
+  if(!G_PolicyRuntimeLoaded)
+  {
+    if(InpPolicyRuntimeRequireFile)
+    {
+      reason = "POLICY_RUNTIME_UNAVAILABLE";
+      return false;
+    }
+    return true;
+  }
+  if(G_PolicyShadowMode)
+  {
+    reason = "SHADOW_MODE";
+    return true;
+  }
+
+  int idx = PolicyGroupIndex(group_name);
+  if(idx < 0)
+  {
+    reason = "UNKNOWN_GROUP";
+    return false;
+  }
+  if(!G_PolicyEntryAllowed[idx])
+  {
+    reason = (G_PolicyReason[idx] == "" ? "ENTRY_BLOCKED" : G_PolicyReason[idx]);
+    return false;
+  }
+  return true;
+}
+
+bool BorrowBlockedForGroup(const string group_name)
+{
+  if(!InpPolicyRuntimeEnabled || !G_PolicyRuntimeLoaded)
+    return false;
+  int idx = PolicyGroupIndex(group_name);
+  if(idx < 0)
+    return false;
+  return G_PolicyBorrowBlocked[idx];
+}
+
+double PriorityFactorForGroup(const string group_name)
+{
+  if(!InpPolicyRuntimeEnabled || !G_PolicyRuntimeLoaded)
+    return 1.0;
+  int idx = PolicyGroupIndex(group_name);
+  if(idx < 0)
+    return 1.0;
+  double pf = G_PolicyPriorityFactor[idx];
+  if(!MathIsValidNumber(pf))
+    return 1.0;
+  return MathMax(0.05, MathMin(1.80, pf));
 }
 
 string Fnv1a32Hex(string text)
@@ -711,7 +1082,13 @@ void ExecuteTrade(
   int magic,
   string comment,
   string msg_id,
-  string request_hash
+  string request_hash,
+  string group_hint,
+  bool payload_risk_entry_allowed,
+  string payload_risk_reason,
+  bool payload_risk_friday,
+  bool payload_risk_reopen,
+  bool payload_policy_shadow
 )
 {
   string action_reply = "TRADE_REPLY";
@@ -742,6 +1119,72 @@ void ExecuteTrade(
       "Invalid symbol.", request_hash, true
     );
     return;
+  }
+
+  string trade_group = ResolveTradeGroup(group_hint, symbol_req);
+  string policy_reason = "NONE";
+  bool entry_allowed = EntryAllowedForGroup(trade_group, policy_reason);
+  bool risk_friday = false;
+  bool risk_reopen = false;
+  string risk_reason = "NONE";
+  bool in_risk_window = IsRiskWindow(trade_group, risk_friday, risk_reopen, risk_reason);
+  bool borrow_blocked = BorrowBlockedForGroup(trade_group);
+  double prio_factor = PriorityFactorForGroup(trade_group);
+
+  if(!entry_allowed)
+  {
+    string deny_reason = (policy_reason == "" ? "ENTRY_BLOCKED" : policy_reason);
+    SendReplyEnvelope(
+      "REJECTED", msg_id, action_reply,
+      50020, "CUSTOM_RETCODE_POLICY_ENTRY_BLOCKED", 0, 0,
+      StringFormat("Policy blocked entry group=%s reason=%s", trade_group, deny_reason),
+      symbol_req,
+      deny_reason, request_hash, true
+    );
+    Print(
+      "ENTRY_SKIP_RISK_WINDOW symbol=", symbol_req,
+      " group=", trade_group,
+      " friday=", (risk_friday ? "1" : "0"),
+      " reopen=", (risk_reopen ? "1" : "0"),
+      " reason=", deny_reason,
+      " borrow_block=", (borrow_blocked ? "1" : "0"),
+      " prio_factor=", DoubleToString(prio_factor, 3)
+    );
+    return;
+  }
+
+  if(!payload_policy_shadow && !payload_risk_entry_allowed)
+  {
+    string deny_reason_payload = (payload_risk_reason == "" ? "PAYLOAD_RISK_BLOCK" : payload_risk_reason);
+    SendReplyEnvelope(
+      "REJECTED", msg_id, action_reply,
+      50021, "CUSTOM_RETCODE_PAYLOAD_RISK_BLOCK", 0, 0,
+      StringFormat("Payload risk blocked entry group=%s reason=%s", trade_group, deny_reason_payload),
+      symbol_req,
+      deny_reason_payload, request_hash, true
+    );
+    Print(
+      "ENTRY_SKIP_RISK_WINDOW symbol=", symbol_req,
+      " group=", trade_group,
+      " friday=", (payload_risk_friday ? "1" : "0"),
+      " reopen=", (payload_risk_reopen ? "1" : "0"),
+      " reason=", deny_reason_payload,
+      " source=PAYLOAD"
+    );
+    return;
+  }
+
+  if(in_risk_window || borrow_blocked || prio_factor != 1.0)
+  {
+    Print(
+      "POLICY_CONTEXT symbol=", symbol_req,
+      " group=", trade_group,
+      " risk_friday=", (risk_friday ? "1" : "0"),
+      " risk_reopen=", (risk_reopen ? "1" : "0"),
+      " borrow_block=", (borrow_blocked ? "1" : "0"),
+      " priority_factor=", DoubleToString(prio_factor, 3),
+      " reason=", risk_reason
+    );
   }
 
   for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -993,6 +1436,12 @@ void ProcessCommands()
     double tp_price = JsonGetDouble(payload, "tp_price", 0.0);
     long magic = JsonGetLong(payload, "magic", 0);
     string comment = JsonGetString(payload, "comment", "");
+    string group_hint = JsonGetString(payload, "group", "");
+    bool payload_risk_entry_allowed = JsonGetBool(payload, "risk_entry_allowed", true);
+    string payload_risk_reason = JsonGetString(payload, "risk_reason", "NONE");
+    bool payload_risk_friday = JsonGetBool(payload, "risk_friday", false);
+    bool payload_risk_reopen = JsonGetBool(payload, "risk_reopen", false);
+    bool payload_policy_shadow = JsonGetBool(payload, "policy_shadow_mode", true);
 
     string expected_hash = BuildRequestHashTrade(
       action,
@@ -1020,7 +1469,23 @@ void ProcessCommands()
       return;
     }
 
-    ExecuteTrade(signal, symbol, volume, sl_price, tp_price, (int)magic, comment, msg_id, request_hash);
+    ExecuteTrade(
+      signal,
+      symbol,
+      volume,
+      sl_price,
+      tp_price,
+      (int)magic,
+      comment,
+      msg_id,
+      request_hash,
+      group_hint,
+      payload_risk_entry_allowed,
+      payload_risk_reason,
+      payload_risk_friday,
+      payload_risk_reopen,
+      payload_policy_shadow
+    );
     return;
   }
 
@@ -1059,6 +1524,12 @@ int OnInit()
   G_SymbolUpper = ToUpperAscii(_Symbol);
   G_LastPythonMessageTime = (ulong)GetTickCount();
   G_IsFailSafeActive = false;
+  PolicyResetDefaults();
+  G_PolicyRuntimeLoaded = false;
+  G_PolicyFailSafeNoTrade = false;
+  G_PolicyLastError = "";
+  G_LastPolicyReloadMs = 0;
+  RefreshPolicyRuntime();
 
   if(!InitIndicatorHandles())
     Print("WARN: indicator handles partially unavailable. BAR feature payload may be incomplete.");
@@ -1068,7 +1539,10 @@ int OnInit()
     " timer_sec=", InpTimerSec,
     " timeout_sec=", InpPythonTimeoutSec,
     " watchdog=", (InpEnablePythonTimeoutWatchdog ? "ON" : "OFF"),
-    " account_pulse_sec=", InpAccountPulseSec
+    " account_pulse_sec=", InpAccountPulseSec,
+    " policy_runtime=", (InpPolicyRuntimeEnabled ? "ON" : "OFF"),
+    " policy_loaded=", (G_PolicyRuntimeLoaded ? "YES" : "NO"),
+    " policy_shadow=", (G_PolicyShadowMode ? "YES" : "NO")
   );
   return INIT_SUCCEEDED;
 }
@@ -1083,6 +1557,8 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
+  RefreshPolicyRuntime();
+
   // Always service REQ/REP first so HEARTBEAT and TRADE replies stay responsive.
   ProcessCommands();
 
