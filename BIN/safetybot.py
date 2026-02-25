@@ -4736,6 +4736,10 @@ class ExecutionEngine:
         self.incident_journal: Optional[IncidentJournal] = None
         self._retcodes_day_key: str = str(pl_day_key(now_utc()))
         self._retcodes_day: Dict[int, int] = {}
+        # Last known MT5 snapshots used as defensive fallback when MT5 API
+        # transiently returns None (common during terminal reconnect/busy windows).
+        self._positions_cache: Tuple = tuple()
+        self._orders_cache: Tuple = tuple()
 
     def _roll_retcodes_day(self) -> None:
         day_key = str(pl_day_key(now_utc()))
@@ -4946,17 +4950,101 @@ class ExecutionEngine:
     def positions_get(self, emergency: bool = False) -> Optional[Tuple]:
         if mt5 is None:
             return None
-        if not self.gov.consume("SYS", "__POSITIONS__", "positions_get", 1, emergency=bool(emergency)):
+        # Primary budget lane.
+        consumed = bool(self.gov.consume("SYS", "__POSITIONS__", "positions_get", 1, emergency=bool(emergency)))
+        if not consumed and (not bool(emergency)):
+            # Fail-safe retry on emergency SYS pool for critical visibility into open risk.
+            consumed = bool(self.gov.consume("SYS", "__POSITIONS__", "positions_get", 1, emergency=True))
+            if consumed:
+                logging.info("POSITIONS_GET_BUDGET_FALLBACK lane=emergency")
+        if not consumed:
+            if self._positions_cache:
+                logging.warning(
+                    "POSITIONS_GET_CACHE_FALLBACK lane=budget cache_count=%s emergency=%s",
+                    int(len(self._positions_cache)),
+                    int(bool(emergency)),
+                )
+                return tuple(self._positions_cache)
             return None
-        return mt5.positions_get()
+
+        pos = mt5.positions_get()
+        if pos is not None:
+            self._positions_cache = tuple(pos)
+            return pos
+
+        err1 = None
+        try:
+            err1 = mt5.last_error()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        # One emergency retry when primary call returns None.
+        if not bool(emergency):
+            em_ok = bool(self.gov.consume("SYS", "__POSITIONS__", "positions_get", 1, emergency=True))
+            if em_ok:
+                pos2 = mt5.positions_get()
+                if pos2 is not None:
+                    self._positions_cache = tuple(pos2)
+                    logging.info(
+                        "POSITIONS_GET_RECOVERED lane=emergency count=%s err1=%s",
+                        int(len(pos2)),
+                        err1,
+                    )
+                    return pos2
+                err2 = None
+                try:
+                    err2 = mt5.last_error()
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                logging.warning("POSITIONS_GET_NONE err1=%s err2=%s", err1, err2)
+            else:
+                logging.warning("POSITIONS_GET_NONE err1=%s emergency_budget=0", err1)
+        else:
+            logging.warning("POSITIONS_GET_NONE emergency=1 err=%s", err1)
+
+        if self._positions_cache:
+            logging.warning(
+                "POSITIONS_GET_CACHE_FALLBACK lane=mt5_none cache_count=%s",
+                int(len(self._positions_cache)),
+            )
+            return tuple(self._positions_cache)
+        return None
 
     def orders_get(self, emergency: bool = False) -> Optional[Tuple]:
         """Pending orders (does not include SL/TP as separate objects in typical MT5 setups)."""
         if mt5 is None:
             return None
-        if not self.gov.consume("SYS", "__ORDERS__", "orders_get", 1, emergency=bool(emergency)):
+        consumed = bool(self.gov.consume("SYS", "__ORDERS__", "orders_get", 1, emergency=bool(emergency)))
+        if not consumed and (not bool(emergency)):
+            consumed = bool(self.gov.consume("SYS", "__ORDERS__", "orders_get", 1, emergency=True))
+            if consumed:
+                logging.info("ORDERS_GET_BUDGET_FALLBACK lane=emergency")
+        if not consumed:
+            if self._orders_cache:
+                logging.warning(
+                    "ORDERS_GET_CACHE_FALLBACK lane=budget cache_count=%s emergency=%s",
+                    int(len(self._orders_cache)),
+                    int(bool(emergency)),
+                )
+                return tuple(self._orders_cache)
             return None
-        return mt5.orders_get()
+        ords = mt5.orders_get()
+        if ords is not None:
+            self._orders_cache = tuple(ords)
+            return ords
+        err = None
+        try:
+            err = mt5.last_error()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        logging.warning("ORDERS_GET_NONE err=%s", err)
+        if self._orders_cache:
+            logging.warning(
+                "ORDERS_GET_CACHE_FALLBACK lane=mt5_none cache_count=%s",
+                int(len(self._orders_cache)),
+            )
+            return tuple(self._orders_cache)
+        return None
 
     def account_info(self):
         if self._snapshot_only_mode():

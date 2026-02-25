@@ -13,6 +13,24 @@ class RiskManager:
         self.config = config
         self.db = db
 
+    @staticmethod
+    def _symbol_group(symbol: str) -> str:
+        """Best-effort symbol -> group mapping used for cross-group heat weighting."""
+        s = str(symbol or "").upper()
+        if not s:
+            return "FX"
+        # Metals / commodities
+        if any(k in s for k in ("XAU", "GOLD", "XAG", "SILVER", "PLATIN", "PALLAD", "COPPER", "XPT", "XPD")):
+            return "METAL"
+        # Indices
+        if any(k in s for k in ("US30", "US100", "US500", "EU50", "DAX", "DE40", "DE30", "NAS", "SPX", "JPN225")):
+            return "INDEX"
+        # Crypto
+        if any(k in s for k in ("BTC", "ETH", "LTC", "XBT", "SOL", "DOGE", "ADA", "XRP")):
+            return "CRYPTO"
+        # Fallback for major/other FX pairs
+        return "FX"
+
     def daily_loss_guard(self, symbol: str, mode: str, dd_pct: float) -> bool:
         """
         Checks if the daily drawdown percentage exceeds soft or hard limits.
@@ -135,7 +153,15 @@ class RiskManager:
             logging.info(f"SKIP_POS_PER_SYMBOL {symbol} cap={risk_cfg['max_positions_per_symbol']}")
             return False
 
-        open_risk_money = 0.0
+        same_group_weight = float(risk_cfg.get("portfolio_heat_same_group_weight", 1.0) or 1.0)
+        cross_group_weight = float(risk_cfg.get("portfolio_heat_cross_group_weight", 1.0) or 1.0)
+        # Defensive clamp: keep weighting predictable.
+        same_group_weight = max(0.25, min(2.0, same_group_weight))
+        cross_group_weight = max(0.25, min(2.0, cross_group_weight))
+
+        open_risk_money_raw = 0.0
+        open_risk_money_weighted = 0.0
+        new_grp = self._symbol_group(symbol)
         for p in our_positions:
             sl_p = float(getattr(p, "sl", 0.0) or 0.0)
             if sl_p <= 0:
@@ -154,12 +180,25 @@ class RiskManager:
             vol_p = float(getattr(p, "volume", 0.0) or 0.0)
             if vol_p <= 0:
                 continue
-            
-            open_risk_money += (abs(price_open - sl_p) / ts) * tv * vol_p
+
+            pos_risk = (abs(price_open - sl_p) / ts) * tv * vol_p
+            open_risk_money_raw += pos_risk
+            pos_grp = self._symbol_group(p_sym)
+            weight = same_group_weight if str(pos_grp) == str(new_grp) else cross_group_weight
+            open_risk_money_weighted += (pos_risk * float(weight))
 
         max_open_risk_money = eq_now * float(risk_cfg['max_open_risk_pct'])
-        if (open_risk_money + new_trade_risk_money) > max_open_risk_money:
-            logging.info(f"SKIP_HEAT {symbol} open_risk={open_risk_money:.2f} new_risk={new_trade_risk_money:.2f} max={max_open_risk_money:.2f}")
+        if (open_risk_money_weighted + new_trade_risk_money) > max_open_risk_money:
+            logging.info(
+                "SKIP_HEAT %s open_risk_raw=%.2f open_risk_w=%.2f new_risk=%.2f max=%.2f same_w=%.2f cross_w=%.2f",
+                symbol,
+                float(open_risk_money_raw),
+                float(open_risk_money_weighted),
+                float(new_trade_risk_money),
+                float(max_open_risk_money),
+                float(same_group_weight),
+                float(cross_group_weight),
+            )
             return False
 
         return True
