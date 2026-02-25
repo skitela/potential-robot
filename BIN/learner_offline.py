@@ -1558,6 +1558,22 @@ def run_once(root: Path) -> int:
             }
             try:
                 meta_advice.setdefault("notes", []).append("policy_stage_one=see_logs")
+                # Minimal, human-friendly readiness signal for next steps (strings only; META guards-safe).
+                segs = stage1_sug.get("segments") if isinstance(stage1_sug.get("segments"), list) else []
+                ready = []
+                for s in segs:
+                    if not isinstance(s, dict):
+                        continue
+                    lvl = str(s.get("level") or "").strip().upper()
+                    if lvl in {"READY_SHADOW", "READY_CANARY"}:
+                        sid = str(s.get("segment") or "").strip()
+                        if sid:
+                            ready.append(f"{lvl}:{sid}")
+                    if len(ready) >= 12:
+                        break
+                if ready:
+                    meta_advice["stage1_ready"] = ready
+                    meta_advice.setdefault("notes", []).append(f"stage1_ready_n={len(ready)}")
             except Exception as e:
                 cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
         else:
