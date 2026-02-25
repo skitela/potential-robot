@@ -933,11 +933,25 @@ def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
         except Exception:
             continue
         if _in_window(local_now, start_hm, end_hm):
-            # Closeout buffer
+            # Closeout buffer:
+            # For overnight windows (e.g. 23:00-09:00) the "end" moment is on the next day.
+            # We must compute end_dt robustly, otherwise the whole overnight window becomes CLOSEOUT.
+            s_h, s_m = int(start_hm[0]), int(start_hm[1])
             e_h, e_m = int(end_hm[0]), int(end_hm[1])
-            end_dt = local_now.replace(hour=e_h, minute=e_m, second=0, microsecond=0)
-            closeout_start = end_dt - dt.timedelta(minutes=int(buf_min))
-            in_closeout = bool(local_now >= closeout_start)
+            if (s_h, s_m) == (e_h, e_m):
+                # Always-on: there is no meaningful "end", so entries remain allowed.
+                in_closeout = False
+            else:
+                overnight = bool((e_h, e_m) < (s_h, s_m))
+                start_dt = local_now.replace(hour=s_h, minute=s_m, second=0, microsecond=0)
+                if overnight and (local_now.hour, local_now.minute) < (e_h, e_m):
+                    # After-midnight part: start happened "yesterday".
+                    start_dt = start_dt - dt.timedelta(days=1)
+                end_dt = start_dt.replace(hour=e_h, minute=e_m, second=0, microsecond=0)
+                if overnight:
+                    end_dt = end_dt + dt.timedelta(days=1)
+                closeout_start = end_dt - dt.timedelta(minutes=int(buf_min))
+                in_closeout = bool(local_now >= closeout_start)
             ctx.update({
                 "phase": "CLOSEOUT" if in_closeout else "ACTIVE",
                 "window_id": wid,
