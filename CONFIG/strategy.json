@@ -133,7 +133,7 @@
   "fx_budget_pacing_phase1_progress": 0.25,
   "fx_budget_pacing_phase2_progress": 0.6667,
   "fx_budget_pacing_phase1_ratio": 0.25,
-  "fx_budget_pacing_phase2_ratio": 0.70,
+  "fx_budget_pacing_phase2_ratio": 0.7,
   "fx_budget_pacing_slack": 0.05,
   "metal_signal_score_enabled": true,
   "metal_signal_score_threshold": 72,
@@ -151,7 +151,7 @@
   "metal_budget_pacing_phase1_progress": 0.25,
   "metal_budget_pacing_phase2_progress": 0.6667,
   "metal_budget_pacing_phase1_ratio": 0.25,
-  "metal_budget_pacing_phase2_ratio": 0.70,
+  "metal_budget_pacing_phase2_ratio": 0.7,
   "metal_budget_pacing_slack": 0.05,
   "scan_interval_sec": 30,
   "usb_watch_check_interval_sec": 30,
@@ -393,5 +393,14 @@
   "canary_rollout_enabled": false,
   "canary_max_symbols_per_iter": 1,
   "paper_trading": false,
-  "eco_probe_symbols_when_flat": 1
+  "eco_probe_symbols_when_flat": 1,
+  "policy_windows_v2_enabled": true,
+  "policy_risk_windows_enabled": true,
+  "policy_group_arbitration_enabled": true,
+  "policy_overlap_arbitration_enabled": true,
+  "policy_shadow_mode_enabled": false,
+  "policy_runtime_emit_enabled": true,
+  "policy_runtime_emit_interval_sec": 15,
+  "policy_runtime_emit_common_file": true,
+  "policy_runtime_common_subdir": "OANDA_MT5_SYSTEM"
 }

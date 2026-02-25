@@ -15,6 +15,7 @@ set "SOURCE_DIR=%ROOT%\MQL5"
 set "LOG_DIR=%ROOT%\LOGS"
 set "SERVER_NAME=OANDATMS-MT5"
 set "DIAG_BAT=%ROOT%\RUN_MT5_FULL_DIAGNOSTIC.bat"
+set "TERMINAL_DATA_DIR_FALLBACK=C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 
@@ -43,20 +44,20 @@ if not exist "%SOURCE_DIR%\Libraries\libsodium.dll" (
 )
 
 set "TERMINAL_DATA_DIR="
-for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command ^
-  "$base=Join-Path $env:APPDATA 'MetaQuotes\Terminal';" ^
-  "if(!(Test-Path $base)){exit 1};" ^
-  "$best=''; $bestScore=[int64]::MinValue;" ^
-  "Get-ChildItem $base -Directory | ForEach-Object {" ^
-  "  $ini=Join-Path $_.FullName 'config\common.ini';" ^
-  "  if(!(Test-Path $ini)){return};" ^
-  "  $score=(Get-Item $ini).LastWriteTimeUtc.Ticks;" ^
-  "  $srv='';" ^
-  "  try { $srv=((Get-Content $ini -Encoding UTF8 | Where-Object {$_ -match '^\s*Server\s*='} | Select-Object -First 1) -replace '^\s*Server\s*=\s*','').Trim() } catch {};" ^
-  "  if($srv -ieq '%SERVER_NAME%'){ $score += 1000000000000000000 };" ^
-  "  if($score -gt $bestScore){ $bestScore=$score; $best=$_.FullName };" ^
-  "};" ^
-  "if($best){Write-Output $best}"`) do set "TERMINAL_DATA_DIR=%%I"
+if exist "%TERMINAL_DATA_DIR_FALLBACK%\config\common.ini" (
+  set "TERMINAL_DATA_DIR=%TERMINAL_DATA_DIR_FALLBACK%"
+)
+
+if not defined TERMINAL_DATA_DIR (
+  set "MT5_BASE=%APPDATA%\MetaQuotes\Terminal"
+  if exist "%MT5_BASE%" (
+    for /d %%D in ("%MT5_BASE%\*") do (
+      if exist "%%~fD\config\common.ini" (
+        set "TERMINAL_DATA_DIR=%%~fD"
+      )
+    )
+  )
+)
 
 if not defined TERMINAL_DATA_DIR (
   echo [ERROR] Could not detect MT5 data directory in %%APPDATA%%\MetaQuotes\Terminal
