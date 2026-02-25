@@ -26,6 +26,7 @@ input bool   InpPolicyRuntimeEnabled = true;
 input bool   InpPolicyRuntimeRequireFile = true;
 input bool   InpPolicyRuntimeEnforceEntry = true;
 input uint   InpPolicyRuntimeReloadSec = 5;
+input uint   InpPolicyRuntimeOpenFailLogThrottleSec = 30;
 input string InpPolicyRuntimeRelativePath = "OANDA_MT5_SYSTEM\\policy_runtime.json";
 input int    InpSmaFastPeriod = 20;
 input int    InpAdxPeriod = 14;
@@ -41,6 +42,7 @@ bool   G_PolicyShadowMode = true;
 bool   G_PolicyRiskWindowsEnabled = true;
 string G_PolicyLastError = "";
 ulong  G_LastPolicyReloadMs = 0;
+ulong  G_LastPolicyOpenFailLogMs = 0;
 
 int G_MAFastHandle = INVALID_HANDLE;
 int G_ADXHandle = INVALID_HANDLE;
@@ -276,7 +278,25 @@ bool IsWindowActive(
 bool LoadPolicyRuntimeFile(string &error_msg)
 {
   error_msg = "";
-  PolicyResetDefaults();
+
+  bool tmp_entry_allowed[POLICY_GROUP_COUNT];
+  bool tmp_borrow_blocked[POLICY_GROUP_COUNT];
+  double tmp_priority_factor[POLICY_GROUP_COUNT];
+  string tmp_reason[POLICY_GROUP_COUNT];
+  bool tmp_risk_friday[POLICY_GROUP_COUNT];
+  bool tmp_risk_reopen[POLICY_GROUP_COUNT];
+  bool tmp_shadow_mode = true;
+  bool tmp_risk_windows_enabled = true;
+
+  for(int i = 0; i < POLICY_GROUP_COUNT; i++)
+  {
+    tmp_entry_allowed[i] = true;
+    tmp_borrow_blocked[i] = false;
+    tmp_priority_factor[i] = 1.0;
+    tmp_reason[i] = "NONE";
+    tmp_risk_friday[i] = false;
+    tmp_risk_reopen[i] = false;
+  }
 
   string rel_path = TrimString(InpPolicyRuntimeRelativePath);
   if(rel_path == "")
@@ -285,7 +305,7 @@ bool LoadPolicyRuntimeFile(string &error_msg)
     return false;
   }
 
-  int fh = FileOpen(rel_path, FILE_READ | FILE_BIN | FILE_COMMON);
+  int fh = FileOpen(rel_path, FILE_READ | FILE_BIN | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
   if(fh == INVALID_HANDLE)
   {
     error_msg = StringFormat("POLICY_RUNTIME_OPEN_FAIL path=%s err=%d", rel_path, (int)GetLastError());
@@ -329,8 +349,8 @@ bool LoadPolicyRuntimeFile(string &error_msg)
   JSONNode *flags = root_ptr.HasKey("flags", Object);
   if(JsonNodeValid(flags))
   {
-    G_PolicyShadowMode = JsonGetBool(flags, "policy_shadow_mode_enabled", true);
-    G_PolicyRiskWindowsEnabled = JsonGetBool(flags, "policy_risk_windows_enabled", true);
+    tmp_shadow_mode = JsonGetBool(flags, "policy_shadow_mode_enabled", true);
+    tmp_risk_windows_enabled = JsonGetBool(flags, "policy_risk_windows_enabled", true);
   }
 
   JSONNode *groups = root_ptr.HasKey("groups", Object);
@@ -346,21 +366,38 @@ bool LoadPolicyRuntimeFile(string &error_msg)
     if(!JsonNodeValid(node))
       continue;
 
-    G_PolicyEntryAllowed[i] = JsonGetBool(node, "entry_allowed", true);
-    G_PolicyBorrowBlocked[i] = JsonGetBool(node, "borrow_blocked", false);
+    tmp_entry_allowed[i] = JsonGetBool(node, "entry_allowed", true);
+    tmp_borrow_blocked[i] = JsonGetBool(node, "borrow_blocked", false);
     double pf = JsonGetDouble(node, "priority_factor", 1.0);
     if(!MathIsValidNumber(pf))
       pf = 1.0;
-    G_PolicyPriorityFactor[i] = MathMax(0.05, MathMin(1.80, pf));
+    tmp_priority_factor[i] = MathMax(0.05, MathMin(1.80, pf));
     string rs = JsonGetString(node, "reason", "NONE");
     if(rs == "")
       rs = "NONE";
-    G_PolicyReason[i] = rs;
-    G_PolicyRiskFriday[i] = JsonGetBool(node, "risk_friday", false);
-    G_PolicyRiskReopen[i] = JsonGetBool(node, "risk_reopen", false);
+    tmp_reason[i] = rs;
+    tmp_risk_friday[i] = JsonGetBool(node, "risk_friday", false);
+    tmp_risk_reopen[i] = JsonGetBool(node, "risk_reopen", false);
+  }
+
+  G_PolicyShadowMode = tmp_shadow_mode;
+  G_PolicyRiskWindowsEnabled = tmp_risk_windows_enabled;
+  for(int j = 0; j < POLICY_GROUP_COUNT; j++)
+  {
+    G_PolicyEntryAllowed[j] = tmp_entry_allowed[j];
+    G_PolicyBorrowBlocked[j] = tmp_borrow_blocked[j];
+    G_PolicyPriorityFactor[j] = tmp_priority_factor[j];
+    G_PolicyReason[j] = tmp_reason[j];
+    G_PolicyRiskFriday[j] = tmp_risk_friday[j];
+    G_PolicyRiskReopen[j] = tmp_risk_reopen[j];
   }
 
   return true;
+}
+
+bool IsPolicyOpenFailError(const string error_msg)
+{
+  return (StringFind(error_msg, "POLICY_RUNTIME_OPEN_FAIL", 0) >= 0);
 }
 
 void RefreshPolicyRuntime()
@@ -374,6 +411,7 @@ void RefreshPolicyRuntime()
     return;
   G_LastPolicyReloadMs = now_ms;
 
+  bool had_loaded = G_PolicyRuntimeLoaded;
   string err = "";
   bool ok = LoadPolicyRuntimeFile(err);
   if(ok)
@@ -382,13 +420,32 @@ void RefreshPolicyRuntime()
     G_PolicyRuntimeLoaded = true;
     G_PolicyFailSafeNoTrade = false;
     G_PolicyLastError = "";
+    G_LastPolicyOpenFailLogMs = 0;
     if(had_fail)
       Print("POLICY_RUNTIME_RECOVERED path=", TrimString(InpPolicyRuntimeRelativePath));
     return;
   }
 
-  G_PolicyRuntimeLoaded = false;
   G_PolicyLastError = err;
+  if(had_loaded && IsPolicyOpenFailError(err))
+  {
+    // Keep last known good policy on transient file-open races.
+    G_PolicyRuntimeLoaded = true;
+    G_PolicyFailSafeNoTrade = false;
+
+    uint throttle_sec = (uint)MathMax(1, (int)InpPolicyRuntimeOpenFailLogThrottleSec);
+    if(
+      G_LastPolicyOpenFailLogMs == 0 ||
+      (now_ms - G_LastPolicyOpenFailLogMs) >= ((ulong)throttle_sec * 1000)
+    )
+    {
+      G_LastPolicyOpenFailLogMs = now_ms;
+      Print("POLICY_RUNTIME_OPEN_RETRY reason=", err);
+    }
+    return;
+  }
+
+  G_PolicyRuntimeLoaded = false;
   if(InpPolicyRuntimeRequireFile)
   {
     G_PolicyFailSafeNoTrade = true;
@@ -1529,6 +1586,7 @@ int OnInit()
   G_PolicyFailSafeNoTrade = false;
   G_PolicyLastError = "";
   G_LastPolicyReloadMs = 0;
+  G_LastPolicyOpenFailLogMs = 0;
   RefreshPolicyRuntime();
 
   if(!InitIndicatorHandles())

@@ -8910,8 +8910,8 @@ class SafetyBot:
         common_path = self._policy_runtime_common_path()
         if common_path is not None:
             try:
-                common_path.parent.mkdir(parents=True, exist_ok=True)
-                common_path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                # Use atomic writer also for MT5 Common\Files to avoid transient read/open races in EA.
+                atomic_write_json(common_path, payload)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
