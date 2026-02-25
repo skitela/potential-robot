@@ -1,0 +1,241 @@
+/* --- Globalne Ustawienia i Reset --- */
+:root {
+    --font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --background-color: #f8f9fa;
+    --card-background-color: #ffffff;
+    --text-color: #212529;
+    --text-color-secondary: #6c757d;
+    --border-color: #dee2e6;
+    --shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+
+    --color-green: #28a745;
+    --color-red: #dc3545;
+    --color-orange: #fd7e14;
+    --color-blue: #007bff;
+    --color-grey: #6c757d;
+    
+    --color-green-bg: rgba(40, 167, 69, 0.1);
+    --color-red-bg: rgba(220, 53, 69, 0.1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--background-color);
+    color: var(--text-color);
+    line-height: 1.5;
+}
+
+/* --- Główny Kontener i Nagłówek --- */
+.dashboard-container {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+}
+
+.dashboard-header h1 {
+    font-size: 1.75rem;
+    font-weight: 600;
+}
+
+.logo-placeholder {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100px;
+    height: 50px;
+    background-color: #e9ecef;
+    border: 2px dashed var(--border-color);
+    color: var(--text-color-secondary);
+    font-size: 0.9rem;
+    font-weight: 500;
+    border-radius: 8px;
+}
+
+.header-status {
+    text-align: right;
+    font-size: 0.9rem;
+    color: var(--text-color-secondary);
+}
+
+/* --- Siatka Dashboardu --- */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+}
+
+/* --- Karty --- */
+.card {
+    background-color: var(--card-background-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-span-2 {
+    grid-column: span 2;
+}
+
+.card-header {
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-header h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.card-header h3 {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-color-secondary);
+}
+
+.card-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+
+/* --- Metryki --- */
+.metric-large {
+    font-size: 3rem;
+    font-weight: 700;
+}
+
+.metric-medium {
+    font-size: 2rem;
+    font-weight: 600;
+}
+
+.metric-small {
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--text-color-secondary);
+}
+
+/* --- Kolorowanie Wartości --- */
+.neutral { color: var(--text-color); }
+.positive { color: var(--color-green); }
+.negative { color: var(--color-red); }
+
+/* --- Status Systemu --- */
+.system-health-content {
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+}
+
+.status-badge {
+    font-size: 1.5rem;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    border-radius: 30px;
+    color: white;
+}
+
+.status-badge.AKTYWNY { background-color: var(--color-green); }
+.status-badge.TRYB-ECO { background-color: var(--color-orange); }
+.status-badge.KONSERWACJA { background-color: var(--color-blue); }
+.status-badge.BŁĄD-KRYTYCZNY { background-color: var(--color-red); }
+.status-badge.OCZEKIWANIE { background-color: var(--color-grey); }
+
+
+.components-status {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.component {
+    display: flex;
+    align-items: center;
+    font-size: 1rem;
+}
+
+.diode {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 0.75rem;
+    transition: background-color 0.3s ease;
+}
+
+.diode.green { background-color: var(--color-green); }
+.diode.red { background-color: var(--color-red); }
+.diode.grey { background-color: var(--border-color); }
+
+.status-detail {
+    font-size: 1rem;
+}
+
+/* --- Paski Postępu --- */
+.progress-bar-container {
+    width: 100%;
+    height: 12px;
+    background-color: #e9ecef;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background-color: var(--color-blue);
+    border-radius: 6px;
+    transition: width 0.5s ease-out;
+}
+.progress-bar.high-usage {
+    background-color: var(--color-orange);
+}
+.progress-bar.critical-usage {
+    background-color: var(--color-red);
+}
+
+
+.progress-label {
+    font-size: 1rem;
+    font-weight: 500;
+}
+
+/* --- Animacja Aktualizacji --- */
+.value-flash {
+    animation: flash 0.7s ease-out;
+}
+
+@keyframes flash {
+    0% { background-color: transparent; }
+    25% { background-color: var(--color-green-bg); }
+    100% { background-color: transparent; }
+}
+
+.value-flash.negative-flash {
+    animation-name: flash-negative;
+}
+
+@keyframes flash-negative {
+    0% { background-color: transparent; }
+    25% { background-color: var(--color-red-bg); }
+    100% { background-color: transparent; }
+}
