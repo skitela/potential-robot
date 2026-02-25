@@ -1527,6 +1527,16 @@ def select_entry_signal(
 
     if reg == "RANGE":
         return None, "RANGE_DISABLED"
+    # ECO fallback for transitional ADX regime:
+    # keep directionality from H4 trend, require at least one short-term continuation cue.
+    # This increases entry opportunity without removing trend anchoring.
+    if reg == "TRANSITION":
+        m = str(mode).upper()
+        if m == "ECO":
+            if trend == "BUY" and close_price > sma_fast_value:
+                return "BUY", "ADX_TRANSITION_ECO_CONTINUATION"
+            if trend == "SELL" and close_price < sma_fast_value:
+                return "SELL", "ADX_TRANSITION_ECO_CONTINUATION"
     return None, "ADX_TRANSITION"
 
 
@@ -6631,8 +6641,16 @@ class StandardStrategy:
         ind: Optional[Dict[str, Any]] = None,
     ):
         # tick na żądanie: spread + cena wykonania
-        tick = self.engine.tick(symbol, grp)
+        tick = self.engine.tick(symbol, grp, emergency=False)
         if not tick:
+            # Signals are rare relative to scan loop; allow one emergency tick fetch as fallback
+            # when snapshot tick stream is temporarily missing.
+            tick = self.engine.tick(symbol, grp, emergency=True)
+            if tick:
+                logging.warning("ENTRY_TICK_FALLBACK symbol=%s grp=%s mode=%s source=MT5_EMERGENCY", symbol, grp, mode)
+        if not tick:
+            self._metric_inc_skip("TICK_UNAVAILABLE")
+            logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=TICK_UNAVAILABLE", symbol, grp, mode)
             return
 
         spread_pts = (tick.ask - tick.bid) / float(info.point)
@@ -6696,6 +6714,8 @@ class StandardStrategy:
         # account/risk context (no guessing)
         acc = self.engine.account_info()
         if acc is None:
+            self._metric_inc_skip("ACCOUNT_INFO_UNAVAILABLE")
+            logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=ACCOUNT_INFO_UNAVAILABLE", symbol, grp, mode)
             return
         bal_now = float(getattr(acc, "balance", 0.0) or 0.0)
         eq_now = float(getattr(acc, "equity", bal_now) or bal_now)
@@ -6703,6 +6723,8 @@ class StandardStrategy:
 
         point = float(getattr(info, "point", 0.0) or 0.0)
         if point <= 0:
+            self._metric_inc_skip("POINT_INVALID")
+            logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=POINT_INVALID", symbol, grp, mode)
             return
         atr_value = None
         if isinstance(ind, dict):
@@ -6729,6 +6751,14 @@ class StandardStrategy:
             return
 
         if not self.risk_manager.daily_loss_guard(symbol, mode, dd_pct):
+            self._metric_inc_skip("DAILY_LOSS_GUARD")
+            logging.info(
+                "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=DAILY_LOSS_GUARD dd_pct=%.5f",
+                symbol,
+                grp,
+                mode,
+                float(dd_pct),
+            )
             return
 
         soft_loss = (dd_pct >= float(self.config.risk['daily_loss_soft_pct']))
@@ -6736,6 +6766,8 @@ class StandardStrategy:
 
         risk_money = eq_now * risk_pct
         if risk_money <= 0:
+            self._metric_inc_skip("RISK_MONEY_ZERO")
+            logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=RISK_MONEY_ZERO", symbol, grp, mode)
             return
 
         # Portfolio heat + volume sizing from SL distance
@@ -6754,6 +6786,8 @@ class StandardStrategy:
         )
 
         if volume is None:
+            self._metric_inc_skip("VOLUME_UNAVAILABLE")
+            logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=VOLUME_UNAVAILABLE", symbol, grp, mode)
             return
         try:
             vol_cap = float(_cfg_group_float(grp, "volume_cap_lots", 0.0, symbol=symbol))
@@ -6772,11 +6806,15 @@ class StandardStrategy:
         
         positions = self.engine.positions_get(emergency=False)
         if positions is None:
+            self._metric_inc_skip("POSITIONS_UNAVAILABLE")
+            logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=POSITIONS_UNAVAILABLE", symbol, grp, mode)
             return
         
         our_positions = [p for p in positions if int(getattr(p, "magic", 0) or 0) == int(CFG.magic_number)]
         
         if not self.risk_manager.check_portfolio_heat(our_positions, eq_now, symbol, risk_money, self.engine, self.db, grp):
+            self._metric_inc_skip("PORTFOLIO_HEAT")
+            logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=PORTFOLIO_HEAT", symbol, grp, mode)
             return
 
         cmd = mt5.ORDER_TYPE_BUY if signal == "BUY" else mt5.ORDER_TYPE_SELL

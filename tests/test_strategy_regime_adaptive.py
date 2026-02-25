@@ -98,6 +98,36 @@ class TestStrategyRegimeAdaptive(unittest.TestCase):
         self.assertIsNone(sig)
         self.assertEqual(reason, "NO_TREND_SIGNAL")
 
+    def test_select_entry_signal_transition_relaxed_for_eco(self) -> None:
+        sig, reason = safetybot.select_entry_signal(
+            trend_h4="BUY",
+            structure_h4="BUY",
+            regime="TRANSITION",
+            close_price=1.1012,
+            open_price=1.1009,
+            sma_fast_value=1.1010,
+            structure_filter_enabled=False,
+            mean_reversion_enabled=True,
+            mode="ECO",
+        )
+        self.assertEqual(sig, "BUY")
+        self.assertEqual(reason, "ADX_TRANSITION_ECO_CONTINUATION")
+
+    def test_select_entry_signal_transition_not_relaxed_for_hot(self) -> None:
+        sig, reason = safetybot.select_entry_signal(
+            trend_h4="BUY",
+            structure_h4="BUY",
+            regime="TRANSITION",
+            close_price=1.1012,
+            open_price=1.1009,
+            sma_fast_value=1.1010,
+            structure_filter_enabled=False,
+            mean_reversion_enabled=True,
+            mode="HOT",
+        )
+        self.assertIsNone(sig)
+        self.assertEqual(reason, "ADX_TRANSITION")
+
     def test_adaptive_exit_points_uses_atr(self) -> None:
         prev = (
             safetybot.CFG.fixed_sl_points,

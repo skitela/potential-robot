@@ -25,6 +25,7 @@ input uint   InpReplyCacheSize = 64;
 input bool   InpPolicyRuntimeEnabled = true;
 input bool   InpPolicyRuntimeRequireFile = true;
 input bool   InpPolicyRuntimeEnforceEntry = true;
+input bool   InpPolicyRuntimeAllowAmbiguousReasonNone = true;
 input uint   InpPolicyRuntimeReloadSec = 5;
 input uint   InpPolicyRuntimeOpenFailLogThrottleSec = 30;
 input string InpPolicyRuntimeRelativePath = "OANDA_MT5_SYSTEM\\policy_runtime.json";
@@ -1191,6 +1192,21 @@ void ExecuteTrade(
   if(!entry_allowed)
   {
     string deny_reason = (policy_reason == "" ? "ENTRY_BLOCKED" : policy_reason);
+    if(
+      InpPolicyRuntimeAllowAmbiguousReasonNone &&
+      deny_reason == "NONE" &&
+      !in_risk_window
+    )
+    {
+      Print(
+        "POLICY_RUNTIME_AMBIGUOUS_ALLOW symbol=", symbol_req,
+        " group=", trade_group,
+        " reason=", deny_reason,
+        " action=ALLOW"
+      );
+    }
+    else
+    {
     SendReplyEnvelope(
       "REJECTED", msg_id, action_reply,
       50020, "CUSTOM_RETCODE_POLICY_ENTRY_BLOCKED", 0, 0,
@@ -1208,6 +1224,7 @@ void ExecuteTrade(
       " prio_factor=", DoubleToString(prio_factor, 3)
     );
     return;
+    }
   }
 
   if(!payload_policy_shadow && !payload_risk_entry_allowed)
