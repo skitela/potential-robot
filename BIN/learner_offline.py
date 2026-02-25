@@ -41,10 +41,23 @@ UTC = dt.timezone.utc
 
 DETERMINISTIC_MODE = os.environ.get("OFFLINE_DETERMINISTIC", "").strip() == "1"
 
+STAGE1_SUGGESTIONS_SCHEMA = "oanda_mt5.learner_policy_suggestions.v1"
+STAGE1_MILESTONES_SCHEMA = "oanda_mt5.learner_milestones.v1"
+STAGE1_SUGGESTIONS_FILE = "learner_policy_suggestions_v1.json"
+STAGE1_MILESTONES_FILE = "learner_milestones_v1.json"
+
 def _now_utc() -> dt.datetime:
     if DETERMINISTIC_MODE:
         return dt.datetime(1970, 1, 1, tzinfo=UTC)
     return dt.datetime.now(tz=UTC)
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "1" if default else "0") or "").strip().lower()
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
 
 def _env_int(name: str, default: int, *, vmin: int, vmax: int) -> int:
     try:
@@ -270,6 +283,227 @@ def parse_ts_utc(s: str) -> Optional[dt.datetime]:
     except Exception as e:
         cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
         return None
+
+def _safe_read_json(path: Path) -> Any:
+    try:
+        if not path.exists():
+            return None
+        txt = path.read_text(encoding="utf-8", errors="replace")
+        return json.loads(txt)
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", f"read_json_failed path={path}", e)
+        return None
+
+def _clamp_int(x: int, lo: int, hi: int) -> int:
+    try:
+        return int(max(lo, min(hi, int(x))))
+    except Exception:
+        return int(lo)
+
+def _median_int(xs: List[int]) -> Optional[int]:
+    if not xs:
+        return None
+    ys = sorted(int(x) for x in xs)
+    mid = len(ys) // 2
+    if len(ys) % 2 == 1:
+        return int(ys[mid])
+    return int(round(0.5 * (float(ys[mid - 1]) + float(ys[mid]))))
+
+def _quantile_int(xs: List[int], q: float) -> Optional[int]:
+    if not xs:
+        return None
+    qf = float(max(0.0, min(1.0, float(q))))
+    ys = sorted(int(x) for x in xs)
+    if len(ys) == 1:
+        return int(ys[0])
+    pos = qf * float(len(ys) - 1)
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return int(ys[lo])
+    w = float(pos - lo)
+    return int(round((1.0 - w) * float(ys[lo]) + w * float(ys[hi])))
+
+def _seg_norm(s: Any, *, fallback: str = "UNK", max_len: int = 32) -> str:
+    try:
+        out = str(s or "").strip().upper()
+        out = out.replace(" ", "")
+        if not out:
+            out = fallback
+        if len(out) > max_len:
+            out = out[:max_len]
+        return out
+    except Exception:
+        return str(fallback)
+
+def _seg_id_group(grp: str, window_id: str, phase: str) -> str:
+    return f"G|{_seg_norm(grp)}|{_seg_norm(window_id)}|{_seg_norm(phase)}"
+
+def _seg_id_symbol(symbol: str, window_id: str, phase: str) -> str:
+    return f"S|{_seg_norm(symbol, max_len=40)}|{_seg_norm(window_id)}|{_seg_norm(phase)}"
+
+def _stage1_load_milestones(path: Path) -> Dict[str, Any]:
+    obj = _safe_read_json(path)
+    if not isinstance(obj, dict):
+        return {"schema": STAGE1_MILESTONES_SCHEMA, "updated_ts_utc": "", "segments": {}}
+    segs = obj.get("segments")
+    if not isinstance(segs, dict):
+        segs = {}
+    return {
+        "schema": str(obj.get("schema") or STAGE1_MILESTONES_SCHEMA),
+        "updated_ts_utc": str(obj.get("updated_ts_utc") or ""),
+        "segments": segs,
+    }
+
+def _stage1_due(n_cur: int, n_next_eval: int) -> bool:
+    return int(n_cur) >= int(max(1, n_next_eval))
+
+def _stage1_next_eval_n(n_cur: int, *, n_min: int, growth: float) -> int:
+    n = int(max(0, n_cur))
+    base = int(max(1, n_min))
+    if n < base:
+        return base
+    g = float(max(1.05, min(2.00, float(growth))))
+    return int(max(base, int(math.ceil(float(n) * g))))
+
+def _stage1_partition_segments(rows: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """
+    Build segment index maps (disjoint by design):
+      - Group segments: grp + window_id + window_phase
+      - Symbol segments: symbol + window_id + window_phase
+    Each entry: {"idxs":[...], "meta":{...}}
+    """
+    group: Dict[str, Dict[str, Any]] = {}
+    sym: Dict[str, Dict[str, Any]] = {}
+    for i, r in enumerate(rows):
+        grp = _seg_norm(r.get("grp"))
+        win = _seg_norm(r.get("window_id"))
+        ph = _seg_norm(r.get("window_phase"))
+        s = _seg_norm(r.get("symbol"), max_len=40)
+        if grp != "UNK" and win != "UNK" and ph != "UNK":
+            sid = _seg_id_group(grp, win, ph)
+            ent = group.setdefault(sid, {"idxs": [], "meta": {"kind": "GROUP_WINDOW_PHASE", "grp": grp, "window_id": win, "phase": ph}})
+            ent["idxs"].append(int(i))
+        if s != "UNK" and win != "UNK" and ph != "UNK":
+            sid2 = _seg_id_symbol(s, win, ph)
+            ent2 = sym.setdefault(sid2, {"idxs": [], "meta": {"kind": "SYMBOL_WINDOW_PHASE", "symbol": s, "window_id": win, "phase": ph}})
+            ent2["idxs"].append(int(i))
+    return group, sym
+
+def _stage1_suggest_entry_threshold(
+    rows: List[Dict[str, Any]],
+    *,
+    n_min_subset: int,
+) -> Dict[str, Any]:
+    """
+    Suggest entry_min_score threshold based on realized outcomes in this segment.
+    Note: data is censored below the current threshold (trades are only present when the gate passed).
+    """
+    entry_scores: List[int] = []
+    entry_mins: List[int] = []
+    # Use edge proxy consistent with build_advice (pnl_net / reqs_trade).
+    data: List[Tuple[int, float]] = []  # (entry_score, edge)
+    for r in rows:
+        es = r.get("entry_score")
+        if es is None:
+            continue
+        try:
+            es_i = int(es)
+        except Exception:
+            continue
+        try:
+            em = r.get("entry_min_score")
+            if em is not None:
+                entry_mins.append(int(em))
+        except Exception as e:
+            cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        try:
+            reqs_i = int(r.get("reqs_trade") or 0)
+            pnl = float(r.get("pnl_net") or 0.0)
+            edge = (pnl / float(reqs_i)) if reqs_i > 0 else 0.0
+        except Exception:
+            continue
+        entry_scores.append(es_i)
+        data.append((es_i, float(edge)))
+
+    base_thr = _median_int(entry_mins)
+    if not entry_scores or not data:
+        return {"ok": False, "reason": "NO_ENTRY_SCORE"}
+
+    es_min = int(min(entry_scores))
+    es_max = int(max(entry_scores))
+    censored_below_current = 0
+    if base_thr is not None and int(es_min) >= int(base_thr):
+        censored_below_current = 1
+
+    candidates: List[int] = []
+    if base_thr is not None:
+        for d in (-12, -8, -4, 0, 4, 8, 12):
+            candidates.append(int(base_thr) + int(d))
+        # also add a couple of quantiles to adapt to score scale
+        for q in (0.25, 0.50, 0.75):
+            qi = _quantile_int(entry_scores, q)
+            if qi is not None:
+                candidates.append(int(qi))
+    else:
+        for q in (0.10, 0.25, 0.50, 0.75, 0.90):
+            qi = _quantile_int(entry_scores, q)
+            if qi is not None:
+                candidates.append(int(qi))
+
+    # Clamp to plausible range [0..100] and to observed min/max.
+    cand2 = []
+    for c in candidates:
+        cc = _clamp_int(int(c), 0, 100)
+        if cc < es_min:
+            cc = es_min
+        if cc > es_max:
+            cc = es_max
+        cand2.append(int(cc))
+    candidates = sorted(set(cand2))
+    if not candidates:
+        return {"ok": False, "reason": "NO_CANDIDATES"}
+
+    best = None
+    for t in candidates:
+        subset = [edge for (es_i, edge) in data if int(es_i) >= int(t)]
+        if len(subset) < int(max(5, n_min_subset)):
+            continue
+        mu = float(sum(subset) / len(subset))
+        psr = float(probabilistic_sharpe_ratio(subset, sr_benchmark=0.0))
+        score = float(mu) * float(psr)
+        item = {"t": int(t), "n": int(len(subset)), "mu": float(mu), "psr": float(psr), "score": float(score)}
+        if best is None or float(item["score"]) > float(best["score"]):
+            best = item
+
+    if best is None:
+        return {"ok": False, "reason": "INSUFFICIENT_SUBSET"}
+
+    # Prefer the smallest threshold within 95% of the best score (avoid overly strict gate).
+    best_score = float(best["score"])
+    chosen = int(best["t"])
+    for t in candidates:
+        subset = [edge for (es_i, edge) in data if int(es_i) >= int(t)]
+        if len(subset) < int(max(5, n_min_subset)):
+            continue
+        mu = float(sum(subset) / len(subset))
+        psr = float(probabilistic_sharpe_ratio(subset, sr_benchmark=0.0))
+        score = float(mu) * float(psr)
+        if best_score <= 0.0:
+            continue
+        if float(score) >= (0.95 * best_score):
+            chosen = int(t)
+            break
+
+    return {
+        "ok": True,
+        "entry_min_score_current": None if base_thr is None else int(base_thr),
+        "entry_min_score_suggested": int(chosen),
+        "censored_below_current": int(censored_below_current),
+        "observed_min": int(es_min),
+        "observed_max": int(es_max),
+        "best": best,
+    }
 
 def load_external_replay_summary(meta_dir: Path, *, max_age_sec: int) -> Optional[Dict[str, Any]]:
     """Load offline replay summary produced by TOOLS/offline_replay_analytics.py.
@@ -534,6 +768,27 @@ def fetch_closed_events(db_path: Path, since_iso_utc: str, limit: int = 20000) -
         "outcome_commission",
         "outcome_swap",
         "outcome_fee",
+        # v3 optional context (safe, non price-like)
+        "grp",
+        "window_id",
+        "window_phase",
+        "window_group",
+        "regime",
+        "entry_score",
+        "entry_min_score",
+        "risk_entry_allowed",
+        "eco_active",
+        "black_swan_flag",
+        "self_heal_active",
+        "canary_active",
+        "drift_active",
+        "snapshot_block_new_entries",
+        "mt5_retcode",
+        "mt5_retcode_name",
+        "prio",
+        "time_weight",
+        "score_factor",
+        "group_factor",
     ]
     select_cols = [c for c in base_cols if c in cols]
     if "outcome_closed_ts_utc" not in select_cols or "choice_A" not in select_cols:
@@ -569,6 +824,27 @@ def fetch_closed_events(db_path: Path, since_iso_utc: str, limit: int = 20000) -
                 "commission": float(row.get("outcome_commission") or 0.0),
                 "swap": float(row.get("outcome_swap") or 0.0),
                 "fee": float(row.get("outcome_fee") or 0.0),
+                # optional v3 context
+                "grp": (str(row.get("grp") or "").strip().upper() if "grp" in select_cols else ""),
+                "window_id": (str(row.get("window_id") or "").strip().upper() if "window_id" in select_cols else ""),
+                "window_phase": (str(row.get("window_phase") or "").strip().upper() if "window_phase" in select_cols else ""),
+                "window_group": (str(row.get("window_group") or "").strip().upper() if "window_group" in select_cols else ""),
+                "regime": (str(row.get("regime") or "").strip().upper() if "regime" in select_cols else ""),
+                "entry_score": (None if "entry_score" not in select_cols else (None if row.get("entry_score") is None else int(row.get("entry_score") or 0))),
+                "entry_min_score": (None if "entry_min_score" not in select_cols else (None if row.get("entry_min_score") is None else int(row.get("entry_min_score") or 0))),
+                "risk_entry_allowed": (None if "risk_entry_allowed" not in select_cols else int(row.get("risk_entry_allowed") or 0)),
+                "eco_active": (None if "eco_active" not in select_cols else int(row.get("eco_active") or 0)),
+                "black_swan_flag": (None if "black_swan_flag" not in select_cols else int(row.get("black_swan_flag") or 0)),
+                "self_heal_active": (None if "self_heal_active" not in select_cols else int(row.get("self_heal_active") or 0)),
+                "canary_active": (None if "canary_active" not in select_cols else int(row.get("canary_active") or 0)),
+                "drift_active": (None if "drift_active" not in select_cols else int(row.get("drift_active") or 0)),
+                "snapshot_block_new_entries": (None if "snapshot_block_new_entries" not in select_cols else int(row.get("snapshot_block_new_entries") or 0)),
+                "mt5_retcode": (None if "mt5_retcode" not in select_cols else (None if row.get("mt5_retcode") is None else int(row.get("mt5_retcode") or 0))),
+                "mt5_retcode_name": (None if "mt5_retcode_name" not in select_cols else (None if row.get("mt5_retcode_name") is None else str(row.get("mt5_retcode_name") or ""))),
+                "prio": (None if "prio" not in select_cols else (None if row.get("prio") is None else float(row.get("prio") or 0.0))),
+                "time_weight": (None if "time_weight" not in select_cols else (None if row.get("time_weight") is None else float(row.get("time_weight") or 0.0))),
+                "score_factor": (None if "score_factor" not in select_cols else (None if row.get("score_factor") is None else float(row.get("score_factor") or 0.0))),
+                "group_factor": (None if "group_factor" not in select_cols else (None if row.get("group_factor") is None else float(row.get("group_factor") or 0.0))),
             })
         return out
     finally:
@@ -936,6 +1212,225 @@ def build_advice(rows: List[Dict[str, Any]], window_days: int) -> Tuple[Dict[str
     }
     return (meta_advice, expanded_report)
 
+
+# -------------------------
+# Stage 1: policy suggestions + readiness milestones (deterministic, no ML)
+# -------------------------
+def _stage1_eval_segment(
+    rows_all: List[Dict[str, Any]],
+    idxs: List[int],
+    *,
+    window_days: int,
+    n_min: int,
+    n_min_subset: int,
+    canary_mult: float,
+) -> Dict[str, Any]:
+    n_cur = int(len(idxs))
+    if n_cur < int(max(1, n_min)):
+        return {
+            "n_closed": int(n_cur),
+            "qa_light": "RED",
+            "qa_reasons": ["N_TOO_LOW"],
+            "ready_shadow": 0,
+            "ready_canary": 0,
+            "metrics": {},
+            "suggest": {"ok": False, "reason": "N_TOO_LOW"},
+        }
+    rows = [rows_all[i] for i in idxs]
+    meta_advice, rep = build_advice(rows, window_days=int(window_days))
+    qa = str(meta_advice.get("qa_light") or "UNKNOWN").strip().upper()
+    qa_reasons = rep.get("anti_overfit_reasons") if isinstance(rep.get("anti_overfit_reasons"), list) else []
+    if not isinstance(qa_reasons, list):
+        qa_reasons = []
+    ready_shadow = 1 if qa in {"GREEN", "YELLOW"} else 0
+    canary_min_n = int(max(int(n_min), int(math.ceil(float(n_min) * float(max(1.0, canary_mult))))))
+    stress2 = float(rep.get("stress_pnl_mean_2x") or 0.0)
+    ready_canary = 1 if (qa == "GREEN" and n_cur >= canary_min_n and stress2 >= 0.0) else 0
+    suggest = _stage1_suggest_entry_threshold(rows, n_min_subset=int(n_min_subset))
+    # keep report minimal (LOGS only, no META)
+    metrics = {
+        "n_total": int(rep.get("n_total") or 0),
+        "trades_per_day": float(rep.get("trades_per_day") or 0.0),
+        "reqs_trade_avg": float(rep.get("reqs_trade_avg") or 0.0),
+        "cost_pressure": float(rep.get("cost_pressure") or 0.0),
+        "stress_pnl_mean_2x": float(stress2),
+        "tail_es95": float(rep.get("tail_es95") or 0.0),
+        "loss_streak_p5": float(rep.get("loss_streak_p5") or 0.0),
+        "rank_corr_half": rep.get("rank_corr_half"),
+        "topk_churn": rep.get("topk_churn"),
+    }
+    return {
+        "n_closed": int(n_cur),
+        "qa_light": qa,
+        "qa_reasons": [str(x) for x in qa_reasons][:16],
+        "ready_shadow": int(ready_shadow),
+        "ready_canary": int(ready_canary),
+        "metrics": metrics,
+        "suggest": suggest,
+    }
+
+
+def _stage1_update_outputs(
+    *,
+    rows: List[Dict[str, Any]],
+    window_days: int,
+    logs_dir: Path,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """
+    Returns (suggestions_obj, milestones_obj). Writes are performed by caller.
+    """
+    if not _env_bool("LEARNER_STAGE1_ENABLED", True):
+        return (None, None)
+
+    n_min_grp = _env_int("LEARNER_STAGE1_N_MIN_GRP", 80, vmin=10, vmax=1_000_000)
+    n_min_sym = _env_int("LEARNER_STAGE1_N_MIN_SYM", 200, vmin=10, vmax=1_000_000)
+    n_min_subset = _env_int("LEARNER_STAGE1_SUBSET_N_MIN", 30, vmin=5, vmax=1_000_000)
+    growth = _env_float("LEARNER_STAGE1_GROWTH_FACTOR", 1.30, vmin=1.05, vmax=2.00)
+    canary_mult = _env_float("LEARNER_STAGE1_CANARY_N_MULT", 1.50, vmin=1.00, vmax=5.00)
+
+    ms_path = logs_dir / STAGE1_MILESTONES_FILE
+    ms = _stage1_load_milestones(ms_path)
+    seg_state = ms.get("segments")
+    if not isinstance(seg_state, dict):
+        seg_state = {}
+        ms["segments"] = seg_state
+
+    now = _now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    group_map, sym_map = _stage1_partition_segments(rows)
+
+    segments: List[Tuple[str, Dict[str, Any]]] = []
+    for sid, info in group_map.items():
+        segments.append((sid, info))
+    for sid, info in sym_map.items():
+        segments.append((sid, info))
+    segments.sort(key=lambda x: x[0])
+
+    out_segments: List[Dict[str, Any]] = []
+    ready_shadow_ids: List[str] = []
+    ready_canary_ids: List[str] = []
+    updated_cnt = 0
+
+    for seg_id, info in segments:
+        meta = info.get("meta") if isinstance(info.get("meta"), dict) else {}
+        idxs = info.get("idxs") if isinstance(info.get("idxs"), list) else []
+        kind = str(meta.get("kind") or "UNKNOWN")
+        n_cur = int(len(idxs))
+        n_min = int(n_min_grp) if kind == "GROUP_WINDOW_PHASE" else int(n_min_sym)
+
+        prev = seg_state.get(seg_id) if isinstance(seg_state.get(seg_id), dict) else None
+        prev_level = str(prev.get("level") or "") if isinstance(prev, dict) else ""
+        n_next_eval = int(prev.get("n_next_eval") or n_min) if isinstance(prev, dict) else int(n_min)
+        due = _stage1_due(n_cur, n_next_eval)
+
+        if due:
+            eval_out = _stage1_eval_segment(
+                rows,
+                idxs,
+                window_days=int(window_days),
+                n_min=int(n_min),
+                n_min_subset=int(n_min_subset),
+                canary_mult=float(canary_mult),
+            )
+            level = "NOT_READY"
+            if int(eval_out.get("ready_canary") or 0) == 1:
+                level = "READY_CANARY"
+            elif int(eval_out.get("ready_shadow") or 0) == 1:
+                level = "READY_SHADOW"
+            if eval_out.get("qa_light") == "RED" and n_cur < n_min:
+                level = "NOT_READY_TOO_LOW"
+
+            n_next = _stage1_next_eval_n(n_cur, n_min=int(n_min), growth=float(growth))
+            st_new = {
+                "kind": kind,
+                "meta": meta,
+                "level": str(level),
+                "n_last_eval": int(n_cur),
+                "n_next_eval": int(n_next),
+                "last_eval_ts_utc": now,
+                "qa_light": str(eval_out.get("qa_light") or "UNKNOWN"),
+                "qa_reasons": eval_out.get("qa_reasons") if isinstance(eval_out.get("qa_reasons"), list) else [],
+                "ready_shadow": int(eval_out.get("ready_shadow") or 0),
+                "ready_canary": int(eval_out.get("ready_canary") or 0),
+                "metrics": eval_out.get("metrics") if isinstance(eval_out.get("metrics"), dict) else {},
+                "suggest": eval_out.get("suggest") if isinstance(eval_out.get("suggest"), dict) else {},
+            }
+            seg_state[seg_id] = st_new
+            updated_cnt += 1
+
+            if level.startswith("READY") and level != prev_level:
+                logging.info(
+                    "STAGE1_READY segment=%s level=%s prev=%s n=%s",
+                    seg_id,
+                    level,
+                    prev_level or "NONE",
+                    int(n_cur),
+                )
+        else:
+            # Cache: ensure we keep at least minimal state for visibility.
+            if prev is None:
+                seg_state[seg_id] = {
+                    "kind": kind,
+                    "meta": meta,
+                    "level": "NOT_READY_TOO_LOW" if n_cur < n_min else "NOT_READY",
+                    "n_last_eval": 0,
+                    "n_next_eval": int(_stage1_next_eval_n(n_cur, n_min=int(n_min), growth=float(growth))),
+                    "last_eval_ts_utc": "",
+                    "qa_light": "UNKNOWN",
+                    "qa_reasons": [],
+                    "ready_shadow": 0,
+                    "ready_canary": 0,
+                    "metrics": {},
+                    "suggest": {"ok": False, "reason": "NO_EVAL_YET"},
+                }
+
+        st = seg_state.get(seg_id) if isinstance(seg_state.get(seg_id), dict) else {}
+        level = str(st.get("level") or "")
+        if str(level).startswith("READY_SHADOW"):
+            ready_shadow_ids.append(seg_id)
+        if str(level).startswith("READY_CANARY"):
+            ready_canary_ids.append(seg_id)
+        out_segments.append(
+            {
+                "segment": str(seg_id),
+                "kind": str(kind),
+                "n_closed": int(n_cur),
+                "due": int(1 if due else 0),
+                "level": str(level),
+                "n_next_eval": int(st.get("n_next_eval") or n_min),
+                "qa_light": str(st.get("qa_light") or "UNKNOWN"),
+                "ready_shadow": int(st.get("ready_shadow") or 0),
+                "ready_canary": int(st.get("ready_canary") or 0),
+                "metrics": st.get("metrics") if isinstance(st.get("metrics"), dict) else {},
+                "suggest": st.get("suggest") if isinstance(st.get("suggest"), dict) else {},
+            }
+        )
+
+    ms["schema"] = STAGE1_MILESTONES_SCHEMA
+    ms["updated_ts_utc"] = now
+
+    suggestions = {
+        "schema": STAGE1_SUGGESTIONS_SCHEMA,
+        "ts_utc": now,
+        "ttl_sec": int(3600),
+        "window_days": int(window_days),
+        "n_total_closed": int(len(rows)),
+        "params": {
+            "n_min_grp": int(n_min_grp),
+            "n_min_sym": int(n_min_sym),
+            "growth_factor": float(growth),
+            "subset_n_min": int(n_min_subset),
+            "canary_n_mult": float(canary_mult),
+        },
+        "summary": {
+            "segments_total": int(len(out_segments)),
+            "segments_updated": int(updated_cnt),
+            "ready_shadow_n": int(len(ready_shadow_ids)),
+            "ready_canary_n": int(len(ready_canary_ids)),
+        },
+        "segments": out_segments,
+    }
+    return (suggestions, ms)
+
 def run_once(root: Path) -> int:
     dirs = ensure_dirs(root)
     meta_dir = dirs["META"]
@@ -1047,6 +1542,31 @@ def run_once(root: Path) -> int:
             "max_age_sec": int(ext_max_age_sec),
             "weight": float(ext_weight),
         }
+
+    # Stage 1: readiness + policy suggestions (LOGS only; no direct execution impact).
+    try:
+        stage1_sug, stage1_ms = _stage1_update_outputs(rows=rows, window_days=int(window_days), logs_dir=logs_dir)
+        if isinstance(stage1_sug, dict):
+            atomic_write_json(logs_dir / STAGE1_SUGGESTIONS_FILE, stage1_sug)
+            report["policy_stage_one"] = {
+                "enabled": True,
+                "schema": str(stage1_sug.get("schema") or ""),
+                "summary": stage1_sug.get("summary") if isinstance(stage1_sug.get("summary"), dict) else {},
+                "params": stage1_sug.get("params") if isinstance(stage1_sug.get("params"), dict) else {},
+                "suggestions_file": str((logs_dir / STAGE1_SUGGESTIONS_FILE).name),
+                "milestones_file": str(STAGE1_MILESTONES_FILE),
+            }
+            try:
+                meta_advice.setdefault("notes", []).append("policy_stage_one=see_logs")
+            except Exception as e:
+                cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
+        else:
+            report["policy_stage_one"] = {"enabled": False, "reason": "disabled_or_missing"}
+        if isinstance(stage1_ms, dict):
+            atomic_write_json(logs_dir / STAGE1_MILESTONES_FILE, stage1_ms)
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", "stage1_outputs_failed", e)
+        report["policy_stage_one"] = {"enabled": False, "reason": f"stage1_exception:{type(e).__name__}"}
 
     # Hard gates for META output
     guard_obj_no_price_like(meta_advice)
