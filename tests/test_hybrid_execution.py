@@ -77,6 +77,52 @@ class TestHybridExecution(unittest.TestCase):
 
         self.assertIsNone(res)
 
+    @patch("BIN.safetybot.group_market_risk_state")
+    @patch("BIN.safetybot.mt5")
+    def test_dispatch_order_forces_entry_allowed_on_ambiguous_risk_state(self, mock_mt5, mock_group_risk):
+        bot = self._build_bot()
+
+        mock_mt5.TRADE_ACTION_DEAL = 1
+        mock_mt5.ORDER_TYPE_BUY = 0
+        mock_mt5.TRADE_RETCODE_DONE = 10009
+        mock_mt5.TRADE_RETCODE_PLACED = 10008
+        mock_mt5.TRADE_RETCODE_REJECT = 10006
+        mock_mt5.TRADE_RETCODE_ERROR = 10011
+
+        mock_group_risk.return_value = {
+            "entry_allowed": False,
+            "reason": "NONE",
+            "friday_risk": False,
+            "reopen_guard": False,
+        }
+        bot._send_trade_command.return_value = {
+            "status": "PROCESSED",
+            "correlation_id": "risk-ambiguous-1",
+            "details": {
+                "retcode": 10009,
+                "order": 10,
+                "deal": 11,
+                "comment": "ok",
+            },
+        }
+
+        req = {
+            "action": mock_mt5.TRADE_ACTION_DEAL,
+            "type": mock_mt5.ORDER_TYPE_BUY,
+            "volume": 0.01,
+            "sl": 1.1,
+            "tp": 1.2,
+            "magic": 777,
+            "comment": "test",
+        }
+        res = bot._dispatch_order("US500.pro", "INDEX", req, emergency=False)
+
+        self.assertIsNotNone(res)
+        self.assertTrue(bot._send_trade_command.called)
+        sent_kwargs = bot._send_trade_command.call_args.kwargs
+        self.assertTrue(bool(sent_kwargs.get("risk_entry_allowed")))
+        self.assertEqual("NONE", str(sent_kwargs.get("risk_reason")))
+
     @patch("BIN.safetybot.mt5")
     def test_dispatch_order_falls_back_for_position_close(self, mock_mt5):
         bot = self._build_bot()

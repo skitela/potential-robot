@@ -568,6 +568,11 @@ class CFG:
     structure_filter_enabled: bool = True
     sma_structure_fast: int = 55
     sma_structure_slow: int = 200
+    # When strict no-fetch mode has short MTF history after restart,
+    # allow a conservative fallback trend estimate instead of hard NEUTRAL.
+    trend_short_fallback_enabled: bool = True
+    trend_short_fallback_min_h4_rows: int = 3
+    trend_short_fallback_min_d1_rows: int = 1
 
     # Adaptive exits: ATR-based SL/TP derived from current regime.
     atr_exit_enabled: bool = True
@@ -6394,6 +6399,62 @@ class StandardStrategy:
         min_h4_rows = max(40, int(sma_struct_fast_win) + 5)
         min_d1_rows = 40
         if rows_h4 < min_h4_rows or rows_d1 < min_d1_rows:
+            fallback_enabled = bool(
+                _cfg_group_bool(
+                    grp,
+                    "trend_short_fallback_enabled",
+                    bool(getattr(CFG, "trend_short_fallback_enabled", True)),
+                    symbol=symbol,
+                )
+            )
+            fallback_min_h4 = max(
+                2,
+                _cfg_group_int(
+                    grp,
+                    "trend_short_fallback_min_h4_rows",
+                    int(getattr(CFG, "trend_short_fallback_min_h4_rows", 3)),
+                    symbol=symbol,
+                ),
+            )
+            fallback_min_d1 = max(
+                1,
+                _cfg_group_int(
+                    grp,
+                    "trend_short_fallback_min_d1_rows",
+                    int(getattr(CFG, "trend_short_fallback_min_d1_rows", 1)),
+                    symbol=symbol,
+                ),
+            )
+            if fallback_enabled and rows_h4 >= fallback_min_h4 and rows_d1 >= fallback_min_d1:
+                close_h4_last = float(df_h4["close"].iloc[-1])
+                close_h4_prev = float(df_h4["close"].iloc[-2]) if rows_h4 >= 2 else close_h4_last
+                trend_h4 = "BUY" if close_h4_last >= close_h4_prev else "SELL"
+
+                if rows_d1 >= 2:
+                    close_d1_last = float(df_d1["close"].iloc[-1])
+                    close_d1_prev = float(df_d1["close"].iloc[-2])
+                    trend_d1 = "BUY" if close_d1_last >= close_d1_prev else "SELL"
+                else:
+                    trend_d1 = trend_h4
+
+                struct_span = max(2, min(rows_h4, 5))
+                struct_ref = float(df_h4["close"].tail(struct_span).mean())
+                structure_h4 = "BUY" if close_h4_last >= struct_ref else "SELL"
+
+                logging.warning(
+                    "TREND_DATA_SHORT_FALLBACK symbol=%s grp=%s rows_h4=%s rows_d1=%s min_h4=%s min_d1=%s trend_h4=%s trend_d1=%s structure_h4=%s",
+                    symbol,
+                    grp,
+                    rows_h4,
+                    rows_d1,
+                    min_h4_rows,
+                    min_d1_rows,
+                    trend_h4,
+                    trend_d1,
+                    structure_h4,
+                )
+                self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1, structure_h4)
+                return trend_h4, trend_d1, structure_h4
             logging.info(
                 "TREND_DATA_SHORT symbol=%s grp=%s rows_h4=%s rows_d1=%s min_h4=%s min_d1=%s",
                 symbol,
@@ -7927,6 +7988,27 @@ class SafetyBot:
             signal = "BUY" if request.get("type") == mt5.ORDER_TYPE_BUY else "SELL"
             grp_u = _group_key(grp)
             risk_state = group_market_risk_state(grp_u)
+            risk_entry_allowed = bool(risk_state.get("entry_allowed", True))
+            risk_reason = str(risk_state.get("reason", "NONE"))
+            risk_friday = bool(risk_state.get("friday_risk", False))
+            risk_reopen = bool(risk_state.get("reopen_guard", False))
+            if (not risk_entry_allowed) and str(risk_reason).upper() == "NONE" and (not risk_friday) and (not risk_reopen):
+                logging.warning(
+                    "RISK_STATE_INCONSISTENT symbol=%s group=%s entry_allowed=0 reason=NONE friday=0 reopen=0 forcing_entry_allowed=1",
+                    symbol,
+                    grp_u,
+                )
+                risk_entry_allowed = True
+            logging.info(
+                "HYBRID_DISPATCH_RISK symbol=%s group=%s entry_allowed=%s reason=%s friday=%s reopen=%s shadow=%s",
+                symbol,
+                grp_u,
+                int(risk_entry_allowed),
+                risk_reason,
+                int(risk_friday),
+                int(risk_reopen),
+                int(bool(getattr(CFG, "policy_shadow_mode_enabled", True))),
+            )
             logging.info(f"HYBRID_DISPATCH | DEAL over ZMQ symbol={symbol} signal={signal}")
             reply = self._send_trade_command(
                 signal=signal,
@@ -7937,10 +8019,10 @@ class SafetyBot:
                 magic=request.get("magic"),
                 comment=request.get("comment"),
                 group=grp_u,
-                risk_entry_allowed=bool(risk_state.get("entry_allowed", True)),
-                risk_reason=str(risk_state.get("reason", "NONE")),
-                risk_friday=bool(risk_state.get("friday_risk", False)),
-                risk_reopen=bool(risk_state.get("reopen_guard", False)),
+                risk_entry_allowed=risk_entry_allowed,
+                risk_reason=risk_reason,
+                risk_friday=risk_friday,
+                risk_reopen=risk_reopen,
                 policy_shadow_mode=bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
             )
             if not isinstance(reply, dict):
@@ -10345,6 +10427,15 @@ if __name__ == "__main__":
     CFG.structure_filter_enabled = _cfg_bool("structure_filter_enabled", CFG.structure_filter_enabled)
     CFG.sma_structure_fast = _cfg_int("sma_structure_fast", CFG.sma_structure_fast)
     CFG.sma_structure_slow = _cfg_int("sma_structure_slow", CFG.sma_structure_slow)
+    CFG.trend_short_fallback_enabled = _cfg_bool(
+        "trend_short_fallback_enabled", CFG.trend_short_fallback_enabled
+    )
+    CFG.trend_short_fallback_min_h4_rows = _cfg_int(
+        "trend_short_fallback_min_h4_rows", CFG.trend_short_fallback_min_h4_rows
+    )
+    CFG.trend_short_fallback_min_d1_rows = _cfg_int(
+        "trend_short_fallback_min_d1_rows", CFG.trend_short_fallback_min_d1_rows
+    )
     CFG.atr_exit_enabled = _cfg_bool("atr_exit_enabled", CFG.atr_exit_enabled)
     CFG.atr_exit_use_override = _cfg_bool("atr_exit_use_override", CFG.atr_exit_use_override)
     CFG.atr_sl_mult_hot = _cfg_float("atr_sl_mult_hot", CFG.atr_sl_mult_hot)

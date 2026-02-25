@@ -1230,22 +1230,39 @@ void ExecuteTrade(
   if(!payload_policy_shadow && !payload_risk_entry_allowed)
   {
     string deny_reason_payload = (payload_risk_reason == "" ? "PAYLOAD_RISK_BLOCK" : payload_risk_reason);
-    SendReplyEnvelope(
-      "REJECTED", msg_id, action_reply,
-      50021, "CUSTOM_RETCODE_PAYLOAD_RISK_BLOCK", 0, 0,
-      StringFormat("Payload risk blocked entry group=%s reason=%s", trade_group, deny_reason_payload),
-      symbol_req,
-      deny_reason_payload, request_hash, true
+    bool allow_ambiguous_payload_none = (
+      InpPolicyRuntimeAllowAmbiguousReasonNone &&
+      deny_reason_payload == "NONE" &&
+      !in_risk_window
     );
-    Print(
-      "ENTRY_SKIP_RISK_WINDOW symbol=", symbol_req,
-      " group=", trade_group,
-      " friday=", (payload_risk_friday ? "1" : "0"),
-      " reopen=", (payload_risk_reopen ? "1" : "0"),
-      " reason=", deny_reason_payload,
-      " source=PAYLOAD"
-    );
-    return;
+    if(allow_ambiguous_payload_none)
+    {
+      Print(
+        "POLICY_RUNTIME_AMBIGUOUS_ALLOW symbol=", symbol_req,
+        " group=", trade_group,
+        " reason=", deny_reason_payload,
+        " source=PAYLOAD action=ALLOW"
+      );
+    }
+    else
+    {
+      SendReplyEnvelope(
+        "REJECTED", msg_id, action_reply,
+        50021, "CUSTOM_RETCODE_PAYLOAD_RISK_BLOCK", 0, 0,
+        StringFormat("Payload risk blocked entry group=%s reason=%s", trade_group, deny_reason_payload),
+        symbol_req,
+        deny_reason_payload, request_hash, true
+      );
+      Print(
+        "ENTRY_SKIP_RISK_WINDOW symbol=", symbol_req,
+        " group=", trade_group,
+        " friday=", (payload_risk_friday ? "1" : "0"),
+        " reopen=", (payload_risk_reopen ? "1" : "0"),
+        " reason=", deny_reason_payload,
+        " source=PAYLOAD"
+      );
+      return;
+    }
   }
 
   if(in_risk_window || borrow_blocked || prio_factor != 1.0)
