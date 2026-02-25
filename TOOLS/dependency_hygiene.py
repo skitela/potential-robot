@@ -16,6 +16,7 @@ REQUIREMENT_FILES_DEFAULT = [
     "requirements-dev.txt",
     "requirements.offline.lock",
     "requirements.live.lock",
+    "dashboard/requirements.txt",
 ]
 
 IMPORT_MAP = {

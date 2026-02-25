@@ -313,6 +313,25 @@ class CFG:
     }
     trade_window_strict_group_routing: bool = True
     trade_closeout_buffer_min: int = 15
+    # Trade-window extensions (v1): improve continuity without changing the base windows.
+    # - PREFETCH: near the next window start, compute (and optionally warm) a shortlist for the next group.
+    #   It is observation-only (no trades).
+    # - CARRYOVER: grace period after window switch; can be observation-only or (optionally) allow limited entries
+    #   from the previous group.
+    # - FX ROTATION: optional deterministic bucketing of FX symbols when the group is over scan capacity.
+    trade_window_prefetch_enabled: bool = False
+    trade_window_prefetch_lead_min: int = 15
+    trade_window_prefetch_max_symbols: int = 4
+    trade_window_prefetch_warm_store_indicators: bool = False
+    trade_window_carryover_enabled: bool = False
+    trade_window_carryover_minutes: int = 3
+    trade_window_carryover_max_symbols: int = 2
+    trade_window_carryover_trade_enabled: bool = False
+    trade_window_carryover_groups: Tuple[str, ...] = ()
+    trade_window_fx_rotation_enabled: bool = False
+    trade_window_fx_rotation_bucket_size: int = 4
+    trade_window_fx_rotation_period_sec: int = 180
+    trade_window_fx_rotation_only_when_over_capacity: bool = True
     hard_no_mt5_outside_windows: bool = True
     # Outside windows we still do minimal SYS reconciliation (positions/orders) for safety.
     trade_off_sys_poll_sec: int = 900
@@ -932,6 +951,101 @@ def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
             return ctx
 
     return ctx
+
+
+def trade_window_next_ctx(
+    now_dt: Optional[dt.datetime] = None,
+    *,
+    trade_windows: Optional[Dict[str, Dict[str, object]]] = None,
+) -> Optional[Dict[str, object]]:
+    """Return the next scheduled trade-window start (UTC), based on repeating daily windows.
+
+    Notes:
+    - Deterministic: ties are broken by window_id (lexicographic).
+    - "Always-on" windows (start==end) are ignored for "next start" calculation.
+    - Overnight windows are supported (end < start in local anchor time).
+    """
+    if now_dt is None:
+        now_dt = now_utc()
+    if trade_windows is None:
+        try:
+            trade_windows = getattr(CFG, "trade_windows", {}) or {}
+        except Exception:
+            trade_windows = {}
+
+    best: Optional[Tuple[dt.datetime, str, Dict[str, object]]] = None  # (start_utc, window_id, ctx)
+    for wid in sorted(trade_windows.keys()):
+        w = trade_windows.get(wid)
+        if not isinstance(w, dict) or not w:
+            continue
+        try:
+            tz = ZoneInfo(str(w.get("anchor_tz") or "Europe/Warsaw"))
+        except Exception:
+            tz = TZ_PL
+        local_now = now_dt.astimezone(tz)
+        try:
+            start_hm = tuple(w.get("start_hm") or (0, 0))
+            end_hm = tuple(w.get("end_hm") or (0, 0))
+        except Exception:
+            continue
+        s_h, s_m = int(start_hm[0]), int(start_hm[1])
+        e_h, e_m = int(end_hm[0]), int(end_hm[1])
+        if (s_h, s_m) == (e_h, e_m):
+            # Always-on windows have no meaningful "next start".
+            continue
+        start_today = local_now.replace(hour=s_h, minute=s_m, second=0, microsecond=0)
+        overnight = bool((e_h, e_m) < (s_h, s_m))
+
+        active = _in_window(local_now, (s_h, s_m), (e_h, e_m))
+        if active and overnight and local_now < start_today:
+            # Window started "yesterday"; next occurrence starts today.
+            next_start_local = start_today
+        elif active:
+            next_start_local = start_today + dt.timedelta(days=1)
+        else:
+            if local_now < start_today:
+                next_start_local = start_today
+            else:
+                next_start_local = start_today + dt.timedelta(days=1)
+
+        start_utc = next_start_local.astimezone(UTC)
+        if best is None or start_utc < best[0] or (start_utc == best[0] and wid < best[1]):
+            minutes_to = max(0.0, (start_utc - now_dt).total_seconds() / 60.0)
+            ctx = {
+                "window_id": wid,
+                "group": str(w.get("group") or "").upper(),
+                "anchor_tz": str(w.get("anchor_tz") or "Europe/Warsaw"),
+                "anchor_start": next_start_local,
+                "start_utc": start_utc,
+                "minutes_to_start": float(minutes_to),
+            }
+            best = (start_utc, wid, ctx)
+
+    return best[2] if best is not None else None
+
+
+def fx_rotation_bucket(
+    symbols: List[str],
+    *,
+    now_ts: Optional[float] = None,
+    bucket_size: int = 4,
+    period_sec: int = 180,
+) -> Tuple[int, List[str], int]:
+    """Deterministically bucket symbols for rotation.
+
+    Returns: (bucket_index, bucket_symbols, bucket_count)
+    """
+    if now_ts is None:
+        now_ts = time.time()
+    syms = sorted([str(s or "").strip() for s in symbols if str(s or "").strip()])
+    if not syms:
+        return 0, [], 0
+    bsz = max(1, int(bucket_size))
+    period = max(1, int(period_sec))
+    buckets: List[List[str]] = [syms[i : i + bsz] for i in range(0, len(syms), bsz)]
+    bcount = int(len(buckets))
+    idx = int(int(now_ts) // int(period)) % bcount
+    return int(idx), list(buckets[idx]), bcount
 
 def pl_day_start_utc_ts(ts_utc: Optional[dt.datetime] = None) -> int:
     """Start of PL day (00:00 Europe/Warsaw) expressed as UTC epoch seconds."""
@@ -9221,6 +9335,19 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+        # Track window switches (in-memory only) for optional carryover logic.
+        try:
+            cur_wid = getattr(self, "_tw_cur_window_id", None)
+            cur_grp = getattr(self, "_tw_cur_group", None)
+            if (cur_wid != tw_window_id) or (cur_grp != tw_group):
+                setattr(self, "_tw_prev_window_id", cur_wid)
+                setattr(self, "_tw_prev_group", cur_grp)
+                setattr(self, "_tw_switch_ts", float(time.time()))
+                setattr(self, "_tw_cur_window_id", tw_window_id)
+                setattr(self, "_tw_cur_group", tw_group)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
         # ECO on budget pressure (PRICE / SYS / ORDER)
         eco_by_budget = False
         eco_reason = ""
@@ -9554,11 +9681,224 @@ class SafetyBot:
         use_risk_windows_hard = bool(getattr(CFG, "policy_risk_windows_enabled", True)) and (not policy_shadow)
         use_group_arb_hard = bool(getattr(CFG, "policy_group_arbitration_enabled", True)) and (not policy_shadow)
         now_prio = now_utc()
+
+        # --- Trade-window extensions (P0 deterministic; defaults = no behavior change) ---
+        allowed_groups: Optional[set[str]] = None
+        if tw_strict_group and tw_group:
+            allowed_groups = {str(tw_group).upper()}
+        allowed_symbols_by_group: Dict[str, set[str]] = {}
+
+        # Carryover: grace window after switch (optional limited cross-group entries).
+        try:
+            carry_enabled = bool(getattr(CFG, "trade_window_carryover_enabled", False))
+            carry_trade = bool(getattr(CFG, "trade_window_carryover_trade_enabled", False))
+            carry_min = max(0, int(getattr(CFG, "trade_window_carryover_minutes", 0)))
+            carry_max = max(0, int(getattr(CFG, "trade_window_carryover_max_symbols", 0)))
+            carry_groups = tuple(getattr(CFG, "trade_window_carryover_groups", ()) or ())
+            carry_prev_grp = str(getattr(self, "_tw_prev_group", "") or "").upper()
+            carry_prev_wid = str(getattr(self, "_tw_prev_window_id", "") or "")
+            carry_age_min = 9999.0
+            carry_syms: List[str] = []
+            if carry_enabled and carry_prev_grp and carry_prev_grp != str(tw_group).upper() and carry_min > 0 and carry_max > 0:
+                sw_ts = float(getattr(self, "_tw_switch_ts", 0.0) or 0.0)
+                if sw_ts > 0:
+                    carry_age_min = max(0.0, (time.time() - sw_ts) / 60.0)
+                if carry_age_min <= float(carry_min):
+                    if (not carry_groups) or (_group_key(carry_prev_grp) in {_group_key(x) for x in carry_groups}):
+                        # Select a small, deterministic shortlist from the previous group.
+                        carry_rank: List[Tuple[float, str]] = []
+                        for _raw2, _sym2, _grp2 in self.universe:
+                            if _group_key(_grp2) != _group_key(carry_prev_grp):
+                                continue
+                            try:
+                                if use_group_arb_hard:
+                                    gf = float(
+                                        group_arb.get(_group_key(_grp2), {}).get(
+                                            "priority_factor", effective_group_priority_factor(_group_key(_grp2), now_dt=now_prio)
+                                        )
+                                    )
+                                else:
+                                    gf = float(group_arb.get(_group_key(_grp2), {}).get("priority_factor", self.gov.group_priority_factor(_group_key(_grp2))))
+                            except Exception:
+                                gf = 1.0
+                            try:
+                                twt = float(group_window_weight(_grp2, _sym2, now_dt=now_prio)) if use_windows_v2_hard else float(self.ctrl.time_weight(_grp2, _sym2))
+                            except Exception:
+                                twt = 1.0
+                            try:
+                                sf = float(self.ctrl.score_factor(_grp2, _sym2))
+                            except Exception:
+                                sf = 1.0
+                            carry_rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
+                        carry_rank.sort(reverse=True, key=lambda x: x[0])
+                        carry_syms = [s for (_p, s) in carry_rank[:carry_max]]
+
+                    sig = f"{tw_window_id}:{carry_prev_wid}:{carry_prev_grp}:{int(carry_trade)}:{','.join(carry_syms)}"
+                    if sig != str(getattr(self, "_last_carryover_sig", "")):
+                        setattr(self, "_last_carryover_sig", sig)
+                        logging.info(
+                            "WINDOW_CARRYOVER window=%s group=%s prev_window=%s prev_group=%s age_min=%.2f trade=%s symbols=%s",
+                            tw_window_id or "NONE",
+                            tw_group or "NONE",
+                            carry_prev_wid or "NONE",
+                            carry_prev_grp or "NONE",
+                            float(carry_age_min),
+                            int(bool(carry_trade)),
+                            ",".join(carry_syms) if carry_syms else "NONE",
+                        )
+
+                    if carry_trade and carry_syms:
+                        if allowed_groups is None:
+                            allowed_groups = {str(tw_group).upper()}
+                        allowed_groups.add(_group_key(carry_prev_grp))
+                        allowed_symbols_by_group[_group_key(carry_prev_grp)] = set(carry_syms)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        # FX rotation: only when FX is over scan capacity (unless overridden).
+        try:
+            fx_rot_enabled = bool(getattr(CFG, "trade_window_fx_rotation_enabled", False))
+            fx_bucket_size = max(1, int(getattr(CFG, "trade_window_fx_rotation_bucket_size", 4)))
+            fx_period = max(1, int(getattr(CFG, "trade_window_fx_rotation_period_sec", 180)))
+            fx_only_over = bool(getattr(CFG, "trade_window_fx_rotation_only_when_over_capacity", True))
+            if fx_rot_enabled and _group_key(tw_group) == "FX":
+                fx_syms_all = [str(s) for (_r, s, g) in self.universe if _group_key(g) == "FX"]
+                fx_cap = max(1, int(self.ctrl.max_symbols_per_iter(global_mode)))
+                if (not fx_only_over) or (len(fx_syms_all) > int(fx_cap)):
+                    bidx, bucket_syms, bcount = fx_rotation_bucket(
+                        fx_syms_all,
+                        now_ts=time.time(),
+                        bucket_size=int(fx_bucket_size),
+                        period_sec=int(fx_period),
+                    )
+                    allowed_symbols_by_group["FX"] = set(bucket_syms)
+                    # Always keep open symbols visible to policy telemetry.
+                    allowed_symbols_by_group["FX"].update({s for s in open_syms if str(s)})
+                    fx_sig = f"{bidx}/{bcount}:{','.join(sorted(bucket_syms))}"
+                    if fx_sig != str(getattr(self, "_last_fx_rot_sig", "")):
+                        setattr(self, "_last_fx_rot_sig", fx_sig)
+                        logging.info(
+                            "FX_ROTATION window=%s group=FX bucket=%s/%s period_sec=%s bucket_size=%s cap=%s total=%s symbols=%s",
+                            tw_window_id or "NONE",
+                            int(bidx) + 1,
+                            int(bcount),
+                            int(fx_period),
+                            int(fx_bucket_size),
+                            int(fx_cap),
+                            int(len(fx_syms_all)),
+                            ",".join(sorted(bucket_syms)) if bucket_syms else "NONE",
+                        )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        # Prefetch: compute (and optionally warm) next window shortlist (observation-only).
+        try:
+            prefetch_enabled = bool(getattr(CFG, "trade_window_prefetch_enabled", False))
+            prefetch_lead = max(0, int(getattr(CFG, "trade_window_prefetch_lead_min", 15)))
+            prefetch_max = max(0, int(getattr(CFG, "trade_window_prefetch_max_symbols", 4)))
+            prefetch_warm = bool(getattr(CFG, "trade_window_prefetch_warm_store_indicators", False))
+            if prefetch_enabled and prefetch_lead > 0 and prefetch_max > 0:
+                nxt = trade_window_next_ctx(now_prio)
+                if isinstance(nxt, dict):
+                    t_minus = float(nxt.get("minutes_to_start", 9999.0))
+                    nxt_wid = str(nxt.get("window_id") or "")
+                    nxt_grp = _group_key(str(nxt.get("group") or ""))
+                    nxt_start = nxt.get("start_utc")
+                    if nxt_wid and nxt_grp and isinstance(nxt_start, dt.datetime) and 0.0 <= t_minus <= float(prefetch_lead):
+                        # Priority for prefetch uses the *next window start time* (future time-weight).
+                        rank: List[Tuple[float, str]] = []
+                        for _raw2, _sym2, _grp2 in self.universe:
+                            if _group_key(_grp2) != nxt_grp:
+                                continue
+                            try:
+                                if use_group_arb_hard:
+                                    gf = float(effective_group_priority_factor(nxt_grp, now_dt=nxt_start))
+                                else:
+                                    gf = float(self.gov.group_priority_factor(nxt_grp))
+                            except Exception:
+                                gf = 1.0
+                            try:
+                                twt = float(group_window_weight(_grp2, _sym2, now_dt=nxt_start))
+                            except Exception:
+                                twt = 1.0
+                            try:
+                                sf = float(self.ctrl.score_factor(_grp2, _sym2))
+                            except Exception:
+                                sf = 1.0
+                            rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
+                        rank.sort(reverse=True, key=lambda x: x[0])
+                        pre_syms = [s for (_p, s) in rank[:prefetch_max]]
+
+                        # Best-effort store-only indicator warmup (no MT5 fetch).
+                        warm_ok = False
+                        if pre_syms and prefetch_warm and getattr(self.execution_engine, "bars_store", None) is not None:
+                            warmed = 0
+                            for s in pre_syms:
+                                try:
+                                    df_store = self.execution_engine.bars_store.read_recent_df(symbol_base(s), 120)
+                                    if df_store is None or len(df_store) < 60:
+                                        continue
+                                    # Compute minimal M5 indicators for warm-start (same as m5_indicators_if_due()).
+                                    sma_fast_win = max(
+                                        2, _cfg_group_int(nxt_grp, "sma_fast", int(getattr(CFG, "sma_fast", 20)), symbol=s)
+                                    )
+                                    adx_period = max(
+                                        2, _cfg_group_int(nxt_grp, "adx_period", int(getattr(CFG, "adx_period", 14)), symbol=s)
+                                    )
+                                    atr_period = max(
+                                        2, _cfg_group_int(nxt_grp, "atr_period", int(getattr(CFG, "atr_period", 14)), symbol=s)
+                                    )
+                                    df_store = df_store.copy()
+                                    df_store["sma_fast"] = ta.trend.sma_indicator(df_store["close"], window=sma_fast_win)
+                                    adx = ta.trend.ADXIndicator(df_store["high"], df_store["low"], df_store["close"], window=adx_period)
+                                    df_store["adx"] = adx.adx()
+                                    atr_val = None
+                                    try:
+                                        tr1 = (df_store["high"] - df_store["low"]).abs()
+                                        tr2 = (df_store["high"] - df_store["close"].shift(1)).abs()
+                                        tr3 = (df_store["low"] - df_store["close"].shift(1)).abs()
+                                        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                                        atr_val = float(tr.rolling(window=atr_period, min_periods=atr_period).mean().iloc[-1])
+                                    except Exception:
+                                        atr_val = None
+                                    ind = {
+                                        "close": float(df_store["close"].iloc[-1]),
+                                        "open": float(df_store["open"].iloc[-1]),
+                                        "high": float(df_store["high"].iloc[-1]),
+                                        "low": float(df_store["low"].iloc[-1]),
+                                        "sma": float(df_store["sma_fast"].iloc[-1]),
+                                        "adx": float(df_store["adx"].iloc[-1]),
+                                        "atr": float(atr_val) if atr_val is not None else None,
+                                    }
+                                    self.strategy.last_indicators[symbol_base(s)] = dict(ind)
+                                    warmed += 1
+                                except Exception:
+                                    continue
+                            warm_ok = bool(warmed > 0)
+
+                        sig = f"{tw_window_id}->{nxt_wid}:{','.join(pre_syms)}:{int(bool(prefetch_warm))}:{int(bool(warm_ok))}"
+                        if sig != str(getattr(self, "_last_prefetch_sig", "")):
+                            setattr(self, "_last_prefetch_sig", sig)
+                            logging.info(
+                                "WINDOW_PREFETCH active_window=%s active_group=%s next_window=%s next_group=%s t_minus_min=%.1f selected=%s warm_store=%s",
+                                tw_window_id or "NONE",
+                                tw_group or "NONE",
+                                nxt_wid,
+                                nxt_grp,
+                                float(t_minus),
+                                ",".join(pre_syms) if pre_syms else "NONE",
+                                int(bool(warm_ok)) if prefetch_warm else 0,
+                            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
         for raw, sym, grp in self.universe:
-            # With strict routing enabled we trade only the active window group.
-            if tw_strict_group and tw_group and str(grp).upper() != tw_group:
-                continue
             grp_u = _group_key(grp)
+            if allowed_groups is not None and grp_u not in allowed_groups:
+                continue
+            sym_allow = allowed_symbols_by_group.get(grp_u)
+            if sym_allow is not None and sym not in sym_allow:
+                continue
             risk_state = group_risk.get(grp_u) or group_market_risk_state(grp_u, now_dt=now_prio)
             skip_entry, skip_tag = risk_window_skip_decision(
                 symbol=sym,
@@ -10508,6 +10848,53 @@ if __name__ == "__main__":
         "hard_no_mt5_outside_windows", CFG.hard_no_mt5_outside_windows
     )
     CFG.trade_off_sys_poll_sec = _cfg_int("trade_off_sys_poll_sec", CFG.trade_off_sys_poll_sec)
+    # Trade-window extensions (v1)
+    CFG.trade_window_prefetch_enabled = _cfg_bool(
+        "trade_window_prefetch_enabled", CFG.trade_window_prefetch_enabled
+    )
+    CFG.trade_window_prefetch_lead_min = _cfg_int(
+        "trade_window_prefetch_lead_min", CFG.trade_window_prefetch_lead_min
+    )
+    CFG.trade_window_prefetch_max_symbols = _cfg_int(
+        "trade_window_prefetch_max_symbols", CFG.trade_window_prefetch_max_symbols
+    )
+    CFG.trade_window_prefetch_warm_store_indicators = _cfg_bool(
+        "trade_window_prefetch_warm_store_indicators", CFG.trade_window_prefetch_warm_store_indicators
+    )
+    CFG.trade_window_carryover_enabled = _cfg_bool(
+        "trade_window_carryover_enabled", CFG.trade_window_carryover_enabled
+    )
+    CFG.trade_window_carryover_minutes = _cfg_int(
+        "trade_window_carryover_minutes", CFG.trade_window_carryover_minutes
+    )
+    CFG.trade_window_carryover_max_symbols = _cfg_int(
+        "trade_window_carryover_max_symbols", CFG.trade_window_carryover_max_symbols
+    )
+    CFG.trade_window_carryover_trade_enabled = _cfg_bool(
+        "trade_window_carryover_trade_enabled", CFG.trade_window_carryover_trade_enabled
+    )
+    try:
+        raw_cg = _cfg_str_list("trade_window_carryover_groups", list(CFG.trade_window_carryover_groups))
+        cg_out: List[str] = []
+        for g in raw_cg:
+            gg = _group_key(g)
+            if gg in {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"} and gg not in cg_out:
+                cg_out.append(gg)
+        CFG.trade_window_carryover_groups = tuple(cg_out)
+    except Exception:
+        CFG.trade_window_carryover_groups = tuple(getattr(CFG, "trade_window_carryover_groups", ()) or ())
+    CFG.trade_window_fx_rotation_enabled = _cfg_bool(
+        "trade_window_fx_rotation_enabled", CFG.trade_window_fx_rotation_enabled
+    )
+    CFG.trade_window_fx_rotation_bucket_size = _cfg_int(
+        "trade_window_fx_rotation_bucket_size", CFG.trade_window_fx_rotation_bucket_size
+    )
+    CFG.trade_window_fx_rotation_period_sec = _cfg_int(
+        "trade_window_fx_rotation_period_sec", CFG.trade_window_fx_rotation_period_sec
+    )
+    CFG.trade_window_fx_rotation_only_when_over_capacity = _cfg_bool(
+        "trade_window_fx_rotation_only_when_over_capacity", CFG.trade_window_fx_rotation_only_when_over_capacity
+    )
     CFG.adx_threshold = _cfg_int("adx_threshold", CFG.adx_threshold)
     CFG.adx_range_max = _cfg_int("adx_range_max", CFG.adx_range_max)
     CFG.regime_switch_enabled = _cfg_bool("regime_switch_enabled", CFG.regime_switch_enabled)
