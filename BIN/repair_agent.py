@@ -53,7 +53,9 @@ CODEX_REQUEST_FILE = "codex_repair_request.json"
 CHECKLIST_FILE = "repair_checklist_v1.json"
 
 # Trading-functional watchdog (system is "alive" only when it effectively trades).
-TRADE_IDLE_ALERT_SEC = int(os.environ.get("REPAIR_TRADE_IDLE_ALERT_SEC", "3600"))
+# NOTE: "No trades for X seconds" is not a reliable signal of system failure (it can be caused by filters/market regime).
+# We therefore keep this guard conservative by default, and rely on scan/heartbeat-based monitors for liveness.
+TRADE_IDLE_ALERT_SEC = int(os.environ.get("REPAIR_TRADE_IDLE_ALERT_SEC", "43200"))  # default 12h
 TRADE_LOSS_WINDOW_SEC = int(os.environ.get("REPAIR_TRADE_LOSS_WINDOW_SEC", "172800"))  # 48h
 TRADE_HEALTH_CHECK_SEC = int(os.environ.get("REPAIR_TRADE_HEALTH_CHECK_SEC", "30"))
 TRADE_LOSS_MIN_DEALS_PER_SYMBOL = int(os.environ.get("REPAIR_TRADE_LOSS_MIN_DEALS_PER_SYMBOL", "6"))
