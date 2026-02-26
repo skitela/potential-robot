@@ -44,6 +44,7 @@ bool   G_PolicyRiskWindowsEnabled = true;
 string G_PolicyLastError = "";
 ulong  G_LastPolicyReloadMs = 0;
 ulong  G_LastPolicyOpenFailLogMs = 0;
+ulong  G_LastTickSendFailLogMs = 0;
 
 int G_MAFastHandle = INVALID_HANDLE;
 int G_ADXHandle = INVALID_HANDLE;
@@ -83,6 +84,18 @@ string ToUpperAscii(string value)
 bool IsCurrentSymbol(string symbol_value)
 {
   return (ToUpperAscii(symbol_value) == G_SymbolUpper);
+}
+
+bool ShouldEmitLogThrottled(ulong &last_ts_ms, uint interval_sec)
+{
+  uint safe_sec = (uint)MathMax(1, (int)interval_sec);
+  ulong now_ms = (ulong)GetTickCount();
+  if(last_ts_ms == 0 || (now_ms - last_ts_ms) >= ((ulong)safe_sec * 1000))
+  {
+    last_ts_ms = now_ms;
+    return true;
+  }
+  return false;
 }
 
 string JsonEscape(string value)
@@ -435,12 +448,8 @@ void RefreshPolicyRuntime()
     G_PolicyFailSafeNoTrade = false;
 
     uint throttle_sec = (uint)MathMax(1, (int)InpPolicyRuntimeOpenFailLogThrottleSec);
-    if(
-      G_LastPolicyOpenFailLogMs == 0 ||
-      (now_ms - G_LastPolicyOpenFailLogMs) >= ((ulong)throttle_sec * 1000)
-    )
+    if(ShouldEmitLogThrottled(G_LastPolicyOpenFailLogMs, throttle_sec))
     {
-      G_LastPolicyOpenFailLogMs = now_ms;
       Print("POLICY_RUNTIME_OPEN_RETRY reason=", err);
     }
     return;
@@ -1086,12 +1095,9 @@ void SendTickData()
 
   if(!Zmq_SendData(json))
   {
-    static ulong last_error_time = 0;
-    ulong now_ms = (ulong)GetTickCount();
-    if(now_ms - last_error_time > 5000)
+    if(ShouldEmitLogThrottled(G_LastTickSendFailLogMs, 5))
     {
       Print("ZMQ_TICK_SEND_FAIL symbol=", G_SymbolUpper);
-      last_error_time = now_ms;
     }
   }
 }

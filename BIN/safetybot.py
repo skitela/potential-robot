@@ -6372,6 +6372,7 @@ class StrategyCache:
         self.last_m5_bar_time: Dict[str, pd.Timestamp] = {}
         self.next_m5_fetch_ts: Dict[str, float] = {}
         self.last_soft_skip_log_ts: Dict[str, float] = {}
+        self.skip_log_throttle_ts: Dict[str, float] = {}
 
 class StandardStrategy:
     def __init__(
@@ -6451,6 +6452,17 @@ class StandardStrategy:
                 self._spread_entry_count_day += 1
         except Exception:
             return
+
+    def _skip_log_allowed(self, symbol: str, reason: str, interval_sec: int) -> bool:
+        if int(interval_sec) <= 0:
+            return True
+        now_ts = float(time.time())
+        key = f"{str(symbol)}|{str(reason or 'UNKNOWN').upper()}"
+        last_ts = float(self.cache.skip_log_throttle_ts.get(key, 0.0) or 0.0)
+        if (now_ts - last_ts) < float(interval_sec):
+            return False
+        self.cache.skip_log_throttle_ts[key] = now_ts
+        return True
 
     def metrics_snapshot(self) -> Dict[str, Any]:
         self._metrics_roll_day()
@@ -7181,13 +7193,14 @@ class StandardStrategy:
 
         if not self.risk_manager.daily_loss_guard(symbol, mode, dd_pct):
             self._metric_inc_skip("DAILY_LOSS_GUARD")
-            logging.info(
-                "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=DAILY_LOSS_GUARD dd_pct=%.5f",
-                symbol,
-                grp,
-                mode,
-                float(dd_pct),
-            )
+            if self._skip_log_allowed(symbol, "DAILY_LOSS_GUARD", 30):
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=DAILY_LOSS_GUARD dd_pct=%.5f",
+                    symbol,
+                    grp,
+                    mode,
+                    float(dd_pct),
+                )
             return
 
         soft_loss = (dd_pct >= float(self.config.risk['daily_loss_soft_pct']))
@@ -7743,17 +7756,29 @@ class StandardStrategy:
             gb_until = int(self.db.get_global_backoff_until_ts())
             if gb_until and now_ts < gb_until:
                 reason = self.db.get_global_backoff_reason()
-                logging.info(f"SKIP_GLOBAL_BACKOFF symbol={symbol} until_ts={gb_until} reason={reason}")
+                if self._skip_log_allowed(symbol, "GLOBAL_BACKOFF", 30):
+                    logging.info(
+                        "SKIP_GLOBAL_BACKOFF symbol=%s until_ts=%s reason=%s",
+                        symbol,
+                        int(gb_until),
+                        str(reason),
+                    )
                 return
             if self.db.is_cooldown_active(symbol, now_ts=now_ts):
                 cd_until = self.db.get_cooldown_until_ts(symbol)
                 cd_reason = self.db.get_cooldown_reason(symbol)
-                logging.info(f"SKIP_COOLDOWN symbol={symbol} until_ts={cd_until} reason={cd_reason}")
+                if self._skip_log_allowed(symbol, "COOLDOWN", 30):
+                    logging.info(
+                        "SKIP_COOLDOWN symbol=%s until_ts=%s reason=%s",
+                        symbol,
+                        int(cd_until),
+                        str(cd_reason),
+                    )
                 return
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
-        # soft-mode price: żadnych nowych wejść
+        # soft-mode price: no new entries
         if self.gov.price_soft_mode():
             # Emit once per minute per symbol to avoid "silent stall" perception.
             try:
@@ -7795,7 +7820,8 @@ class StandardStrategy:
         trend_h4, _trend_d1, structure_h4 = self.get_trend(symbol, grp)
         if trend_h4 == "NEUTRAL":
             self._metric_inc_skip("TREND_NEUTRAL")
-            logging.info(f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=TREND_NEUTRAL")
+            if self._skip_log_allowed(symbol, "TREND_NEUTRAL", 60):
+                logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=TREND_NEUTRAL", symbol, grp, mode)
             return
 
         regime = "TREND"
@@ -8118,11 +8144,22 @@ class StandardStrategy:
             self.try_trade(symbol, grp, mode, info, signal, is_paper, ind=ind)
         else:
             self._metric_inc_skip("NO_SIGNAL")
-            logging.info(
-                f"ENTRY_SKIP symbol={symbol} grp={grp} mode={mode} reason=NO_SIGNAL "
-                f"trend_h4={trend_h4} structure_h4={structure_h4} regime={regime} signal_reason={signal_reason} "
-                f"close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} open={float(ind['open']):.6f} adx={adx_value:.2f}"
-            )
+            if self._skip_log_allowed(symbol, "NO_SIGNAL", 90):
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=NO_SIGNAL trend_h4=%s "
+                    "structure_h4=%s regime=%s signal_reason=%s close=%.6f sma=%.6f open=%.6f adx=%.2f",
+                    symbol,
+                    grp,
+                    mode,
+                    str(trend_h4),
+                    str(structure_h4),
+                    str(regime),
+                    str(signal_reason),
+                    float(ind["close"]),
+                    float(ind["sma"]),
+                    float(ind["open"]),
+                    float(adx_value),
+                )
 
 # =============================================================================
 # BOT
@@ -8472,13 +8509,13 @@ class SafetyBot:
 
             missing = required_cfg_missing_fields()
             if missing:
-                msg = "CRITICAL: Brak wymaganych pól konfiguracji: " + ", ".join(missing) + ". Uzupełnij CFG i uruchom bramki. SafetyBot nie startuje."
+                msg = "CRITICAL: Brak wymaganych pol konfiguracji: " + ", ".join(missing) + ". Uzupelnij CFG i uruchom bramki. SafetyBot nie startuje."
                 print(msg)
                 logging.getLogger("SafetyBot").error(msg)
                 raise SystemExit(3)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            print('CRITICAL: Nie można wczytać TOKEN/BotKey.env. SafetyBot nie startuje.')
+            print("CRITICAL: Nie mozna wczytac TOKEN/BotKey.env. SafetyBot nie startuje.")
             raise SystemExit(2)
         meta = _safe_read_json(self.runtime_root / 'RELEASE_META.json')
         release_id = (str(meta.get('release_id')) if isinstance(meta, dict) and meta.get('release_id') else 'UNKNOWN')
