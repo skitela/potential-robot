@@ -277,6 +277,7 @@ class CFG:
     cooldown_market_closed_s: int = 900
     cooldown_no_quotes_s: int = 120
     cooldown_limit_s: int = 900
+    cooldown_no_money_s: int = 600
 
     # --- Retry (P0 deterministic) ---
     retry_sleep_s: float = 0.20
@@ -292,6 +293,7 @@ class CFG:
     global_backoff_error_s: int = 60
     global_backoff_trade_disabled_s: int = 300
     global_backoff_locked_s: int = 30
+    global_backoff_no_money_s: int = 600
     execution_burst_guard_enabled: bool = True
     execution_burst_lookback_sec: int = 120
     execution_burst_error_threshold: int = 4
@@ -531,6 +533,19 @@ class CFG:
     metal_budget_pacing_phase1_ratio: float = 0.25
     metal_budget_pacing_phase2_ratio: float = 0.70
     metal_budget_pacing_slack: float = 0.05
+
+    # CRYPTO scoring guard (BTC/ETH): stricter than base FX/METAL gates.
+    crypto_signal_score_enabled: bool = True
+    crypto_signal_score_threshold: int = 78
+    crypto_signal_score_hot_relaxed_enabled: bool = True
+    crypto_signal_score_hot_relaxed_threshold: int = 74
+
+    # CRYPTO capital protection: lighter sizing + tighter margin/exposure controls.
+    crypto_major_risk_mult: float = 0.55
+    crypto_major_min_margin_free_pct: float = 0.45
+    crypto_major_max_open_positions: int = 1
+    crypto_no_money_backoff_s: int = 900
+    crypto_no_money_cooldown_s: int = 900
 
     # Self-heal guard (fast pause after local degradation; does not alter risk % policy).
     self_heal_enabled: bool = True
@@ -1210,6 +1225,11 @@ def _symbol_key(symbol: Optional[str]) -> str:
         return str(symbol_base(s)).upper()
     except Exception:
         return str(s).split(".", 1)[0].upper()
+
+
+def _is_crypto_major_symbol(symbol: Optional[str]) -> bool:
+    s = _symbol_key(symbol)
+    return bool(s in {"BTCUSD", "ETHUSD"})
 
 
 def _cfg_group_value(group: Optional[str], key: str, default: Any, symbol: Optional[str] = None) -> Any:
@@ -1945,6 +1965,16 @@ def metal_score_threshold_for_mode(mode: str) -> int:
     base_thr = int(max(0, int(getattr(CFG, "metal_signal_score_threshold", 76) or 76)))
     if bool(getattr(CFG, "metal_signal_score_hot_relaxed_enabled", True)) and str(mode).upper() == "HOT":
         hot_thr = int(max(0, int(getattr(CFG, "metal_signal_score_hot_relaxed_threshold", 70) or 70)))
+        return int(min(base_thr, hot_thr))
+    return int(base_thr)
+
+
+def crypto_score_threshold_for_mode(mode: str, symbol: Optional[str] = None) -> int:
+    base_default = int(max(0, int(getattr(CFG, "crypto_signal_score_threshold", 78) or 78)))
+    base_thr = int(max(0, _cfg_group_int("CRYPTO", "signal_score_threshold", base_default, symbol=symbol)))
+    if bool(getattr(CFG, "crypto_signal_score_hot_relaxed_enabled", True)) and str(mode).upper() == "HOT":
+        hot_default = int(max(0, int(getattr(CFG, "crypto_signal_score_hot_relaxed_threshold", 74) or 74)))
+        hot_thr = int(max(0, _cfg_group_int("CRYPTO", "signal_score_hot_relaxed_threshold", hot_default, symbol=symbol)))
         return int(min(base_thr, hot_thr))
     return int(base_thr)
 
@@ -5864,10 +5894,12 @@ class ExecutionEngine:
             10026: int(CFG.global_backoff_trade_disabled_s),
             10027: int(CFG.global_backoff_trade_disabled_s),
             10028: int(CFG.global_backoff_locked_s),  # only after max_retry_locked exhausted
+            10019: int(CFG.global_backoff_no_money_s),
         }
         symbol_cooldown_cfg = {
             10016: (int(CFG.cooldown_stops_too_close_s), "invalid_stops"),
             10018: (int(CFG.cooldown_market_closed_s), "market_closed"),
+            10019: (int(CFG.cooldown_no_money_s), "no_money"),
             10021: (int(CFG.cooldown_no_quotes_s), "no_quotes"),
             10022: (int(CFG.cooldown_limit_s), "invalid_expiration"),
             10030: (int(CFG.cooldown_trade_mode_s), "invalid_fill_mode"),
@@ -6114,6 +6146,44 @@ class ExecutionEngine:
                     f"acc_trade_allowed={int(account_trade_allowed)} acc_trade_expert={int(account_trade_expert)} "
                     f"term_trade_allowed={int(terminal_trade_allowed)} account_balance={account_balance} "
                     f"cooldown_until_ts={cd} backoff_until_ts={until}"
+                )
+                return res
+
+            # Insufficient margin guard for BTC/ETH: avoid repeated no-money churn.
+            if ret_num == 10019 and _is_crypto_major_symbol(symbol):
+                no_money_backoff_s = int(
+                    max(
+                        1,
+                        _cfg_group_int(
+                            grp,
+                            "no_money_backoff_s",
+                            int(getattr(CFG, "crypto_no_money_backoff_s", 900)),
+                            symbol=symbol,
+                        ),
+                    )
+                )
+                no_money_cd_s = int(
+                    max(
+                        1,
+                        _cfg_group_int(
+                            grp,
+                            "no_money_cooldown_s",
+                            int(getattr(CFG, "crypto_no_money_cooldown_s", 900)),
+                            symbol=symbol,
+                        ),
+                    )
+                )
+                until = int(time.time()) + int(no_money_backoff_s)
+                self.gov.db.set_global_backoff(until_ts=until, reason=f"no_money_crypto:{ret_num}:{ret_name}")
+                cd = self.gov.db.set_cooldown(symbol, int(no_money_cd_s), "no_money_crypto")
+                logging.warning(
+                    "NO_MONEY_GUARD symbol=%s grp=%s retcode_num=%s retcode_name=%s cooldown_until_ts=%s backoff_until_ts=%s",
+                    symbol,
+                    str(grp).upper(),
+                    int(ret_num),
+                    str(ret_name),
+                    int(cd),
+                    int(until),
                 )
                 return res
 
@@ -7052,6 +7122,33 @@ class StandardStrategy:
         bal_now = float(getattr(acc, "balance", 0.0) or 0.0)
         eq_now = float(getattr(acc, "equity", bal_now) or bal_now)
         margin_free = float(getattr(acc, "margin_free", 0.0) or 0.0)
+        if _is_crypto_major_symbol(symbol):
+            min_margin_free_pct = float(
+                max(
+                    0.0,
+                    min(
+                        0.95,
+                        _cfg_group_float(
+                            grp,
+                            "min_margin_free_pct",
+                            float(getattr(CFG, "crypto_major_min_margin_free_pct", 0.45)),
+                            symbol=symbol,
+                        ),
+                    ),
+                )
+            )
+            margin_free_pct = 0.0 if eq_now <= 0.0 else float(margin_free) / float(eq_now)
+            if margin_free_pct < float(min_margin_free_pct):
+                self._metric_inc_skip("CRYPTO_MARGIN_GUARD")
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=CRYPTO_MARGIN_GUARD margin_free_pct=%.4f min=%.4f",
+                    symbol,
+                    grp,
+                    mode,
+                    float(margin_free_pct),
+                    float(min_margin_free_pct),
+                )
+                return
 
         point = float(getattr(info, "point", 0.0) or 0.0)
         if point <= 0:
@@ -7095,6 +7192,30 @@ class StandardStrategy:
 
         soft_loss = (dd_pct >= float(self.config.risk['daily_loss_soft_pct']))
         risk_pct = self.risk_manager.get_risk_pct(mode, soft_loss)
+        if _is_crypto_major_symbol(symbol):
+            risk_mult = float(
+                max(
+                    0.05,
+                    min(
+                        1.0,
+                        _cfg_group_float(
+                            grp,
+                            "risk_multiplier",
+                            float(getattr(CFG, "crypto_major_risk_mult", 0.55)),
+                            symbol=symbol,
+                        ),
+                    ),
+                )
+            )
+            risk_pct = float(risk_pct) * float(risk_mult)
+            logging.info(
+                "CRYPTO_RISK_MULT symbol=%s grp=%s mode=%s risk_mult=%.3f risk_pct=%.6f",
+                symbol,
+                grp,
+                mode,
+                float(risk_mult),
+                float(risk_pct),
+            )
 
         risk_money = eq_now * risk_pct
         if risk_money <= 0:
@@ -7143,7 +7264,37 @@ class StandardStrategy:
             return
         
         our_positions = [p for p in positions if int(getattr(p, "magic", 0) or 0) == int(CFG.magic_number)]
-        
+        if _is_crypto_major_symbol(symbol):
+            max_major = int(
+                max(
+                    1,
+                    _cfg_group_int(
+                        grp,
+                        "max_open_positions",
+                        int(getattr(CFG, "crypto_major_max_open_positions", 1)),
+                        symbol=symbol,
+                    ),
+                )
+            )
+            open_major = int(
+                sum(
+                    1
+                    for p in our_positions
+                    if _is_crypto_major_symbol(getattr(p, "symbol", ""))
+                )
+            )
+            if open_major >= max_major:
+                self._metric_inc_skip("CRYPTO_EXPOSURE_GUARD")
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=CRYPTO_EXPOSURE_GUARD open_major=%s max_major=%s",
+                    symbol,
+                    grp,
+                    mode,
+                    int(open_major),
+                    int(max_major),
+                )
+                return
+
         if not self.risk_manager.check_portfolio_heat(our_positions, eq_now, symbol, risk_money, self.engine, self.db, grp):
             self._metric_inc_skip("PORTFOLIO_HEAT")
             logging.info("ENTRY_SKIP symbol=%s grp=%s mode=%s reason=PORTFOLIO_HEAT", symbol, grp, mode)
@@ -7844,6 +7995,69 @@ class StandardStrategy:
                             grp,
                             mode,
                             int(metal_score),
+                            int(min_score),
+                        )
+                        return
+
+            elif grp_u == "CRYPTO":
+                if bool(getattr(CFG, "crypto_signal_score_enabled", True)):
+                    spread_hint = float(getattr(info, "spread", 0.0) or 0.0)
+                    spread_p80 = float(self.db.get_p80_spread(symbol) or 0.0)
+                    crypto_score, crypto_parts = score_metal_entry_signal(
+                        symbol=symbol,
+                        grp=grp,
+                        mode=mode,
+                        signal=signal,
+                        signal_reason=signal_reason,
+                        trend_h4=trend_h4,
+                        structure_h4=structure_h4,
+                        regime=regime,
+                        close_price=float(ind["close"]),
+                        open_price=float(ind["open"]),
+                        high_price=float(ind.get("high")) if ind.get("high") is not None else None,
+                        low_price=float(ind.get("low")) if ind.get("low") is not None else None,
+                        sma_fast_value=float(ind["sma"]),
+                        adx_value=adx_value,
+                        atr_value=float(ind.get("atr")) if ind.get("atr") is not None else None,
+                        point=float(getattr(info, "point", 0.0) or 0.0),
+                        spread_points=spread_hint,
+                        spread_p80=spread_p80,
+                        execution_error_recent=exec_err_recent,
+                    )
+                    min_score = int(crypto_score_threshold_for_mode(mode, symbol=symbol))
+                    entry_score = int(crypto_score)
+                    entry_min_score = int(min_score)
+                    try:
+                        entry_spread_cap_points = float(crypto_parts.get("spread_cap_points", 0.0) or 0.0)
+                    except Exception:
+                        entry_spread_cap_points = None
+                    logging.info(
+                        "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
+                        "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f wick=%.2f",
+                        symbol,
+                        grp,
+                        mode,
+                        int(crypto_score),
+                        int(min_score),
+                        float(crypto_parts.get("A_regime_direction", 0.0)),
+                        float(crypto_parts.get("B_trigger", 0.0)),
+                        float(crypto_parts.get("C_cost", 0.0)),
+                        float(crypto_parts.get("D_volatility", 0.0)),
+                        float(crypto_parts.get("E_exec_risk", 0.0)),
+                        float(crypto_parts.get("spread_points", 0.0)),
+                        float(crypto_parts.get("spread_p80", 0.0)),
+                        float(crypto_parts.get("spread_cap_points", 0.0)),
+                        float(crypto_parts.get("atr_points", -1.0)),
+                        float(crypto_parts.get("wick_ratio", 0.0)),
+                    )
+                    if int(crypto_score) < int(min_score):
+                        self._metric_inc_skip("CRYPTO_SCORE_BELOW_THRESHOLD")
+                        logging.info(
+                            "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=CRYPTO_SCORE_BELOW_THRESHOLD score=%s min_score=%s",
+                            symbol,
+                            grp,
+                            mode,
+                            int(crypto_score),
                             int(min_score),
                         )
                         return
@@ -11142,6 +11356,8 @@ if __name__ == "__main__":
     )
     CFG.max_orders_per_minute = _cfg_int("max_orders_per_minute", CFG.max_orders_per_minute)
     CFG.max_orders_per_hour = _cfg_int("max_orders_per_hour", CFG.max_orders_per_hour)
+    CFG.cooldown_no_money_s = _cfg_int("cooldown_no_money_s", CFG.cooldown_no_money_s)
+    CFG.global_backoff_no_money_s = _cfg_int("global_backoff_no_money_s", CFG.global_backoff_no_money_s)
     CFG.fx_signal_score_enabled = _cfg_bool("fx_signal_score_enabled", CFG.fx_signal_score_enabled)
     CFG.fx_signal_score_threshold = _cfg_int("fx_signal_score_threshold", CFG.fx_signal_score_threshold)
     CFG.fx_signal_score_hot_relaxed_enabled = _cfg_bool(
@@ -11212,6 +11428,27 @@ if __name__ == "__main__":
         "metal_budget_pacing_phase2_ratio", CFG.metal_budget_pacing_phase2_ratio
     )
     CFG.metal_budget_pacing_slack = _cfg_float("metal_budget_pacing_slack", CFG.metal_budget_pacing_slack)
+    CFG.crypto_signal_score_enabled = _cfg_bool(
+        "crypto_signal_score_enabled", CFG.crypto_signal_score_enabled
+    )
+    CFG.crypto_signal_score_threshold = _cfg_int(
+        "crypto_signal_score_threshold", CFG.crypto_signal_score_threshold
+    )
+    CFG.crypto_signal_score_hot_relaxed_enabled = _cfg_bool(
+        "crypto_signal_score_hot_relaxed_enabled", CFG.crypto_signal_score_hot_relaxed_enabled
+    )
+    CFG.crypto_signal_score_hot_relaxed_threshold = _cfg_int(
+        "crypto_signal_score_hot_relaxed_threshold", CFG.crypto_signal_score_hot_relaxed_threshold
+    )
+    CFG.crypto_major_risk_mult = _cfg_float("crypto_major_risk_mult", CFG.crypto_major_risk_mult)
+    CFG.crypto_major_min_margin_free_pct = _cfg_float(
+        "crypto_major_min_margin_free_pct", CFG.crypto_major_min_margin_free_pct
+    )
+    CFG.crypto_major_max_open_positions = _cfg_int(
+        "crypto_major_max_open_positions", CFG.crypto_major_max_open_positions
+    )
+    CFG.crypto_no_money_backoff_s = _cfg_int("crypto_no_money_backoff_s", CFG.crypto_no_money_backoff_s)
+    CFG.crypto_no_money_cooldown_s = _cfg_int("crypto_no_money_cooldown_s", CFG.crypto_no_money_cooldown_s)
     CFG.usb_watch_check_interval_sec = _cfg_int(
         "usb_watch_check_interval_sec", CFG.usb_watch_check_interval_sec
     )
