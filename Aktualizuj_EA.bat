@@ -16,6 +16,13 @@ set "LOG_DIR=%ROOT%\LOGS"
 set "SERVER_NAME=OANDATMS-MT5"
 set "DIAG_BAT=%ROOT%\RUN_MT5_FULL_DIAGNOSTIC.bat"
 set "TERMINAL_DATA_DIR_FALLBACK=C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
+set "PY312_AVAILABLE=0"
+
+where py >nul 2>&1
+if "%ERRORLEVEL%"=="0" (
+  py -3.12 -c "import sys; print(sys.version_info[0])" >nul 2>&1
+  if "%ERRORLEVEL%"=="0" set "PY312_AVAILABLE=1"
+)
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 
@@ -156,6 +163,45 @@ if exist "%DIAG_BAT%" (
   )
 ) else (
   echo [WARN] Diagnostic script not found: %DIAG_BAT%
+)
+
+echo [STEP] Ensuring Wave-1 MT5 symbols are selected/visible (AUDJPY/NZDJPY)
+if exist "%ROOT%\TOOLS\mt5_symbol_select.py" (
+  if "%PY312_AVAILABLE%"=="1" (
+    py -3.12 "%ROOT%\TOOLS\mt5_symbol_select.py" --mt5-path "%TERMINAL_EXE%" --symbols AUDJPY NZDJPY --out "%ROOT%\RUN\mt5_symbol_select_report.json"
+  ) else (
+    python "%ROOT%\TOOLS\mt5_symbol_select.py" --mt5-path "%TERMINAL_EXE%" --symbols AUDJPY NZDJPY --out "%ROOT%\RUN\mt5_symbol_select_report.json"
+  )
+  if not "%ERRORLEVEL%"=="0" (
+    echo [WARN] Symbol select utility returned non-zero rc=%ERRORLEVEL%
+  )
+) else (
+  echo [WARN] Missing symbol-select utility: %ROOT%\TOOLS\mt5_symbol_select.py
+)
+
+echo [STEP] Refreshing symbols audit + preflight artifacts
+if exist "%ROOT%\TOOLS\audit_symbols_get_mt5.py" (
+  if "%PY312_AVAILABLE%"=="1" (
+    py -3.12 "%ROOT%\TOOLS\audit_symbols_get_mt5.py" --mt5-path "%TERMINAL_EXE%" --out "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json"
+  ) else (
+    python "%ROOT%\TOOLS\audit_symbols_get_mt5.py" --mt5-path "%TERMINAL_EXE%" --out "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json"
+  )
+  if exist "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json" (
+    copy /Y "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json" "%ROOT%\RUN\symbols_audit_now.json" >nul
+  )
+) else (
+  echo [WARN] Missing symbols audit tool: %ROOT%\TOOLS\audit_symbols_get_mt5.py
+)
+
+if exist "%ROOT%\TOOLS\generate_asia_preflight_evidence.py" (
+  python "%ROOT%\TOOLS\generate_asia_preflight_evidence.py"
+) else (
+  echo [WARN] Missing tool: %ROOT%\TOOLS\generate_asia_preflight_evidence.py
+)
+if exist "%ROOT%\TOOLS\no_live_drift_check.py" (
+  python "%ROOT%\TOOLS\no_live_drift_check.py"
+) else (
+  echo [WARN] Missing tool: %ROOT%\TOOLS\no_live_drift_check.py
 )
 
 echo [INFO] Symbols configured in CONFIG\strategy.json:

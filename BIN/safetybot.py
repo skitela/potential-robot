@@ -567,6 +567,42 @@ class CFG:
     canary_max_symbols_per_iter: int = 1
     canary_backoff_s: int = 900
 
+    # Hard Live Canary contract (execution/risk gates; no strategy/edge changes).
+    live_canary_enabled: bool = False
+    module_live_enabled_map: Dict[str, bool] = {
+        "FX": True,
+        "METAL": False,
+        "INDEX": False,
+        "CRYPTO": False,
+        "EQUITY": False,
+    }
+    live_canary_allowed_groups: Tuple[str, ...] = ("FX",)
+    live_canary_allowed_symbol_intents: Tuple[str, ...] = ("USDJPY", "EURJPY", "AUDJPY", "NZDJPY")
+    hard_live_disabled_groups: Tuple[str, ...] = ("CRYPTO", "METAL", "INDEX", "EQUITY")
+    hard_live_disabled_symbol_intents: Tuple[str, ...] = ("BTCUSD", "ETHUSD", "JP225", "GOLD")
+    hard_live_contract_file_name: str = "live_canary_contract.json"
+    no_live_drift_file_name: str = "no_live_drift_check.json"
+    # Cost gate policy for live canary.
+    cost_gate_policy_mode: str = "DIAGNOSTIC_ONLY"  # CANARY_ACTIVE / DIAGNOSTIC_ONLY / DISABLED
+    cost_gate_min_target_to_cost_ratio: float = 1.10
+    cost_gate_block_on_unknown_quality: bool = True
+    # Hard live limits / throttles.
+    max_daily_loss_account: float = 0.02
+    max_session_loss_account: float = 0.01
+    max_daily_loss_per_module: float = 0.008
+    max_consecutive_losses_per_module: int = 3
+    max_trades_per_window_per_module: int = 8
+    max_execution_anomalies_per_window: int = 4
+    max_ipc_failures_per_window: int = 4
+    max_reject_ratio_threshold: float = 0.50
+    max_reject_ratio_min_samples: int = 10
+    # JPY basket exposure guard (Wave-1).
+    jpy_basket_symbol_intents: Tuple[str, ...] = ("USDJPY", "EURJPY", "AUDJPY", "NZDJPY")
+    jpy_basket_max_concurrent_positions: int = 1
+    jpy_basket_max_risk_budget: float = 0.006
+    jpy_basket_selection_mode: str = "TOP_1"
+    jpy_basket_ranking_basis_for_top_k: str = "cost_execution_aware"
+
     # Drift guard (P2): online regime degradation detector.
     drift_guard_enabled: bool = True
     drift_min_samples: int = 30
@@ -3119,6 +3155,18 @@ class Persistence:
 def symbol_base(raw_symbol: str) -> str:
     return raw_symbol.split(".")[0]
 
+def canonical_symbol(symbol: str) -> str:
+    """Canonical symbol format for telemetry joins: BASE[.suffix-lower]."""
+    raw = str(symbol or "").strip()
+    if not raw:
+        return ""
+    if "." in raw:
+        base, suffix = raw.split(".", 1)
+        base_u = str(base).strip().upper()
+        suf_l = str(suffix).strip().lower()
+        return f"{base_u}.{suf_l}" if suf_l else base_u
+    return raw.upper()
+
 def symbol_alias_candidates(raw_symbol: str) -> List[str]:
     raw = str(raw_symbol or "").strip().upper()
     if not raw:
@@ -3201,7 +3249,7 @@ LEGACY_DB_NAMES = [
 ]
 
 # SQLite PRAGMA user_version target for decision_events.sqlite
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 SCOUT_MAX_BYTES = 256_000  # ochrona IO
@@ -7563,6 +7611,40 @@ class StandardStrategy:
 
         comment = f"SBOT-EVT-{event_id}" if event_id else f"MT5_SAFETY_BOT_{CFG.BOT_VERSION}"
         order_dev = int(max(1, _cfg_group_int(grp, "order_deviation_points", 20, symbol=symbol)))
+        spread_component_price = (float(spread_pts) * float(point)) if float(point) > 0.0 else None
+        expected_slippage_points = float(max(0.0, min(float(order_dev), float(max(0.0, float(spread_pts) * 0.25)))))
+        expected_slippage_price = (
+            float(expected_slippage_points) * float(point) if float(point) > 0.0 else None
+        )
+        estimated_entry_cost_components = {
+            "spread_points": float(spread_pts),
+            "spread_cost_price": spread_component_price,
+            "expected_slippage_points": float(expected_slippage_points),
+            "expected_slippage_cost_price": expected_slippage_price,
+            "commission_estimate": None,
+            "fee_estimate": None,
+            "cost_units": "price_and_points",
+            "cost_currency_basis": "SYMBOL_QUOTE_OR_UNKNOWN",
+            "cost_estimation_quality": "PARTIAL",
+            "calibration_status": "HYPOTHESIS_DEFAULT",
+        }
+        estimated_round_trip_cost = {
+            "value_price": (
+                float(2.0 * ((spread_component_price or 0.0) + (expected_slippage_price or 0.0)))
+                if spread_component_price is not None
+                else None
+            ),
+            "unit": "price",
+            "cost_estimation_quality": ("PARTIAL" if spread_component_price is not None else "UNKNOWN"),
+            "calibration_status": "HYPOTHESIS_DEFAULT",
+        }
+        target_move_price = float(abs(float(tp) - float(price)))
+        cost_feasible_shadow = None
+        if estimated_round_trip_cost.get("value_price") is not None:
+            try:
+                cost_feasible_shadow = bool(float(target_move_price) > float(estimated_round_trip_cost.get("value_price") or 0.0))
+            except Exception:
+                cost_feasible_shadow = None
 
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -7577,6 +7659,16 @@ class StandardStrategy:
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
+            "spread_at_decision_points": float(spread_pts),
+            "spread_at_decision_unit": "points",
+            "spread_at_decision_provenance": "python.strategy.tick_snapshot",
+            "estimated_entry_cost_components": estimated_entry_cost_components,
+            "estimated_round_trip_cost": estimated_round_trip_cost,
+            "cost_feasibility_shadow": cost_feasible_shadow,
+            "target_move_price": float(target_move_price),
+            "cost_gate_policy_mode": str(getattr(CFG, "cost_gate_policy_mode", "DIAGNOSTIC_ONLY")),
+            "net_cost_feasible": (None if cost_feasible_shadow is None else bool(cost_feasible_shadow)),
+            "cost_gate_reason_code": "NONE",
         }
 
         if is_paper:
@@ -7584,6 +7676,88 @@ class StandardStrategy:
             return
 
         res = self._dispatch_order(symbol, grp, req, emergency=False)
+        et_symbol_canon = canonical_symbol(symbol)
+        et_msg_id = str(getattr(res, "message_id", "") or "")
+        et_request_price = float(getattr(res, "request_price", float(price)) or 0.0) if res is not None else float(price)
+        et_fill_price = float(getattr(res, "executed_price", 0.0) or 0.0) if res is not None else 0.0
+        et_slippage_abs = getattr(res, "slippage_abs_price", None) if res is not None else None
+        et_slippage_points = getattr(res, "slippage_points", None) if res is not None else None
+        et_slippage_ticks = getattr(res, "slippage_ticks", None) if res is not None else None
+        et_retcode = int(getattr(res, "retcode", 0) or 0) if res is not None else 0
+        et_record = {
+            "event_type": "EXECUTION_RESULT",
+            "correlation_id": et_msg_id,
+            "request_id": str(getattr(res, "request_id", et_msg_id) if res is not None else et_msg_id),
+            "command_id": str(getattr(res, "command_id", et_msg_id) if res is not None else et_msg_id),
+            "message_id": et_msg_id,
+            "symbol_raw": str(symbol),
+            "symbol_canonical": et_symbol_canon,
+            "group": str(grp_u),
+            "request_price": float(et_request_price),
+            "fill_price": float(et_fill_price) if et_fill_price > 0.0 else None,
+            "spread_at_decision": float(spread_pts),
+            "spread_unit": "points",
+            "spread_provenance": "python.strategy.tick_snapshot",
+            "slippage_abs_price": (float(et_slippage_abs) if et_slippage_abs is not None else None),
+            "slippage_points": (float(et_slippage_points) if et_slippage_points is not None else None),
+            "slippage_ticks": (float(et_slippage_ticks) if et_slippage_ticks is not None else None),
+            "deviation_requested_points": int(order_dev),
+            "deviation_effective_points": int(getattr(res, "deviation_effective_points", 0) or 0) if res is not None else None,
+            "deviation_expected_points": int(order_dev),
+            "deviation_unit": "points",
+            "retcode": int(et_retcode),
+            "retcode_name": (_retcode_name(int(et_retcode)) if et_retcode else "UNKNOWN"),
+            "cost_estimation_quality": str(
+                getattr(res, "cost_estimation_quality", estimated_entry_cost_components.get("cost_estimation_quality", "UNKNOWN"))
+                if res is not None
+                else estimated_entry_cost_components.get("cost_estimation_quality", "UNKNOWN")
+            ),
+            "estimated_entry_cost_components": estimated_entry_cost_components,
+            "estimated_round_trip_cost": estimated_round_trip_cost,
+            "cost_feasibility_shadow": cost_feasible_shadow,
+            "cost_feasibility_mode": str(
+                getattr(res, "cost_gate_policy_mode", getattr(CFG, "cost_gate_policy_mode", "DIAGNOSTIC_ONLY"))
+                if res is not None
+                else getattr(CFG, "cost_gate_policy_mode", "DIAGNOSTIC_ONLY")
+            ).lower(),
+            "net_cost_feasible": (
+                getattr(res, "net_cost_feasible", (None if cost_feasible_shadow is None else bool(cost_feasible_shadow)))
+                if res is not None
+                else (None if cost_feasible_shadow is None else bool(cost_feasible_shadow))
+            ),
+            "cost_gate_reason_code": str(getattr(res, "cost_gate_reason_code", "NONE") if res is not None else "NONE"),
+            "target_move_price": float(target_move_price),
+            "cost_feasibility_payload_echo": (getattr(res, "cost_feasibility_shadow", None) if res is not None else None),
+            "realized_cost_components": (
+                dict(getattr(res, "realized_cost_components", {}) or {}) if res is not None else {}
+            ),
+            "timezone_basis": "UTC",
+            "exact_window": "runtime_event",
+            "source_list": ["python.safetybot", "python.zmq_bridge", "mql5.hybrid_agent"],
+            "symbol_filter": str(et_symbol_canon),
+            "method": "dispatch_result",
+            "sample_size_n": 1,
+            "low_stat_power": True,
+        }
+        if res is not None:
+            try:
+                dev_eff_pts = int(getattr(res, "deviation_effective_points", 0) or 0)
+                if dev_eff_pts > int(order_dev) * 4:
+                    self._emit_unit_diagnostic(
+                        parameter_name="deviation_effective_points",
+                        current_unit="points",
+                        expected_unit="points",
+                        risk_level="MED",
+                        details={
+                            "symbol": str(symbol),
+                            "deviation_expected_points": int(order_dev),
+                            "deviation_effective_points": int(dev_eff_pts),
+                            "retcode": int(et_retcode),
+                        },
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        self._append_execution_telemetry(et_record)
         if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
             self._metric_note_order_result(False, spread_points=float(spread_pts))
             logging.error(f"Order failed: {getattr(res, 'retcode', None)} {getattr(res, 'comment', '')}")
@@ -7777,6 +7951,33 @@ class StandardStrategy:
                 return
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        if bool(getattr(CFG, "policy_shadow_mode_enabled", True)):
+            sym_norm = canonical_symbol(symbol)
+            if (
+                sym_norm in self._asia_shadow_symbol_targets
+                and (not bool(self._asia_shadow_symbol_gate.get(sym_norm, False)))
+            ):
+                self._metric_inc_skip("ASIA_PREFLIGHT_BLOCK")
+                logging.warning(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=ASIA_PREFLIGHT_BLOCK preflight_ok=0",
+                    symbol,
+                    grp,
+                    mode,
+                )
+                self._append_execution_telemetry(
+                    {
+                        "event_type": "ASIA_PREFLIGHT_BLOCK",
+                        "symbol_raw": str(symbol),
+                        "symbol_canonical": sym_norm,
+                        "group": str(grp),
+                        "method": "preflight_gate",
+                        "sample_size_n": 1,
+                        "low_stat_power": True,
+                        "source_list": ["EVIDENCE/asia_symbol_preflight.json"],
+                    }
+                )
+                return
 
         # soft-mode price: no new entries
         if self.gov.price_soft_mode():
@@ -8470,6 +8671,23 @@ class SafetyBot:
         self.backups_dir = _paths["backups"]
         self.lock_dir = _paths["lock"]
         self.evidence_dir = _paths["evidence"]
+        self.execution_telemetry_path = self.logs_dir / "execution_telemetry_v2.jsonl"
+        self.asia_preflight_path = self.evidence_dir / "asia_symbol_preflight.json"
+        self.live_canary_contract_path = self.evidence_dir / str(
+            getattr(CFG, "hard_live_contract_file_name", "live_canary_contract.json")
+        )
+        self.no_live_drift_path = self.evidence_dir / str(
+            getattr(CFG, "no_live_drift_file_name", "no_live_drift_check.json")
+        )
+        self._asia_shadow_symbol_gate: Dict[str, bool] = {}
+        self._asia_shadow_symbol_targets: Set[str] = set()
+        self._live_canary_allowed_symbols: Set[str] = set()
+        self._hard_live_disabled_symbols: Set[str] = set()
+        self._live_module_states: Dict[str, str] = {}
+        self._live_module_state_reasons: Dict[str, List[str]] = {}
+        self._live_window_trade_counts: Dict[str, int] = {}
+        self._live_window_keys: Dict[str, str] = {}
+        self._live_guard_snapshot: Dict[str, Any] = {}
         self.manual_kill_switch_path = self.runtime_root / str(getattr(CFG, "manual_kill_switch_file", "RUN/kill_switch.flag"))
         self._last_manual_kill_log_ts = 0.0
         self._metrics_day_key = str(pl_day_key(now_utc()))
@@ -8585,6 +8803,7 @@ class SafetyBot:
         if not self.universe:
             logging.critical('Universe puste. SafetyBot kończy pracę.')
             raise SystemExit(1)
+        self._refresh_asia_preflight_evidence()
 
         # SafetyBot reads Scout outputs ONLY from local runtime (not from USB).
         snap_path = write_runtime_boot_snapshot(self.runtime_root, self.universe)
@@ -8601,6 +8820,695 @@ class SafetyBot:
             self.paper_start_ts = self.db.get_or_set_paper_start()
         else:
             self.paper_start_ts = 0.0
+        self._refresh_live_canary_contract()
+        self._refresh_no_live_drift_check(tw_ctx=trade_window_ctx(now_utc()))
+
+    def _append_jsonl_record(self, path: Path, payload: Dict[str, Any]) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            with open(path, "a", encoding="utf-8", newline="\n") as f:
+                f.write(line + "\n")
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _emit_unit_diagnostic(
+        self,
+        parameter_name: str,
+        current_unit: str,
+        expected_unit: str,
+        risk_level: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        evt = {
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "event_type": "UNIT_MISMATCH_RISK" if str(current_unit).strip() else "AMBIGUOUS_UNIT",
+            "parameter_name": str(parameter_name or ""),
+            "current_unit": str(current_unit or "AMBIGUOUS_UNIT"),
+            "expected_unit": str(expected_unit or "AMBIGUOUS_UNIT"),
+            "risk_level": str(risk_level or "LOW").upper(),
+            "source_provenance": "python.safetybot",
+            "details": dict(details or {}),
+        }
+        logging.warning(
+            "UNIT_DIAGNOSTIC event=%s parameter=%s current_unit=%s expected_unit=%s risk=%s details=%s",
+            evt["event_type"],
+            evt["parameter_name"],
+            evt["current_unit"],
+            evt["expected_unit"],
+            evt["risk_level"],
+            evt["details"],
+        )
+        self._append_jsonl_record(self.execution_telemetry_path, evt)
+
+    def _append_execution_telemetry(self, payload: Dict[str, Any]) -> None:
+        rec = dict(payload or {})
+        rec.setdefault("ts_utc", now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+        rec.setdefault("timestamp_semantics", "UTC")
+        rec.setdefault("source_provenance", "python.safetybot")
+        rec.setdefault("method", "event")
+        rec.setdefault("sample_size_n", 1)
+        rec.setdefault("low_stat_power", True)
+        self._append_jsonl_record(self.execution_telemetry_path, rec)
+
+    def _refresh_asia_preflight_evidence(self) -> None:
+        """Build deterministic symbol-preflight artifact for Asia shadow rollout decisions."""
+        intents_cfg = getattr(CFG, "asia_wave1_symbol_intents", ("USDJPY", "EURJPY", "AUDJPY", "NZDJPY", "JP225", "GOLD"))
+        intents: List[str] = []
+        seen_intents: Set[str] = set()
+        for raw_intent in (intents_cfg or ()):
+            key = str(raw_intent or "").strip().upper()
+            if key and key not in seen_intents:
+                seen_intents.add(key)
+                intents.append(key)
+        rows: List[Dict[str, Any]] = []
+        gate: Dict[str, bool] = {}
+        targets: Set[str] = set()
+        for intent in intents:
+            canon = self.resolve_canon_symbol(intent)
+            canon_norm = canonical_symbol(canon or "")
+            if canon_norm:
+                targets.add(canon_norm)
+            exists = bool(canon)
+            selected = False
+            visible = False
+            tradable = "UNKNOWN"
+            select_attempted = False
+            select_result = "UNKNOWN"
+            fail_reason = ""
+            info = None
+            if exists and mt5 is not None:
+                try:
+                    info = mt5.symbol_info(canon)
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                    info = None
+                if info is None:
+                    try:
+                        select_attempted = True
+                        select_result = "OK" if bool(mt5.symbol_select(canon, True)) else "FAIL"
+                        info = mt5.symbol_info(canon)
+                    except Exception as e:
+                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        select_result = "EXCEPTION"
+                        info = None
+            if info is not None:
+                try:
+                    selected = bool(getattr(info, "select", False))
+                except Exception:
+                    selected = False
+                try:
+                    visible = bool(getattr(info, "visible", False))
+                except Exception:
+                    visible = False
+                try:
+                    tradable = _trade_mode_name(int(getattr(info, "trade_mode", -1)))
+                except Exception:
+                    tradable = "UNKNOWN"
+            else:
+                if not exists:
+                    fail_reason = "SYMBOL_NOT_RESOLVED"
+                elif select_attempted and select_result != "OK":
+                    fail_reason = "SYMBOL_SELECT_FAIL"
+                else:
+                    fail_reason = "SYMBOL_INFO_UNAVAILABLE"
+            preflight_ok = bool(exists and selected and visible and tradable in ("FULL", "LONGONLY", "SHORTONLY"))
+            if canon_norm:
+                gate[canon_norm] = preflight_ok
+            rows.append(
+                {
+                    "alias_intent": intent,
+                    "raw_symbol": intent,
+                    "canonical_symbol": canon or "",
+                    "canonical_symbol_norm": canon_norm or "",
+                    "exists": bool(exists),
+                    "selected": bool(selected),
+                    "visible": bool(visible),
+                    "tradable": str(tradable),
+                    "session_info_available": "UNKNOWN",
+                    "symbol_select_attempted": bool(select_attempted),
+                    "symbol_select_result": str(select_result),
+                    "preflight_ok": bool(preflight_ok),
+                    "fail_reason": fail_reason or "",
+                    "source": ("RUNTIME_MT5" if mt5 is not None else "UNKNOWN"),
+                    "confidence": ("HIGH" if info is not None else ("MED" if exists else "LOW")),
+                }
+            )
+        report = {
+            "schema_version": "2R.A1",
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "timezone_basis": "UTC",
+            "window_basis": "N/A",
+            "source_list": ["python.runtime.mt5_symbol_info" if mt5 is not None else "UNKNOWN"],
+            "method": "startup_preflight",
+            "sample_size_n": int(len(rows)),
+            "low_stat_power": bool(len(rows) < 5),
+            "rows": rows,
+        }
+        self._asia_shadow_symbol_gate = gate
+        self._asia_shadow_symbol_targets = targets
+        try:
+            atomic_write_json(self.asia_preflight_path, report)
+            logging.info("ASIA_PREFLIGHT_EVIDENCE path=%s symbols=%s", self.asia_preflight_path, int(len(rows)))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _resolve_intents_to_canonical(self, intents: Tuple[str, ...]) -> Set[str]:
+        out: Set[str] = set()
+        for raw in (intents or ()):
+            intent = str(raw or "").strip().upper()
+            if not intent:
+                continue
+            canon = self.resolve_canon_symbol(intent)
+            if canon:
+                out.add(canonical_symbol(canon))
+            else:
+                out.add(canonical_symbol(intent))
+        return out
+
+    def _refresh_live_canary_contract(self) -> None:
+        groups = {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}
+        module_map_raw = dict(getattr(CFG, "module_live_enabled_map", {}) or {})
+        module_map: Dict[str, bool] = {}
+        for g in sorted(groups):
+            module_map[g] = bool(module_map_raw.get(g, False))
+
+        allowed_groups = {
+            _group_key(str(g))
+            for g in (getattr(CFG, "live_canary_allowed_groups", ()) or ())
+            if str(g).strip()
+        }
+        hard_groups = {
+            _group_key(str(g))
+            for g in (getattr(CFG, "hard_live_disabled_groups", ()) or ())
+            if str(g).strip()
+        }
+        self._live_canary_allowed_symbols = self._resolve_intents_to_canonical(
+            tuple(getattr(CFG, "live_canary_allowed_symbol_intents", ()) or ())
+        )
+        self._hard_live_disabled_symbols = self._resolve_intents_to_canonical(
+            tuple(getattr(CFG, "hard_live_disabled_symbol_intents", ()) or ())
+        )
+
+        rows: List[Dict[str, Any]] = []
+        universe_rows = list(getattr(self, "universe", []) or [])
+        for raw, sym, grp in universe_rows:
+            grp_u = _group_key(grp)
+            sym_canon = canonical_symbol(sym)
+            module_live_enabled = bool(module_map.get(grp_u, False))
+            symbol_live_enabled = True
+            reason = "NONE"
+            if not bool(getattr(CFG, "live_canary_enabled", False)):
+                symbol_live_enabled = False
+                reason = "LIVE_CANARY_DISABLED"
+            elif grp_u in hard_groups:
+                symbol_live_enabled = False
+                reason = "HARD_LIVE_DISABLED_GROUP"
+            elif sym_canon in self._hard_live_disabled_symbols:
+                symbol_live_enabled = False
+                reason = "HARD_LIVE_DISABLED_SYMBOL"
+            elif grp_u not in allowed_groups:
+                symbol_live_enabled = False
+                reason = "GROUP_NOT_IN_WAVE1"
+            elif not module_live_enabled:
+                symbol_live_enabled = False
+                reason = "MODULE_LIVE_DISABLED"
+            elif self._live_canary_allowed_symbols and sym_canon not in self._live_canary_allowed_symbols:
+                symbol_live_enabled = False
+                reason = "SYMBOL_NOT_IN_WAVE1"
+            elif (
+                sym_canon in self._asia_shadow_symbol_targets
+                and (not bool(self._asia_shadow_symbol_gate.get(sym_canon, False)))
+            ):
+                symbol_live_enabled = False
+                reason = "ASIA_PREFLIGHT_BLOCK"
+            rows.append(
+                {
+                    "symbol_raw": str(sym),
+                    "symbol_canonical": sym_canon,
+                    "group": grp_u,
+                    "module_live_enabled": bool(module_live_enabled),
+                    "symbol_live_enabled": bool(symbol_live_enabled),
+                    "hard_live_disabled_reason": str(reason),
+                }
+            )
+
+        payload = {
+            "schema_version": "HL.A1",
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "live_canary_enabled": bool(getattr(CFG, "live_canary_enabled", False)),
+            "module_live_enabled_map": module_map,
+            "live_canary_allowed_groups": sorted(allowed_groups),
+            "live_canary_allowed_symbols": sorted(self._live_canary_allowed_symbols),
+            "hard_live_disabled_groups": sorted(hard_groups),
+            "hard_live_disabled_symbols": sorted(self._hard_live_disabled_symbols),
+            "jpy_basket_symbol_set": sorted(
+                self._resolve_intents_to_canonical(tuple(getattr(CFG, "jpy_basket_symbol_intents", ()) or ()))
+            ),
+            "jpy_basket_selection_mode": str(getattr(CFG, "jpy_basket_selection_mode", "TOP_1")),
+            "jpy_basket_ranking_basis_for_top_k": str(getattr(CFG, "jpy_basket_ranking_basis_for_top_k", "")),
+            "rows": rows,
+            "calibration_status": {
+                "module_live_enabled_map": "HYPOTHESIS_DEFAULT",
+                "live_canary_allowed_symbols": "CALIBRATED",
+                "hard_live_disabled_symbols": "HYPOTHESIS_DEFAULT",
+            },
+        }
+        self._live_guard_snapshot = payload
+        try:
+            atomic_write_json(self.live_canary_contract_path, payload)
+            logging.info(
+                "LIVE_CANARY_CONTRACT path=%s enabled=%s rows=%s",
+                str(self.live_canary_contract_path),
+                int(bool(payload.get("live_canary_enabled"))),
+                int(len(rows)),
+            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _live_entry_contract(self, symbol: str, group: str) -> Dict[str, Any]:
+        grp_u = _group_key(group)
+        sym_canon = canonical_symbol(symbol)
+        module_map = dict(getattr(CFG, "module_live_enabled_map", {}) or {})
+        allowed_groups = {
+            _group_key(str(g))
+            for g in (getattr(CFG, "live_canary_allowed_groups", ()) or ())
+            if str(g).strip()
+        }
+        hard_groups = {
+            _group_key(str(g))
+            for g in (getattr(CFG, "hard_live_disabled_groups", ()) or ())
+            if str(g).strip()
+        }
+        state = str(self._live_module_states.get(grp_u, "NORMAL")).upper()
+        reasons = list(self._live_module_state_reasons.get(grp_u, []) or [])
+        if self.is_paper:
+            return {
+                "entry_allowed": True,
+                "reason_code": "PAPER_MODE",
+                "module_live_enabled": True,
+                "symbol_live_enabled": True,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        if not bool(getattr(CFG, "live_canary_enabled", False)):
+            return {
+                "entry_allowed": False,
+                "reason_code": "LIVE_CANARY_DISABLED",
+                "module_live_enabled": False,
+                "symbol_live_enabled": False,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        if grp_u in hard_groups:
+            return {
+                "entry_allowed": False,
+                "reason_code": "HARD_LIVE_DISABLED_GROUP",
+                "module_live_enabled": False,
+                "symbol_live_enabled": False,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        if sym_canon in self._hard_live_disabled_symbols:
+            return {
+                "entry_allowed": False,
+                "reason_code": "HARD_LIVE_DISABLED_SYMBOL",
+                "module_live_enabled": bool(module_map.get(grp_u, False)),
+                "symbol_live_enabled": False,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        module_live_enabled = bool(module_map.get(grp_u, False))
+        if (allowed_groups and grp_u not in allowed_groups) or (not module_live_enabled):
+            return {
+                "entry_allowed": False,
+                "reason_code": ("GROUP_NOT_IN_WAVE1" if allowed_groups and grp_u not in allowed_groups else "MODULE_LIVE_DISABLED"),
+                "module_live_enabled": bool(module_live_enabled),
+                "symbol_live_enabled": False,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        if self._live_canary_allowed_symbols and sym_canon not in self._live_canary_allowed_symbols:
+            return {
+                "entry_allowed": False,
+                "reason_code": "SYMBOL_NOT_IN_WAVE1",
+                "module_live_enabled": bool(module_live_enabled),
+                "symbol_live_enabled": False,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        if (
+            sym_canon in self._asia_shadow_symbol_targets
+            and (not bool(self._asia_shadow_symbol_gate.get(sym_canon, False)))
+        ):
+            return {
+                "entry_allowed": False,
+                "reason_code": "ASIA_PREFLIGHT_BLOCK",
+                "module_live_enabled": bool(module_live_enabled),
+                "symbol_live_enabled": False,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        if state in {"OFF", "RESTRICTED"}:
+            return {
+                "entry_allowed": False,
+                "reason_code": f"MODULE_STATE_{state}",
+                "module_live_enabled": bool(module_live_enabled),
+                "symbol_live_enabled": True,
+                "module_state": state,
+                "module_state_reasons": reasons,
+                "symbol_canonical": sym_canon,
+            }
+        return {
+            "entry_allowed": True,
+            "reason_code": "NONE",
+            "module_live_enabled": bool(module_live_enabled),
+            "symbol_live_enabled": True,
+            "module_state": state,
+            "module_state_reasons": reasons,
+            "symbol_canonical": sym_canon,
+        }
+
+    def _window_start_utc(self, tw_ctx: Dict[str, Any], now_dt: dt.datetime) -> int:
+        phase = str(tw_ctx.get("phase") or "OFF").upper()
+        wid = str(tw_ctx.get("window_id") or "")
+        if phase not in {"ACTIVE", "CLOSEOUT"} or not wid:
+            return int(pl_day_start_utc_ts(now_dt))
+        tw = getattr(CFG, "trade_windows", {}) or {}
+        w = tw.get(wid) if isinstance(tw, dict) else None
+        if not isinstance(w, dict):
+            return int(pl_day_start_utc_ts(now_dt))
+        try:
+            tz = ZoneInfo(str(w.get("anchor_tz") or "Europe/Warsaw"))
+        except Exception:
+            tz = TZ_PL
+        local_now = now_dt.astimezone(tz)
+        start_hm = tuple(w.get("start_hm") or (0, 0))
+        end_hm = tuple(w.get("end_hm") or (0, 0))
+        s_h, s_m = int(start_hm[0]), int(start_hm[1])
+        e_h, e_m = int(end_hm[0]), int(end_hm[1])
+        start_local = local_now.replace(hour=s_h, minute=s_m, second=0, microsecond=0)
+        if (e_h, e_m) < (s_h, s_m) and (local_now.hour, local_now.minute) < (s_h, s_m):
+            start_local = start_local - dt.timedelta(days=1)
+        return int(start_local.astimezone(UTC).timestamp())
+
+    def _pnl_net_since_ts_group(self, start_ts: int, group: str) -> float:
+        grp = _group_key(group)
+        try:
+            cur = self.db.conn.cursor()
+            cur.execute(
+                """SELECT COALESCE(SUM(profit + commission + swap), 0.0)
+                   FROM deals_log WHERE time >= ? AND grp = ?""",
+                (int(start_ts), str(grp)),
+            )
+            row = cur.fetchone()
+            return float(row[0] or 0.0) if row else 0.0
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return 0.0
+
+    def _loss_streak_group(self, group: str, limit: int = 64) -> int:
+        grp = _group_key(group)
+        try:
+            cur = self.db.conn.cursor()
+            cur.execute(
+                """SELECT (profit + commission + swap) AS pnl_net
+                   FROM deals_log WHERE grp = ?
+                   ORDER BY time DESC LIMIT ?""",
+                (str(grp), int(max(1, limit))),
+            )
+            rows = cur.fetchall()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            rows = []
+        streak = 0
+        for row in rows:
+            try:
+                pnl = float(row[0] or 0.0)
+            except Exception:
+                pnl = 0.0
+            if pnl < 0.0:
+                streak += 1
+            else:
+                break
+        return int(streak)
+
+    def _count_ipc_failures_since(self, start_ts_utc: int, tail_lines: int = 4000) -> int:
+        path = self.logs_dir / "audit_trail.jsonl"
+        if not path.exists():
+            return 0
+        failure_events = {
+            "COMMAND_TIMEOUT",
+            "COMMAND_SEND_TIMEOUT",
+            "COMMAND_FAILED",
+            "REPLY_INVALID_JSON",
+            "REPLY_REQUEST_HASH_MISMATCH",
+            "REPLY_RESPONSE_HASH_MISMATCH",
+        }
+        count = 0
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            return 0
+        for ln in lines[-int(max(1, tail_lines)) :]:
+            try:
+                obj = json.loads(str(ln or "{}"))
+                ts_raw = str(obj.get("timestamp_utc") or "")
+                ts = 0
+                if ts_raw:
+                    ts = int(dt.datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp())
+                if ts and ts < int(start_ts_utc):
+                    continue
+                evt = str(obj.get("event_type_norm") or obj.get("event_type") or "").strip().upper()
+                if evt in failure_events:
+                    count += 1
+            except Exception:
+                continue
+        return int(count)
+
+    def _refresh_live_module_states(self, tw_ctx: Dict[str, Any], st: Dict[str, Any]) -> None:
+        groups = sorted({
+            _group_key(str(g))
+            for g in (getattr(CFG, "module_live_enabled_map", {}) or {}).keys()
+            if str(g).strip()
+        } or {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"})
+
+        now_dt = now_utc()
+        start_ts_pl = int(pl_day_start_utc_ts(now_dt))
+        start_ts_window = int(self._window_start_utc(tw_ctx, now_dt))
+        phase = str(tw_ctx.get("phase") or "OFF").upper()
+        window_id = str(tw_ctx.get("window_id") or "OFF")
+        window_key = f"{str(pl_day_key(now_dt))}:{phase}:{window_id}"
+
+        if not self.is_paper:
+            for g in groups:
+                if str(self._live_window_keys.get(g, "")) != window_key:
+                    self._live_window_keys[g] = str(window_key)
+                    self._live_window_trade_counts[g] = 0
+
+        acc = self.execution_engine.account_info()
+        bal_now = float(getattr(acc, "balance", 0.0) or 0.0) if acc is not None else 0.0
+        eq_now = float(getattr(acc, "equity", bal_now) or bal_now) if acc is not None else bal_now
+        pnl_today = float(self.db.pnl_net_since_ts(int(start_ts_pl)))
+        bal_start = float(bal_now - pnl_today)
+        if bal_start <= 0.0:
+            bal_start = float(max(1.0, bal_now))
+        dd_pct = max(0.0, (float(bal_start) - float(eq_now)) / float(bal_start)) if bal_start > 0.0 else 0.0
+        session_pnl = float(self.db.pnl_net_since_ts(int(start_ts_window)))
+
+        exec_metrics = self.execution_engine.metrics_snapshot()
+        retcodes = dict(exec_metrics.get("retcodes_day") or {})
+        total_exec_samples = int(sum(int(v) for v in retcodes.values())) if retcodes else 0
+        rejects = int(exec_metrics.get("rejects_day", 0) or 0)
+        reject_ratio = (float(rejects) / float(total_exec_samples)) if total_exec_samples > 0 else 0.0
+
+        lookback_sec = max(60, int(time.time()) - int(start_ts_window))
+        incident_counts = self.incident_journal.recent_counts(lookback_sec=lookback_sec) if self.incident_journal else {}
+        exec_anomalies = int((incident_counts or {}).get("error_or_worse", 0) or 0)
+        ipc_failures = int(self._count_ipc_failures_since(int(start_ts_window)))
+
+        out_states: Dict[str, str] = {}
+        out_reasons: Dict[str, List[str]] = {}
+        module_map = dict(getattr(CFG, "module_live_enabled_map", {}) or {})
+        max_daily_loss_account = float(max(0.0, getattr(CFG, "max_daily_loss_account", 0.0)))
+        max_session_loss_account = float(max(0.0, getattr(CFG, "max_session_loss_account", 0.0)))
+        max_daily_loss_module = float(max(0.0, getattr(CFG, "max_daily_loss_per_module", 0.0)))
+        max_consecutive = int(max(1, getattr(CFG, "max_consecutive_losses_per_module", 3)))
+        max_trades_window = int(max(1, getattr(CFG, "max_trades_per_window_per_module", 8)))
+        max_exec_anom = int(max(1, getattr(CFG, "max_execution_anomalies_per_window", 4)))
+        max_ipc = int(max(1, getattr(CFG, "max_ipc_failures_per_window", 4)))
+        max_reject_ratio = float(max(0.0, getattr(CFG, "max_reject_ratio_threshold", 1.0)))
+        max_reject_samples = int(max(1, getattr(CFG, "max_reject_ratio_min_samples", 10)))
+
+        for grp in groups:
+            reasons: List[str] = []
+            state = "NORMAL"
+            module_live = bool(module_map.get(grp, False))
+            if not module_live:
+                state = "OFF"
+                reasons.append("MODULE_LIVE_DISABLED")
+            if max_daily_loss_account > 0.0 and dd_pct >= max_daily_loss_account:
+                state = "OFF"
+                reasons.append("ACCOUNT_DAILY_LOSS")
+            if max_session_loss_account > 0.0 and session_pnl <= (-1.0 * max_session_loss_account * bal_start):
+                state = "OFF"
+                reasons.append("SESSION_LOSS")
+
+            module_pnl = float(self._pnl_net_since_ts_group(int(start_ts_pl), grp))
+            if max_daily_loss_module > 0.0 and module_pnl <= (-1.0 * max_daily_loss_module * bal_start):
+                state = "OFF"
+                reasons.append("MODULE_DAILY_LOSS")
+
+            if int(self._loss_streak_group(grp)) >= max_consecutive:
+                state = "OFF"
+                reasons.append("MODULE_LOSS_STREAK")
+
+            if state != "OFF":
+                tr_count = int(self._live_window_trade_counts.get(grp, 0))
+                if tr_count >= max_trades_window:
+                    state = "RESTRICTED"
+                    reasons.append("MODULE_TRADES_WINDOW_CAP")
+                if exec_anomalies >= max_exec_anom:
+                    state = "RESTRICTED"
+                    reasons.append("EXECUTION_ANOMALIES_CAP")
+                if ipc_failures >= max_ipc:
+                    state = "RESTRICTED"
+                    reasons.append("IPC_FAILURES_CAP")
+                if total_exec_samples >= max_reject_samples and reject_ratio >= max_reject_ratio:
+                    state = "RESTRICTED"
+                    reasons.append("REJECT_RATIO_CAP")
+                elif total_exec_samples >= max_reject_samples and reject_ratio >= (0.8 * max_reject_ratio):
+                    state = "REDUCE"
+                    reasons.append("REJECT_RATIO_HIGH")
+
+            if not reasons:
+                reasons.append("NONE")
+            out_states[grp] = str(state)
+            out_reasons[grp] = list(reasons)
+
+            prev_state = str(self._live_module_states.get(grp, "UNKNOWN"))
+            prev_reasons = list(self._live_module_state_reasons.get(grp, []))
+            if prev_state != state or prev_reasons != reasons:
+                logging.warning(
+                    "MODULE_STATE_CHANGE grp=%s prev=%s new=%s reasons=%s window_key=%s",
+                    grp,
+                    prev_state,
+                    state,
+                    ",".join(reasons),
+                    window_key,
+                )
+
+        self._live_module_states = out_states
+        self._live_module_state_reasons = out_reasons
+        self._live_guard_snapshot = {
+            "schema_version": "HL.A1.runtime",
+            "ts_utc": now_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "window_key": window_key,
+            "window_phase": phase,
+            "window_id": window_id,
+            "dd_pct": float(dd_pct),
+            "session_pnl": float(session_pnl),
+            "bal_start": float(bal_start),
+            "eq_now": float(eq_now),
+            "reject_ratio": float(reject_ratio),
+            "reject_samples": int(total_exec_samples),
+            "execution_anomalies": int(exec_anomalies),
+            "ipc_failures": int(ipc_failures),
+            "module_states": dict(out_states),
+            "module_state_reasons": dict(out_reasons),
+            "module_trade_counts": dict(self._live_window_trade_counts),
+        }
+
+    def _refresh_no_live_drift_check(self, tw_ctx: Dict[str, Any]) -> None:
+        rows: List[Dict[str, Any]] = []
+        for raw, sym, grp in (self.universe or []):
+            c = self._live_entry_contract(sym, grp)
+            rows.append(
+                {
+                    "symbol_raw": str(sym),
+                    "symbol_canonical": str(c.get("symbol_canonical") or canonical_symbol(sym)),
+                    "group": _group_key(grp),
+                    "entry_allowed": bool(c.get("entry_allowed", False)),
+                    "reason_code": str(c.get("reason_code") or "UNKNOWN"),
+                    "module_state": str(c.get("module_state") or "UNKNOWN"),
+                    "module_state_reasons": list(c.get("module_state_reasons") or []),
+                    "module_live_enabled": bool(c.get("module_live_enabled", False)),
+                    "symbol_live_enabled": bool(c.get("symbol_live_enabled", False)),
+                }
+            )
+        payload = {
+            "schema_version": "HL.A1",
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "live_canary_enabled": bool(getattr(CFG, "live_canary_enabled", False)),
+            "policy_shadow_mode_enabled": bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
+            "trade_window_phase": str(tw_ctx.get("phase") or "UNKNOWN"),
+            "trade_window_id": str(tw_ctx.get("window_id") or "UNKNOWN"),
+            "rows": rows,
+        }
+        try:
+            atomic_write_json(self.no_live_drift_path, payload)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _blocked_result_stub(self, *, retcode: int, comment: str, symbol: str, request: Dict[str, Any]) -> Any:
+        ctx = {
+            "message_id": "",
+            "command_id": "",
+            "request_id": "",
+            "symbol_raw": str(symbol),
+            "symbol_canonical": canonical_symbol(symbol),
+            "request_price": float(request.get("price", 0.0) or 0.0),
+            "deviation_requested_points": int(request.get("deviation") or request.get("deviation_points") or 0),
+            "timestamp_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+        }
+        return SimpleNamespace(
+            retcode=int(retcode),
+            comment=str(comment),
+            order=0,
+            deal=0,
+            request_context=ctx,
+            message_id="",
+            command_id="",
+            request_id="",
+            symbol_raw=str(symbol),
+            symbol_canonical=canonical_symbol(symbol),
+            request_price=float(ctx["request_price"]),
+            executed_price=0.0,
+            deviation_requested_points=int(ctx["deviation_requested_points"]),
+            deviation_effective_points=0,
+            point_size=0.0,
+            tick_size=0.0,
+            slippage_abs_price=None,
+            slippage_points=None,
+            slippage_ticks=None,
+            spread_at_decision=None,
+            spread_unit="UNKNOWN",
+            spread_provenance="python.live_gate",
+            estimated_entry_cost_components=dict(request.get("estimated_entry_cost_components") or {}),
+            estimated_round_trip_cost=dict(request.get("estimated_round_trip_cost") or {}),
+            cost_feasibility_shadow=request.get("cost_feasibility_shadow"),
+            net_cost_feasible=request.get("net_cost_feasible"),
+            cost_gate_policy_mode=str(request.get("cost_gate_policy_mode") or "DIAGNOSTIC_ONLY"),
+            cost_gate_reason_code=str(request.get("cost_gate_reason_code") or "NONE"),
+            realized_cost_components={},
+            cost_estimation_quality="UNKNOWN",
+            source_provenance="python.live_gate",
+            timestamp_utc=ctx["timestamp_utc"],
+            timestamp_semantics="UTC",
+        )
 
     def resolve_canon_symbol(self, raw_sym: str) -> Optional[str]:
         if raw_sym in self.resolved_symbols:
@@ -8890,6 +9798,236 @@ class SafetyBot:
         if action == mt5.TRADE_ACTION_DEAL and close_ticket <= 0:
             signal = "BUY" if request.get("type") == mt5.ORDER_TYPE_BUY else "SELL"
             grp_u = _group_key(grp)
+            live_contract = self._live_entry_contract(symbol, grp_u)
+            if not bool(live_contract.get("entry_allowed", False)):
+                reason_code = str(live_contract.get("reason_code") or "LIVE_CONTRACT_BLOCK")
+                logging.warning(
+                    "ENTRY_BLOCK_HARD_LIVE symbol=%s group=%s reason=%s module_state=%s module_reasons=%s",
+                    symbol,
+                    grp_u,
+                    reason_code,
+                    str(live_contract.get("module_state") or "UNKNOWN"),
+                    ",".join([str(x) for x in (live_contract.get("module_state_reasons") or [])]),
+                )
+                self._append_execution_telemetry(
+                    {
+                        "event_type": "ENTRY_BLOCK_HARD_LIVE",
+                        "symbol_raw": str(symbol),
+                        "symbol_canonical": str(live_contract.get("symbol_canonical") or canonical_symbol(symbol)),
+                        "group": str(grp_u),
+                        "reason_code": reason_code,
+                        "module_state": str(live_contract.get("module_state") or "UNKNOWN"),
+                        "module_state_reasons": list(live_contract.get("module_state_reasons") or []),
+                        "cost_gate_policy_mode": str(getattr(CFG, "cost_gate_policy_mode", "DIAGNOSTIC_ONLY")),
+                        "source_list": [str(self.live_canary_contract_path), str(self.no_live_drift_path)],
+                        "method": "hard_live_gate",
+                        "sample_size_n": 1,
+                        "low_stat_power": True,
+                    }
+                )
+                return self._blocked_result_stub(
+                    retcode=int(getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017)),
+                    comment=f"HARD_LIVE_BLOCK:{reason_code}",
+                    symbol=symbol,
+                    request=request,
+                )
+
+            # Hard throttle: per-window max trades per module.
+            grp_count = int(self._live_window_trade_counts.get(grp_u, 0))
+            grp_limit = int(max(1, getattr(CFG, "max_trades_per_window_per_module", 8)))
+            if grp_count >= grp_limit:
+                logging.warning(
+                    "ENTRY_BLOCK_THROTTLE symbol=%s group=%s reason=MODULE_TRADES_WINDOW_CAP count=%s limit=%s",
+                    symbol,
+                    grp_u,
+                    grp_count,
+                    grp_limit,
+                )
+                self._append_execution_telemetry(
+                    {
+                        "event_type": "ENTRY_BLOCK_THROTTLE",
+                        "symbol_raw": str(symbol),
+                        "symbol_canonical": canonical_symbol(symbol),
+                        "group": str(grp_u),
+                        "reason_code": "MODULE_TRADES_WINDOW_CAP",
+                        "current_value": int(grp_count),
+                        "limit_value": int(grp_limit),
+                        "method": "hard_live_throttle",
+                        "sample_size_n": 1,
+                        "low_stat_power": True,
+                    }
+                )
+                return self._blocked_result_stub(
+                    retcode=int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006)),
+                    comment="THROTTLE:MODULE_TRADES_WINDOW_CAP",
+                    symbol=symbol,
+                    request=request,
+                )
+
+            # Active cost gate in canary mode (no strategy mutation; execution feasibility only).
+            cost_mode = str(getattr(CFG, "cost_gate_policy_mode", "DIAGNOSTIC_ONLY") or "DIAGNOSTIC_ONLY").strip().upper()
+            if cost_mode == "CANARY_ACTIVE":
+                est_rt = request.get("estimated_round_trip_cost") if isinstance(request.get("estimated_round_trip_cost"), dict) else {}
+                est_comp = request.get("estimated_entry_cost_components") if isinstance(request.get("estimated_entry_cost_components"), dict) else {}
+                quality = str(
+                    est_comp.get("cost_estimation_quality")
+                    or est_rt.get("cost_estimation_quality")
+                    or "UNKNOWN"
+                ).upper()
+                cost_unknown = quality in {"UNKNOWN", "HEURISTIC", "PARTIAL"}
+                cost_value = est_rt.get("value_price")
+                target_move = request.get("target_move_price")
+                feasible_shadow = request.get("cost_feasibility_shadow")
+                ratio = None
+                try:
+                    if cost_value is not None and target_move is not None and float(cost_value) > 0.0:
+                        ratio = float(target_move) / float(cost_value)
+                except Exception:
+                    ratio = None
+                min_ratio = float(max(0.0, getattr(CFG, "cost_gate_min_target_to_cost_ratio", 1.10)))
+                block_reason = ""
+                if bool(getattr(CFG, "cost_gate_block_on_unknown_quality", True)) and cost_unknown:
+                    block_reason = "BLOCK_TRADE_COST_UNKNOWN"
+                elif feasible_shadow is False:
+                    block_reason = "BLOCK_TRADE_COST"
+                elif ratio is not None and ratio < min_ratio:
+                    block_reason = "BLOCK_TRADE_COST_RATIO"
+                if block_reason:
+                    logging.warning(
+                        "ENTRY_BLOCK_COST symbol=%s group=%s reason=%s quality=%s ratio=%s min_ratio=%.3f",
+                        symbol,
+                        grp_u,
+                        block_reason,
+                        quality,
+                        ("%.4f" % float(ratio)) if ratio is not None else "NA",
+                        float(min_ratio),
+                    )
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": "ENTRY_BLOCK_COST",
+                            "symbol_raw": str(symbol),
+                            "symbol_canonical": canonical_symbol(symbol),
+                            "group": str(grp_u),
+                            "reason_code": str(block_reason),
+                            "cost_gate_policy_mode": str(cost_mode),
+                            "cost_estimation_quality": str(quality),
+                            "cost_feasibility_shadow": feasible_shadow,
+                            "cost_target_to_estimated_ratio": ratio,
+                            "cost_ratio_min_required": float(min_ratio),
+                            "method": "cost_gate",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
+                    return self._blocked_result_stub(
+                        retcode=int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006)),
+                        comment=f"{block_reason}:{quality}",
+                        symbol=symbol,
+                        request=request,
+                    )
+
+            # JPY basket exposure cap (Wave-1).
+            sym_canon = canonical_symbol(symbol)
+            jpy_set = self._resolve_intents_to_canonical(
+                tuple(getattr(CFG, "jpy_basket_symbol_intents", ()) or ())
+            )
+            if sym_canon in jpy_set:
+                max_pos = int(max(1, getattr(CFG, "jpy_basket_max_concurrent_positions", 1)))
+                max_budget = float(max(0.0, getattr(CFG, "jpy_basket_max_risk_budget", 0.0)))
+                eq_now = 0.0
+                try:
+                    acc_info = self.execution_engine.account_info()
+                    eq_now = float(getattr(acc_info, "equity", 0.0) or 0.0) if acc_info is not None else 0.0
+                except Exception:
+                    eq_now = 0.0
+                positions = self.execution_engine.positions_get(emergency=False) or []
+                basket_positions = []
+                for p in positions:
+                    try:
+                        if int(getattr(p, "magic", 0) or 0) != int(CFG.magic_number):
+                            continue
+                        if canonical_symbol(str(getattr(p, "symbol", "") or "")) in jpy_set:
+                            basket_positions.append(p)
+                    except Exception:
+                        continue
+                if len(basket_positions) >= max_pos:
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": "ENTRY_BLOCK_BASKET",
+                            "symbol_raw": str(symbol),
+                            "symbol_canonical": str(sym_canon),
+                            "group": str(grp_u),
+                            "reason_code": "JPY_BASKET_MAX_POSITIONS",
+                            "basket_positions": int(len(basket_positions)),
+                            "basket_limit": int(max_pos),
+                            "selection_mode": str(getattr(CFG, "jpy_basket_selection_mode", "TOP_1")),
+                            "ranking_basis_for_top_k": str(getattr(CFG, "jpy_basket_ranking_basis_for_top_k", "")),
+                            "method": "jpy_basket_cap",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
+                    return self._blocked_result_stub(
+                        retcode=int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006)),
+                        comment="JPY_BASKET_MAX_POSITIONS",
+                        symbol=symbol,
+                        request=request,
+                    )
+                if max_budget > 0.0 and eq_now > 0.0:
+                    cur_risk = 0.0
+                    for p in basket_positions:
+                        try:
+                            p_sym = str(getattr(p, "symbol", "") or "")
+                            p_grp = guess_group(p_sym)
+                            p_info = self.execution_engine.symbol_info_cached(p_sym, p_grp, self.db)
+                            if p_info is None:
+                                continue
+                            tick_sz = float(getattr(p_info, "trade_tick_size", 0.0) or 0.0)
+                            tick_val = float(getattr(p_info, "trade_tick_value", 0.0) or 0.0)
+                            p_vol = float(getattr(p, "volume", 0.0) or 0.0)
+                            p_sl = float(getattr(p, "sl", 0.0) or 0.0)
+                            p_open = float(getattr(p, "price_open", 0.0) or 0.0)
+                            if tick_sz > 0.0 and tick_val > 0.0 and p_vol > 0.0 and p_sl > 0.0 and p_open > 0.0:
+                                cur_risk += float(abs(p_open - p_sl) / tick_sz) * float(tick_val) * float(p_vol)
+                        except Exception:
+                            continue
+                    req_risk = 0.0
+                    try:
+                        info_req = self.execution_engine.symbol_info_cached(symbol, grp_u, self.db)
+                        tick_sz = float(getattr(info_req, "trade_tick_size", 0.0) or 0.0) if info_req is not None else 0.0
+                        tick_val = float(getattr(info_req, "trade_tick_value", 0.0) or 0.0) if info_req is not None else 0.0
+                        vol_req = float(request.get("volume", 0.0) or 0.0)
+                        px_req = float(request.get("price", 0.0) or 0.0)
+                        sl_req = float(request.get("sl", 0.0) or 0.0)
+                        if tick_sz > 0.0 and tick_val > 0.0 and vol_req > 0.0 and px_req > 0.0 and sl_req > 0.0:
+                            req_risk = float(abs(px_req - sl_req) / tick_sz) * float(tick_val) * float(vol_req)
+                    except Exception:
+                        req_risk = 0.0
+                    budget_ratio = float((cur_risk + req_risk) / eq_now) if eq_now > 0.0 else 0.0
+                    if budget_ratio > max_budget:
+                        self._append_execution_telemetry(
+                            {
+                                "event_type": "ENTRY_BLOCK_BASKET",
+                                "symbol_raw": str(symbol),
+                                "symbol_canonical": str(sym_canon),
+                                "group": str(grp_u),
+                                "reason_code": "JPY_BASKET_RISK_BUDGET",
+                                "basket_risk_ratio_after": float(budget_ratio),
+                                "basket_risk_budget_limit": float(max_budget),
+                                "selection_mode": str(getattr(CFG, "jpy_basket_selection_mode", "TOP_1")),
+                                "ranking_basis_for_top_k": str(getattr(CFG, "jpy_basket_ranking_basis_for_top_k", "")),
+                                "method": "jpy_basket_cap",
+                                "sample_size_n": 1,
+                                "low_stat_power": True,
+                            }
+                        )
+                        return self._blocked_result_stub(
+                            retcode=int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006)),
+                            comment="JPY_BASKET_RISK_BUDGET",
+                            symbol=symbol,
+                            request=request,
+                        )
+
             risk_state = group_market_risk_state(grp_u)
             risk_entry_allowed = bool(risk_state.get("entry_allowed", True))
             risk_reason = str(risk_state.get("reason", "NONE"))
@@ -8913,12 +10051,37 @@ class SafetyBot:
                 int(bool(getattr(CFG, "policy_shadow_mode_enabled", True))),
             )
             logging.info(f"HYBRID_DISPATCH | DEAL over ZMQ symbol={symbol} signal={signal}")
+            req_dev_points = int(request.get("deviation") or request.get("deviation_points") or 0)
+            if req_dev_points <= 0:
+                req_dev_points = int(max(1, _cfg_group_int(grp_u, "order_deviation_points", 20, symbol=symbol)))
+                self._emit_unit_diagnostic(
+                    parameter_name="order_deviation_points",
+                    current_unit="AMBIGUOUS_UNIT",
+                    expected_unit="points",
+                    risk_level="MED",
+                    details={
+                        "symbol": str(symbol),
+                        "group": str(grp_u),
+                        "fallback_deviation_points": int(req_dev_points),
+                    },
+                )
             reply = self._send_trade_command(
                 signal=signal,
                 symbol=symbol,
                 volume=request.get("volume"),
                 sl_price=request.get("sl"),
                 tp_price=request.get("tp"),
+                request_price=float(request.get("price", 0.0) or 0.0),
+                deviation_points=int(req_dev_points),
+                spread_at_decision_points=request.get("spread_at_decision_points"),
+                spread_unit=str(request.get("spread_at_decision_unit") or "AMBIGUOUS_UNIT"),
+                spread_provenance=str(request.get("spread_at_decision_provenance") or "UNKNOWN"),
+                estimated_entry_cost_components=request.get("estimated_entry_cost_components"),
+                estimated_round_trip_cost=request.get("estimated_round_trip_cost"),
+                cost_feasibility_shadow=request.get("cost_feasibility_shadow"),
+                net_cost_feasible=request.get("net_cost_feasible"),
+                cost_gate_policy_mode=str(request.get("cost_gate_policy_mode") or getattr(CFG, "cost_gate_policy_mode", "DIAGNOSTIC_ONLY")),
+                cost_gate_reason_code=str(request.get("cost_gate_reason_code") or "NONE"),
                 magic=request.get("magic"),
                 comment=request.get("comment"),
                 group=grp_u,
@@ -8950,6 +10113,16 @@ class SafetyBot:
             order = _as_int(details.get("order"), default=0)
             deal = _as_int(details.get("deal"), default=0)
             comment = str(details.get("comment") or reply.get("error") or "")
+            request_ctx = reply.get("__request_context") if isinstance(reply.get("__request_context"), dict) else {}
+            request_price = float(details.get("request_price", request_ctx.get("request_price", 0.0)) or 0.0)
+            executed_price = float(details.get("executed_price", 0.0) or 0.0)
+            deviation_requested_points = _as_int(
+                details.get("deviation_requested_points"),
+                default=_as_int(request_ctx.get("deviation_requested_points"), default=0),
+            )
+            deviation_effective_points = _as_int(details.get("deviation_effective_points"), default=0)
+            point_size = float(details.get("point_size", 0.0) or 0.0)
+            tick_size = float(details.get("tick_size", 0.0) or 0.0)
 
             if status == "PROCESSED":
                 if retcode <= 0:
@@ -8987,14 +10160,88 @@ class SafetyBot:
                     comment,
                 )
 
+            try:
+                done_codes = {
+                    int(getattr(mt5, "TRADE_RETCODE_DONE", 10009)),
+                    int(getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)),
+                    int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008)),
+                }
+                if int(retcode) in done_codes:
+                    self._live_window_trade_counts[grp_u] = int(self._live_window_trade_counts.get(grp_u, 0)) + 1
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
             class ResultStub:
-                def __init__(self, rc: int, cm: str, ord_id: int, deal_id: int):
+                def __init__(
+                    self,
+                    rc: int,
+                    cm: str,
+                    ord_id: int,
+                    deal_id: int,
+                    req_ctx: Dict[str, Any],
+                    req_price: float,
+                    fill_price: float,
+                    dev_req: int,
+                    dev_eff: int,
+                    point_val: float,
+                    tick_val: float,
+                ):
                     self.retcode = int(rc)
                     self.comment = str(cm or "")
                     self.order = int(ord_id)
                     self.deal = int(deal_id)
+                    self.request_context = dict(req_ctx or {})
+                    self.message_id = str(self.request_context.get("message_id") or "")
+                    self.command_id = str(self.request_context.get("command_id") or self.message_id)
+                    self.request_id = str(self.request_context.get("request_id") or self.message_id)
+                    self.symbol_raw = str(self.request_context.get("symbol_raw") or symbol)
+                    self.symbol_canonical = str(self.request_context.get("symbol_canonical") or canonical_symbol(symbol))
+                    self.request_price = float(req_price or 0.0)
+                    self.executed_price = float(fill_price or 0.0)
+                    self.deviation_requested_points = int(dev_req)
+                    self.deviation_effective_points = int(dev_eff)
+                    self.point_size = float(point_val or 0.0)
+                    self.tick_size = float(tick_val or 0.0)
+                    self.spread_at_decision = self.request_context.get("spread_at_decision")
+                    self.spread_unit = str(self.request_context.get("spread_unit") or "UNKNOWN")
+                    self.spread_provenance = str(self.request_context.get("spread_provenance") or "UNKNOWN")
+                    self.estimated_entry_cost_components = dict(self.request_context.get("estimated_entry_cost_components") or {})
+                    self.estimated_round_trip_cost = dict(self.request_context.get("estimated_round_trip_cost") or {})
+                    self.cost_feasibility_shadow = self.request_context.get("cost_feasibility_shadow")
+                    self.net_cost_feasible = self.request_context.get("net_cost_feasible")
+                    self.cost_gate_policy_mode = str(self.request_context.get("cost_gate_policy_mode") or "DIAGNOSTIC_ONLY")
+                    self.cost_gate_reason_code = str(self.request_context.get("cost_gate_reason_code") or "NONE")
+                    self.timestamp_utc = str(self.request_context.get("timestamp_utc") or "")
+                    self.timestamp_semantics = str(self.request_context.get("timestamp_semantics") or "UTC")
+                    self.slippage_abs_price = None
+                    self.slippage_points = None
+                    self.slippage_ticks = None
+                    if self.request_price > 0.0 and self.executed_price > 0.0:
+                        self.slippage_abs_price = float(abs(self.executed_price - self.request_price))
+                    if self.slippage_abs_price is not None and self.point_size > 0.0:
+                        self.slippage_points = float(self.slippage_abs_price / self.point_size)
+                    if self.slippage_abs_price is not None and self.tick_size > 0.0:
+                        self.slippage_ticks = float(self.slippage_abs_price / self.tick_size)
+                    self.realized_cost_components = {
+                        "spread_component_points": self.spread_at_decision,
+                        "slippage_points": self.slippage_points,
+                        "slippage_abs_price": self.slippage_abs_price,
+                    }
+                    self.cost_estimation_quality = "PARTIAL"
 
-            return ResultStub(retcode, comment, order, deal)
+            return ResultStub(
+                retcode,
+                comment,
+                order,
+                deal,
+                request_ctx,
+                request_price,
+                executed_price,
+                deviation_requested_points,
+                deviation_effective_points,
+                point_size,
+                tick_size,
+            )
 
         # Fallback do standardowej kolejki/silnika dla innych akcji (np. SLTP modify)
         if getattr(self, "execution_queue", None) is not None:
@@ -10185,6 +11432,11 @@ class SafetyBot:
             f"| SYS used={st['sys_used']}/{self.gov.sys_trade_budget} + em={st['sys_em_used']}/{self.gov.sys_emergency} "
             f"| price_soft={self.gov.price_soft_mode()}"
         )
+        try:
+            self._refresh_live_module_states(tw_ctx=tw_ctx, st=st)
+            self._refresh_no_live_drift_check(tw_ctx=tw_ctx)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         # Trade windows gate:
         # - OFF: no training/scanning and no PRICE polling; keep minimal SYS safety reconciliation.
@@ -10833,6 +12085,40 @@ class SafetyBot:
             if cnt >= n_limit:
                 break
 
+            live_gate = self._live_entry_contract(sym, grp)
+            if not bool(live_gate.get("entry_allowed", False)):
+                self.strategy._metric_inc_skip(str(live_gate.get("reason_code") or "LIVE_GATE_BLOCK"))
+                logging.info(
+                    "ENTRY_SKIP_HARD_LIVE symbol=%s grp=%s reason=%s module_state=%s module_reasons=%s",
+                    sym,
+                    _group_key(grp),
+                    str(live_gate.get("reason_code") or "UNKNOWN"),
+                    str(live_gate.get("module_state") or "UNKNOWN"),
+                    ",".join([str(x) for x in (live_gate.get("module_state_reasons") or [])]),
+                )
+                self._append_execution_telemetry(
+                    {
+                        "event_type": "ENTRY_SKIP_HARD_LIVE",
+                        "symbol_raw": str(sym),
+                        "symbol_canonical": str(live_gate.get("symbol_canonical") or canonical_symbol(sym)),
+                        "group": str(_group_key(grp)),
+                        "reason_code": str(live_gate.get("reason_code") or "UNKNOWN"),
+                        "module_state": str(live_gate.get("module_state") or "UNKNOWN"),
+                        "module_state_reasons": list(live_gate.get("module_state_reasons") or []),
+                        "method": "live_contract_gate",
+                        "sample_size_n": 1,
+                        "low_stat_power": True,
+                        "source_list": [str(self.live_canary_contract_path), str(self.no_live_drift_path)],
+                        "timezone_basis": "UTC",
+                        "exact_window": str(
+                            f"{tw_ctx.get('phase') or 'UNKNOWN'}:{tw_ctx.get('window_id') or 'NONE'}"
+                        ),
+                        "symbol_filter": str(canonical_symbol(sym)),
+                    }
+                )
+                cnt += 1
+                continue
+
             # V1.10: jeśli jest już otwarta pozycja na symbolu, nie otwieraj kolejnej (bez świadomej decyzji).
             if sym in open_syms:
                 logging.debug(f"SKIP NEW ENTRY (open position) | {sym}")
@@ -10954,6 +12240,17 @@ class SafetyBot:
         volume: float,
         sl_price: float,
         tp_price: float,
+        request_price: float,
+        deviation_points: int,
+        spread_at_decision_points: Optional[float],
+        spread_unit: str,
+        spread_provenance: str,
+        estimated_entry_cost_components: Optional[Dict[str, Any]],
+        estimated_round_trip_cost: Optional[Dict[str, Any]],
+        cost_feasibility_shadow: Optional[bool],
+        net_cost_feasible: Optional[bool],
+        cost_gate_policy_mode: str,
+        cost_gate_reason_code: str,
         magic: int,
         comment: str,
         group: str = "",
@@ -10979,15 +12276,36 @@ class SafetyBot:
         command = {
             "action": "TRADE",
             "msg_id": str(uuid.uuid4()),
+            "command_id": "",
+            "request_id": "",
             "schema_version": "1.0",
             "policy_version": "runtime.v1",
+            "timestamp_semantics": "UTC",
             "payload": {
                 "signal": str(signal).upper(),
                 # Preserve broker symbol casing/suffix as resolved by MT5 (e.g. ".pro").
                 "symbol": str(symbol).strip(),
+                "symbol_raw": str(symbol).strip(),
+                "symbol_canonical": canonical_symbol(symbol),
                 "volume": _f(volume, 0.0),
                 "sl_price": _f(sl_price, 0.0),
                 "tp_price": _f(tp_price, 0.0),
+                "request_price": _f(request_price, 0.0),
+                "deviation_points": _i(deviation_points, 0),
+                "deviation_unit": "points",
+                "spread_at_decision": (
+                    None if spread_at_decision_points is None else _f(spread_at_decision_points, 0.0)
+                ),
+                "spread_unit": str(spread_unit or "AMBIGUOUS_UNIT"),
+                "spread_provenance": str(spread_provenance or "UNKNOWN"),
+                "estimated_entry_cost_components": dict(estimated_entry_cost_components or {}),
+                "estimated_round_trip_cost": dict(estimated_round_trip_cost or {}),
+                "cost_feasibility_shadow": (
+                    None if cost_feasibility_shadow is None else bool(cost_feasibility_shadow)
+                ),
+                "net_cost_feasible": (None if net_cost_feasible is None else bool(net_cost_feasible)),
+                "cost_gate_policy_mode": str(cost_gate_policy_mode or "DIAGNOSTIC_ONLY"),
+                "cost_gate_reason_code": str(cost_gate_reason_code or "NONE"),
                 "magic": _i(magic, 0),
                 "comment": str(comment),
                 "group": str(group or ""),
@@ -10998,13 +12316,26 @@ class SafetyBot:
                 "policy_shadow_mode": bool(policy_shadow_mode),
             }
         }
+        command["command_id"] = str(command["msg_id"])
+        command["request_id"] = str(command["msg_id"])
+        command["request_ts_utc"] = now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        command["request_ts_semantics"] = "UTC"
         command["request_hash"] = str(build_request_hash(command))
         logging.info(
-            "ZMQ_SEND | action=TRADE signal=%s symbol=%s volume=%.6f",
+            "ZMQ_SEND | action=TRADE signal=%s symbol=%s volume=%.6f deviation_points=%s",
             command["payload"]["signal"],
             command["payload"]["symbol"],
             float(command["payload"]["volume"]),
+            int(command["payload"]["deviation_points"]),
         )
+        if str(command["payload"].get("spread_unit") or "").strip().upper() in {"", "UNKNOWN", "AMBIGUOUS_UNIT"}:
+            self._emit_unit_diagnostic(
+                parameter_name="spread_at_decision",
+                current_unit=str(command["payload"].get("spread_unit") or "AMBIGUOUS_UNIT"),
+                expected_unit="points",
+                risk_level="HIGH",
+                details={"symbol": str(command["payload"].get("symbol") or ""), "phase": "send_trade_command"},
+            )
         reply = self.zmq_bridge.send_command(command)
         if not isinstance(reply, dict):
             logging.error("ZMQ_SEND_FAIL | No reply from MQL5 for TRADE command.")
@@ -11036,6 +12367,59 @@ class SafetyBot:
                 got_resp_hash,
             )
             return None
+        details_obj = reply.get("details") if isinstance(reply.get("details"), dict) else {}
+        try:
+            dev_req = int(details_obj.get("deviation_requested_points", 0) or 0)
+            dev_eff = int(details_obj.get("deviation_effective_points", 0) or 0)
+            expected_dev = int(command["payload"].get("deviation_points") or 0)
+            if dev_req > 0 and expected_dev > 0 and dev_req != expected_dev:
+                self._emit_unit_diagnostic(
+                    parameter_name="order_deviation_points",
+                    current_unit="points",
+                    expected_unit="points",
+                    risk_level="HIGH",
+                    details={
+                        "msg_id": str(command.get("msg_id") or ""),
+                        "symbol": str(command["payload"].get("symbol") or ""),
+                        "deviation_expected_points": expected_dev,
+                        "deviation_requested_points": dev_req,
+                    },
+                )
+            if dev_req > 0 and dev_eff > (dev_req * 4):
+                self._emit_unit_diagnostic(
+                    parameter_name="deviation_effective_points",
+                    current_unit="points",
+                    expected_unit="points",
+                    risk_level="MED",
+                    details={
+                        "msg_id": str(command.get("msg_id") or ""),
+                        "symbol": str(command["payload"].get("symbol") or ""),
+                        "deviation_requested_points": dev_req,
+                        "deviation_effective_points": dev_eff,
+                    },
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        reply["__request_context"] = {
+            "message_id": str(command.get("msg_id") or ""),
+            "command_id": str(command.get("command_id") or ""),
+            "request_id": str(command.get("request_id") or ""),
+            "symbol_raw": str(command["payload"].get("symbol_raw") or ""),
+            "symbol_canonical": str(command["payload"].get("symbol_canonical") or ""),
+            "request_price": _f(command["payload"].get("request_price"), 0.0),
+            "deviation_requested_points": _i(command["payload"].get("deviation_points"), 0),
+            "spread_at_decision": command["payload"].get("spread_at_decision"),
+            "spread_unit": str(command["payload"].get("spread_unit") or "UNKNOWN"),
+            "spread_provenance": str(command["payload"].get("spread_provenance") or "UNKNOWN"),
+            "estimated_entry_cost_components": dict(command["payload"].get("estimated_entry_cost_components") or {}),
+            "estimated_round_trip_cost": dict(command["payload"].get("estimated_round_trip_cost") or {}),
+            "cost_feasibility_shadow": command["payload"].get("cost_feasibility_shadow"),
+            "net_cost_feasible": command["payload"].get("net_cost_feasible"),
+            "cost_gate_policy_mode": str(command["payload"].get("cost_gate_policy_mode") or "DIAGNOSTIC_ONLY"),
+            "cost_gate_reason_code": str(command["payload"].get("cost_gate_reason_code") or "NONE"),
+            "timestamp_utc": str(command.get("request_ts_utc") or ""),
+            "timestamp_semantics": "UTC",
+        }
         logging.info(
             "ZMQ_REPLY | status=%s correlation_id=%s",
             str(reply.get("status") or "UNKNOWN"),
@@ -11676,6 +13060,91 @@ if __name__ == "__main__":
     CFG.learner_qa_red_to_eco = _cfg_bool("learner_qa_red_to_eco", CFG.learner_qa_red_to_eco)
     CFG.canary_rollout_enabled = _cfg_bool("canary_rollout_enabled", CFG.canary_rollout_enabled)
     CFG.canary_max_symbols_per_iter = _cfg_int("canary_max_symbols_per_iter", CFG.canary_max_symbols_per_iter)
+    CFG.live_canary_enabled = _cfg_bool("live_canary_enabled", CFG.live_canary_enabled)
+    CFG.cost_gate_policy_mode = str(
+        strategy_cfg.get("cost_gate_policy_mode", CFG.cost_gate_policy_mode) or CFG.cost_gate_policy_mode
+    ).strip().upper()
+    if CFG.cost_gate_policy_mode not in {"CANARY_ACTIVE", "DIAGNOSTIC_ONLY", "DISABLED"}:
+        CFG.cost_gate_policy_mode = "DIAGNOSTIC_ONLY"
+    CFG.cost_gate_min_target_to_cost_ratio = _cfg_float(
+        "cost_gate_min_target_to_cost_ratio", CFG.cost_gate_min_target_to_cost_ratio
+    )
+    CFG.cost_gate_block_on_unknown_quality = _cfg_bool(
+        "cost_gate_block_on_unknown_quality", CFG.cost_gate_block_on_unknown_quality
+    )
+    CFG.max_daily_loss_account = _cfg_float("max_daily_loss_account", CFG.max_daily_loss_account)
+    CFG.max_session_loss_account = _cfg_float("max_session_loss_account", CFG.max_session_loss_account)
+    CFG.max_daily_loss_per_module = _cfg_float("max_daily_loss_per_module", CFG.max_daily_loss_per_module)
+    CFG.max_consecutive_losses_per_module = _cfg_int(
+        "max_consecutive_losses_per_module", CFG.max_consecutive_losses_per_module
+    )
+    CFG.max_trades_per_window_per_module = _cfg_int(
+        "max_trades_per_window_per_module", CFG.max_trades_per_window_per_module
+    )
+    CFG.max_execution_anomalies_per_window = _cfg_int(
+        "max_execution_anomalies_per_window", CFG.max_execution_anomalies_per_window
+    )
+    CFG.max_ipc_failures_per_window = _cfg_int(
+        "max_ipc_failures_per_window", CFG.max_ipc_failures_per_window
+    )
+    CFG.max_reject_ratio_threshold = _cfg_float(
+        "max_reject_ratio_threshold", CFG.max_reject_ratio_threshold
+    )
+    CFG.max_reject_ratio_min_samples = _cfg_int(
+        "max_reject_ratio_min_samples", CFG.max_reject_ratio_min_samples
+    )
+    CFG.jpy_basket_max_concurrent_positions = _cfg_int(
+        "jpy_basket_max_concurrent_positions", CFG.jpy_basket_max_concurrent_positions
+    )
+    CFG.jpy_basket_max_risk_budget = _cfg_float(
+        "jpy_basket_max_risk_budget", CFG.jpy_basket_max_risk_budget
+    )
+    CFG.jpy_basket_selection_mode = str(
+        strategy_cfg.get("jpy_basket_selection_mode", CFG.jpy_basket_selection_mode) or CFG.jpy_basket_selection_mode
+    ).strip().upper()
+    CFG.jpy_basket_ranking_basis_for_top_k = str(
+        strategy_cfg.get("jpy_basket_ranking_basis_for_top_k", CFG.jpy_basket_ranking_basis_for_top_k)
+        or CFG.jpy_basket_ranking_basis_for_top_k
+    ).strip()
+    CFG.hard_live_contract_file_name = str(
+        strategy_cfg.get("hard_live_contract_file_name", CFG.hard_live_contract_file_name)
+        or CFG.hard_live_contract_file_name
+    ).strip()
+    CFG.no_live_drift_file_name = str(
+        strategy_cfg.get("no_live_drift_file_name", CFG.no_live_drift_file_name)
+        or CFG.no_live_drift_file_name
+    ).strip()
+    def _cfg_group_bool_map(name: str, fallback: Dict[str, bool]) -> Dict[str, bool]:
+        raw = strategy_cfg.get(name, None)
+        if raw is None:
+            return dict(fallback)
+        if not isinstance(raw, dict):
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: {name} must be object")
+        out: Dict[str, bool] = {}
+        for k, v in raw.items():
+            g = _group_key(str(k or ""))
+            if g not in {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}:
+                continue
+            out[g] = bool(v)
+        return dict(out) if out else dict(fallback)
+    CFG.module_live_enabled_map = _cfg_group_bool_map(
+        "module_live_enabled_map", dict(getattr(CFG, "module_live_enabled_map", {}) or {})
+    )
+    CFG.live_canary_allowed_groups = tuple(
+        _cfg_str_list("live_canary_allowed_groups", list(CFG.live_canary_allowed_groups))
+    )
+    CFG.live_canary_allowed_symbol_intents = tuple(
+        _cfg_str_list("live_canary_allowed_symbol_intents", list(CFG.live_canary_allowed_symbol_intents))
+    )
+    CFG.hard_live_disabled_groups = tuple(
+        _cfg_str_list("hard_live_disabled_groups", list(CFG.hard_live_disabled_groups))
+    )
+    CFG.hard_live_disabled_symbol_intents = tuple(
+        _cfg_str_list("hard_live_disabled_symbol_intents", list(CFG.hard_live_disabled_symbol_intents))
+    )
+    CFG.jpy_basket_symbol_intents = tuple(
+        _cfg_str_list("jpy_basket_symbol_intents", list(CFG.jpy_basket_symbol_intents))
+    )
     CFG.position_time_stop_enabled = _cfg_bool("position_time_stop_enabled", CFG.position_time_stop_enabled)
     CFG.position_time_stop_only_magic = _cfg_bool("position_time_stop_only_magic", CFG.position_time_stop_only_magic)
     CFG.position_time_stop_hot_min = _cfg_int("position_time_stop_hot_min", CFG.position_time_stop_hot_min)

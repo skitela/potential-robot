@@ -1,0 +1,30 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oanda://schemas/execution_comparison_contract_v1",
+  "title": "Execution Comparison Contract v1",
+  "type": "object",
+  "required": [
+    "exact_window",
+    "timezone_basis",
+    "source_list",
+    "symbol_filter",
+    "method",
+    "sample_size_n",
+    "low_stat_power"
+  ],
+  "properties": {
+    "exact_window": { "type": "string", "minLength": 1 },
+    "timezone_basis": { "type": "string", "enum": ["UTC", "MT5_SERVER_DERIVED", "WARSAW_DERIVED", "UNKNOWN"] },
+    "source_list": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "symbol_filter": { "type": "string", "minLength": 1 },
+    "method": { "type": "string", "minLength": 1 },
+    "sample_size_n": { "type": "integer", "minimum": 1 },
+    "low_stat_power": { "type": "boolean" },
+    "notes": { "type": "string" }
+  },
+  "additionalProperties": true
+}

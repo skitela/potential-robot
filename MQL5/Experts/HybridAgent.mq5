@@ -336,7 +336,8 @@ bool LoadPolicyRuntimeFile(string &error_msg)
 
   uchar bytes[];
   ArrayResize(bytes, sz);
-  int read_n = FileReadArray(fh, bytes, 0, sz);
+  uint read_u = FileReadArray(fh, bytes, 0, sz);
+  int read_n = (int)read_u;
   FileClose(fh);
   if(read_n <= 0)
   {
@@ -586,6 +587,29 @@ string BuildRequestHashTrade(
   double sl_price,
   double tp_price,
   long magic,
+  string comment,
+  int deviation_points
+)
+{
+  string sig = ToUpperAscii(action) + "|" + msg_id + "|" + ToUpperAscii(signal) + "|" + ToUpperAscii(symbol)
+    + "|" + NormFloat8(volume)
+    + "|" + NormFloat8(sl_price)
+    + "|" + NormFloat8(tp_price)
+    + "|" + NormInt(magic)
+    + "|" + comment
+    + "|" + NormInt(deviation_points);
+  return Fnv1a32Hex(sig);
+}
+
+string BuildRequestHashTradeLegacy(
+  string action,
+  string msg_id,
+  string signal,
+  string symbol,
+  double volume,
+  double sl_price,
+  double tp_price,
+  long magic,
   string comment
 )
 {
@@ -712,7 +736,13 @@ bool SendReplyEnvelope(
   string symbol,
   string error,
   string request_hash,
-  bool cache_reply = true
+  bool cache_reply = true,
+  double request_price = 0.0,
+  double executed_price = 0.0,
+  int deviation_requested_points = 0,
+  int deviation_effective_points = 0,
+  double point_size = 0.0,
+  double tick_size = 0.0
 )
 {
   string s_status = ToUpperAscii(status);
@@ -738,10 +768,14 @@ bool SendReplyEnvelope(
     s_req_hash
   );
 
+  string ts_utc = TimeToString(TimeGMT(), TIME_DATE | TIME_SECONDS) + "Z";
   string reply_fmt =
     "{\"status\":\"%s\",\"correlation_id\":\"%s\",\"action\":\"%s\",\"request_hash\":\"%s\","
-    + "\"details\":{\"retcode\":%d,\"retcode_str\":\"%s\",\"order\":%I64d,\"deal\":%I64d,\"comment\":\"%s\",\"symbol\":\"%s\"},"
-    + "\"error\":\"%s\",\"schema_version\":\"%s\",\"__v\":\"%s\",\"response_hash\":\"%s\"}";
+    + "\"details\":{\"retcode\":%d,\"retcode_str\":\"%s\",\"order\":%I64d,\"deal\":%I64d,\"comment\":\"%s\",\"symbol\":\"%s\","
+    + "\"request_price\":%.8f,\"executed_price\":%.8f,\"deviation_requested_points\":%d,\"deviation_effective_points\":%d,"
+    + "\"point_size\":%.8f,\"tick_size\":%.8f},"
+    + "\"error\":\"%s\",\"schema_version\":\"%s\",\"__v\":\"%s\",\"response_hash\":\"%s\","
+    + "\"timestamp_utc\":\"%s\",\"timestamp_semantics\":\"UTC\"}";
 
   string reply_json = StringFormat(
     reply_fmt,
@@ -755,10 +789,17 @@ bool SendReplyEnvelope(
     (long)deal_id,
     JsonEscape(s_comment),
     JsonEscape(s_symbol),
+    request_price,
+    executed_price,
+    deviation_requested_points,
+    deviation_effective_points,
+    point_size,
+    tick_size,
     JsonEscape(s_error),
     PROTOCOL_VERSION,
     PROTOCOL_VERSION,
-    response_hash
+    response_hash,
+    JsonEscape(ts_utc)
   );
 
   if(cache_reply && correlation_id != "")
@@ -1148,6 +1189,7 @@ void ExecuteTrade(
   string msg_id,
   string request_hash,
   string group_hint,
+  int payload_deviation_points,
   bool payload_risk_entry_allowed,
   string payload_risk_reason,
   bool payload_risk_friday,
@@ -1374,7 +1416,12 @@ void ExecuteTrade(
   request.comment = comment;
   request.type = order_type;
   request.type_filling = req_fill;
-  request.deviation = 10;
+  int deviation_requested = payload_deviation_points;
+  if(deviation_requested < 1)
+    deviation_requested = 1;
+  if(deviation_requested > 1000)
+    deviation_requested = 1000;
+  request.deviation = deviation_requested;
 
   if(!OrderSend(request, result))
   {
@@ -1390,6 +1437,14 @@ void ExecuteTrade(
   long rc = (long)result.retcode;
   if(rc <= 0)
     rc = 10011;
+  double point_size = SymbolInfoDouble(symbol_req, SYMBOL_POINT);
+  double tick_size = SymbolInfoDouble(symbol_req, SYMBOL_TRADE_TICK_SIZE);
+  double executed_price = result.price;
+  if(executed_price <= 0.0)
+    executed_price = price;
+  int deviation_effective = 0;
+  if(point_size > 0.0 && executed_price > 0.0 && price > 0.0)
+    deviation_effective = (int)MathRound(MathAbs(executed_price - price) / point_size);
   if(rc != 10009 && rc != 10008)
   {
     Print(
@@ -1411,7 +1466,13 @@ void ExecuteTrade(
     symbol_req,
     "",
     request_hash,
-    true
+    true,
+    price,
+    executed_price,
+    deviation_requested,
+    deviation_effective,
+    point_size,
+    tick_size
   );
 }
 
@@ -1533,6 +1594,7 @@ void ProcessCommands()
     double tp_price = JsonGetDouble(payload, "tp_price", 0.0);
     long magic = JsonGetLong(payload, "magic", 0);
     string comment = JsonGetString(payload, "comment", "");
+    int payload_deviation_points = (int)JsonGetLong(payload, "deviation_points", 10);
     string group_hint = JsonGetString(payload, "group", "");
     bool payload_risk_entry_allowed = JsonGetBool(payload, "risk_entry_allowed", true);
     string payload_risk_reason = JsonGetString(payload, "risk_reason", "NONE");
@@ -1549,11 +1611,29 @@ void ProcessCommands()
       sl_price,
       tp_price,
       magic,
-      comment
+      comment,
+      payload_deviation_points
     );
 
     if(request_hash != "" && request_hash != expected_hash)
     {
+      string legacy_expected_hash = BuildRequestHashTradeLegacy(
+        action,
+        msg_id,
+        signal,
+        symbol_hash,
+        volume,
+        sl_price,
+        tp_price,
+        magic,
+        comment
+      );
+      if(request_hash == legacy_expected_hash)
+      {
+        Print("WARN: LEGACY_REQUEST_HASH_ACCEPTED msg_id=", msg_id);
+      }
+      else
+      {
       SendReplyEnvelope(
         "REJECTED", msg_id, "TRADE_REPLY",
         50003, "CUSTOM_RETCODE_REQUEST_HASH_MISMATCH", 0, 0,
@@ -1564,6 +1644,7 @@ void ProcessCommands()
         true
       );
       return;
+      }
     }
 
     ExecuteTrade(
@@ -1577,6 +1658,7 @@ void ProcessCommands()
       msg_id,
       request_hash,
       group_hint,
+      payload_deviation_points,
       payload_risk_entry_allowed,
       payload_risk_reason,
       payload_risk_friday,

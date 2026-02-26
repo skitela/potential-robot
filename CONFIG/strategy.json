@@ -24,8 +24,7 @@
   "symbol_policy_allowed_groups": [
     "FX",
     "METAL",
-    "INDEX",
-    "CRYPTO"
+    "INDEX"
   ],
   "trade_windows": {
     "FX_AM": {
@@ -73,30 +72,6 @@
       ],
       "end_hm": [
         20,
-        0
-      ]
-    },
-    "CRYPTO_PM": {
-      "group": "CRYPTO",
-      "anchor_tz": "Europe/Warsaw",
-      "start_hm": [
-        20,
-        0
-      ],
-      "end_hm": [
-        23,
-        0
-      ]
-    },
-    "CRYPTO_NIGHT": {
-      "group": "CRYPTO",
-      "anchor_tz": "Europe/Warsaw",
-      "start_hm": [
-        23,
-        0
-      ],
-      "end_hm": [
-        9,
         0
       ]
     }
@@ -185,6 +160,9 @@
     "EURUSD",
     "GBPUSD",
     "USDJPY",
+    "EURJPY",
+    "AUDJPY",
+    "NZDJPY",
     "USDCHF",
     "USDCAD",
     "AUDUSD",
@@ -198,9 +176,7 @@
     "US500",
     "US100",
     "US30",
-    "EU50",
-    "BTCUSD",
-    "ETHUSD"
+    "EU50"
   ],
   "time_anchor_max_backward_sec": 120,
   "adx_threshold": 12,
@@ -441,6 +417,59 @@
   "learner_qa_gate_enabled": false,
   "canary_rollout_enabled": false,
   "canary_max_symbols_per_iter": 1,
+  "live_canary_enabled": true,
+  "module_live_enabled_map": {
+    "FX": true,
+    "METAL": false,
+    "INDEX": false,
+    "CRYPTO": false,
+    "EQUITY": false
+  },
+  "live_canary_allowed_groups": [
+    "FX"
+  ],
+  "live_canary_allowed_symbol_intents": [
+    "USDJPY",
+    "EURJPY",
+    "AUDJPY",
+    "NZDJPY"
+  ],
+  "hard_live_disabled_groups": [
+    "CRYPTO",
+    "METAL",
+    "INDEX",
+    "EQUITY"
+  ],
+  "hard_live_disabled_symbol_intents": [
+    "BTCUSD",
+    "ETHUSD",
+    "JP225",
+    "GOLD"
+  ],
+  "hard_live_contract_file_name": "live_canary_contract.json",
+  "no_live_drift_file_name": "no_live_drift_check.json",
+  "cost_gate_policy_mode": "CANARY_ACTIVE",
+  "cost_gate_min_target_to_cost_ratio": 1.15,
+  "cost_gate_block_on_unknown_quality": true,
+  "max_daily_loss_account": 0.02,
+  "max_session_loss_account": 0.01,
+  "max_daily_loss_per_module": 0.008,
+  "max_consecutive_losses_per_module": 3,
+  "max_trades_per_window_per_module": 6,
+  "max_execution_anomalies_per_window": 4,
+  "max_ipc_failures_per_window": 4,
+  "max_reject_ratio_threshold": 0.5,
+  "max_reject_ratio_min_samples": 10,
+  "jpy_basket_symbol_intents": [
+    "USDJPY",
+    "EURJPY",
+    "AUDJPY",
+    "NZDJPY"
+  ],
+  "jpy_basket_max_concurrent_positions": 1,
+  "jpy_basket_max_risk_budget": 0.006,
+  "jpy_basket_selection_mode": "TOP_1",
+  "jpy_basket_ranking_basis_for_top_k": "cost_execution_aware",
   "paper_trading": false,
   "eco_probe_symbols_when_flat": 1,
   "policy_windows_v2_enabled": true,
