@@ -21,6 +21,21 @@ $consoleScript = Join-Path $toolsDir "operator_console.py"
 if (-not (Test-Path $runtimeScript)) { throw "Missing runtime script: $runtimeScript" }
 if (-not (Test-Path $consoleScript)) { throw "Missing console script: $consoleScript" }
 
+function Resolve-PythonExe {
+    $default = "python"
+    try {
+        $resolved = (& $default -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($resolved) -and (Test-Path $resolved)) {
+            return $resolved
+        }
+    } catch {
+        # fallback below
+    }
+    return $default
+}
+
+$pythonExe = Resolve-PythonExe
+
 function Find-ProcByNeedle {
     param([string]$Needle)
     @(Get-CimInstance Win32_Process | Where-Object {
@@ -42,11 +57,11 @@ if ($existing.Count -eq 0) {
     }
     $outLog = Join-Path $jobsDir ("runtime_service_" + (Get-Date -Format "yyyyMMdd_HHmmss") + "_out.log")
     $errLog = Join-Path $jobsDir ("runtime_service_" + (Get-Date -Format "yyyyMMdd_HHmmss") + "_err.log")
-    $p = Start-Process -FilePath "python" -ArgumentList $argList -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+    $p = Start-Process -FilePath $pythonExe -ArgumentList $argList -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
     Write-Output ("runtime_service_started_pid=" + $p.Id)
 } else {
     Write-Output ("runtime_service_already_running_pid=" + $existing[0].ProcessId)
 }
 
 Write-Output "starting_operator_console..."
-python $consoleScript
+& $pythonExe $consoleScript

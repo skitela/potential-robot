@@ -1,0 +1,9 @@
+RUNTIME ONBOARDING PREFLIGHT
+generated_at_utc: 2026-02-27T10:44:54.155047Z
+root: C:\OANDA_MT5_SYSTEM\OBSERVERS_IMPLEMENTATION_CANDIDATE
+verdict: GO
+
+[required_files] passed=True
+[audit_statuses] passed=True
+[import_boundaries] passed=True
+[write_boundaries] passed=True
