@@ -1,0 +1,22 @@
+{
+  "agent_name": "agent_informacyjny",
+  "report_name": "ops_monitoring_snapshot",
+  "generated_at_utc": "2026-02-27T00:00:00Z",
+  "content": {
+    "generated_at_utc": "2026-02-27T00:00:00Z",
+    "live_canary": {
+      "enabled": true,
+      "groups": [
+        "FX"
+      ]
+    },
+    "drift_checks": {
+      "status": "OK"
+    },
+    "anomalies": {
+      "retcode_10017": 0
+    },
+    "recent_critical_events": []
+  }
+}
+

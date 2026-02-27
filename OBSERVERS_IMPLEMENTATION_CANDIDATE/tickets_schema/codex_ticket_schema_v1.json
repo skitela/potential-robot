@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Ticket v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ticket_id",
+    "dedupe_key",
+    "created_at_utc",
+    "agent_name",
+    "priority",
+    "issue_type",
+    "summary",
+    "evidence_paths",
+    "suggested_audit_type",
+    "suggested_scope",
+    "questions",
+    "impact",
+    "requires_operator_approval",
+    "codex_invocation_mode"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "ticket_id": { "type": "string" },
+    "dedupe_key": { "type": "string" },
+    "created_at_utc": { "type": "string" },
+    "agent_name": { "type": "string" },
+    "priority": { "type": "string", "enum": ["LOW", "MED", "HIGH", "CRITICAL"] },
+    "issue_type": { "type": "string" },
+    "summary": { "type": "string" },
+    "evidence_paths": { "type": "array", "items": { "type": "string" } },
+    "suggested_audit_type": { "type": "string" },
+    "suggested_scope": { "type": "object" },
+    "questions": { "type": "array", "items": { "type": "string" } },
+    "impact": { "type": "object" },
+    "requires_operator_approval": { "type": "boolean", "const": true },
+    "codex_invocation_mode": { "type": "string", "const": "MANUAL_BY_OPERATOR" },
+    "notes": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}
+

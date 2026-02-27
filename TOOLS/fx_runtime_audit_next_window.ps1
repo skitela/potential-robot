@@ -48,6 +48,25 @@ function Safe-ReadJson {
     }
 }
 
+function Get-PropSafe {
+    param(
+        [object]$Obj,
+        [string]$Name,
+        [string]$Default = ""
+    )
+    if ($null -eq $Obj -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $Default
+    }
+    try {
+        $p = $Obj.PSObject.Properties[$Name]
+        if ($null -eq $p) { return $Default }
+        if ($null -eq $p.Value) { return $Default }
+        return [string]$p.Value
+    } catch {
+        return $Default
+    }
+}
+
 $runtimeRoot = Resolve-RootPath -Path $Root
 $desktop = Resolve-DesktopPath -ExplicitPath $DesktopPath
 $runDir = Join-Path $runtimeRoot "RUN"
@@ -148,7 +167,11 @@ try {
     $reportLines += "[LIVE_DRIFT_FX_ROWS]"
     $reportLines += ("no_live_drift_path: " + $noLivePath)
     foreach($r in $fxRows){
-        $reportLines += ("- " + [string]$r.symbol_canonical + " | live=" + [string]$r.symbol_live_enabled + " | reason=" + [string]$r.reason_code + " | preflight_ok=" + [string]$r.preflight_ok)
+        $symCanonical = Get-PropSafe -Obj $r -Name "symbol_canonical" -Default "UNKNOWN"
+        $symLive = Get-PropSafe -Obj $r -Name "symbol_live_enabled" -Default "UNKNOWN"
+        $reasonCode = Get-PropSafe -Obj $r -Name "reason_code" -Default "UNKNOWN"
+        $preflight = Get-PropSafe -Obj $r -Name "preflight_ok" -Default "UNKNOWN"
+        $reportLines += ("- " + $symCanonical + " | live=" + $symLive + " | reason=" + $reasonCode + " | preflight_ok=" + $preflight)
     }
     if ($fxRows.Count -eq 0) {
         $reportLines += "- MISSING_OR_EMPTY"

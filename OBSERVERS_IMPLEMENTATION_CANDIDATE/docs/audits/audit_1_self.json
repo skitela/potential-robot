@@ -1,0 +1,13 @@
+{
+  "ts_utc": "2026-02-27T09:52:54.856557Z",
+  "import_boundary": {
+    "violations": [],
+    "pass": true
+  },
+  "write_boundary": {
+    "suspicious_writes": [],
+    "pass": true
+  },
+  "ticket_contract_manual_only": true,
+  "status": "PASS"
+}

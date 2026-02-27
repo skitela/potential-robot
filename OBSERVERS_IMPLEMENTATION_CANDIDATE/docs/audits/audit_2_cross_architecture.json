@@ -1,0 +1,24 @@
+{
+  "ts_utc": "2026-02-27T09:52:54.857174Z",
+  "role_separation": {
+    "roles": {
+      "agent_informacyjny": "monitoring operacyjny",
+      "agent_rozwoju_scalpingu": "R&D analytics",
+      "agent_rekomendacyjny": "rekomendacje",
+      "agent_straznik_spojnosci": "drift/consistency guard"
+    },
+    "missing_role_entrypoints": [],
+    "pass": true
+  },
+  "contracts_and_docs": {
+    "ticket_schema_exists": true,
+    "decisions_exists": true,
+    "manifest_exists": true
+  },
+  "safe_read_signals": {
+    "read_status_constants_present": true,
+    "retry_backoff_present": true,
+    "partial_json_handling_present": true
+  },
+  "status": "PASS"
+}
