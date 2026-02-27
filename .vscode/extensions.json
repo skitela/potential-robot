@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-vscode.powershell",
+    "charliermarsh.ruff",
+    "eamodio.gitlens",
+    "EditorConfig.EditorConfig",
+    "usernamehw.errorlens",
+    "redhat.vscode-yaml",
+    "DavidAnson.vscode-markdownlint"
+  ],
+  "unwantedRecommendations": []
+}

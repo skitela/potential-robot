@@ -16,7 +16,10 @@ tests/_tmp_housekeeping/
 
 # Editor/IDE
 .vs/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
 
 # Runtime outputs
 LOGS/
