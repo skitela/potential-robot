@@ -586,6 +586,17 @@ class CFG:
     cost_gate_policy_mode: str = "DIAGNOSTIC_ONLY"  # CANARY_ACTIVE / DIAGNOSTIC_ONLY / DISABLED
     cost_gate_min_target_to_cost_ratio: float = 1.10
     cost_gate_block_on_unknown_quality: bool = True
+    # Auto-relax for execution guards (no strategy change): only if runtime evidence is sufficient.
+    cost_guard_auto_relax_enabled: bool = False
+    cost_guard_auto_relax_window_minutes: int = 360
+    cost_guard_auto_relax_min_total_decisions: int = 220
+    cost_guard_auto_relax_min_wave1_decisions: int = 24
+    cost_guard_auto_relax_min_unknown_blocks: int = 20
+    cost_guard_auto_relax_max_critical_incidents: int = 0
+    cost_guard_auto_relax_max_error_incidents: int = 4
+    cost_guard_auto_relax_relaxed_min_ratio: float = 1.08
+    cost_guard_auto_relax_block_on_unknown_quality: bool = False
+    cost_guard_auto_relax_status_file_name: str = "cost_guard_auto_relax_status.json"
     # Hard live limits / throttles.
     max_daily_loss_account: float = 0.02
     max_session_loss_account: float = 0.01
@@ -8679,10 +8690,21 @@ class SafetyBot:
         self.no_live_drift_path = self.evidence_dir / str(
             getattr(CFG, "no_live_drift_file_name", "no_live_drift_check.json")
         )
+        self.cost_guard_auto_relax_path = self.evidence_dir / str(
+            getattr(CFG, "cost_guard_auto_relax_status_file_name", "cost_guard_auto_relax_status.json")
+        )
         self._asia_shadow_symbol_gate: Dict[str, bool] = {}
         self._asia_shadow_symbol_targets: Set[str] = set()
         self._live_canary_allowed_symbols: Set[str] = set()
         self._hard_live_disabled_symbols: Set[str] = set()
+        self._cost_guard_auto_relax_state: Dict[str, Any] = {
+            "active": False,
+            "effective_block_on_unknown_quality": bool(getattr(CFG, "cost_gate_block_on_unknown_quality", True)),
+            "effective_min_ratio": float(max(0.0, getattr(CFG, "cost_gate_min_target_to_cost_ratio", 1.10))),
+            "reason": "NOT_EVALUATED",
+            "metrics": {},
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        }
         self._live_module_states: Dict[str, str] = {}
         self._live_module_state_reasons: Dict[str, List[str]] = {}
         self._live_window_trade_counts: Dict[str, int] = {}
@@ -8821,7 +8843,9 @@ class SafetyBot:
         else:
             self.paper_start_ts = 0.0
         self._refresh_live_canary_contract()
-        self._refresh_no_live_drift_check(tw_ctx=trade_window_ctx(now_utc()))
+        _tw_init = trade_window_ctx(now_utc())
+        self._refresh_no_live_drift_check(tw_ctx=_tw_init)
+        self._refresh_cost_guard_auto_relax_state(tw_ctx=_tw_init)
 
     def _append_jsonl_record(self, path: Path, payload: Dict[str, Any]) -> None:
         try:
@@ -9295,6 +9319,238 @@ class SafetyBot:
             except Exception:
                 continue
         return int(count)
+
+    def _count_execution_telemetry_events_since(
+        self,
+        start_ts_utc: int,
+        *,
+        event_type: str,
+        reason_code: str = "",
+        symbol_set: Optional[Set[str]] = None,
+        tail_lines: int = 6000,
+    ) -> int:
+        path = self.execution_telemetry_path
+        if not path.exists():
+            return 0
+        evt = str(event_type or "").strip().upper()
+        reason = str(reason_code or "").strip().upper()
+        symbols_norm = {canonical_symbol(s) for s in (symbol_set or set()) if str(s).strip()}
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            return 0
+        count = 0
+        for ln in lines[-int(max(1, tail_lines)) :]:
+            try:
+                obj = json.loads(str(ln or "{}"))
+            except Exception:
+                continue
+            ts = _parse_iso_utc(str(obj.get("ts_utc") or ""))
+            if ts is None or int(ts.timestamp()) < int(start_ts_utc):
+                continue
+            if str(obj.get("event_type") or "").strip().upper() != evt:
+                continue
+            if reason and str(obj.get("reason_code") or "").strip().upper() != reason:
+                continue
+            if symbols_norm:
+                sym = canonical_symbol(str(obj.get("symbol_canonical") or obj.get("symbol_raw") or ""))
+                if sym not in symbols_norm:
+                    continue
+            count += 1
+        return int(count)
+
+    def _count_decision_events_since(
+        self,
+        start_ts_utc: int,
+        *,
+        intents: Optional[Set[str]] = None,
+    ) -> int:
+        start_iso = dt.datetime.fromtimestamp(int(start_ts_utc), tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        sql = "SELECT COUNT(*) FROM decision_events WHERE ts_utc >= ?"
+        params: List[Any] = [str(start_iso)]
+        intents_u = {str(x).strip().upper() for x in (intents or set()) if str(x).strip()}
+        if intents_u:
+            placeholders = ",".join(["?"] * len(intents_u))
+            sql += f" AND UPPER(COALESCE(choice_A,'')) IN ({placeholders})"
+            params.extend(sorted(intents_u))
+        try:
+            cur = self.db.conn.cursor()
+            cur.execute(sql, tuple(params))
+            row = cur.fetchone()
+            return int(row[0] or 0) if row else 0
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return 0
+
+    def _refresh_cost_guard_auto_relax_state(self, tw_ctx: Optional[Dict[str, Any]] = None) -> None:
+        now_dt = now_utc()
+        window_min = int(max(30, getattr(CFG, "cost_guard_auto_relax_window_minutes", 360)))
+        start_ts = int((now_dt - dt.timedelta(minutes=window_min)).timestamp())
+        enabled = bool(getattr(CFG, "cost_guard_auto_relax_enabled", False))
+        base_block_unknown = bool(getattr(CFG, "cost_gate_block_on_unknown_quality", True))
+        base_min_ratio = float(max(0.0, getattr(CFG, "cost_gate_min_target_to_cost_ratio", 1.10)))
+        relaxed_block_unknown = bool(getattr(CFG, "cost_guard_auto_relax_block_on_unknown_quality", False))
+        relaxed_min_ratio = float(max(0.0, getattr(CFG, "cost_guard_auto_relax_relaxed_min_ratio", base_min_ratio)))
+
+        allowed_symbols = set(self._live_canary_allowed_symbols or set())
+        if not allowed_symbols:
+            allowed_symbols = self._resolve_intents_to_canonical(
+                tuple(getattr(CFG, "live_canary_allowed_symbol_intents", ()) or ())
+            )
+        allowed_intents = {
+            str(x).strip().upper()
+            for x in (getattr(CFG, "live_canary_allowed_symbol_intents", ()) or ())
+            if str(x).strip()
+        }
+
+        decision_total = self._count_decision_events_since(start_ts)
+        decision_wave1 = self._count_decision_events_since(start_ts, intents=allowed_intents)
+        unknown_blocks = self._count_execution_telemetry_events_since(
+            start_ts,
+            event_type="ENTRY_BLOCK_COST",
+            reason_code="BLOCK_TRADE_COST_UNKNOWN",
+            symbol_set=allowed_symbols,
+        )
+        incident_counts = (
+            self.incident_journal.recent_counts(lookback_sec=max(60, window_min * 60))
+            if self.incident_journal
+            else {}
+        )
+        critical = int((incident_counts or {}).get("critical", 0) or 0)
+        err_worse = int((incident_counts or {}).get("error_or_worse", 0) or 0)
+
+        min_total = int(max(1, getattr(CFG, "cost_guard_auto_relax_min_total_decisions", 220)))
+        min_wave1 = int(max(1, getattr(CFG, "cost_guard_auto_relax_min_wave1_decisions", 24)))
+        min_unknown = int(max(1, getattr(CFG, "cost_guard_auto_relax_min_unknown_blocks", 20)))
+        max_critical = int(max(0, getattr(CFG, "cost_guard_auto_relax_max_critical_incidents", 0)))
+        max_errors = int(max(0, getattr(CFG, "cost_guard_auto_relax_max_error_incidents", 4)))
+
+        active = False
+        reason = "DISABLED_IN_CONFIG"
+        if enabled:
+            checks = {
+                "decision_total_ok": decision_total >= min_total,
+                "decision_wave1_ok": decision_wave1 >= min_wave1,
+                "unknown_blocks_ok": unknown_blocks >= min_unknown,
+                "critical_ok": critical <= max_critical,
+                "errors_ok": err_worse <= max_errors,
+            }
+            active = bool(all(checks.values()))
+            if active:
+                reason = "AUTO_RELAX_ACTIVE_THRESHOLD_MET"
+            else:
+                missing = [k for k, v in checks.items() if not v]
+                reason = ("WAIT_" + "_".join(missing[:3])).upper() if missing else "WAIT_CONDITIONS"
+
+        effective_block_unknown = base_block_unknown
+        effective_min_ratio = base_min_ratio
+        if active:
+            effective_block_unknown = bool(relaxed_block_unknown)
+            effective_min_ratio = float(min(base_min_ratio, relaxed_min_ratio))
+
+        payload = {
+            "schema_version": "COST_GUARD_RELAX.V1",
+            "ts_utc": now_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "window_minutes": int(window_min),
+            "trade_window_phase": str((tw_ctx or {}).get("phase") or "UNKNOWN"),
+            "trade_window_id": str((tw_ctx or {}).get("window_id") or "UNKNOWN"),
+            "enabled": bool(enabled),
+            "active": bool(active),
+            "reason": str(reason),
+            "thresholds": {
+                "min_total_decisions": int(min_total),
+                "min_wave1_decisions": int(min_wave1),
+                "min_unknown_blocks": int(min_unknown),
+                "max_critical_incidents": int(max_critical),
+                "max_error_incidents": int(max_errors),
+                "base_min_ratio": float(base_min_ratio),
+                "relaxed_min_ratio": float(relaxed_min_ratio),
+                "base_block_on_unknown": bool(base_block_unknown),
+                "relaxed_block_on_unknown": bool(relaxed_block_unknown),
+            },
+            "metrics": {
+                "decision_total_window": int(decision_total),
+                "decision_wave1_window": int(decision_wave1),
+                "unknown_blocks_wave1_window": int(unknown_blocks),
+                "incident_critical_window": int(critical),
+                "incident_error_or_worse_window": int(err_worse),
+            },
+            "effective": {
+                "cost_gate_block_on_unknown_quality": bool(effective_block_unknown),
+                "cost_gate_min_target_to_cost_ratio": float(effective_min_ratio),
+            },
+        }
+        prev = dict(self._cost_guard_auto_relax_state or {})
+        self._cost_guard_auto_relax_state = payload
+        try:
+            atomic_write_json(self.cost_guard_auto_relax_path, payload)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        prev_active = bool(prev.get("active", False))
+        prev_reason = str(prev.get("reason") or "")
+        prev_block = bool(prev.get("effective_block_on_unknown_quality", prev.get("effective", {}).get("cost_gate_block_on_unknown_quality", base_block_unknown))) if isinstance(prev, dict) else base_block_unknown
+        prev_ratio = float(prev.get("effective_min_ratio", prev.get("effective", {}).get("cost_gate_min_target_to_cost_ratio", base_min_ratio))) if isinstance(prev, dict) else base_min_ratio
+        if (prev_active != bool(active)) or (prev_reason != str(reason)) or (prev_block != bool(effective_block_unknown)) or (abs(prev_ratio - float(effective_min_ratio)) > 1e-9):
+            logging.warning(
+                "COST_GUARD_AUTO_RELAX active=%s reason=%s decisions=%s wave1=%s unknown_blocks=%s incidents_error=%s incidents_critical=%s block_unknown=%s min_ratio=%.3f",
+                int(bool(active)),
+                str(reason),
+                int(decision_total),
+                int(decision_wave1),
+                int(unknown_blocks),
+                int(err_worse),
+                int(critical),
+                int(bool(effective_block_unknown)),
+                float(effective_min_ratio),
+            )
+            self._append_execution_telemetry(
+                {
+                    "event_type": "COST_GUARD_AUTO_RELAX",
+                    "active": bool(active),
+                    "reason_code": str(reason),
+                    "window_minutes": int(window_min),
+                    "decision_total_window": int(decision_total),
+                    "decision_wave1_window": int(decision_wave1),
+                    "unknown_blocks_wave1_window": int(unknown_blocks),
+                    "incident_error_or_worse_window": int(err_worse),
+                    "incident_critical_window": int(critical),
+                    "effective_block_on_unknown_quality": bool(effective_block_unknown),
+                    "effective_min_ratio": float(effective_min_ratio),
+                    "method": "cost_guard_auto_relax",
+                    "sample_size_n": int(max(1, decision_wave1)),
+                    "low_stat_power": bool(int(decision_wave1) < int(min_wave1)),
+                }
+            )
+
+    def _cost_gate_effective_params(self) -> Dict[str, Any]:
+        state = dict(self._cost_guard_auto_relax_state or {})
+        effective = state.get("effective", {}) if isinstance(state.get("effective"), dict) else {}
+        block_unknown = bool(
+            effective.get(
+                "cost_gate_block_on_unknown_quality",
+                state.get(
+                    "effective_block_on_unknown_quality",
+                    getattr(CFG, "cost_gate_block_on_unknown_quality", True),
+                ),
+            )
+        )
+        min_ratio = float(
+            effective.get(
+                "cost_gate_min_target_to_cost_ratio",
+                state.get(
+                    "effective_min_ratio",
+                    getattr(CFG, "cost_gate_min_target_to_cost_ratio", 1.10),
+                ),
+            )
+        )
+        return {
+            "active": bool(state.get("active", False)),
+            "reason": str(state.get("reason") or "UNKNOWN"),
+            "block_unknown_quality": bool(block_unknown),
+            "min_target_to_cost_ratio": float(max(0.0, min_ratio)),
+        }
 
     def _refresh_live_module_states(self, tw_ctx: Dict[str, Any], st: Dict[str, Any]) -> None:
         groups = sorted({
@@ -9884,9 +10140,16 @@ class SafetyBot:
                         ratio = float(target_move) / float(cost_value)
                 except Exception:
                     ratio = None
-                min_ratio = float(max(0.0, getattr(CFG, "cost_gate_min_target_to_cost_ratio", 1.10)))
+                cost_guard_effective = self._cost_gate_effective_params()
+                min_ratio = float(max(0.0, cost_guard_effective.get("min_target_to_cost_ratio", getattr(CFG, "cost_gate_min_target_to_cost_ratio", 1.10))))
+                block_unknown_quality = bool(
+                    cost_guard_effective.get(
+                        "block_unknown_quality",
+                        getattr(CFG, "cost_gate_block_on_unknown_quality", True),
+                    )
+                )
                 block_reason = ""
-                if bool(getattr(CFG, "cost_gate_block_on_unknown_quality", True)) and cost_unknown:
+                if bool(block_unknown_quality) and cost_unknown:
                     block_reason = "BLOCK_TRADE_COST_UNKNOWN"
                 elif feasible_shadow is False:
                     block_reason = "BLOCK_TRADE_COST"
@@ -9914,6 +10177,9 @@ class SafetyBot:
                             "cost_feasibility_shadow": feasible_shadow,
                             "cost_target_to_estimated_ratio": ratio,
                             "cost_ratio_min_required": float(min_ratio),
+                            "cost_guard_auto_relax_active": bool(cost_guard_effective.get("active", False)),
+                            "cost_guard_auto_relax_reason": str(cost_guard_effective.get("reason") or "UNKNOWN"),
+                            "cost_guard_block_unknown_effective": bool(block_unknown_quality),
                             "method": "cost_gate",
                             "sample_size_n": 1,
                             "low_stat_power": True,
@@ -11435,6 +11701,7 @@ class SafetyBot:
         try:
             self._refresh_live_module_states(tw_ctx=tw_ctx, st=st)
             self._refresh_no_live_drift_check(tw_ctx=tw_ctx)
+            self._refresh_cost_guard_auto_relax_state(tw_ctx=tw_ctx)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -13072,6 +13339,37 @@ if __name__ == "__main__":
     CFG.cost_gate_block_on_unknown_quality = _cfg_bool(
         "cost_gate_block_on_unknown_quality", CFG.cost_gate_block_on_unknown_quality
     )
+    CFG.cost_guard_auto_relax_enabled = _cfg_bool(
+        "cost_guard_auto_relax_enabled", CFG.cost_guard_auto_relax_enabled
+    )
+    CFG.cost_guard_auto_relax_window_minutes = _cfg_int(
+        "cost_guard_auto_relax_window_minutes", CFG.cost_guard_auto_relax_window_minutes
+    )
+    CFG.cost_guard_auto_relax_min_total_decisions = _cfg_int(
+        "cost_guard_auto_relax_min_total_decisions", CFG.cost_guard_auto_relax_min_total_decisions
+    )
+    CFG.cost_guard_auto_relax_min_wave1_decisions = _cfg_int(
+        "cost_guard_auto_relax_min_wave1_decisions", CFG.cost_guard_auto_relax_min_wave1_decisions
+    )
+    CFG.cost_guard_auto_relax_min_unknown_blocks = _cfg_int(
+        "cost_guard_auto_relax_min_unknown_blocks", CFG.cost_guard_auto_relax_min_unknown_blocks
+    )
+    CFG.cost_guard_auto_relax_max_critical_incidents = _cfg_int(
+        "cost_guard_auto_relax_max_critical_incidents", CFG.cost_guard_auto_relax_max_critical_incidents
+    )
+    CFG.cost_guard_auto_relax_max_error_incidents = _cfg_int(
+        "cost_guard_auto_relax_max_error_incidents", CFG.cost_guard_auto_relax_max_error_incidents
+    )
+    CFG.cost_guard_auto_relax_relaxed_min_ratio = _cfg_float(
+        "cost_guard_auto_relax_relaxed_min_ratio", CFG.cost_guard_auto_relax_relaxed_min_ratio
+    )
+    CFG.cost_guard_auto_relax_block_on_unknown_quality = _cfg_bool(
+        "cost_guard_auto_relax_block_on_unknown_quality", CFG.cost_guard_auto_relax_block_on_unknown_quality
+    )
+    CFG.cost_guard_auto_relax_status_file_name = str(
+        strategy_cfg.get("cost_guard_auto_relax_status_file_name", CFG.cost_guard_auto_relax_status_file_name)
+        or CFG.cost_guard_auto_relax_status_file_name
+    ).strip()
     CFG.max_daily_loss_account = _cfg_float("max_daily_loss_account", CFG.max_daily_loss_account)
     CFG.max_session_loss_account = _cfg_float("max_session_loss_account", CFG.max_session_loss_account)
     CFG.max_daily_loss_per_module = _cfg_float("max_daily_loss_per_module", CFG.max_daily_loss_per_module)
