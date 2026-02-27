@@ -38,12 +38,20 @@ class TestHardLiveCanaryContracts(unittest.TestCase):
             "max_ipc_failures_per_window",
             "max_reject_ratio_threshold",
             "jpy_basket_symbol_intents",
+            "asia_wave1_symbol_intents",
             "jpy_basket_max_concurrent_positions",
             "jpy_basket_max_risk_budget",
+            "trade_window_symbol_filter_enabled",
+            "trade_window_symbol_intents",
         ]
         for key in required:
             self.assertIn(key, cfg)
         self.assertIn(str(cfg.get("cost_gate_policy_mode", "")).upper(), {"CANARY_ACTIVE", "DIAGNOSTIC_ONLY", "DISABLED"})
+        tw = cfg.get("trade_windows", {})
+        self.assertIn("FX_ASIA", tw)
+        self.assertEqual("Asia/Tokyo", str(tw["FX_ASIA"].get("anchor_tz")))
+        self.assertIn("FX_ASIA", cfg.get("trade_window_symbol_intents", {}))
+        self.assertGreaterEqual(len(cfg.get("trade_window_symbol_intents", {}).get("FX_ASIA", [])), 1)
 
     def test_no_live_drift_tool(self) -> None:
         script = ROOT / "TOOLS" / "no_live_drift_check.py"

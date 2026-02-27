@@ -334,6 +334,10 @@ class CFG:
     trade_window_fx_rotation_bucket_size: int = 4
     trade_window_fx_rotation_period_sec: int = 180
     trade_window_fx_rotation_only_when_over_capacity: bool = True
+    # Optional per-window symbol routing (execution policy only; no strategy changes).
+    # Keys are window ids from trade_windows, values are symbol intents to resolve at runtime.
+    trade_window_symbol_filter_enabled: bool = False
+    trade_window_symbol_intents: Dict[str, Tuple[str, ...]] = {}
     hard_no_mt5_outside_windows: bool = True
     # Outside windows we still do minimal SYS reconciliation (positions/orders) for safety.
     trade_off_sys_poll_sec: int = 900
@@ -613,6 +617,8 @@ class CFG:
     jpy_basket_max_risk_budget: float = 0.006
     jpy_basket_selection_mode: str = "TOP_1"
     jpy_basket_ranking_basis_for_top_k: str = "cost_execution_aware"
+    # Asia Wave-1 symbol intents for deterministic preflight evidence.
+    asia_wave1_symbol_intents: Tuple[str, ...] = ("USDJPY", "EURJPY", "AUDJPY", "NZDJPY")
 
     # Drift guard (P2): online regime degradation detector.
     drift_guard_enabled: bool = True
@@ -11976,7 +11982,9 @@ class SafetyBot:
                         if allowed_groups is None:
                             allowed_groups = {str(tw_group).upper()}
                         allowed_groups.add(_group_key(carry_prev_grp))
-                        allowed_symbols_by_group[_group_key(carry_prev_grp)] = set(carry_syms)
+                        allowed_symbols_by_group[_group_key(carry_prev_grp)] = {
+                            canonical_symbol(s) for s in carry_syms if str(s).strip()
+                        }
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -11998,9 +12006,13 @@ class SafetyBot:
                     )
                     fx_bucket_idx = int(bidx) + 1
                     fx_bucket_count = int(bcount)
-                    allowed_symbols_by_group["FX"] = set(bucket_syms)
+                    allowed_symbols_by_group["FX"] = {
+                        canonical_symbol(s) for s in bucket_syms if str(s).strip()
+                    }
                     # Always keep open symbols visible to policy telemetry.
-                    allowed_symbols_by_group["FX"].update({s for s in open_syms if str(s)})
+                    allowed_symbols_by_group["FX"].update(
+                        {canonical_symbol(s) for s in open_syms if str(s).strip()}
+                    )
                     fx_sig = f"{bidx}/{bcount}:{','.join(sorted(bucket_syms))}"
                     if fx_sig != str(getattr(self, "_last_fx_rot_sig", "")):
                         setattr(self, "_last_fx_rot_sig", fx_sig)
@@ -12119,12 +12131,49 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+        # Optional per-window symbol routing (policy-only): e.g. JPY set for Asia window.
+        try:
+            if bool(getattr(CFG, "trade_window_symbol_filter_enabled", False)):
+                wid = str(tw_window_id or "")
+                if wid:
+                    tw_map_raw = getattr(CFG, "trade_window_symbol_intents", {}) or {}
+                    intents = tuple(tw_map_raw.get(wid) or ())
+                    if intents:
+                        resolved = self._resolve_intents_to_canonical(tuple(intents))
+                        gk = _group_key(str(tw_group or ""))
+                        if gk and resolved:
+                            current = allowed_symbols_by_group.get(gk)
+                            if current is None:
+                                allowed_symbols_by_group[gk] = set(resolved)
+                            else:
+                                allowed_symbols_by_group[gk] = {s for s in current if s in resolved}
+                            # Keep open symbols visible to policy telemetry and closes.
+                            allowed_symbols_by_group[gk].update(
+                                {
+                                    canonical_symbol(s)
+                                    for s in open_syms
+                                    if str(s).strip() and _group_key(guess_group(str(s))) == gk
+                                }
+                            )
+                            sig = f"{wid}:{gk}:{','.join(sorted(intents))}:{','.join(sorted(allowed_symbols_by_group[gk]))}"
+                            if sig != str(getattr(self, "_last_window_symbol_filter_sig", "")):
+                                setattr(self, "_last_window_symbol_filter_sig", sig)
+                                logging.info(
+                                    "WINDOW_SYMBOL_FILTER window=%s group=%s intents=%s resolved=%s",
+                                    wid,
+                                    gk,
+                                    ",".join(intents),
+                                    ",".join(sorted(allowed_symbols_by_group[gk])) if allowed_symbols_by_group[gk] else "NONE",
+                                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
         for raw, sym, grp in self.universe:
             grp_u = _group_key(grp)
             if allowed_groups is not None and grp_u not in allowed_groups:
                 continue
             sym_allow = allowed_symbols_by_group.get(grp_u)
-            if sym_allow is not None and sym not in sym_allow:
+            if sym_allow is not None and canonical_symbol(sym) not in sym_allow:
                 continue
             risk_state = group_risk.get(grp_u) or group_market_risk_state(grp_u, now_dt=now_prio)
             skip_entry, skip_tag = risk_window_skip_decision(
@@ -13289,6 +13338,31 @@ if __name__ == "__main__":
     CFG.trade_window_fx_rotation_only_when_over_capacity = _cfg_bool(
         "trade_window_fx_rotation_only_when_over_capacity", CFG.trade_window_fx_rotation_only_when_over_capacity
     )
+    CFG.trade_window_symbol_filter_enabled = _cfg_bool(
+        "trade_window_symbol_filter_enabled", CFG.trade_window_symbol_filter_enabled
+    )
+    raw_tw_intents = strategy_cfg.get("trade_window_symbol_intents", None)
+    if raw_tw_intents is not None:
+        if not isinstance(raw_tw_intents, dict):
+            raise SystemExit("CONFIG_STRATEGY_FAIL: trade_window_symbol_intents must be object")
+        tw_intents_out: Dict[str, Tuple[str, ...]] = {}
+        for k, v in raw_tw_intents.items():
+            wid = str(k or "").strip()
+            if not wid:
+                continue
+            if not isinstance(v, (list, tuple)):
+                raise SystemExit(f"CONFIG_STRATEGY_FAIL: trade_window_symbol_intents.{wid} must be list")
+            lst: List[str] = []
+            seen: Set[str] = set()
+            for item in v:
+                s = str(item or "").strip().upper()
+                if s and s not in seen:
+                    seen.add(s)
+                    lst.append(s)
+            tw_intents_out[wid] = tuple(lst)
+        CFG.trade_window_symbol_intents = dict(tw_intents_out)
+    elif not isinstance(getattr(CFG, "trade_window_symbol_intents", {}), dict):
+        CFG.trade_window_symbol_intents = {}
     CFG.adx_threshold = _cfg_int("adx_threshold", CFG.adx_threshold)
     CFG.adx_range_max = _cfg_int("adx_range_max", CFG.adx_range_max)
     CFG.regime_switch_enabled = _cfg_bool("regime_switch_enabled", CFG.regime_switch_enabled)
@@ -13442,6 +13516,9 @@ if __name__ == "__main__":
     )
     CFG.jpy_basket_symbol_intents = tuple(
         _cfg_str_list("jpy_basket_symbol_intents", list(CFG.jpy_basket_symbol_intents))
+    )
+    CFG.asia_wave1_symbol_intents = tuple(
+        _cfg_str_list("asia_wave1_symbol_intents", list(CFG.asia_wave1_symbol_intents))
     )
     CFG.position_time_stop_enabled = _cfg_bool("position_time_stop_enabled", CFG.position_time_stop_enabled)
     CFG.position_time_stop_only_magic = _cfg_bool("position_time_stop_only_magic", CFG.position_time_stop_only_magic)
