@@ -1,0 +1,380 @@
+{
+  "schema_version": "oanda_mt5.observers_draft_manifest.v1",
+  "generated_at_utc": "2026-02-27T08:30:43.491280Z",
+  "workspace_root_path": "C:\\OANDA_MT5_SYSTEM",
+  "observers_root_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT",
+  "file_count": 46,
+  "files": [
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\__init__.py",
+      "relative_path": "__init__.py",
+      "classification": "code",
+      "size_bytes": 62,
+      "sha256": "f31bb1687c8545484ee1e13699d4512ea4d95d6ce2a1bae0f6f2889c4a2e9a13",
+      "mtime_utc": "2026-02-27T08:10:31.769149Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_informacyjny\\__init__.py",
+      "relative_path": "agent_informacyjny/__init__.py",
+      "classification": "code",
+      "size_bytes": 45,
+      "sha256": "9a9c16acbd9c14fc8dfc44eeb8bd3e2e04803b3900d6aebd4705e8a9fcc61c69",
+      "mtime_utc": "2026-02-27T08:00:34.920528Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_informacyjny\\agent_ops_monitor.py",
+      "relative_path": "agent_informacyjny/agent_ops_monitor.py",
+      "classification": "code",
+      "size_bytes": 4659,
+      "sha256": "e7ddbd6d34de0fe7cc50a88d866af23fd6860140ac95290b605941514581da41",
+      "mtime_utc": "2026-02-27T08:02:22.095751Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_informacyjny\\report_schema.py",
+      "relative_path": "agent_informacyjny/report_schema.py",
+      "classification": "code",
+      "size_bytes": 526,
+      "sha256": "25616d5e5ffd178cb0be0bee49bb65d670a5282c1547b878933d8dc2efa47373",
+      "mtime_utc": "2026-02-27T08:00:58.267644Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_informacyjny\\rules_alerts.py",
+      "relative_path": "agent_informacyjny/rules_alerts.py",
+      "classification": "code",
+      "size_bytes": 1066,
+      "sha256": "afa874d80ae449d24da6e2c55cdc403999e01d822e60b327435c00e8d042ae0d",
+      "mtime_utc": "2026-02-27T08:01:28.754858Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rekomendacyjny\\__init__.py",
+      "relative_path": "agent_rekomendacyjny/__init__.py",
+      "classification": "code",
+      "size_bytes": 50,
+      "sha256": "be629cfa7737d15dbb781cb01fe59ec0cab29ab63b85c5702cb99227af877268",
+      "mtime_utc": "2026-02-27T08:04:32.669152Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rekomendacyjny\\agent_recommendations.py",
+      "relative_path": "agent_rekomendacyjny/agent_recommendations.py",
+      "classification": "code",
+      "size_bytes": 3761,
+      "sha256": "0968474912a2e7f3a78ca6a52f9e156b356af98e95c5ddfd29e361db9cd02c9b",
+      "mtime_utc": "2026-02-27T08:06:37.850121Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rekomendacyjny\\prioritization.py",
+      "relative_path": "agent_rekomendacyjny/prioritization.py",
+      "classification": "code",
+      "size_bytes": 429,
+      "sha256": "4ca8da568505589d6e3d9e39483e21cd474865b894e3d041abf9264931234dac",
+      "mtime_utc": "2026-02-27T08:05:51.555594Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rekomendacyjny\\recommendation_schema.py",
+      "relative_path": "agent_rekomendacyjny/recommendation_schema.py",
+      "classification": "code",
+      "size_bytes": 256,
+      "sha256": "3ad7462ad4ed238c495620fb0ba64aa43c619c78e4a9c116477d565be0615c56",
+      "mtime_utc": "2026-02-27T08:05:15.329419Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rozwoju_scalpingu\\__init__.py",
+      "relative_path": "agent_rozwoju_scalpingu/__init__.py",
+      "classification": "code",
+      "size_bytes": 36,
+      "sha256": "34ca891712db6218e411efd046727caee8e9aaec001770450610eef7eeebc4cf",
+      "mtime_utc": "2026-02-27T08:03:00.424978Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rozwoju_scalpingu\\agent_scalping_rd.py",
+      "relative_path": "agent_rozwoju_scalpingu/agent_scalping_rd.py",
+      "classification": "code",
+      "size_bytes": 2775,
+      "sha256": "36e83319f34c38511e2ab5fe6e49984ff993a87e0f6465614efc24c4615b7642",
+      "mtime_utc": "2026-02-27T08:04:15.585601Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rozwoju_scalpingu\\diagnosis_rules.py",
+      "relative_path": "agent_rozwoju_scalpingu/diagnosis_rules.py",
+      "classification": "code",
+      "size_bytes": 1451,
+      "sha256": "628f0b24b60df9aec7e3d9f4e01b2bfa564a1985fedc8c428056f07c4f0a40f0",
+      "mtime_utc": "2026-02-27T08:03:49.456204Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_rozwoju_scalpingu\\metrics_engine.py",
+      "relative_path": "agent_rozwoju_scalpingu/metrics_engine.py",
+      "classification": "code",
+      "size_bytes": 1274,
+      "sha256": "ff74de4e25018497d4b66f9d06dcf94b44a5273cc51af47584330f849c4a03b8",
+      "mtime_utc": "2026-02-27T08:03:26.846406Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_straznik_spojnosci\\__init__.py",
+      "relative_path": "agent_straznik_spojnosci/__init__.py",
+      "classification": "code",
+      "size_bytes": 44,
+      "sha256": "bd2f250651f19f38bf81c9276925472a57da1f985ac449f969d373948e5ae112",
+      "mtime_utc": "2026-02-27T08:06:57.652914Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_straznik_spojnosci\\agent_consistency_guardian.py",
+      "relative_path": "agent_straznik_spojnosci/agent_consistency_guardian.py",
+      "classification": "code",
+      "size_bytes": 3492,
+      "sha256": "c3256a443d8184efef1dfa3bdc42fb07eca990bf9503abaf002695f6e303f59b",
+      "mtime_utc": "2026-02-27T08:09:58.384900Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_straznik_spojnosci\\artifact_freshness_checks.py",
+      "relative_path": "agent_straznik_spojnosci/artifact_freshness_checks.py",
+      "classification": "code",
+      "size_bytes": 872,
+      "sha256": "e807beb98a6d003e48e62ff080056d27bede195c00ecd8684accc201fa9a51c6",
+      "mtime_utc": "2026-02-27T08:07:42.606116Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_straznik_spojnosci\\audit_trigger_rules.py",
+      "relative_path": "agent_straznik_spojnosci/audit_trigger_rules.py",
+      "classification": "code",
+      "size_bytes": 701,
+      "sha256": "ebce50940696080c8a7101b7cfe6e974e08cfdd41ed4184cbdca689b50850c3d",
+      "mtime_utc": "2026-02-27T08:08:09.896911Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\agent_straznik_spojnosci\\contract_checks.py",
+      "relative_path": "agent_straznik_spojnosci/contract_checks.py",
+      "classification": "code",
+      "size_bytes": 491,
+      "sha256": "83ae2b1033e6ad2346ea7cdec3cfff46ee3211ca9c73719576ec27ec1213ba09",
+      "mtime_utc": "2026-02-27T08:07:20.095624Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\__init__.py",
+      "relative_path": "common/__init__.py",
+      "classification": "code",
+      "size_bytes": 127,
+      "sha256": "1373457c8af5531457f655e893c1315ac0bddc56a519150ffdd8e51ad95f7fd8",
+      "mtime_utc": "2026-02-27T07:57:14.977415Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\base_agent.py",
+      "relative_path": "common/base_agent.py",
+      "classification": "code",
+      "size_bytes": 1979,
+      "sha256": "2b829d7f8f8be684c62b83ca1984de745b17cee7e3df30b280edb720eaed7911",
+      "mtime_utc": "2026-02-27T08:00:08.026441Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\boundaries.py",
+      "relative_path": "common/boundaries.py",
+      "classification": "code",
+      "size_bytes": 484,
+      "sha256": "cf058deca193d0bbeca73e5dcc798b89d01d070bb8830575f04c7799ae6a8420",
+      "mtime_utc": "2026-02-27T08:22:05.244937Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\contracts.py",
+      "relative_path": "common/contracts.py",
+      "classification": "code",
+      "size_bytes": 2516,
+      "sha256": "352d720472ccf2ee6cc9821a69b6bb9dc0fa30ae5170dbf0a0fc7f5fb0822950",
+      "mtime_utc": "2026-02-27T07:58:13.623294Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\orchestrator.py",
+      "relative_path": "common/orchestrator.py",
+      "classification": "code",
+      "size_bytes": 981,
+      "sha256": "261b5ae9afde591bfa67e7aef8d5b6c63aba5b695d1392577307fd49d2810410",
+      "mtime_utc": "2026-02-27T08:24:29.842740Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\outputs.py",
+      "relative_path": "common/outputs.py",
+      "classification": "code",
+      "size_bytes": 2285,
+      "sha256": "9e4e9619f73de370eedf72de368d49be23933b0f64344d0418a60748737af314",
+      "mtime_utc": "2026-02-27T07:59:06.904768Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\paths.py",
+      "relative_path": "common/paths.py",
+      "classification": "code",
+      "size_bytes": 2365,
+      "sha256": "67f344037f1df9a7176d129c5792995af11f894dfa06fc81c908a311ec5bc2e6",
+      "mtime_utc": "2026-02-27T08:22:43.631347Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\readonly_adapter.py",
+      "relative_path": "common/readonly_adapter.py",
+      "classification": "code",
+      "size_bytes": 7062,
+      "sha256": "34b0366907828c40c7396c65c482e59ef5e0c4d2c4e6e40de9a73bdb84475696",
+      "mtime_utc": "2026-02-27T07:59:45.338765Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\stt_normalization.py",
+      "relative_path": "common/stt_normalization.py",
+      "classification": "code",
+      "size_bytes": 976,
+      "sha256": "8736f8c202372e32d1de28a8762349cf920d15950a40ba97bc031732b660d54f",
+      "mtime_utc": "2026-02-27T07:57:29.946081Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\common\\validators.py",
+      "relative_path": "common/validators.py",
+      "classification": "code",
+      "size_bytes": 1848,
+      "sha256": "539f5b88e775ce9d7dde0cb19cb557dd6308c3a21d60e36bd90c1add75a32215",
+      "mtime_utc": "2026-02-27T07:58:39.983908Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\docs\\ARCHITEKTURA_4_AGENTOW_READ_ONLY.md",
+      "relative_path": "docs/ARCHITEKTURA_4_AGENTOW_READ_ONLY.md",
+      "classification": "docs",
+      "size_bytes": 809,
+      "sha256": "78427ac0b35c72072150f60a2e0537ac46d01637464a01f667057cade8165f0c",
+      "mtime_utc": "2026-02-27T08:12:49.649566Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\docs\\DECISIONS.md",
+      "relative_path": "docs/DECISIONS.md",
+      "classification": "docs",
+      "size_bytes": 868,
+      "sha256": "25e0ce52f7a5589b026549939a586ae2c26738fcd61d378ba35d4f0155175472",
+      "mtime_utc": "2026-02-27T08:14:25.769844Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\docs\\README_OBSERVERS_DRAFT.md",
+      "relative_path": "docs/README_OBSERVERS_DRAFT.md",
+      "classification": "docs",
+      "size_bytes": 841,
+      "sha256": "b4118ade7c3fa066209c51aaaaf0b50d16b5f17bf4fb7dd70c667f062ce1111b",
+      "mtime_utc": "2026-02-27T08:12:16.496307Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\docs\\WDROZENIE_ETAPOWE_PLAN.md",
+      "relative_path": "docs/WDROZENIE_ETAPOWE_PLAN.md",
+      "classification": "docs",
+      "size_bytes": 534,
+      "sha256": "2a0e5b1bb39d5fbf30e0e80d05b43f788543062c0858fcf520fe6ab62a3167b3",
+      "mtime_utc": "2026-02-27T08:13:33.533346Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\DRAFT_MANIFEST.json",
+      "relative_path": "DRAFT_MANIFEST.json",
+      "classification": "code",
+      "size_bytes": 20836,
+      "sha256": "65367578f330f4e07bfd4edce9e9ba59342d64fc840c89e5057d2dcfed04a631",
+      "mtime_utc": "2026-02-27T08:27:34.691776Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\examples\\example_ops_report.json",
+      "relative_path": "examples/example_ops_report.json",
+      "classification": "example",
+      "size_bytes": 424,
+      "sha256": "9077b55a446ac2248d35cc44d62e9e5d194860fbaa37fb6d8485ef4b88efdd88",
+      "mtime_utc": "2026-02-27T08:11:38.798020Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\examples\\example_ticket_to_codex.json",
+      "relative_path": "examples/example_ticket_to_codex.json",
+      "classification": "example",
+      "size_bytes": 950,
+      "sha256": "8d198f1b1b8d19876982874de0a55cfe6d1a8dba124c8550a28f1c44fa998d29",
+      "mtime_utc": "2026-02-27T08:11:17.328921Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\outputs\\.gitkeep",
+      "relative_path": "outputs/.gitkeep",
+      "classification": "output_placeholder",
+      "size_bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "mtime_utc": "2026-02-27T08:18:26.368140Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\outputs\\alerts\\.gitkeep",
+      "relative_path": "outputs/alerts/.gitkeep",
+      "classification": "output_placeholder",
+      "size_bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "mtime_utc": "2026-02-27T08:19:39.641070Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\outputs\\cache\\.gitkeep",
+      "relative_path": "outputs/cache/.gitkeep",
+      "classification": "output_placeholder",
+      "size_bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "mtime_utc": "2026-02-27T08:21:14.816863Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\outputs\\reports\\.gitkeep",
+      "relative_path": "outputs/reports/.gitkeep",
+      "classification": "output_placeholder",
+      "size_bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "mtime_utc": "2026-02-27T08:19:04.903641Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\outputs\\tickets\\.gitkeep",
+      "relative_path": "outputs/tickets/.gitkeep",
+      "classification": "output_placeholder",
+      "size_bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "mtime_utc": "2026-02-27T08:20:20.943534Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\tests\\__init__.py",
+      "relative_path": "tests/__init__.py",
+      "classification": "test",
+      "size_bytes": 39,
+      "sha256": "09e32e75e302b1ba54bb65abf9a62058fe2f9986a44590c91cf72b3e1fd87613",
+      "mtime_utc": "2026-02-27T08:15:20.054500Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\tests\\test_contract_validator_basics.py",
+      "relative_path": "tests/test_contract_validator_basics.py",
+      "classification": "test",
+      "size_bytes": 1375,
+      "sha256": "d74266b76ba80d2cd76966bf4e5b416fac60ca344dee11f95360a578b2663ed9",
+      "mtime_utc": "2026-02-27T08:17:16.270410Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\tests\\test_paths_write_boundaries.py",
+      "relative_path": "tests/test_paths_write_boundaries.py",
+      "classification": "test",
+      "size_bytes": 578,
+      "sha256": "c41d6a94a4e54f3ffb14cf677916900de112a4e2470bb925ef9bd380499e481b",
+      "mtime_utc": "2026-02-27T08:17:56.807811Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\tests\\test_readonly_no_runtime_imports.py",
+      "relative_path": "tests/test_readonly_no_runtime_imports.py",
+      "classification": "test",
+      "size_bytes": 1187,
+      "sha256": "7280fb79b29692b5bd54e0512ef1b6eb0f869ffb0331619937437db71d3de699",
+      "mtime_utc": "2026-02-27T08:23:33.241156Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\tests\\test_ticket_schema.py",
+      "relative_path": "tests/test_ticket_schema.py",
+      "classification": "test",
+      "size_bytes": 914,
+      "sha256": "6106895d175f3a3ac6c32341bcfe3cd87bdc52791706661f55af43d8e965c2c8",
+      "mtime_utc": "2026-02-27T08:16:37.612027Z"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_DRAFT\\tickets_schema\\codex_ticket_schema_v1.json",
+      "relative_path": "tickets_schema/codex_ticket_schema_v1.json",
+      "classification": "schema",
+      "size_bytes": 1361,
+      "sha256": "a6edb333713847a8e30f1c0534689a02ee29b6c6d5afbd20169dc4eabbe6550c",
+      "mtime_utc": "2026-02-27T08:10:54.983458Z"
+    }
+  ],
+  "notes": [
+    "Draft only, no runtime integration, no installation"
+  ]
+}

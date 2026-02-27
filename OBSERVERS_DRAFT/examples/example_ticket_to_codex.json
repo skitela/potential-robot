@@ -1,0 +1,32 @@
+{
+  "schema_version": "oanda_mt5.observers.codex_ticket.v1",
+  "ticket_id": "b2db8eb8-0c8f-4012-ad4c-b3d8fe78de24",
+  "dedupe_key": "agent_informacyjny:OPERATIONS_ALERT:HIGH:Drift mismatch",
+  "created_at_utc": "2026-02-27T00:00:00Z",
+  "agent_name": "agent_informacyjny",
+  "priority": "HIGH",
+  "issue_type": "OPERATIONS_ALERT_BURST_OR_DRIFT_RISK",
+  "summary": "Drift mismatch detected in observer layer.",
+  "evidence_paths": [
+    "OBSERVERS_DRAFT/outputs/reports/agent_informacyjny/20260227T000000Z_ops_monitoring_snapshot.json"
+  ],
+  "suggested_audit_type": "POST-CHANGE_HARD_AUDIT_DELTA",
+  "suggested_scope": {
+    "focus": [
+      "drift",
+      "ipc"
+    ],
+    "window_hours": 6
+  },
+  "questions": [
+    "Is drift mismatch caused by stale artifacts?"
+  ],
+  "impact": {
+    "risk": "MEDIUM",
+    "decision_loop_touched": false
+  },
+  "requires_operator_approval": true,
+  "codex_invocation_mode": "MANUAL_BY_OPERATOR",
+  "notes": []
+}
+

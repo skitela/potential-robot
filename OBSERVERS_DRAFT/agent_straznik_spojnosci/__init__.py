@@ -1,0 +1,2 @@
+"""Consistency guardian observer agent."""
+
