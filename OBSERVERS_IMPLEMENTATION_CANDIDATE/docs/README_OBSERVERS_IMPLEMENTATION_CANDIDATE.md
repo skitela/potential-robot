@@ -22,3 +22,14 @@ Warstwa `OBSERVERS_IMPLEMENTATION_CANDIDATE` jest odseparowana od execution path
 - Brak integracji runtime trading.
 - Brak instalacji jako service.
 - Brak modyfikacji SafetyBot/EA/bridge.
+
+## Komunikacja z operatorem (wdrozone)
+- Konsola operatora (terminal refresh):
+  - `python OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/operator_console.py`
+- Runtime scheduler observerow (read-only, bez decision loop integration):
+  - `python OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/operator_runtime_service.py --popup-enabled`
+- Start/stop przez PowerShell:
+  - `OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/start_operator_console.ps1`
+  - `OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/stop_operator_console.ps1`
+
+Wyskakujace okienka sa generowane tylko dla alertow `severity=HIGH` i nie uruchamiaja zadnych zmian w runtime trading.

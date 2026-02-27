@@ -1,0 +1,58 @@
+{
+  "schema_version": "oanda_mt5.observers.runtime_onboarding_preflight.v1",
+  "generated_at_utc": "2026-02-27T10:35:54.792465Z",
+  "root": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE",
+  "verdict": "GO",
+  "checks": [
+    {
+      "name": "required_files",
+      "passed": true,
+      "details": {
+        "missing": [],
+        "required_count": 6
+      }
+    },
+    {
+      "name": "audit_statuses",
+      "passed": true,
+      "details": {
+        "missing": [],
+        "statuses": {
+          "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\audits\\audit_1_self.json": "PASS",
+          "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\audits\\audit_2_cross_architecture.json": "PASS",
+          "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\audits\\audit_3_operational_auditability.json": "PASS"
+        }
+      }
+    },
+    {
+      "name": "import_boundaries",
+      "passed": true,
+      "details": {
+        "violations": [],
+        "forbidden_prefixes": [
+          "MetaTrader5",
+          "safetybot",
+          "zeromq_bridge",
+          "BIN.safetybot",
+          "BIN.zeromq_bridge",
+          "MQL5"
+        ]
+      }
+    },
+    {
+      "name": "write_boundaries",
+      "passed": true,
+      "details": {
+        "violations": [],
+        "allowed_files": [
+          "common/outputs.py",
+          "common/paths.py",
+          "tests/test_safe_read_artifacts.py",
+          "tools/operator_dry_run_cycle.py",
+          "tools/operator_runtime_service.py",
+          "tools/runtime_onboarding_preflight.py"
+        ]
+      }
+    }
+  ]
+}

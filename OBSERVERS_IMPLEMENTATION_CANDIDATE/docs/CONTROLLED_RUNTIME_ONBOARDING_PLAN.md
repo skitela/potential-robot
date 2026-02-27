@@ -19,6 +19,8 @@ Przeprowadzic kontrolowany onboarding warstwy `OBSERVERS_IMPLEMENTATION_CANDIDAT
 1. Operator uruchamia pojedynczy cykl kazdego agenta na danych persisted (lokalnie).
 2. Weryfikacja, ze raporty/alerty/tickety trafiaja wyłącznie do `outputs/`.
 3. Weryfikacja, ze nie ma prob zapisu do execution path.
+4. Konsola operatora prezentuje stan uslugi + liczniki + ostatnie alerty.
+5. Popups tylko dla `HIGH` alertow (bez ingerencji w decision loop).
 
 ## Etap 3: Shadow onboarding (osobny prompt)
 1. Podpiecie uruchamiania agentow do harmonogramu pomocniczego.

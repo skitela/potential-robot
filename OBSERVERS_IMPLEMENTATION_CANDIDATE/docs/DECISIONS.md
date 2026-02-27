@@ -21,6 +21,13 @@ Brak danych lub niepelny artefakt nie jest traktowany jako falszywy FAIL globaln
 ## D5 Repo implantation without runtime integration
 Kod zostal osadzony jako osobna warstwa w repo (`OBSERVERS_IMPLEMENTATION_CANDIDATE`) bez podpinania do decision loop.
 
+## D6 Operator communication channel
+Wdrożono dedykowany kanał operatorski:
+- `operator_runtime_service.py` (scheduler read-only + status + high-alert popup),
+- `operator_console.py` (widok stanu na ekranie),
+- start/stop skrypty PowerShell.
+Kanał nie dotyka SafetyBot/EA/bridge i nie wykonuje runtime queries do decision loop.
+
 ## OPEN_DECISIONS
 1. Ktore snapshoty sa kanoniczne dla V1 (mapa nazwa->sciezka) i jakie TTL per artefakt?
 2. Jaka polityka retencji dla `outputs/` (rotacja, limity)?
