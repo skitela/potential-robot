@@ -1,11 +1,11 @@
 {
-  "ts_utc": "2026-02-27T09:52:54.857174Z",
+  "ts_utc": "2026-02-27T10:07:51.564223Z",
   "role_separation": {
     "roles": {
-      "agent_informacyjny": "monitoring operacyjny",
-      "agent_rozwoju_scalpingu": "R&D analytics",
+      "agent_informacyjny": "monitoring",
+      "agent_rozwoju_scalpingu": "rd",
       "agent_rekomendacyjny": "rekomendacje",
-      "agent_straznik_spojnosci": "drift/consistency guard"
+      "agent_straznik_spojnosci": "guardian"
     },
     "missing_role_entrypoints": [],
     "pass": true

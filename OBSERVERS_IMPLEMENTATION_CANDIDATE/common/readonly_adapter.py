@@ -12,7 +12,8 @@ from .paths import Paths
 
 
 READ_STATUS_OK = "OK"
-READ_STATUS_STALE_OR_INCOMPLETE = "STALE_OR_INCOMPLETE"
+READ_STATUS_STALE_OR_INCOMPLETE_ARTIFACT = "STALE_OR_INCOMPLETE_ARTIFACT"
+READ_STATUS_STALE_OR_INCOMPLETE = READ_STATUS_STALE_OR_INCOMPLETE_ARTIFACT
 READ_STATUS_MISSING = "MISSING"
 
 
@@ -175,4 +176,3 @@ class ReadOnlyDataAdapter:
     @staticmethod
     def _utc_now() -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-

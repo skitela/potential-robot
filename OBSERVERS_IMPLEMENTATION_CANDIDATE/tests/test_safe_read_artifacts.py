@@ -7,6 +7,7 @@ import unittest
 from OBSERVERS_IMPLEMENTATION_CANDIDATE.common.paths import Paths
 from OBSERVERS_IMPLEMENTATION_CANDIDATE.common.readonly_adapter import (
     READ_STATUS_STALE_OR_INCOMPLETE,
+    READ_STATUS_STALE_OR_INCOMPLETE_ARTIFACT,
     ReadOnlyDataAdapter,
 )
 from OBSERVERS_IMPLEMENTATION_CANDIDATE.common.stt_normalization import normalize_stt_term
@@ -28,6 +29,7 @@ class TestSafeReadArtifacts(unittest.TestCase):
 
             self.assertIsNotNone(snap)
             self.assertEqual(READ_STATUS_STALE_OR_INCOMPLETE, snap.read_status)
+            self.assertEqual(READ_STATUS_STALE_OR_INCOMPLETE_ARTIFACT, snap.read_status)
 
     def test_stt_normalization_rules(self) -> None:
         src = "Honda MT5 System i Kodex dla Oranda oraz Zaphotybot i lqm5"
