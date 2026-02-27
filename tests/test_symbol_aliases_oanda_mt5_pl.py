@@ -68,6 +68,9 @@ class TestSymbolAliasesOandaMt5Pl(unittest.TestCase):
         self.assertEqual(safetybot.index_profile("DE30.pro"), "EU")
         self.assertEqual(safetybot.guess_group("GOLD.pro"), "METAL")
         self.assertEqual(safetybot.guess_group("BTCUSD.pro"), "CRYPTO")
+        self.assertEqual(safetybot.guess_group("EURJPY.pro"), "FX")
+        self.assertEqual(safetybot.guess_group("AUDJPY.pro"), "FX")
+        self.assertEqual(safetybot.guess_group("NZDJPY.pro"), "FX")
 
     def test_resolve_canon_symbol_uses_aliases_and_suffixes(self):
         bot = types.SimpleNamespace()

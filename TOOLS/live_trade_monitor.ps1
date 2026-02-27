@@ -533,12 +533,12 @@ while ($true) {
                     $barEpoch = $null
                     $barUtc = ""
                     $barAge = $null
+                    $barDelta = $null
+                    $barAhead = $null
                     $barSeen = 0
                     if ($barState.ContainsKey($canon)) {
                         $barEpoch = [int64]$barState[$canon].last_epoch
                         $barSeen = [int]$barState[$canon].count
-                        $barDelta = $null
-                        $barAhead = $null
                         try {
                             $barUtc = ([DateTimeOffset]::FromUnixTimeSeconds([int64]$barEpoch)).UtcDateTime.ToString("o")
                             $delta = [int]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$barEpoch)
