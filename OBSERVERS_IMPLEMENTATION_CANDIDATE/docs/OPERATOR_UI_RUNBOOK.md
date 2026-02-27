@@ -18,14 +18,13 @@ Panel zawiera przyciski:
 - `NAPRAW SYSTEM` (`NAPRAW_SYSTEM.bat` -> `TOOLS/CODEX_REPAIR_RUNBOOK.ps1`)
 - `START MONITORA AGENTOW`
 - `STOP MONITORA AGENTOW`
-- 4 przyciski agentow otwierajace ostatni raport JSON.
+- 4 przyciski agentow otwierajace opisowe podsumowanie.
 
-W widoku agenta (szczegolnie `Agent Informacyjny`) panel pokazuje juz podsumowanie tekstowe zamiast surowego kodu JSON:
-- czy system jest aktywny,
-- liczbe wykonanych zlecen i glowne skip reason,
-- wynik netto za poprzedni i biezacy dzien (z `DB/decision_events.sqlite`, tabela `deals_log`),
-- najwiekszy zysk i strate po symbolach,
-- podsumowanie aktywnosci nocnej (okno Warsaw 20:00->08:00).
+Widoki agentow sa opisowe, nie surowy JSON:
+- `Agent Informacyjny`: stan systemu, wynik netto dzien poprzedni/biezacy, top zysk/strata, podsumowanie nocy.
+- `Agent Rozwoju Scalpingu`: co widzi -> co to znaczy -> co proponuje -> co dalej.
+- `Agent Rekomendacyjny`: priorytety zmian z uzasadnieniem, ryzykiem i sposobem weryfikacji.
+- `Straznik Spojnosci`: wykryte niespojnosci, wplyw, zalecane kroki i warunek eskalacji.
 
 ## Autostart panelu po starcie Windows
 ```powershell
@@ -57,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\OBSERVERS_IMPLEMENT
 
 ## Polityka eskalacji do Codex
 - Tylko `agent_straznik_spojnosci` moze utworzyc ticket do Codex.
-- Pozostali agenci zapisują jedynie rekomendacje/alerty polityki i nie eskaluja ticketow.
+- Pozostali agenci zapisuja jedynie rekomendacje/alerty polityki i nie eskaluja ticketow.
 
 ## Ograniczenia (P0)
 - Brak importu SafetyBot/EA/bridge.

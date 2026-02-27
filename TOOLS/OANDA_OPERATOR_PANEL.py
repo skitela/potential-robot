@@ -525,22 +525,68 @@ def _build_rd_summary(payload: dict, latest_path: Path) -> str:
     metrics = content.get("metrics", {}) if isinstance(content.get("metrics"), dict) else {}
     diagnosis = content.get("diagnosis", {}) if isinstance(content.get("diagnosis"), dict) else {}
     hypotheses = content.get("hypotheses", []) if isinstance(content.get("hypotheses"), list) else []
+    window = content.get("analysis_window_utc", {}) if isinstance(content.get("analysis_window_utc"), dict) else {}
+    event_count = content.get("event_count", "UNKNOWN")
 
     lines = [
         "AGENT ROZWOJU SCALPINGU - PODSUMOWANIE",
         "=" * 72,
         f"Raport plik: {latest_path}",
         f"Generated_at_utc: {payload.get('generated_at_utc', 'UNKNOWN')}",
-        f"Event count: {content.get('event_count', 'UNKNOWN')}",
-        f"Diagnoza: {diagnosis}",
-        f"Liczba hipotez: {len(hypotheses)}",
+        "",
+        "[1] CO WIDZE",
+        f"- Okno analizy: {window.get('start', 'UNKNOWN')} -> {window.get('end', 'UNKNOWN')}",
+        f"- Przeanalizowane zdarzenia: {event_count}",
     ]
 
-    if isinstance(metrics.get("pnl_net_by_symbol"), dict):
-        top = sorted(metrics["pnl_net_by_symbol"].items(), key=lambda x: x[1], reverse=True)[:5]
-        lines.append("Top symbole wg pnl_net_by_symbol:")
-        for symbol, val in top:
-            lines.append(f"- {symbol}: {_fmt_money(_safe_float(val))}")
+    pnl_by_symbol = metrics.get("pnl_net_by_symbol", {})
+    if isinstance(pnl_by_symbol, dict) and pnl_by_symbol:
+        top_gain = max(pnl_by_symbol.items(), key=lambda x: _safe_float(x[1]))
+        top_loss = min(pnl_by_symbol.items(), key=lambda x: _safe_float(x[1]))
+        lines.append(f"- Najmocniejszy symbol netto: {top_gain[0]} ({_fmt_money(_safe_float(top_gain[1]))})")
+        lines.append(f"- Najslabszy symbol netto: {top_loss[0]} ({_fmt_money(_safe_float(top_loss[1]))})")
+    else:
+        lines.append("- Brak pelnych danych netto po symbolach w tym oknie.")
+
+    block_dist = metrics.get("block_reason_distribution", {})
+    if isinstance(block_dist, dict) and block_dist:
+        top_block = max(block_dist.items(), key=lambda x: _safe_float(x[1]))
+        lines.append(f"- Najczestszy powod blokady wejsc: {top_block[0]} ({int(_safe_float(top_block[1]))}x)")
+    else:
+        lines.append("- Brak dominujacego powodu blokady (za malo danych lub brak blokad).")
+
+    lines.extend(
+        [
+            "",
+            "[2] CO TO ZNACZY",
+            f"- Warstwa sygnalowa: {diagnosis.get('signal_layer_notes', 'UNKNOWN')}",
+            f"- Warstwa wykonawcza: {diagnosis.get('execution_layer', 'UNKNOWN')}",
+            f"- Warstwa rezimu: {diagnosis.get('regime_layer_notes', 'UNKNOWN')}",
+        ]
+    )
+
+    lines.append("")
+    lines.append("[3] CO PROPONUJE")
+    if hypotheses:
+        for idx, hyp in enumerate(hypotheses[:5], start=1):
+            lines.append(
+                f"{idx}. {hyp.get('statement', 'Brak opisu hipotezy')} "
+                f"(typ: {hyp.get('type', 'UNKNOWN')})"
+            )
+    else:
+        lines.append(
+            "- Na teraz proponuje kontynuowac zbieranie danych; "
+            "bez stabilnej probki nie warto zmieniac polityki."
+        )
+
+    lines.extend(
+        [
+            "",
+            "[4] CO ZROBI SYSTEM DALEJ",
+            "- Agent zapisze kolejny raport po nastepnym cyklu analizy.",
+            "- Jesli ryzyko wzrosnie, eskalacje ticketu do Codex wykona Straznik Spojnosci.",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -554,14 +600,43 @@ def _build_recommendation_summary(payload: dict, latest_path: Path) -> str:
         "=" * 72,
         f"Raport plik: {latest_path}",
         f"Generated_at_utc: {payload.get('generated_at_utc', 'UNKNOWN')}",
-        f"Liczba rekomendacji: {len(recommendations)}",
+        "",
+        "[1] CO WIDZE",
+        f"- Liczba rekomendacji: {len(recommendations)}",
+        f"- Liczba raportow zrodlowych: {content.get('input_report_counts', {})}",
     ]
+
+    lines.append("")
+    lines.append("[2] CO TO ZNACZY")
+    if not recommendations:
+        lines.append("- W tej chwili brak nowej rekomendacji do wdrozenia.")
+    else:
+        high_count = sum(1 for r in recommendations if str(r.get("priority", "")).upper() == "HIGH")
+        med_count = sum(1 for r in recommendations if str(r.get("priority", "")).upper() == "MED")
+        lines.append(f"- Rekomendacje HIGH: {high_count}, MED: {med_count}.")
+        lines.append("- To jest lista priorytetow do przegladu, nie automatyczne zmiany.")
+
+    lines.append("")
+    lines.append("[3] CO PROPONUJE")
     for idx, rec in enumerate(recommendations[:5], start=1):
         lines.append(
-            f"{idx}. [{rec.get('priority', 'UNK')}] {rec.get('problem', 'UNKNOWN')} | requires_codex={rec.get('requires_codex', 'UNKNOWN')}"
+            f"{idx}. [{rec.get('priority', 'UNK')}] {rec.get('problem', 'UNKNOWN')}\n"
+            f"   Dlaczego: {rec.get('evidence', 'UNKNOWN')}\n"
+            f"   Wplyw: {rec.get('impact', 'UNKNOWN')} | Ryzyko: {rec.get('risk', 'UNKNOWN')}\n"
+            f"   Jak sprawdzic: {rec.get('verify_after_change', 'UNKNOWN')}"
         )
     if not recommendations:
-        lines.append("Brak rekomendacji w ostatnim raporcie.")
+        lines.append("- Kontynuowac obserwacje i czekac na mocniejsze sygnaly z raportow.")
+
+    lines.extend(
+        [
+            "",
+            "[4] CO ZROBI SYSTEM DALEJ",
+            "- Agent zapisze kolejny raport rekomendacji po nastepnym cyklu.",
+            "- Ewentualny ticket do Codex wystawia tylko Straznik Spojnosci (guardian-only).",
+        ]
+    )
+
     return "\n".join(lines)
 
 
@@ -569,23 +644,68 @@ def _build_guardian_summary(payload: dict, latest_path: Path) -> str:
     content = payload.get("content", {}) if isinstance(payload.get("content"), dict) else {}
     risk_summary = content.get("risk_summary", {}) if isinstance(content.get("risk_summary"), dict) else {}
     findings = content.get("findings", {}) if isinstance(content.get("findings"), dict) else {}
+    risk_status = str(risk_summary.get("status", "UNKNOWN"))
+    high_findings = int(_safe_float(risk_summary.get("high_findings", 0)))
+    medium_findings = int(_safe_float(risk_summary.get("medium_findings", 0)))
 
     lines = [
         "STRAZNIK SPOJNOSCI - PODSUMOWANIE",
         "=" * 72,
         f"Raport plik: {latest_path}",
         f"Generated_at_utc: {payload.get('generated_at_utc', 'UNKNOWN')}",
-        f"Risk status: {risk_summary.get('status', 'UNKNOWN')}",
-        f"Risk score: {risk_summary.get('risk_score', 'UNKNOWN')}",
+        "",
+        "[1] CO WIDZE",
+        f"- Status ryzyka: {risk_status}",
+        f"- Znalezione problemy HIGH/MED: {high_findings}/{medium_findings}",
     ]
 
     contracts = findings.get("contracts", {}) if isinstance(findings.get("contracts"), dict) else {}
     contract_issues = contracts.get("issues", []) if isinstance(contracts.get("issues"), list) else []
-    lines.append(f"Contract issues: {len(contract_issues)}")
+    lines.append(f"- Problemy kontraktow danych: {len(contract_issues)}")
 
     freshness = findings.get("artifact_freshness", {}) if isinstance(findings.get("artifact_freshness"), dict) else {}
-    stale = freshness.get("stale_or_missing", []) if isinstance(freshness.get("stale_or_missing"), list) else []
-    lines.append(f"Stale/missing artifacts: {len(stale)}")
+    stale_count = int(_safe_float(freshness.get("stale_count", 0)))
+    lines.append(f"- Nieaktualne artefakty: {stale_count}")
+
+    stale_paths: list[str] = []
+    findings_list = freshness.get("findings", []) if isinstance(freshness.get("findings"), list) else []
+    for item in findings_list:
+        if isinstance(item, dict) and str(item.get("status", "")).upper() != "OK":
+            stale_paths.append(str(item.get("path", "UNKNOWN")))
+
+    lines.append("")
+    lines.append("[2] CO TO ZNACZY")
+    if risk_status.upper() == "ALERT":
+        lines.append("- Wykryto stan alarmowy. Potrzebny pilny audyt i dzialanie naprawcze.")
+    elif risk_status.upper() == "WARN":
+        lines.append("- Sa niespojnosci sredniej wagi. System dziala, ale wymaga korekt.")
+    else:
+        lines.append("- Nie widze krytycznych niespojnosci na ten moment.")
+
+    if stale_paths:
+        lines.append("- Najwazniejsze stale artefakty:")
+        for p in stale_paths[:5]:
+            lines.append(f"  * {p}")
+    else:
+        lines.append("- Artefakty krytyczne sa swieze lub bez odchylen.")
+
+    lines.append("")
+    lines.append("[3] CO PROPONUJE")
+    if contract_issues:
+        lines.append("- Najpierw naprawic problemy kontraktow danych, bo utrudniaja wiarygodna diagnoze.")
+    if stale_count > 0:
+        lines.append("- Odswiezyc stale artefakty i ponowic skan spojnosci.")
+    if not contract_issues and stale_count == 0:
+        lines.append("- Utrzymac monitoring i przegladac raport co 30-60 min.")
+
+    lines.extend(
+        [
+            "",
+            "[4] CO ZROBI SYSTEM DALEJ",
+            "- Straznik wykona kolejny skan w nastepnym cyklu.",
+            "- Gdy status przejdzie na ALERT, przygotuje ticket do Codex (guardian-only).",
+        ]
+    )
 
     return "\n".join(lines)
 
