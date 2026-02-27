@@ -1,0 +1,12 @@
+OPERATOR DRY RUN CYCLE
+generated_at_utc: 2026-02-27T10:21:06.528843Z
+workspace_root_path: C:\OANDA_MT5_SYSTEM
+status: PASS
+
+- agent_informacyjny: PASS
+- agent_rozwoju_scalpingu: PASS
+- agent_rekomendacyjny: PASS
+- agent_straznik_spojnosci: PASS
+
+created_output_files: 7
+write_boundary_outside_outputs: 0

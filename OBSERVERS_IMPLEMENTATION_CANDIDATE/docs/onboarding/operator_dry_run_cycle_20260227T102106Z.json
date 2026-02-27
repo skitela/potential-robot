@@ -1,0 +1,65 @@
+{
+  "schema_version": "oanda_mt5.observers.operator_dry_run.v1",
+  "generated_at_utc": "2026-02-27T10:21:06.528843Z",
+  "workspace_root_path": "C:\\OANDA_MT5_SYSTEM",
+  "observers_root_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE",
+  "status": "PASS",
+  "agent_runs": [
+    {
+      "agent": "agent_informacyjny",
+      "status": "PASS",
+      "started_at_utc": "2026-02-27T10:21:04.044939Z",
+      "finished_at_utc": "2026-02-27T10:21:05.774640Z",
+      "result": {
+        "report_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_informacyjny\\20260227T102105Z_ops_monitoring_snapshot.json",
+        "alert_count": 0,
+        "ticket_path": null
+      }
+    },
+    {
+      "agent": "agent_rozwoju_scalpingu",
+      "status": "PASS",
+      "started_at_utc": "2026-02-27T10:21:05.774655Z",
+      "finished_at_utc": "2026-02-27T10:21:06.148020Z",
+      "result": {
+        "report_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_rozwoju_scalpingu\\20260227T102106Z_scalping_rd_daily.json",
+        "ticket_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\tickets\\agent_rozwoju_scalpingu\\20260227T102106Z_3f630446-a86c-4658-a872-c992bc5099b5.json"
+      }
+    },
+    {
+      "agent": "agent_rekomendacyjny",
+      "status": "PASS",
+      "started_at_utc": "2026-02-27T10:21:06.148070Z",
+      "finished_at_utc": "2026-02-27T10:21:06.155909Z",
+      "result": {
+        "report_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_rekomendacyjny\\20260227T102106Z_improvement_recommendations.json",
+        "ticket_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\tickets\\agent_rekomendacyjny\\20260227T102106Z_ac9deb36-5766-4fd0-ad8c-eb1ab4f7e4c4.json"
+      }
+    },
+    {
+      "agent": "agent_straznik_spojnosci",
+      "status": "PASS",
+      "started_at_utc": "2026-02-27T10:21:06.155936Z",
+      "finished_at_utc": "2026-02-27T10:21:06.524039Z",
+      "result": {
+        "report_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_straznik_spojnosci\\20260227T102106Z_consistency_guardian_scan.json",
+        "ticket_path": null
+      }
+    }
+  ],
+  "created_output_files": [
+    "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\alerts\\agent_straznik_spojnosci\\20260227T102106Z_MED_2b04337c01.json",
+    "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_informacyjny\\20260227T102105Z_ops_monitoring_snapshot.json",
+    "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_rekomendacyjny\\20260227T102106Z_improvement_recommendations.json",
+    "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_rozwoju_scalpingu\\20260227T102106Z_scalping_rd_daily.json",
+    "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\reports\\agent_straznik_spojnosci\\20260227T102106Z_consistency_guardian_scan.json",
+    "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\tickets\\agent_rekomendacyjny\\20260227T102106Z_ac9deb36-5766-4fd0-ad8c-eb1ab4f7e4c4.json",
+    "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\outputs\\tickets\\agent_rozwoju_scalpingu\\20260227T102106Z_3f630446-a86c-4658-a872-c992bc5099b5.json"
+  ],
+  "write_boundary_outside_outputs": [],
+  "notes": [
+    "Dry-run only, no runtime integration.",
+    "Read persisted data only.",
+    "No SafetyBot/EA/bridge mutation."
+  ]
+}

@@ -22,6 +22,7 @@ ALLOWED_WRITE_FILES = {
     "common/paths.py",
     "tests/test_safe_read_artifacts.py",
     "tools/runtime_onboarding_preflight.py",
+    "tools/operator_dry_run_cycle.py",
 }
 
 WRITE_CALL_NAMES = {"write_text", "write_bytes", "unlink", "mkdir", "rmdir", "rename", "touch"}
