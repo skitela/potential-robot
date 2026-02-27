@@ -1,9 +1,9 @@
 {
   "schema_version": "oanda_mt5.observers.manifest.v2",
-  "generated_at_utc": "2026-02-27T10:07:20.724722Z",
+  "generated_at_utc": "2026-02-27T10:16:54.658778Z",
   "workspace_root_path": "C:/OANDA_MT5_SYSTEM",
   "observers_root_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE",
-  "file_count": 50,
+  "file_count": 55,
   "files": [
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\__init__.py",
@@ -242,24 +242,32 @@
       "relative_path": "docs/audits/audit_1_self.json",
       "class": "docs",
       "size_bytes": 256,
-      "mtime_utc": "2026-02-27T09:52:54.859219Z",
-      "sha256": "a6154a03e146ce8a6be13ff2ab85b3e08fea12afda9eb99c843032db06eb6d5e"
+      "mtime_utc": "2026-02-27T10:07:51.564305Z",
+      "sha256": "be04e58f0e3aaa35a4d678378425f458df1c128f0bc228a665719a789d138991"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\audits\\audit_2_cross_architecture.json",
       "relative_path": "docs/audits/audit_2_cross_architecture.json",
       "class": "docs",
-      "size_bytes": 673,
-      "mtime_utc": "2026-02-27T09:52:54.860216Z",
-      "sha256": "b6c806ad9dc516abdee751d9b74619e28bbd816799cb9371f5714c0a993f9b81"
+      "size_bytes": 636,
+      "mtime_utc": "2026-02-27T10:07:51.564305Z",
+      "sha256": "fbeb71445c21ec3fe207f23a49f007a4a33aa26c15b5371c72432528f8c29ebb"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\audits\\audit_3_operational_auditability.json",
       "relative_path": "docs/audits/audit_3_operational_auditability.json",
       "class": "docs",
       "size_bytes": 165,
-      "mtime_utc": "2026-02-27T09:53:33.541627Z",
-      "sha256": "518b5c0abdc78ef9eee0546d92cb37baa5cf1ae6c0821be14558133531681328"
+      "mtime_utc": "2026-02-27T10:07:51.564305Z",
+      "sha256": "3896ffb7e1e32e8d30042ebcfdad845acceff7979355835b13b1335ac816298d"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\CONTROLLED_RUNTIME_ONBOARDING_PLAN.md",
+      "relative_path": "docs/CONTROLLED_RUNTIME_ONBOARDING_PLAN.md",
+      "class": "docs",
+      "size_bytes": 1670,
+      "mtime_utc": "2026-02-27T10:12:40.771557Z",
+      "sha256": "ef898d92112614c45b720a1bd891af8e33792a8f3aa3fe2840dbf394fbd23369"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\DECISIONS.md",
@@ -268,6 +276,30 @@
       "size_bytes": 1128,
       "mtime_utc": "2026-02-27T09:51:10.291978Z",
       "sha256": "9ce1e9a1298d1fcf6acfa626757fb1650004422f78d527827aa98d3be16c3520"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\onboarding\\runtime_onboarding_preflight_20260227T101503Z.json",
+      "relative_path": "docs/onboarding/runtime_onboarding_preflight_20260227T101503Z.json",
+      "class": "docs",
+      "size_bytes": 1583,
+      "mtime_utc": "2026-02-27T10:15:03.881618Z",
+      "sha256": "c33d7e58ba91bb66f132aa3fc1b5d60ad908e771cbe4d727ffb28e33c24ba94b"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\onboarding\\runtime_onboarding_preflight_20260227T101503Z.txt",
+      "relative_path": "docs/onboarding/runtime_onboarding_preflight_20260227T101503Z.txt",
+      "class": "docs",
+      "size_bytes": 277,
+      "mtime_utc": "2026-02-27T10:15:03.881618Z",
+      "sha256": "d0e086d2e234fcb48657eff1c603d2ce1db39b4f243e5330759d3432199aa4e7"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\PROMPT_CONTROLLED_RUNTIME_ONBOARDING.txt",
+      "relative_path": "docs/PROMPT_CONTROLLED_RUNTIME_ONBOARDING.txt",
+      "class": "docs",
+      "size_bytes": 1198,
+      "mtime_utc": "2026-02-27T10:12:56.193120Z",
+      "sha256": "7d99a67813cdab01eedc6befeeab6111453c104d7785855423b1800e84d8e995"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\README_OBSERVERS_IMPLEMENTATION_CANDIDATE.md",
@@ -289,9 +321,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\DRAFT_MANIFEST.json",
       "relative_path": "DRAFT_MANIFEST.json",
       "class": "unknown",
-      "size_bytes": 19534,
-      "mtime_utc": "2026-02-27T09:54:02.085135Z",
-      "sha256": "4c81e8ea3af191b5cc855324592e7a16e14528fd8b442d4d025541bcad177252"
+      "size_bytes": 22091,
+      "mtime_utc": "2026-02-27T10:15:35.760797Z",
+      "sha256": "df283c8c988d0b26cd6f9fabbbd62452bab665438f173545948603b87ab25164"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\examples\\example_ops_report.json",
@@ -404,6 +436,14 @@
       "size_bytes": 1361,
       "mtime_utc": "2026-02-27T09:51:10.298987Z",
       "sha256": "a6edb333713847a8e30f1c0534689a02ee29b6c6d5afbd20169dc4eabbe6550c"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\tools\\runtime_onboarding_preflight.py",
+      "relative_path": "tools/runtime_onboarding_preflight.py",
+      "class": "tool",
+      "size_bytes": 6719,
+      "mtime_utc": "2026-02-27T10:14:20.628867Z",
+      "sha256": "81fbb7df5892ea909bdd17c9f95b85b3f9bfc2ebd96464de966aa0d35f070da3"
     }
   ]
 }

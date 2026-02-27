@@ -1,0 +1,44 @@
+Drogi kuzynie,
+
+to jest PROMPT: CONTROLLED RUNTIME ONBOARDING (OBSERVERS CANDIDATE).
+
+KANONICZNY ROOT:
+- C:\OANDA_MT5_SYSTEM
+
+ZAKRES:
+- Tylko warstwa OBSERVERS_IMPLEMENTATION_CANDIDATE.
+- Bez modyfikacji SafetyBot/EA/bridge.
+- Bez zmian strategii/decision loop.
+
+P0 NON-NEGOTIABLE:
+1) NO TOUCH
+2) NO ASK
+3) READ PERSISTED ONLY
+4) MANUAL CODEX INVOCATION ONLY
+
+KROKI:
+1. Uruchom preflight read-only dla:
+   - audit_1_self.json
+   - audit_2_cross_architecture.json
+   - audit_3_operational_auditability.json
+   - granice import/write
+   - komplet docs + manifest
+2. Wygeneruj raport GO/NO-GO:
+   - C:\OANDA_MT5_SYSTEM\OBSERVERS_IMPLEMENTATION_CANDIDATE\docs\onboarding\runtime_onboarding_preflight_*.json
+   - C:\OANDA_MT5_SYSTEM\OBSERVERS_IMPLEMENTATION_CANDIDATE\docs\onboarding\runtime_onboarding_preflight_*.txt
+3. Jesli GO:
+   - przygotuj plan dry-run operatora (manual) bez runtime integration.
+4. Jesli NO-GO:
+   - wypisz tylko FIX_PLAN_ONLY.
+
+ZABRONIONE:
+- Jakikolwiek write do execution path.
+- Jakikolwiek runtime query do SafetyBot/EA/bridge.
+- Auto-uruchamianie Codexa.
+
+WYJSCIE:
+- Krotka odpowiedz:
+  - WORKSPACE_ROOT_PATH
+  - REPORT_JSON_PATH
+  - REPORT_TXT_PATH
+  - VERDICT (GO/NO-GO)
