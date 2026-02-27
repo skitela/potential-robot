@@ -20,6 +20,13 @@ Panel zawiera przyciski:
 - `STOP MONITORA AGENTOW`
 - 4 przyciski agentow otwierajace ostatni raport JSON.
 
+W widoku agenta (szczegolnie `Agent Informacyjny`) panel pokazuje juz podsumowanie tekstowe zamiast surowego kodu JSON:
+- czy system jest aktywny,
+- liczbe wykonanych zlecen i glowne skip reason,
+- wynik netto za poprzedni i biezacy dzien (z `DB/decision_events.sqlite`, tabela `deals_log`),
+- najwiekszy zysk i strate po symbolach,
+- podsumowanie aktywnosci nocnej (okno Warsaw 20:00->08:00).
+
 ## Autostart panelu po starcie Windows
 ```powershell
 powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\INSTALL_OPERATOR_PANEL_AUTOSTART.ps1 -Force

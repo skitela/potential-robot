@@ -37,6 +37,8 @@ Warstwa `OBSERVERS_IMPLEMENTATION_CANDIDATE` jest odseparowana od execution path
 
 Wyskakujace okienka sa generowane tylko dla alertow `severity=HIGH`.
 Przycisk `NAPRAW SYSTEM` uruchamia runbook: `NAPRAW_SYSTEM.bat` -> `TOOLS/CODEX_REPAIR_RUNBOOK.ps1`.
+Przycisk `Agent Informacyjny` pokazuje podsumowanie operacyjne i netto (bez surowego JSON):
+stan systemu, wykonane zlecenia, wynik netto dzien poprzedni/biezacy, top zysk/strata symbolu, aktywnosc nocna.
 
 ## Polityka eskalacji do Codex
 - Tylko `agent_straznik_spojnosci` moze tworzyc tickety do Codex.
