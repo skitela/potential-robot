@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import build_codex_ticket
+from .escalation_policy import evaluate_ticket_permission
 from .outputs import ObserverOutputWriter
 from .readonly_adapter import ReadOnlyDataAdapter
 from .validators import DataContractValidator
@@ -46,6 +47,11 @@ class ReadOnlyAgentBase(ABC):
         questions: list[str],
         impact: dict[str, Any],
     ) -> Path:
+        permission = evaluate_ticket_permission(self.AGENT_NAME, priority)
+        if not permission.allowed:
+            raise PermissionError(
+                f"Escalation denied for agent={self.AGENT_NAME}: {permission.reason}"
+            )
         ticket = build_codex_ticket(
             agent_name=self.AGENT_NAME,
             priority=priority,
@@ -61,4 +67,3 @@ class ReadOnlyAgentBase(ABC):
         if issues:
             raise ValueError(f"Ticket validation failed: {issues}")
         return self.out.write_codex_ticket(ticket)
-

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..common.base_agent import ReadOnlyAgentBase
+from ..common.escalation_policy import evaluate_ticket_permission
 from .prioritization import prioritize_recommendations
 
 
@@ -60,23 +61,36 @@ class ImprovementRecommendationAgent(ReadOnlyAgentBase):
                 "No runtime queries",
                 "No live config changes",
             ],
+            "codex_escalation_policy": {
+                "requested": False,
+                "allowed": False,
+                "reason": "NOT_REQUESTED",
+            },
         }
-        report_path = self.emit_report("improvement_recommendations", report)
         ticket_path: str | None = None
+        policy_alert = None
         if recommendations and any(r.get("requires_codex") for r in recommendations):
             top = recommendations[0]
-            ticket_path = str(
-                self.emit_codex_ticket(
-                    priority=str(top.get("priority", "MED")),
-                    issue_type="IMPROVEMENT_RECOMMENDATION",
-                    summary=str(top.get("problem", "Top recommendation")),
-                    evidence_paths=[str(report_path)],
-                    suggested_audit_type="PATCH_PLANNING_ONLY",
-                    suggested_scope={"observer_recommendation": top.get("scope", "UNKNOWN")},
-                    questions=["Does recommendation preserve read-only observer constitution?"],
-                    impact={"risk": top.get("risk", "UNKNOWN"), "decision_loop_touched": False},
-                )
-            )
+            requested_priority = str(top.get("priority", "MED"))
+            permission = evaluate_ticket_permission(self.AGENT_NAME, requested_priority)
+            report["codex_escalation_policy"] = {
+                "requested": True,
+                "allowed": permission.allowed,
+                "reason": permission.reason,
+            }
+            if not permission.allowed:
+                policy_alert = {
+                    "type": "ESCALATION_POLICY_BLOCKED",
+                    "severity": "LOW",
+                    "agent_name": self.AGENT_NAME,
+                    "requested_priority": requested_priority,
+                    "reason": permission.reason,
+                    "message": "Rekomendacje trafiaja do review; ticket do Codex wysyla Guardian.",
+                }
+
+        report_path = self.emit_report("improvement_recommendations", report)
+        if policy_alert is not None:
+            self.emit_alert("LOW", policy_alert)
 
         return {"report_path": str(report_path), "ticket_path": ticket_path}
 

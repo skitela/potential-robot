@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..common.base_agent import ReadOnlyAgentBase
-from ..common.contracts import EventRecord
+from ..common.escalation_policy import evaluate_ticket_permission
 from .rules_alerts import evaluate_alerts, should_raise_codex_ticket
 
 
@@ -53,36 +53,43 @@ class OperationsMonitoringAgent(ReadOnlyAgentBase):
             "ipc_health": ipc_health.to_dict() if ipc_health else {},
             "recent_critical_events": [e.to_dict() for e in recent_events],
             "data_contract_issues_detected": sorted(set(contract_issues)),
+            "codex_escalation_policy": {
+                "requested": False,
+                "allowed": False,
+                "reason": "NOT_REQUESTED",
+            },
         }
 
         alerts = evaluate_alerts(report)
-        report_path = self.emit_report("ops_monitoring_snapshot", report)
-        alert_paths = [str(self.emit_alert(a["severity"], a)) for a in alerts]
+        ticket_policy_block = None
         ticket_path: str | None = None
 
         if should_raise_codex_ticket(report, alerts):
-            ticket_path = str(
-                self.emit_codex_ticket(
-                    priority="HIGH",
-                    issue_type="OPERATIONS_ALERT_BURST_OR_DRIFT_RISK",
-                    summary="Observer detected high-severity ops/drift alert(s).",
-                    evidence_paths=[str(report_path), *alert_paths],
-                    suggested_audit_type="POST-CHANGE_HARD_AUDIT_DELTA",
-                    suggested_scope={
-                        "runtime": "read-only artifacts",
-                        "focus": ["drift", "ipc", "live-scope consistency"],
-                    },
-                    questions=[
-                        "Is no_live_drift consistent with active canary scope?",
-                        "Are anomaly counters increasing due to transport or policy gates?",
-                    ],
-                    impact={"operational_risk": "MEDIUM_TO_HIGH", "decision_loop_touched": False},
-                )
-            )
+            permission = evaluate_ticket_permission(self.AGENT_NAME, "HIGH")
+            report["codex_escalation_policy"] = {
+                "requested": True,
+                "allowed": permission.allowed,
+                "reason": permission.reason,
+            }
+            if not permission.allowed:
+                ticket_policy_block = {
+                    "type": "ESCALATION_POLICY_BLOCKED",
+                    "severity": "MED",
+                    "agent_name": self.AGENT_NAME,
+                    "requested_priority": "HIGH",
+                    "reason": permission.reason,
+                    "message": "Eskalacja do Codex zablokowana polityka guardian-only.",
+                }
+
+        report_path = self.emit_report("ops_monitoring_snapshot", report)
+        alert_payloads = [*alerts]
+        if ticket_policy_block is not None:
+            alert_payloads.append(ticket_policy_block)
+        alert_paths = [str(self.emit_alert(a["severity"], a)) for a in alert_payloads]
 
         return {
             "report_path": str(report_path),
-            "alert_count": len(alerts),
+            "alert_count": len(alert_payloads),
             "ticket_path": ticket_path,
         }
 
@@ -100,4 +107,3 @@ def _merge_drift_status(no_live_drift: Any, no_strategy_drift: Any) -> str:
     if "OK" in statuses:
         return "OK"
     return "UNKNOWN"
-

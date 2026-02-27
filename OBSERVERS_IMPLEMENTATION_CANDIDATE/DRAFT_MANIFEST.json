@@ -1,9 +1,9 @@
 {
   "schema_version": "oanda_mt5.observers.manifest.v2",
-  "generated_at_utc": "2026-02-27T10:49:43.076528Z",
+  "generated_at_utc": "2026-02-27T11:34:39.405555Z",
   "workspace_root_path": "C:/OANDA_MT5_SYSTEM",
   "observers_root_path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE",
-  "file_count": 76,
+  "file_count": 80,
   "files": [
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\__init__.py",
@@ -25,9 +25,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\agent_informacyjny\\agent_ops_monitor.py",
       "relative_path": "agent_informacyjny/agent_ops_monitor.py",
       "class": "agent_informacyjny",
-      "size_bytes": 4659,
-      "mtime_utc": "2026-02-27T09:51:10.281976Z",
-      "sha256": "e7ddbd6d34de0fe7cc50a88d866af23fd6860140ac95290b605941514581da41"
+      "size_bytes": 4776,
+      "mtime_utc": "2026-02-27T11:22:48.621513Z",
+      "sha256": "9f313c0115e720e83be1aba640a169ac46fd2e3ff76685ce86960b63907224cf"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\agent_informacyjny\\report_schema.py",
@@ -57,9 +57,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\agent_rekomendacyjny\\agent_recommendations.py",
       "relative_path": "agent_rekomendacyjny/agent_recommendations.py",
       "class": "agent_rekomendacyjny",
-      "size_bytes": 3753,
-      "mtime_utc": "2026-02-27T09:51:10.282975Z",
-      "sha256": "c18347fd8159aca4f3c8e857e1c92b8eb095be4db4714a0854bf9f895a579303"
+      "size_bytes": 4188,
+      "mtime_utc": "2026-02-27T11:23:27.276042Z",
+      "sha256": "fafd9ac13d495e957629b9956b864d33a8a1e259cdb8b3819baa3e894e968b99"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\agent_rekomendacyjny\\prioritization.py",
@@ -89,9 +89,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\agent_rozwoju_scalpingu\\agent_scalping_rd.py",
       "relative_path": "agent_rozwoju_scalpingu/agent_scalping_rd.py",
       "class": "agent_rozwoju_scalpingu",
-      "size_bytes": 2775,
-      "mtime_utc": "2026-02-27T09:51:10.284975Z",
-      "sha256": "36e83319f34c38511e2ab5fe6e49984ff993a87e0f6465614efc24c4615b7642"
+      "size_bytes": 3109,
+      "mtime_utc": "2026-02-27T11:23:05.681162Z",
+      "sha256": "e0ce0525f0dbb6b4d4ca77df5d0c6053cf7a0a32740a0eba786daad0f1617aeb"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\agent_rozwoju_scalpingu\\diagnosis_rules.py",
@@ -161,9 +161,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\common\\base_agent.py",
       "relative_path": "common/base_agent.py",
       "class": "common",
-      "size_bytes": 1979,
-      "mtime_utc": "2026-02-27T09:51:10.287991Z",
-      "sha256": "2b829d7f8f8be684c62b83ca1984de745b17cee7e3df30b280edb720eaed7911"
+      "size_bytes": 2281,
+      "mtime_utc": "2026-02-27T11:22:26.864286Z",
+      "sha256": "ac2f22dd235b3ed857ff9a7f0bac896fed99bc0292f24e47314327d90bd5bce9"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\common\\boundaries.py",
@@ -180,6 +180,14 @@
       "size_bytes": 2516,
       "mtime_utc": "2026-02-27T09:51:10.288975Z",
       "sha256": "352d720472ccf2ee6cc9821a69b6bb9dc0fa30ae5170dbf0a0fc7f5fb0822950"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\common\\escalation_policy.py",
+      "relative_path": "common/escalation_policy.py",
+      "class": "common",
+      "size_bytes": 952,
+      "mtime_utc": "2026-02-27T11:21:58.241582Z",
+      "sha256": "9de2aeb7c497e48b9fcdf7280fdfc9a5c7ba043fca9bbdebdccfc98b2974e50f"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\common\\operator_alerts.py",
@@ -281,9 +289,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\DECISIONS.md",
       "relative_path": "docs/DECISIONS.md",
       "class": "docs",
-      "size_bytes": 1460,
-      "mtime_utc": "2026-02-27T10:33:45.082907Z",
-      "sha256": "629f205fa1e0d69cc313e9f2c1a1cfbdcbb496c6f8ac7ae00cc01f279787fd60"
+      "size_bytes": 2287,
+      "mtime_utc": "2026-02-27T11:32:12.292053Z",
+      "sha256": "8bd2c63f34155a3c87509dc3a4c97f846908fd0a7de65c3402b16f64298289de"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\onboarding\\operator_dry_run_cycle_20260227T102106Z.json",
@@ -385,9 +393,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\OPERATOR_UI_RUNBOOK.md",
       "relative_path": "docs/OPERATOR_UI_RUNBOOK.md",
       "class": "docs",
-      "size_bytes": 1279,
-      "mtime_utc": "2026-02-27T10:37:18.181010Z",
-      "sha256": "8d07f37a0ab218bda759d2c127a6bdbbb560d86bc0a4f71236c0fff6ee3b3aa6"
+      "size_bytes": 2041,
+      "mtime_utc": "2026-02-27T11:31:15.505476Z",
+      "sha256": "d892541c4be73472b047e83bf6a78d6f9647f94f45897b55ee304fbce658ad4b"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\PROMPT_CONTROLLED_RUNTIME_ONBOARDING.txt",
@@ -401,9 +409,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\README_OBSERVERS_IMPLEMENTATION_CANDIDATE.md",
       "relative_path": "docs/README_OBSERVERS_IMPLEMENTATION_CANDIDATE.md",
       "class": "docs",
-      "size_bytes": 1774,
-      "mtime_utc": "2026-02-27T10:33:20.595710Z",
-      "sha256": "39e8f3712d4bb1b04e2b8f99c1ab052da3f3d7fb1f6d7228c46739620694eee0"
+      "size_bytes": 2144,
+      "mtime_utc": "2026-02-27T11:32:30.186009Z",
+      "sha256": "dd19ce9c69629a09cb14cb5353013773d50dabc175ad07a7bc164448d4e9fd68"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\docs\\WDROZENIE_ETAPOWE_PLAN.md",
@@ -417,9 +425,9 @@
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\DRAFT_MANIFEST.json",
       "relative_path": "DRAFT_MANIFEST.json",
       "class": "unknown",
-      "size_bytes": 28779,
-      "mtime_utc": "2026-02-27T10:45:18.117714Z",
-      "sha256": "6c4b3cacbfcdf1468bc520d39243f0430d59c790a3d894bb52dd8d61b85d8d82"
+      "size_bytes": 29573,
+      "mtime_utc": "2026-02-27T10:49:43.076720Z",
+      "sha256": "36fc9134089da4bcdd372d13fd3eda1ac8e3a29e3e4150e028e91b69d5d98d38"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\examples\\example_ops_report.json",
@@ -508,6 +516,22 @@
       "size_bytes": 1413,
       "mtime_utc": "2026-02-27T09:51:10.293978Z",
       "sha256": "d1cfa71a8d3600d14f0d5172b1268aca5ea57c58f9aa8fbe74eacc4bbf76d510"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\tests\\test_escalation_policy.py",
+      "relative_path": "tests/test_escalation_policy.py",
+      "class": "test",
+      "size_bytes": 951,
+      "mtime_utc": "2026-02-27T11:23:42.300694Z",
+      "sha256": "ee212170afa4e5d8d7588bf71c5d4f00d1c985b0c0d202cea2569c2800c078cd"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\tests\\test_guardian_ticket_gate.py",
+      "relative_path": "tests/test_guardian_ticket_gate.py",
+      "class": "test",
+      "size_bytes": 1903,
+      "mtime_utc": "2026-02-27T11:33:11.005614Z",
+      "sha256": "db29af3783035794e99597c508ee49793cdb4823edb43848d0b03763584645cb"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\tests\\test_operator_alerts.py",
@@ -604,6 +628,14 @@
       "size_bytes": 2466,
       "mtime_utc": "2026-02-27T10:43:23.664660Z",
       "sha256": "4e22c0e2f28968742abef838b24347b0e0cba6a56d184feb120d7ad7892e3d54"
+    },
+    {
+      "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\tools\\start_operator_runtime_service.ps1",
+      "relative_path": "tools/start_operator_runtime_service.ps1",
+      "class": "tool",
+      "size_bytes": 1985,
+      "mtime_utc": "2026-02-27T11:25:14.272638Z",
+      "sha256": "5db152dee489c12b8ad1f0403b18e34e26781dab533a28608973e0cc0081c8fc"
     },
     {
       "path": "C:\\OANDA_MT5_SYSTEM\\OBSERVERS_IMPLEMENTATION_CANDIDATE\\tools\\stop_operator_console.ps1",

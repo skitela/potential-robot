@@ -24,12 +24,20 @@ Warstwa `OBSERVERS_IMPLEMENTATION_CANDIDATE` jest odseparowana od execution path
 - Brak modyfikacji SafetyBot/EA/bridge.
 
 ## Komunikacja z operatorem (wdrozone)
-- Konsola operatora (terminal refresh):
-  - `python OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/operator_console.py`
+- Panel operatorski:
+  - `powershell -ExecutionPolicy Bypass -File TOOLS/START_OPERATOR_PANEL.ps1`
+- Autostart panelu:
+  - `powershell -ExecutionPolicy Bypass -File TOOLS/INSTALL_OPERATOR_PANEL_AUTOSTART.ps1 -Force`
 - Runtime scheduler observerow (read-only, bez decision loop integration):
   - `python OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/operator_runtime_service.py --popup-enabled`
-- Start/stop przez PowerShell:
-  - `OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/start_operator_console.ps1`
+- Start monitora bez otwierania konsoli:
+  - `OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/start_operator_runtime_service.ps1`
+- Stop monitora:
   - `OBSERVERS_IMPLEMENTATION_CANDIDATE/tools/stop_operator_console.ps1`
 
-Wyskakujace okienka sa generowane tylko dla alertow `severity=HIGH` i nie uruchamiaja zadnych zmian w runtime trading.
+Wyskakujace okienka sa generowane tylko dla alertow `severity=HIGH`.
+Przycisk `NAPRAW SYSTEM` uruchamia runbook: `NAPRAW_SYSTEM.bat` -> `TOOLS/CODEX_REPAIR_RUNBOOK.ps1`.
+
+## Polityka eskalacji do Codex
+- Tylko `agent_straznik_spojnosci` moze tworzyc tickety do Codex.
+- Pozostali agenci zapisuja raporty/alerty, bez bezposredniej eskalacji ticketowej.
