@@ -555,13 +555,17 @@ def _build_rd_summary(payload: dict, latest_path: Path) -> str:
     else:
         lines.append("- Brak dominujacego powodu blokady (za malo danych lub brak blokad).")
 
+    signal_note = _translate_tech_text(str(diagnosis.get("signal_layer_notes", "Brak opisu.")))
+    regime_note = _translate_tech_text(str(diagnosis.get("regime_layer_notes", "Brak opisu.")))
+    execution_layer = diagnosis.get("execution_layer", {})
+
     lines.extend(
         [
             "",
             "[2] CO TO ZNACZY",
-            f"- Warstwa sygnalowa: {diagnosis.get('signal_layer_notes', 'UNKNOWN')}",
-            f"- Warstwa wykonawcza: {diagnosis.get('execution_layer', 'UNKNOWN')}",
-            f"- Warstwa rezimu: {diagnosis.get('regime_layer_notes', 'UNKNOWN')}",
+            f"- Warstwa sygnalowa: {signal_note}",
+            f"- Warstwa wykonawcza: {_describe_execution_layer(execution_layer)}",
+            f"- Warstwa rezimu: {regime_note}",
         ]
     )
 
@@ -569,9 +573,11 @@ def _build_rd_summary(payload: dict, latest_path: Path) -> str:
     lines.append("[3] CO PROPONUJE")
     if hypotheses:
         for idx, hyp in enumerate(hypotheses[:5], start=1):
+            statement = _translate_tech_text(str(hyp.get("statement", "Brak opisu hipotezy")))
+            hyp_type = _translate_hypothesis_type(str(hyp.get("type", "UNKNOWN")))
             lines.append(
-                f"{idx}. {hyp.get('statement', 'Brak opisu hipotezy')} "
-                f"(typ: {hyp.get('type', 'UNKNOWN')})"
+                f"{idx}. {statement} "
+                f"(typ: {hyp_type})"
             )
     else:
         lines.append(
@@ -585,6 +591,11 @@ def _build_rd_summary(payload: dict, latest_path: Path) -> str:
             "[4] CO ZROBI SYSTEM DALEJ",
             "- Agent zapisze kolejny raport po nastepnym cyklu analizy.",
             "- Jesli ryzyko wzrosnie, eskalacje ticketu do Codex wykona Straznik Spojnosci.",
+            "",
+            "[5] SLOWNIK POJEC",
+            "- 'wynik netto' = zysk/strata po kosztach (prowizje, swap, oplaty).",
+            "- 'odrzucone wejscie' = broker lub polityka nie pozwolily otworzyc pozycji.",
+            "- 'rezim rynku' = aktualny typ warunkow rynku (np. spokojny, zmienny).",
         ]
     )
 
@@ -619,11 +630,16 @@ def _build_recommendation_summary(payload: dict, latest_path: Path) -> str:
     lines.append("")
     lines.append("[3] CO PROPONUJE")
     for idx, rec in enumerate(recommendations[:5], start=1):
+        problem = _translate_tech_text(str(rec.get("problem", "UNKNOWN")))
+        evidence = _translate_tech_text(str(rec.get("evidence", "UNKNOWN")))
+        impact = _translate_tech_text(str(rec.get("impact", "UNKNOWN")))
+        risk = _translate_tech_text(str(rec.get("risk", "UNKNOWN")))
+        verify = _translate_tech_text(str(rec.get("verify_after_change", "UNKNOWN")))
         lines.append(
-            f"{idx}. [{rec.get('priority', 'UNK')}] {rec.get('problem', 'UNKNOWN')}\n"
-            f"   Dlaczego: {rec.get('evidence', 'UNKNOWN')}\n"
-            f"   Wplyw: {rec.get('impact', 'UNKNOWN')} | Ryzyko: {rec.get('risk', 'UNKNOWN')}\n"
-            f"   Jak sprawdzic: {rec.get('verify_after_change', 'UNKNOWN')}"
+            f"{idx}. [{rec.get('priority', 'UNK')}] {problem}\n"
+            f"   Dlaczego: {evidence}\n"
+            f"   Wplyw: {impact} | Ryzyko: {risk}\n"
+            f"   Jak sprawdzic: {verify}"
         )
     if not recommendations:
         lines.append("- Kontynuowac obserwacje i czekac na mocniejsze sygnaly z raportow.")
@@ -708,6 +724,61 @@ def _build_guardian_summary(payload: dict, latest_path: Path) -> str:
     )
 
     return "\n".join(lines)
+
+
+def _translate_hypothesis_type(value: str) -> str:
+    mapping = {
+        "DATA_COVERAGE": "pokrycie danych",
+        "EXECUTION_QUALITY": "jakosc wykonania",
+        "RISK_REGIME": "ryzyko i rezim",
+    }
+    key = (value or "").strip().upper()
+    return mapping.get(key, key or "UNKNOWN")
+
+
+def _describe_execution_layer(execution_layer: object) -> str:
+    if not isinstance(execution_layer, dict):
+        return _translate_tech_text(str(execution_layer))
+    rejects = execution_layer.get("symbols_with_rejects", [])
+    reasons = execution_layer.get("reject_block_reasons", {})
+    reject_count = len(rejects) if isinstance(rejects, list) else 0
+    if reject_count == 0:
+        return "Nie widze odrzuconych wejsc w tym oknie analizy."
+    reason_desc = "brak danych o powodach"
+    if isinstance(reasons, dict) and reasons:
+        top_reason, top_count = max(reasons.items(), key=lambda x: _safe_float(x[1]))
+        reason_desc = f"najczestszy powod: {top_reason} ({int(_safe_float(top_count))}x)"
+    return (
+        f"Widze odrzucone wejscia dla {reject_count} symboli; {reason_desc}."
+    )
+
+
+def _translate_tech_text(text: str) -> str:
+    if not text:
+        return "Brak opisu."
+    replacements = [
+        (
+            "No strategy inference in draft; signal-vs-regime analysis requires richer labeled events.",
+            "Agent nie ocenia jeszcze skutecznosci strategii; potrzeba wiecej oznaczonych zdarzen, aby rozdzielic sygnal od warunkow rynku.",
+        ),
+        (
+            "Regime impact marked UNKNOWN in draft until direct regime tags are mapped.",
+            "Wplyw warunkow rynku jest jeszcze nierozpoznany; trzeba dopiac bezposrednie oznaczenia rezimu rynku.",
+        ),
+        (
+            "Persisted TRADE_CLOSED with pnl_net is sparse; improve reporting coverage before deeper R&D claims.",
+            "W bazie jest za malo zamknietych transakcji z wynikiem netto; najpierw trzeba rozszerzyc pokrycie raportowania.",
+        ),
+        ("Both report streams present", "Oba strumienie raportow sa dostepne."),
+        ("Better prioritization", "Lepsze ustawienie priorytetow zmian."),
+        ("LOW", "niskie"),
+        ("MED", "srednie"),
+        ("HIGH", "wysokie"),
+    ]
+    out = text
+    for src, dst in replacements:
+        out = out.replace(src, dst)
+    return out
 
 
 def main() -> int:
