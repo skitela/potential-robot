@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -78,6 +79,21 @@ def run_cmd(cmd: List[str], *, cwd: Path, timeout_sec: int) -> Dict[str, Any]:
         "stdout_tail": _tail_text(out),
         "stderr_tail": _tail_text(err),
     }
+
+
+def resolve_python_exe(requested: str) -> str:
+    raw = str(requested or "").strip()
+    if raw:
+        p = Path(raw)
+        if p.is_file():
+            return str(p)
+        found = shutil.which(raw)
+        if found:
+            return str(found)
+    current = str(sys.executable or "").strip()
+    if current and Path(current).exists():
+        return current
+    return "python"
 
 
 def _list_gate_run_ids(gates_dir: Path) -> set[str]:
@@ -400,9 +416,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    python_exe = resolve_python_exe(str(args.python))
     rep, out = run_one_click(
         root=Path(args.root),
-        python_exe=str(args.python),
+        python_exe=python_exe,
         mt5_path=str(args.mt5_path),
         offline_sim=bool(args.offline_sim),
         skip_learner=bool(args.skip_learner),

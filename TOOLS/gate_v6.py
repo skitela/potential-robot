@@ -225,6 +225,7 @@ BANNED_DIRS = {"__pycache__"}
 # Paths that are runtime-only or temporary and must not affect release gates.
 EXCLUDE_DIRS_CLEANLINESS = {
     ".venv",
+    ".venv312",
     "_ZIP_AUDIT_",
     "__pycache__",
     "LOGS",
@@ -236,6 +237,26 @@ EXCLUDE_DIRS_CLEANLINESS = {
     "TMP_AUDIT_IO",
     "tests",
     ".git",
+}
+
+# Known operator wrappers intentionally kept at repo root.
+# They are operational entrypoints and are validated by name.
+ROOT_BAT_ALLOWLIST = {
+    "Aktualizuj_EA.bat",
+    "CHECKPOINT_75PLUS.bat",
+    "FIX_MT5_AUTOTRADE.bat",
+    "INSTALUJ_PANEL_AUTOSTART.bat",
+    "NAPRAW_SYSTEM.bat",
+    "PANEL_OPERATORA.bat",
+    "RUN_MT5_FULL_DIAGNOSTIC.bat",
+    "RUN_POST_UNLOCK_ENTRY_TEST.bat",
+    "RUN_TMP_JANITOR.bat",
+    "SAFE_SHUTDOWN.bat",
+    "start.bat",
+    "START_HARDMODE_NIGHT.bat",
+    "START_LONG_SUPERVISOR_72H.bat",
+    "START_MT5_RISK_GUARD.bat",
+    "stop.bat",
 }
 
 # Scope secrets scan to release content only; avoid runtime artifacts.
@@ -302,6 +323,8 @@ def rel(p: Path) -> str:
 
 def _is_excluded_dir(parts: tuple[str, ...], excluded: set[str]) -> bool:
     for part in parts:
+        if part.lower().startswith(".venv"):
+            return True
         if part in excluded:
             return True
         for prefix in excluded:
@@ -325,6 +348,8 @@ def scan_cleanliness() -> tuple[bool, list[str]]:
             continue
 
         if p.suffix.lower() in BANNED_SUFFIXES:
+            if relp.parent == Path(".") and p.name in ROOT_BAT_ALLOWLIST:
+                continue
             issues.append(f"BANNED_FILE: {rel(p)}")
 
     return (len(issues) == 0), issues
