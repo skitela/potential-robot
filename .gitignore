@@ -67,3 +67,11 @@ SECRETS/
 
 # Checksums or generated lists
 CHECKSUMS_BINARIES_SHA256.txt
+
+# Continue local override/secrets (shared config stays tracked)
+.continue/config.local.json
+.continue/config.local.yaml
+.continue/config.local.yml
+.continue/.continuerc.local.json
+.continue/.env
+.continuerc.local.json
