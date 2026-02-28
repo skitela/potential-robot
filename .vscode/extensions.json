@@ -4,6 +4,7 @@
     "ms-python.vscode-pylance",
     "ms-vscode.powershell",
     "charliermarsh.ruff",
+    "google.geminicodeassist",
     "continue.continue",
     "eamodio.gitlens",
     "EditorConfig.EditorConfig",

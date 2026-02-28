@@ -38,6 +38,13 @@ W Continue (panel chat):
 
 Autouzupełnianie (tab autocomplete) jest ustawione na `gemini-fast`.
 
+## Tryb podwójny w VS Code (Gemini + Perplexity)
+- `Gemini Code Assist` działa niezależnie jako osobny panel/agent w VS Code.
+- `Continue` działa równolegle:
+  - `gemini-primary` (domyślnie),
+  - `perplexity-fallback` (przełączany ręcznie).
+- Dzięki temu możesz mieć oba narzędzia aktywne jednocześnie bez zmian w runtime tradingu.
+
 ## Checklista bezpieczeństwa
 - Nigdy nie zapisuj kluczy w:
   - `.continue/config.json`
