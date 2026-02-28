@@ -27,19 +27,29 @@ function Run-Cmd {
                 $safeArgs += $txt
             }
         }
-        $argLine = ($safeArgs | ForEach-Object {
-            if ([string]$_ -match "\s") { '"' + [string]$_ + '"' } else { [string]$_ }
-        }) -join " "
-        $cmdLine = [string]$Exe
-        if (-not [string]::IsNullOrWhiteSpace($argLine)) {
-            $cmdLine = $cmdLine + " " + $argLine
-        }
-        $allOut = (& cmd /c $cmdLine 2>&1 | Out-String)
-        $rc = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
-        return @{
-            rc = [int]$rc
-            stdout = [string]$allOut
-            stderr = ""
+        try {
+            $allOut = (& $Exe @safeArgs 2>&1 | Out-String)
+            $rc = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+            return @{
+                rc = [int]$rc
+                stdout = [string]$allOut
+                stderr = ""
+            }
+        } catch {
+            $argLine = ($safeArgs | ForEach-Object {
+                if ([string]$_ -match "\s") { '"' + [string]$_ + '"' } else { [string]$_ }
+            }) -join " "
+            $cmdLine = [string]$Exe
+            if (-not [string]::IsNullOrWhiteSpace($argLine)) {
+                $cmdLine = $cmdLine + " " + $argLine
+            }
+            $allOut = (& cmd /c $cmdLine 2>&1 | Out-String)
+            $rc = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+            return @{
+                rc = [int]$rc
+                stdout = [string]$allOut
+                stderr = ""
+            }
         }
     } catch {
         return @{
@@ -90,10 +100,12 @@ $report = [ordered]@{
     manual_steps_required = @()
 }
 
-$listRes = Run-Cmd -Exe "powercfg" -Args @("/L")
-$activeRes = Run-Cmd -Exe "powercfg" -Args @("/GETACTIVESCHEME")
-$report.active_scheme_before = Parse-ActiveScheme -Text ([string]$activeRes.stdout + "`n" + [string]$activeRes.stderr)
-$report.high_performance_scheme = Find-HighPerformanceSchemeGuid -Text ([string]$listRes.stdout + "`n" + [string]$listRes.stderr)
+$listText = ""
+$activeText = ""
+try { $listText = (& powercfg /L 2>&1 | Out-String) } catch { $listText = "" }
+try { $activeText = (& powercfg /GETACTIVESCHEME 2>&1 | Out-String) } catch { $activeText = "" }
+$report.active_scheme_before = Parse-ActiveScheme -Text ([string]$activeText)
+$report.high_performance_scheme = Find-HighPerformanceSchemeGuid -Text ([string]$listText)
 
 $commands = @()
 if (-not [string]::IsNullOrWhiteSpace($report.high_performance_scheme)) {
@@ -115,13 +127,48 @@ foreach ($cmd in $commands) {
         }
         continue
     }
-    $res = Run-Cmd -Exe ([string]$cmd.exe) -Args ([string[]]$cmd.args)
+    $res = $null
+    if ([string]$cmd.id -eq "disable_sleep_ac") {
+        try {
+            $o = (& powercfg /X -standby-timeout-ac 0 2>&1 | Out-String)
+            $res = @{ rc = [int]$LASTEXITCODE; stdout = [string]$o; stderr = "" }
+        } catch {
+            $res = @{ rc = 125; stdout = ""; stderr = [string]$_.Exception.Message }
+        }
+    } elseif ([string]$cmd.id -eq "disable_hibernate_ac") {
+        try {
+            $o = (& powercfg /X -hibernate-timeout-ac 0 2>&1 | Out-String)
+            $res = @{ rc = [int]$LASTEXITCODE; stdout = [string]$o; stderr = "" }
+        } catch {
+            $res = @{ rc = 125; stdout = ""; stderr = [string]$_.Exception.Message }
+        }
+    } else {
+        $res = Run-Cmd -Exe ([string]$cmd.exe) -Args ([string[]]$cmd.args)
+    }
     $ok = ([int]$res.rc -eq 0)
+    $usedArgs = @($cmd.args)
+    if (-not $ok -and [string]$cmd.id -eq "disable_sleep_ac") {
+        $fallbackArgs = @("/CHANGE", "standby-timeout-ac", "0")
+        $res2 = Run-Cmd -Exe ([string]$cmd.exe) -Args ([string[]]$fallbackArgs)
+        if ([int]$res2.rc -eq 0) {
+            $res = $res2
+            $ok = $true
+            $usedArgs = @($fallbackArgs)
+        }
+    } elseif (-not $ok -and [string]$cmd.id -eq "disable_hibernate_ac") {
+        $fallbackArgs = @("/CHANGE", "hibernate-timeout-ac", "0")
+        $res2 = Run-Cmd -Exe ([string]$cmd.exe) -Args ([string[]]$fallbackArgs)
+        if ([int]$res2.rc -eq 0) {
+            $res = $res2
+            $ok = $true
+            $usedArgs = @($fallbackArgs)
+        }
+    }
     if (-not $ok) { $report.status = "PARTIAL_FAIL" }
     $report.commands += [ordered]@{
         id = [string]$cmd.id
         exe = [string]$cmd.exe
-        args = @($cmd.args)
+        args = @($usedArgs)
         rc = [int]$res.rc
         ok = [bool]$ok
         stdout_tail = [string]($res.stdout | Out-String | Select-Object -First 1)
