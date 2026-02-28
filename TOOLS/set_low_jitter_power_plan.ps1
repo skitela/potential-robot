@@ -18,15 +18,28 @@ function Resolve-RootPath {
 function Run-Cmd {
     param([string]$Exe, [string[]]$Args)
     try {
-        $p = Start-Process -FilePath $Exe -ArgumentList $Args -NoNewWindow -PassThru -Wait -RedirectStandardOutput "$env:TEMP\low_jitter_out.txt" -RedirectStandardError "$env:TEMP\low_jitter_err.txt"
-        $out = ""
-        $err = ""
-        if (Test-Path "$env:TEMP\low_jitter_out.txt") { $out = Get-Content "$env:TEMP\low_jitter_out.txt" -Raw -ErrorAction SilentlyContinue }
-        if (Test-Path "$env:TEMP\low_jitter_err.txt") { $err = Get-Content "$env:TEMP\low_jitter_err.txt" -Raw -ErrorAction SilentlyContinue }
+        $safeArgs = @()
+        if ($null -ne $Args) {
+            foreach ($a in $Args) {
+                if ($null -eq $a) { continue }
+                $txt = [string]$a
+                if ([string]::IsNullOrWhiteSpace($txt)) { continue }
+                $safeArgs += $txt
+            }
+        }
+        $argLine = ($safeArgs | ForEach-Object {
+            if ([string]$_ -match "\s") { '"' + [string]$_ + '"' } else { [string]$_ }
+        }) -join " "
+        $cmdLine = [string]$Exe
+        if (-not [string]::IsNullOrWhiteSpace($argLine)) {
+            $cmdLine = $cmdLine + " " + $argLine
+        }
+        $allOut = (& cmd /c $cmdLine 2>&1 | Out-String)
+        $rc = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
         return @{
-            rc = [int]$p.ExitCode
-            stdout = [string]$out
-            stderr = [string]$err
+            rc = [int]$rc
+            stdout = [string]$allOut
+            stderr = ""
         }
     } catch {
         return @{
@@ -41,6 +54,7 @@ function Parse-ActiveScheme {
     param([string]$Text)
     if ($Text -match "GUID schematu zasilania:\s*([a-fA-F0-9\-]{36})") { return [string]$Matches[1] }
     if ($Text -match "Power Scheme GUID:\s*([a-fA-F0-9\-]{36})") { return [string]$Matches[1] }
+    if ($Text -match "([a-fA-F0-9\-]{36})") { return [string]$Matches[1] }
     return ""
 }
 
@@ -51,6 +65,9 @@ function Find-HighPerformanceSchemeGuid {
         if ($line -match "([a-fA-F0-9\-]{36}).*(High performance|Wysoka wydajność)") {
             return [string]$Matches[1]
         }
+    }
+    if ($Text -match "(8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c)") {
+        return [string]$Matches[1]
     }
     return ""
 }
@@ -82,8 +99,8 @@ $commands = @()
 if (-not [string]::IsNullOrWhiteSpace($report.high_performance_scheme)) {
     $commands += [ordered]@{ exe = "powercfg"; args = @("/SETACTIVE", [string]$report.high_performance_scheme); id = "set_high_performance" }
 }
-$commands += [ordered]@{ exe = "powercfg"; args = @("/CHANGE", "standby-timeout-ac", "0"); id = "disable_sleep_ac" }
-$commands += [ordered]@{ exe = "powercfg"; args = @("/CHANGE", "hibernate-timeout-ac", "0"); id = "disable_hibernate_ac" }
+$commands += [ordered]@{ exe = "powercfg"; args = @("/X", "-standby-timeout-ac", "0"); id = "disable_sleep_ac" }
+$commands += [ordered]@{ exe = "powercfg"; args = @("/X", "-hibernate-timeout-ac", "0"); id = "disable_hibernate_ac" }
 
 foreach ($cmd in $commands) {
     if (-not $Apply) {
