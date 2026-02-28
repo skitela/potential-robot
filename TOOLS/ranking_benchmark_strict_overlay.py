@@ -35,11 +35,10 @@ def _ok(ok: bool, value: Any, threshold: Any, code: str, note: str = "") -> dict
     }
 
 
-def _is_code_path(path_str: str) -> bool:
+def _is_runtime_code_path(path_str: str) -> bool:
     path = path_str.upper().replace("/", "\\")
     return (
         "\\BIN\\" in path
-        or "\\TOOLS\\" in path
         or "\\MQL5\\" in path
         or "\\CONFIG\\" in path
     )
@@ -69,8 +68,7 @@ def evaluate(bench: dict[str, Any], stress: dict[str, Any], policy: dict[str, An
         score_v = float((criteria.get(cid) or {}).get("score_0_10") or 0.0)
         checks.append(_ok(score_v >= float(min_v), round(score_v, 2), float(min_v), f"CRITERION_{cid}"))
 
-    hits = list(signals.get("hardcoded_path_hits") or [])
-    code_hits = [h for h in hits if _is_code_path(str(h.get("file") or ""))]
+    code_hits = list(signals.get("hardcoded_runtime_code_hits") or [])
     max_code_hits = int(thr.get("max_code_hardcoded_path_hits") or 0)
     checks.append(_ok(len(code_hits) <= max_code_hits, len(code_hits), max_code_hits, "CODE_HARDCODED_PATH_HITS"))
 

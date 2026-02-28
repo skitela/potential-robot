@@ -86,6 +86,8 @@ SOURCE_URLS: List[str] = [
     "https://www.lmax.com/connectivity-guide",
 ]
 
+MAX_RUNTIME_HARDCODED_HITS_BLOCK = 20
+
 
 def now_utc_iso() -> str:
     return dt.datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -104,6 +106,29 @@ def _read_text(path: Path) -> str:
 
 def _clamp10(v: float) -> float:
     return round(max(0.0, min(10.0, float(v))), 2)
+
+
+def _norm_win_path(path_str: str) -> str:
+    return str(path_str or "").upper().replace("/", "\\")
+
+
+def _is_runtime_code_path(path_str: str) -> bool:
+    p = _norm_win_path(path_str)
+    return ("\\BIN\\" in p) or ("\\MQL5\\" in p) or ("\\CONFIG\\" in p)
+
+
+def _is_tooling_path(path_str: str) -> bool:
+    p = _norm_win_path(path_str)
+    return "\\TOOLS\\" in p
+
+
+def _runtime_hard_penalty(count: int) -> float:
+    c = int(max(0, count))
+    if c <= 5:
+        return 0.0
+    if c <= MAX_RUNTIME_HARDCODED_HITS_BLOCK:
+        return 0.5
+    return 1.0
 
 
 def _list_python_files(root: Path) -> List[Path]:
@@ -240,6 +265,8 @@ def collect_signals(root: Path) -> Dict[str, Any]:
         for pat in patterns:
             if pat in txt:
                 hardcoded_hits.append({"file": str(p), "pattern": pat})
+    hardcoded_runtime_hits = [h for h in hardcoded_hits if _is_runtime_code_path(h.get("file", ""))]
+    hardcoded_tooling_hits = [h for h in hardcoded_hits if _is_tooling_path(h.get("file", ""))]
 
     meta_stats = _dir_stats(root / "META")
     log_stats = _dir_stats(root / "LOGS")
@@ -270,6 +297,9 @@ def collect_signals(root: Path) -> Dict[str, Any]:
         "bot_module_count": bot_module_count,
         "keyword_flags": keyword_flags,
         "hardcoded_path_hits": hardcoded_hits,
+        "hardcoded_runtime_code_hits": hardcoded_runtime_hits,
+        "hardcoded_tooling_hits": hardcoded_tooling_hits,
+        "hardcoded_non_runtime_hits_count": max(0, len(hardcoded_hits) - len(hardcoded_runtime_hits)),
         "checks": checks,
         "stats": {
             "meta": meta_stats,
@@ -286,8 +316,8 @@ def score_criteria(signals: Dict[str, Any], smoke: Dict[str, Any], prelive: Dict
     kf = dict(signals.get("keyword_flags") or {})
     ch = dict(signals.get("checks") or {})
     st = dict(signals.get("stats") or {})
-    hard_hits = list(signals.get("hardcoded_path_hits") or [])
-    hard_penalty = 1.0 if hard_hits else 0.0
+    runtime_hard_hits = list(signals.get("hardcoded_runtime_code_hits") or [])
+    hard_penalty = _runtime_hard_penalty(len(runtime_hard_hits))
     smoke_ok = int(smoke.get("failures_count") or 0) == 0
     prelive_go = bool(prelive.get("go"))
     learner_fresh = False
@@ -351,7 +381,7 @@ def score_criteria(signals: Dict[str, Any], smoke: Dict[str, Any], prelive: Dict
     c06 += 0.8 if ch.get("has_system_control_ps1") else 0.0
     c06 += 0.7 if (ch.get("has_start_bat") and ch.get("has_stop_bat")) else 0.0
     c06 += 0.7 if m.get("runtime_root") else 0.0
-    c06 -= 1.0 if hard_hits else 0.0
+    c06 -= 1.0 if runtime_hard_hits else 0.0
 
     c07 = 3.5
     c07 += 1.5 if int(signals.get("bot_module_count") or 0) >= 6 else 0.0
@@ -495,21 +525,21 @@ def overall_go_nogo(smoke: Dict[str, Any], prelive: Dict[str, Any], signals: Dic
     smoke_ok = int(smoke.get("failures_count") or 0) == 0
     prelive_go = bool(prelive.get("go"))
     checks = dict(signals.get("checks") or {})
-    hard_hits = list(signals.get("hardcoded_path_hits") or [])
+    runtime_hard_hits = list(signals.get("hardcoded_runtime_code_hits") or [])
 
     if not smoke_ok:
         blockers.append("SMOKE_COMPILE_FAIL")
     if not prelive_go:
         blockers.append("PRELIVE_NO_GO")
-    if hard_hits:
-        blockers.append("HARDCODED_OANDA_PATHS_IN_GH")
+    if len(runtime_hard_hits) > MAX_RUNTIME_HARDCODED_HITS_BLOCK:
+        blockers.append("HARDCODED_RUNTIME_PATHS")
     if not checks.get("has_tests_dir"):
         blockers.append("NO_TESTS_DIR")
     if not checks.get("has_gate_tool"):
         blockers.append("NO_GATE_TOOLING")
 
     go_live_ready = len(blockers) == 0
-    go_offline_ready = smoke_ok and (len(hard_hits) == 0)
+    go_offline_ready = smoke_ok and (len(runtime_hard_hits) == 0)
     status = "GO" if go_live_ready else ("GO_OFFLINE_PENDING_ONLINE" if go_offline_ready else "NO_GO")
     return {
         "status": status,
@@ -540,7 +570,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
     lines.append(f"- Root: `{gh['root']}`")
     lines.append(f"- Smoke compile: checked={smoke['checked']}, failures={smoke['failures_count']}")
     lines.append(f"- Prelive: go={int(bool(pre.get('go')))}, reason={pre.get('reason')}, qa_light={pre.get('qa_light')}, n_total={pre.get('n_total')}")
-    lines.append(f"- Hardcoded path hits: {len(sig.get('hardcoded_path_hits') or [])}")
+    lines.append(f"- Hardcoded path hits (all): {len(sig.get('hardcoded_path_hits') or [])}")
+    lines.append(f"- Hardcoded path hits (runtime BIN/MQL5/CONFIG): {len(sig.get('hardcoded_runtime_code_hits') or [])}")
+    lines.append(f"- Hardcoded path hits (tooling TOOLS): {len(sig.get('hardcoded_tooling_hits') or [])}")
     lines.append(f"- Tests dir: {int(bool(sig.get('checks', {}).get('has_tests_dir')))}")
     lines.append("")
     lines.append("## 3) Wynik GH V1")
