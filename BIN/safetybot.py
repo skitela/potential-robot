@@ -199,6 +199,12 @@ class CFG:
     # REQ/REP heartbeat to validate MQL5 agent liveness
     zmq_heartbeat_interval_sec: int = 15
     zmq_heartbeat_fail_threshold: int = 3
+    zmq_heartbeat_fail_safe_cooldown_sec: int = 30
+    zmq_heartbeat_fail_log_interval_sec: int = 15
+    zmq_scan_suppressed_log_interval_sec: int = 60
+    run_loop_idle_sleep_sec: float = 0.01
+    run_loop_scan_slow_warn_ms: int = 1500
+    run_loop_scan_stats_window: int = 120
     # częstotliwość sprawdzania obecności klucza USB podczas uśpienia pętli
     usb_watch_check_interval_sec: int = 3
     # Hybrid data path:
@@ -802,6 +808,10 @@ class CFG:
     execution_queue_enabled: bool = True
     execution_queue_maxsize: int = 256
     execution_queue_submit_timeout_sec: int = 20
+    execution_queue_backpressure_enabled: bool = True
+    execution_queue_backpressure_high_watermark: float = 0.85
+    execution_queue_backpressure_warn_interval_sec: int = 30
+    execution_queue_wait_warn_ms: int = 1000
     pending_reconcile_poll_sec: int = 60
     pending_reconcile_force_poll_sec: int = 20
 
@@ -4952,12 +4962,27 @@ class ExecutionQueue:
         self.enabled = bool(getattr(CFG, "execution_queue_enabled", True))
         self.maxsize = max(1, int(getattr(CFG, "execution_queue_maxsize", 256)))
         self.submit_timeout_sec = max(1, int(getattr(CFG, "execution_queue_submit_timeout_sec", 20)))
+        self.backpressure_enabled = bool(getattr(CFG, "execution_queue_backpressure_enabled", True))
+        self.backpressure_high_watermark = float(
+            getattr(CFG, "execution_queue_backpressure_high_watermark", 0.85)
+        )
+        self.backpressure_high_watermark = min(0.99, max(0.10, self.backpressure_high_watermark))
+        self.backpressure_warn_interval_sec = max(
+            1,
+            int(getattr(CFG, "execution_queue_backpressure_warn_interval_sec", 30)),
+        )
+        self.wait_warn_ms = max(100, int(getattr(CFG, "execution_queue_wait_warn_ms", 1000)))
         self._queue: "pyqueue.Queue[Optional[Dict[str, Any]]]" = pyqueue.Queue(maxsize=self.maxsize)
         self._stop_evt = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._worker_ident: int = 0
         self._seq = 0
         self._seq_lock = threading.Lock()
+        self._last_backpressure_log_ts: float = 0.0
+        self._metric_backpressure_drops: int = 0
+        self._metric_queue_full: int = 0
+        self._metric_queue_timeout: int = 0
+        self._metric_wait_warn: int = 0
 
     def _next_seq(self) -> int:
         with self._seq_lock:
@@ -4977,6 +5002,24 @@ class ExecutionQueue:
         )
         self._worker.start()
         logging.info("ORDER_QUEUE_START enabled=1 maxsize=%s", int(self.maxsize))
+
+    def _fill_ratio(self) -> float:
+        try:
+            return float(self._queue.qsize()) / float(max(1, int(self.maxsize)))
+        except Exception:
+            return 0.0
+
+    def metrics_snapshot(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "maxsize": int(self.maxsize),
+            "qsize": int(self._queue.qsize()),
+            "fill_ratio": float(round(self._fill_ratio(), 4)),
+            "backpressure_drops": int(self._metric_backpressure_drops),
+            "queue_full": int(self._metric_queue_full),
+            "queue_timeout": int(self._metric_queue_timeout),
+            "wait_warn": int(self._metric_wait_warn),
+        }
 
     def stop(self, timeout_sec: float = 5.0) -> None:
         if not self.enabled:
@@ -5042,6 +5085,25 @@ class ExecutionQueue:
             # avoid deadlock if called re-entrantly from worker
             return self.engine.order_send(symbol, grp, request, emergency=bool(emergency))
 
+        if self.backpressure_enabled:
+            qsize = int(self._queue.qsize())
+            fill_ratio = float(qsize) / float(max(1, int(self.maxsize)))
+            if fill_ratio >= float(self.backpressure_high_watermark):
+                self._metric_backpressure_drops = int(self._metric_backpressure_drops) + 1
+                now_ts = float(time.time())
+                if (now_ts - float(self._last_backpressure_log_ts)) >= float(self.backpressure_warn_interval_sec):
+                    self._last_backpressure_log_ts = now_ts
+                    logging.warning(
+                        "ORDER_QUEUE_BACKPRESSURE_DROP symbol=%s grp=%s qsize=%s maxsize=%s fill_ratio=%.3f threshold=%.3f",
+                        str(symbol),
+                        str(grp),
+                        int(qsize),
+                        int(self.maxsize),
+                        float(fill_ratio),
+                        float(self.backpressure_high_watermark),
+                    )
+                return None
+
         done_evt = threading.Event()
         box: Dict[str, Any] = {}
         seq = self._next_seq()
@@ -5058,6 +5120,7 @@ class ExecutionQueue:
         try:
             self._queue.put(item, timeout=1.0)
         except pyqueue.Full:
+            self._metric_queue_full = int(self._metric_queue_full) + 1
             logging.warning(
                 "ORDER_QUEUE_FULL seq=%s symbol=%s grp=%s qsize=%s",
                 int(seq),
@@ -5070,6 +5133,7 @@ class ExecutionQueue:
         wait_timeout = int(timeout_sec) if timeout_sec is not None else int(self.submit_timeout_sec)
         wait_timeout = max(1, int(wait_timeout))
         if not done_evt.wait(timeout=float(wait_timeout)):
+            self._metric_queue_timeout = int(self._metric_queue_timeout) + 1
             logging.warning(
                 "ORDER_QUEUE_TIMEOUT seq=%s symbol=%s grp=%s timeout_s=%s qsize=%s",
                 int(seq),
@@ -5080,7 +5144,8 @@ class ExecutionQueue:
             )
             return None
         queue_wait_ms = int((time.perf_counter() - t_enqueue) * 1000.0)
-        if queue_wait_ms >= 1000:
+        if queue_wait_ms >= int(self.wait_warn_ms):
+            self._metric_wait_warn = int(self._metric_wait_warn) + 1
             logging.warning(
                 "ORDER_QUEUE_WAIT_HIGH seq=%s symbol=%s grp=%s wait_ms=%s",
                 int(seq),
@@ -8958,6 +9023,14 @@ class SafetyBot:
         self._metrics_10m_last_emit_ts = 0.0
         self._metrics_10m_anchor: Dict[str, Any] = {}
         self._last_group_budget_log_ts = 0.0
+        self._loop_scan_durations_ms: List[int] = []
+        self._loop_scan_runs: int = 0
+        self._loop_scan_errors: int = 0
+        self._loop_heartbeat_fail_total: int = 0
+        self._loop_heartbeat_recoveries: int = 0
+        self._last_scan_suppressed_log_ts: float = 0.0
+        self._last_heartbeat_fail_log_ts: float = 0.0
+        self._last_loop_health_emit_ts: float = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -10485,6 +10558,35 @@ class SafetyBot:
         self._metrics_10m_anchor = {}
         self._metrics_10m_last_emit_ts = 0.0
 
+    @staticmethod
+    def _percentile_int(values: List[int], pct: float) -> int:
+        if not values:
+            return 0
+        p = min(1.0, max(0.0, float(pct)))
+        s = sorted(int(v) for v in values)
+        idx = int(round((len(s) - 1) * p))
+        idx = min(len(s) - 1, max(0, idx))
+        return int(s[idx])
+
+    def _record_scan_duration(self, scan_ms: int) -> None:
+        win = max(16, int(getattr(CFG, "run_loop_scan_stats_window", 120)))
+        self._loop_scan_durations_ms.append(int(max(0, scan_ms)))
+        if len(self._loop_scan_durations_ms) > win:
+            self._loop_scan_durations_ms = self._loop_scan_durations_ms[-win:]
+
+    def _loop_metrics_snapshot(self) -> Dict[str, Any]:
+        arr = list(self._loop_scan_durations_ms)
+        return {
+            "scan_runs_total": int(self._loop_scan_runs),
+            "scan_errors_total": int(self._loop_scan_errors),
+            "scan_last_ms": int(arr[-1]) if arr else 0,
+            "scan_p50_ms": int(self._percentile_int(arr, 0.50)),
+            "scan_p95_ms": int(self._percentile_int(arr, 0.95)),
+            "scan_max_ms": int(max(arr)) if arr else 0,
+            "heartbeat_fail_total": int(self._loop_heartbeat_fail_total),
+            "heartbeat_recoveries_total": int(self._loop_heartbeat_recoveries),
+        }
+
     def _emit_runtime_metrics(self, st: Dict[str, Any], *, eco_active: bool, warn_active: bool) -> None:
         self._metrics_roll_day()
         if bool(eco_active):
@@ -10506,6 +10608,14 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             exec_metrics = {}
+        queue_metrics = {}
+        try:
+            if getattr(self, "execution_queue", None) is not None:
+                queue_metrics = self.execution_queue.metrics_snapshot()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            queue_metrics = {}
+        loop_metrics = self._loop_metrics_snapshot()
 
         if not self._metrics_10m_anchor:
             self._metrics_10m_anchor = {
@@ -10544,7 +10654,9 @@ class SafetyBot:
             "RUNTIME_METRICS_10M day=%s price_requests_10m=%s sys_requests_10m=%s order_actions_10m=%s "
             "entries_10m=%s rejects_10m=%s entries_day=%s rejects_day=%s avg_spread_entry_points_day=%.3f "
             "skip_no_signal_day=%s skip_m5_same_bar_day=%s skip_m5_pull_wait_day=%s skip_m5_wait_new_bar_day=%s "
-            "eco_scans_10m=%s warn_scans_10m=%s top_rejects_day=%s",
+            "eco_scans_10m=%s warn_scans_10m=%s top_rejects_day=%s "
+            "scan_p50_ms=%s scan_p95_ms=%s scan_max_ms=%s hb_fail_total=%s hb_recoveries_total=%s "
+            "q_fill_ratio=%.3f q_backpressure_drops=%s q_timeouts=%s q_full=%s",
             str(self._metrics_day_key),
             int(d_price),
             int(d_sys),
@@ -10561,6 +10673,15 @@ class SafetyBot:
             int(d_eco),
             int(d_warn),
             str(top_rejects),
+            int(loop_metrics.get("scan_p50_ms", 0)),
+            int(loop_metrics.get("scan_p95_ms", 0)),
+            int(loop_metrics.get("scan_max_ms", 0)),
+            int(loop_metrics.get("heartbeat_fail_total", 0)),
+            int(loop_metrics.get("heartbeat_recoveries_total", 0)),
+            float(queue_metrics.get("fill_ratio", 0.0) or 0.0),
+            int(queue_metrics.get("backpressure_drops", 0)),
+            int(queue_metrics.get("queue_timeout", 0)),
+            int(queue_metrics.get("queue_full", 0)),
         )
 
         self._metrics_10m_anchor = {
@@ -13529,98 +13650,140 @@ class SafetyBot:
         scan_interval = int(getattr(CFG, "scan_interval_sec", 60))
         heartbeat_interval = max(1, int(getattr(CFG, "zmq_heartbeat_interval_sec", 15)))
         heartbeat_fail_threshold = max(1, int(getattr(CFG, "zmq_heartbeat_fail_threshold", 3)))
+        heartbeat_fail_safe_cooldown = max(
+            1,
+            int(getattr(CFG, "zmq_heartbeat_fail_safe_cooldown_sec", 30)),
+        )
+        heartbeat_fail_log_interval = max(
+            1,
+            int(getattr(CFG, "zmq_heartbeat_fail_log_interval_sec", 15)),
+        )
+        scan_suppressed_log_interval = max(
+            1,
+            int(getattr(CFG, "zmq_scan_suppressed_log_interval_sec", 60)),
+        )
+        run_loop_idle_sleep = max(0.001, float(getattr(CFG, "run_loop_idle_sleep_sec", 0.01)))
+        scan_slow_warn_ms = max(100, int(getattr(CFG, "run_loop_scan_slow_warn_ms", 1500)))
         last_heartbeat_ts = 0.0
         heartbeat_failures = 0
         heartbeat_fail_safe_active = False
+        heartbeat_fail_safe_until = 0.0
 
         try:
             while True:
                 now = time.time()
-                
-                # 1. Odbiór danych z ZMQ (nieblokujący z krótkim timeoutem)
+
+                # 1. Receive ZMQ data (non-blocking, short timeout)
                 market_data = self.zmq_bridge.receive_data(timeout=100)
                 if market_data:
                     self._handle_market_data(market_data)
 
                 # 2. Synchronous heartbeat over REQ/REP
                 if (now - last_heartbeat_ts) >= heartbeat_interval:
-                    hb_reply = self.zmq_bridge.send_command({"action": "HEARTBEAT"})
-                    hb_hash_ok = False
-                    try:
-                        hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
-                        hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
-                    except Exception as e:
-                        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                        hb_hash_ok = False
-                    hb_ok = (
-                        isinstance(hb_reply, dict)
-                        and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
-                        and str(hb_reply.get("status") or "").upper() == "OK"
-                        and bool(hb_hash_ok)
-                    )
-                    if hb_ok:
-                        if heartbeat_fail_safe_active or heartbeat_failures > 0:
-                            logging.warning(
-                                "HEARTBEAT_RECOVERED | previous_failures=%s",
-                                int(heartbeat_failures),
-                            )
-                        heartbeat_failures = 0
-                        heartbeat_fail_safe_active = False
+                    if heartbeat_fail_safe_active and now < float(heartbeat_fail_safe_until):
+                        pass
                     else:
-                        heartbeat_failures += 1
-                        logging.error(
-                            "HEARTBEAT_FAIL | consecutive=%s threshold=%s reply=%s",
-                            int(heartbeat_failures),
-                            int(heartbeat_fail_threshold),
-                            hb_reply,
+                        hb_reply = self.zmq_bridge.send_command({"action": "HEARTBEAT"})
+                        hb_hash_ok = False
+                        try:
+                            hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
+                            hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
+                        except Exception as e:
+                            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                            hb_hash_ok = False
+                        hb_ok = (
+                            isinstance(hb_reply, dict)
+                            and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
+                            and str(hb_reply.get("status") or "").upper() == "OK"
+                            and bool(hb_hash_ok)
                         )
-                        if heartbeat_failures >= heartbeat_fail_threshold and not heartbeat_fail_safe_active:
-                            heartbeat_fail_safe_active = True
-                            logging.critical(
-                                "HEARTBEAT_FAILSAFE_ACTIVE | consecutive=%s threshold=%s mode=NO_TRADE",
-                                int(heartbeat_failures),
-                                int(heartbeat_fail_threshold),
-                            )
-                            try:
-                                if self.incident_journal is not None:
-                                    self.incident_journal.note_guard(
-                                        guard="zmq_heartbeat",
-                                        reason="consecutive_heartbeat_failures",
-                                        severity="CRITICAL",
-                                        category="system",
-                                        symbol="__ALL__",
-                                        extra={
-                                            "failures": int(heartbeat_failures),
-                                            "threshold": int(heartbeat_fail_threshold),
-                                        },
-                                    )
-                            except Exception as e:
-                                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                        if hb_ok:
+                            if heartbeat_fail_safe_active or heartbeat_failures > 0:
+                                logging.warning(
+                                    "HEARTBEAT_RECOVERED | previous_failures=%s",
+                                    int(heartbeat_failures),
+                                )
+                                self._loop_heartbeat_recoveries = int(self._loop_heartbeat_recoveries) + 1
+                            heartbeat_failures = 0
+                            heartbeat_fail_safe_active = False
+                            heartbeat_fail_safe_until = 0.0
+                        else:
+                            heartbeat_failures += 1
+                            self._loop_heartbeat_fail_total = int(self._loop_heartbeat_fail_total) + 1
+                            if (now - float(self._last_heartbeat_fail_log_ts or 0.0)) >= float(heartbeat_fail_log_interval):
+                                self._last_heartbeat_fail_log_ts = now
+                                logging.error(
+                                    "HEARTBEAT_FAIL | consecutive=%s threshold=%s cooldown_s=%s reply=%s",
+                                    int(heartbeat_failures),
+                                    int(heartbeat_fail_threshold),
+                                    int(heartbeat_fail_safe_cooldown),
+                                    hb_reply,
+                                )
+                            if heartbeat_failures >= heartbeat_fail_threshold and not heartbeat_fail_safe_active:
+                                heartbeat_fail_safe_active = True
+                                logging.critical(
+                                    "HEARTBEAT_FAILSAFE_ACTIVE | consecutive=%s threshold=%s mode=NO_TRADE cooldown_s=%s",
+                                    int(heartbeat_failures),
+                                    int(heartbeat_fail_threshold),
+                                    int(heartbeat_fail_safe_cooldown),
+                                )
+                                try:
+                                    if self.incident_journal is not None:
+                                        self.incident_journal.note_guard(
+                                            guard="zmq_heartbeat",
+                                            reason="consecutive_heartbeat_failures",
+                                            severity="CRITICAL",
+                                            category="system",
+                                            symbol="__ALL__",
+                                            extra={
+                                                "failures": int(heartbeat_failures),
+                                                "threshold": int(heartbeat_fail_threshold),
+                                                "cooldown_sec": int(heartbeat_fail_safe_cooldown),
+                                            },
+                                        )
+                                except Exception as e:
+                                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                            if heartbeat_fail_safe_active:
+                                heartbeat_fail_safe_until = now + float(heartbeat_fail_safe_cooldown)
                     last_heartbeat_ts = now
 
                 # 3. Cykliczny skan logiki (wstrzymany, gdy heartbeat fail-safe aktywny)
                 if now - last_scan_ts >= scan_interval:
                     if heartbeat_fail_safe_active:
-                        logging.warning(
-                            "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s",
-                            int(heartbeat_failures),
-                        )
+                        if (now - float(self._last_scan_suppressed_log_ts or 0.0)) >= float(scan_suppressed_log_interval):
+                            self._last_scan_suppressed_log_ts = now
+                            logging.warning(
+                                "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s cooldown_remain_s=%s",
+                                int(heartbeat_failures),
+                                int(max(0, round(float(heartbeat_fail_safe_until) - now))),
+                            )
                     else:
-                        logging.info("--- START PERIODIC SCAN ---")
+                        self._loop_scan_runs = int(self._loop_scan_runs) + 1
+                        scan_start_ts = float(time.perf_counter())
                         try:
                             self.scan_once()
                         except Exception as e:
-                            logging.error(f"Błąd podczas scan_once: {e}", exc_info=True)
+                            self._loop_scan_errors = int(self._loop_scan_errors) + 1
+                            logging.error(f"scan_once error: {e}", exc_info=True)
+                        finally:
+                            scan_ms = int((time.perf_counter() - scan_start_ts) * 1000.0)
+                            self._record_scan_duration(scan_ms)
+                            if scan_ms >= int(scan_slow_warn_ms):
+                                logging.warning(
+                                    "SCAN_SLOW scan_ms=%s threshold_ms=%s",
+                                    int(scan_ms),
+                                    int(scan_slow_warn_ms),
+                                )
                     last_scan_ts = now
 
                 # 4. Sprawdzenie Kill-Switch
                 if self.manual_kill_switch_path.exists():
                     logging.info("BOT STOP | Wykryto plik kill_switch.")
                     break
-                
+
                 # 5. Krótki odpoczynek dla CPU, jeśli nie było danych
                 if not market_data:
-                    time.sleep(0.01)
+                    time.sleep(float(run_loop_idle_sleep))
 
         except KeyboardInterrupt:
             logging.info("BOT STOP | manual (Ctrl+C)")
@@ -13752,6 +13915,27 @@ if __name__ == "__main__":
     )
     CFG.zmq_heartbeat_fail_threshold = _cfg_int(
         "zmq_heartbeat_fail_threshold", CFG.zmq_heartbeat_fail_threshold
+    )
+    CFG.zmq_heartbeat_fail_safe_cooldown_sec = _cfg_int(
+        "zmq_heartbeat_fail_safe_cooldown_sec",
+        CFG.zmq_heartbeat_fail_safe_cooldown_sec,
+    )
+    CFG.zmq_heartbeat_fail_log_interval_sec = _cfg_int(
+        "zmq_heartbeat_fail_log_interval_sec",
+        CFG.zmq_heartbeat_fail_log_interval_sec,
+    )
+    CFG.zmq_scan_suppressed_log_interval_sec = _cfg_int(
+        "zmq_scan_suppressed_log_interval_sec",
+        CFG.zmq_scan_suppressed_log_interval_sec,
+    )
+    CFG.run_loop_idle_sleep_sec = _cfg_float("run_loop_idle_sleep_sec", CFG.run_loop_idle_sleep_sec)
+    CFG.run_loop_scan_slow_warn_ms = _cfg_int(
+        "run_loop_scan_slow_warn_ms",
+        CFG.run_loop_scan_slow_warn_ms,
+    )
+    CFG.run_loop_scan_stats_window = _cfg_int(
+        "run_loop_scan_stats_window",
+        CFG.run_loop_scan_stats_window,
     )
     CFG.runtime_metrics_interval_sec = _cfg_int(
         "runtime_metrics_interval_sec", CFG.runtime_metrics_interval_sec
@@ -14264,6 +14448,21 @@ if __name__ == "__main__":
     CFG.execution_queue_maxsize = _cfg_int("execution_queue_maxsize", CFG.execution_queue_maxsize)
     CFG.execution_queue_submit_timeout_sec = _cfg_int(
         "execution_queue_submit_timeout_sec", CFG.execution_queue_submit_timeout_sec
+    )
+    CFG.execution_queue_backpressure_enabled = _cfg_bool(
+        "execution_queue_backpressure_enabled",
+        CFG.execution_queue_backpressure_enabled,
+    )
+    CFG.execution_queue_backpressure_high_watermark = _cfg_float(
+        "execution_queue_backpressure_high_watermark",
+        CFG.execution_queue_backpressure_high_watermark,
+    )
+    CFG.execution_queue_backpressure_warn_interval_sec = _cfg_int(
+        "execution_queue_backpressure_warn_interval_sec",
+        CFG.execution_queue_backpressure_warn_interval_sec,
+    )
+    CFG.execution_queue_wait_warn_ms = _cfg_int(
+        "execution_queue_wait_warn_ms", CFG.execution_queue_wait_warn_ms
     )
     CFG.pending_reconcile_poll_sec = _cfg_int("pending_reconcile_poll_sec", CFG.pending_reconcile_poll_sec)
     CFG.pending_reconcile_force_poll_sec = _cfg_int(
