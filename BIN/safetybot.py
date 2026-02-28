@@ -98,6 +98,11 @@ try:
         CostMicrostructureGateInput,
         evaluate_cost_microstructure_gate,
     )
+    from .japanese_candle_adapter import (
+        JapaneseCandleAdapterConfig,
+        JapaneseCandleInput,
+        evaluate_japanese_candle_adapter,
+    )
     from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from .self_heal_guard import SelfHealGuard, SelfHealPolicy
     from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
@@ -119,6 +124,11 @@ except Exception:  # pragma: no cover
         CostMicrostructureGateConfig,
         CostMicrostructureGateInput,
         evaluate_cost_microstructure_gate,
+    )
+    from japanese_candle_adapter import (
+        JapaneseCandleAdapterConfig,
+        JapaneseCandleInput,
+        evaluate_japanese_candle_adapter,
     )
     from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
@@ -683,6 +693,13 @@ class CFG:
         "CRYPTO": 1400.0,
         "EQUITY": 120.0,
     }
+    # Japanese Candle adapter (advisory; does not execute orders).
+    candle_adapter_enabled: bool = True
+    candle_adapter_mode: str = "SHADOW_ONLY"  # SHADOW_ONLY / ADVISORY_SCORE / DISABLED
+    candle_adapter_emit_event: bool = True
+    candle_adapter_score_weight: float = 6.0
+    candle_adapter_min_body_to_range: float = 0.35
+    candle_adapter_pin_wick_ratio_min: float = 1.6
     # Auto-relax for execution guards (no strategy change): only if runtime evidence is sufficient.
     cost_guard_auto_relax_enabled: bool = False
     cost_guard_auto_relax_window_minutes: int = 360
@@ -6674,6 +6691,81 @@ class StandardStrategy:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return False
 
+    def _evaluate_candle_context(
+        self,
+        *,
+        symbol: str,
+        grp: str,
+        signal: str,
+        trend_h4: str,
+        regime: str,
+        ind: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        mode = str(getattr(CFG, "candle_adapter_mode", "SHADOW_ONLY") or "SHADOW_ONLY").strip().upper()
+        if mode not in {"SHADOW_ONLY", "ADVISORY_SCORE", "DISABLED"}:
+            mode = "SHADOW_ONLY"
+        cfg = JapaneseCandleAdapterConfig(
+            enabled=bool(getattr(CFG, "candle_adapter_enabled", True)),
+            mode=mode,
+            min_body_to_range=float(max(0.0, getattr(CFG, "candle_adapter_min_body_to_range", 0.35))),
+            pin_wick_ratio_min=float(max(0.1, getattr(CFG, "candle_adapter_pin_wick_ratio_min", 1.6))),
+        )
+        required = ("prev_open", "prev_high", "prev_low", "prev_close")
+        if any(ind.get(k) is None for k in required):
+            return {
+                "ready": False,
+                "candle_bias": "NONE",
+                "candle_score_long": 0.0,
+                "candle_score_short": 0.0,
+                "candle_quality_grade": "UNKNOWN",
+                "candle_patterns": [],
+                "no_trade_hint": False,
+                "reason_code": "CANDLE_PREV_BAR_MISSING",
+                "mode": mode,
+                "symbol_raw": str(symbol),
+                "symbol_canonical": canonical_symbol(symbol),
+                "group": _group_key(grp),
+            }
+        inp = JapaneseCandleInput(
+            signal=str(signal),
+            trend_h4=str(trend_h4),
+            regime=str(regime),
+            open_price=float(ind.get("open")),
+            high_price=float(ind.get("high")),
+            low_price=float(ind.get("low")),
+            close_price=float(ind.get("close")),
+            prev_open=float(ind.get("prev_open")),
+            prev_high=float(ind.get("prev_high")),
+            prev_low=float(ind.get("prev_low")),
+            prev_close=float(ind.get("prev_close")),
+        )
+        out = dict(evaluate_japanese_candle_adapter(cfg, inp))
+        out.update(
+            {
+                "symbol_raw": str(symbol),
+                "symbol_canonical": canonical_symbol(symbol),
+                "group": _group_key(grp),
+            }
+        )
+        return out
+
+    def _apply_candle_advisory_score(
+        self,
+        *,
+        signal: str,
+        base_score: int,
+        candle_ctx: Dict[str, Any],
+    ) -> int:
+        mode = str(candle_ctx.get("mode") or "SHADOW_ONLY").upper()
+        if mode != "ADVISORY_SCORE":
+            return int(base_score)
+        long_s = float(candle_ctx.get("candle_score_long", 0.0) or 0.0)
+        short_s = float(candle_ctx.get("candle_score_short", 0.0) or 0.0)
+        weight = float(max(0.0, getattr(CFG, "candle_adapter_score_weight", 6.0)))
+        delta = (long_s - short_s) if str(signal).upper() == "BUY" else (short_s - long_s)
+        adjusted = int(round(float(base_score) + float(delta) * float(weight)))
+        return int(max(0, min(100, adjusted)))
+
     def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
         # Prefer a single dispatch path when provided by the bot (hybrid REQ/REP).
         if callable(self.dispatch_order_hook):
@@ -7187,6 +7279,10 @@ class StandardStrategy:
             "open": float(df["open"].iloc[-1]),
             "high": float(df["high"].iloc[-1]),
             "low": float(df["low"].iloc[-1]),
+            "prev_close": (float(df["close"].iloc[-2]) if len(df) >= 2 else None),
+            "prev_open": (float(df["open"].iloc[-2]) if len(df) >= 2 else None),
+            "prev_high": (float(df["high"].iloc[-2]) if len(df) >= 2 else None),
+            "prev_low": (float(df["low"].iloc[-2]) if len(df) >= 2 else None),
             "sma": float(df["sma_fast"].iloc[-1]),
             "adx": float(df["adx"].iloc[-1]),
             "atr": float(atr) if atr is not None else None,
@@ -8174,6 +8270,33 @@ class StandardStrategy:
             entry_score = None
             entry_min_score = None
             entry_spread_cap_points = None
+            candle_ctx = self._evaluate_candle_context(
+                symbol=symbol,
+                grp=grp,
+                signal=signal,
+                trend_h4=trend_h4,
+                regime=regime,
+                ind=ind,
+            )
+            try:
+                self._scan_meta.setdefault("candle_context", {})[symbol_base(symbol)] = dict(candle_ctx)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            if bool(getattr(CFG, "candle_adapter_emit_event", True)):
+                c_patterns = ",".join([str(x) for x in (candle_ctx.get("candle_patterns") or [])]) or "NONE"
+                logging.info(
+                    "CANDLE_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s long=%.3f short=%.3f patterns=%s",
+                    symbol,
+                    grp_u,
+                    str(candle_ctx.get("mode") or "SHADOW_ONLY"),
+                    int(bool(candle_ctx.get("ready", False))),
+                    str(candle_ctx.get("candle_bias") or "NONE"),
+                    str(candle_ctx.get("candle_quality_grade") or "UNKNOWN"),
+                    str(candle_ctx.get("reason_code") or "NONE"),
+                    float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
+                    float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
+                    c_patterns,
+                )
 
             if grp_u == "FX":
                 pace_ok, pace_meta = fx_budget_pacing_allows_entry(self.gov, self.db, now_dt=now_utc())
@@ -8219,7 +8342,11 @@ class StandardStrategy:
                         execution_error_recent=exec_err_recent,
                     )
                     min_score = int(fx_score_threshold_for_mode(mode))
-                    entry_score = int(fx_score)
+                    entry_score = self._apply_candle_advisory_score(
+                        signal=signal,
+                        base_score=int(fx_score),
+                        candle_ctx=candle_ctx,
+                    )
                     entry_min_score = int(min_score)
                     try:
                         entry_spread_cap_points = float(fx_parts.get("spread_cap_points", 0.0) or 0.0)
@@ -8231,7 +8358,7 @@ class StandardStrategy:
                         symbol,
                         grp,
                         mode,
-                        int(fx_score),
+                        int(entry_score),
                         int(min_score),
                         float(fx_parts.get("A_regime_direction", 0.0)),
                         float(fx_parts.get("B_trigger", 0.0)),
@@ -8243,14 +8370,14 @@ class StandardStrategy:
                         float(fx_parts.get("spread_cap_points", 0.0)),
                         float(fx_parts.get("atr_points", -1.0)),
                     )
-                    if int(fx_score) < int(min_score):
+                    if int(entry_score) < int(min_score):
                         self._metric_inc_skip("FX_SCORE_BELOW_THRESHOLD")
                         logging.info(
                             "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=FX_SCORE_BELOW_THRESHOLD score=%s min_score=%s",
                             symbol,
                             grp,
                             mode,
-                            int(fx_score),
+                            int(entry_score),
                             int(min_score),
                         )
                         return
@@ -8299,7 +8426,11 @@ class StandardStrategy:
                         execution_error_recent=exec_err_recent,
                     )
                     min_score = int(metal_score_threshold_for_mode(mode))
-                    entry_score = int(metal_score)
+                    entry_score = self._apply_candle_advisory_score(
+                        signal=signal,
+                        base_score=int(metal_score),
+                        candle_ctx=candle_ctx,
+                    )
                     entry_min_score = int(min_score)
                     try:
                         entry_spread_cap_points = float(metal_parts.get("spread_cap_points", 0.0) or 0.0)
@@ -8311,7 +8442,7 @@ class StandardStrategy:
                         symbol,
                         grp,
                         mode,
-                        int(metal_score),
+                        int(entry_score),
                         int(min_score),
                         float(metal_parts.get("A_regime_direction", 0.0)),
                         float(metal_parts.get("B_trigger", 0.0)),
@@ -8324,14 +8455,14 @@ class StandardStrategy:
                         float(metal_parts.get("atr_points", -1.0)),
                         float(metal_parts.get("wick_ratio", 0.0)),
                     )
-                    if int(metal_score) < int(min_score):
+                    if int(entry_score) < int(min_score):
                         self._metric_inc_skip("METAL_SCORE_BELOW_THRESHOLD")
                         logging.info(
                             "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=METAL_SCORE_BELOW_THRESHOLD score=%s min_score=%s",
                             symbol,
                             grp,
                             mode,
-                            int(metal_score),
+                            int(entry_score),
                             int(min_score),
                         )
                         return
@@ -8362,7 +8493,11 @@ class StandardStrategy:
                         execution_error_recent=exec_err_recent,
                     )
                     min_score = int(crypto_score_threshold_for_mode(mode, symbol=symbol))
-                    entry_score = int(crypto_score)
+                    entry_score = self._apply_candle_advisory_score(
+                        signal=signal,
+                        base_score=int(crypto_score),
+                        candle_ctx=candle_ctx,
+                    )
                     entry_min_score = int(min_score)
                     try:
                         entry_spread_cap_points = float(crypto_parts.get("spread_cap_points", 0.0) or 0.0)
@@ -8374,7 +8509,7 @@ class StandardStrategy:
                         symbol,
                         grp,
                         mode,
-                        int(crypto_score),
+                        int(entry_score),
                         int(min_score),
                         float(crypto_parts.get("A_regime_direction", 0.0)),
                         float(crypto_parts.get("B_trigger", 0.0)),
@@ -8387,14 +8522,14 @@ class StandardStrategy:
                         float(crypto_parts.get("atr_points", -1.0)),
                         float(crypto_parts.get("wick_ratio", 0.0)),
                     )
-                    if int(crypto_score) < int(min_score):
+                    if int(entry_score) < int(min_score):
                         self._metric_inc_skip("CRYPTO_SCORE_BELOW_THRESHOLD")
                         logging.info(
                             "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=CRYPTO_SCORE_BELOW_THRESHOLD score=%s min_score=%s",
                             symbol,
                             grp,
                             mode,
-                            int(crypto_score),
+                            int(entry_score),
                             int(min_score),
                         )
                         return
@@ -8449,6 +8584,12 @@ class StandardStrategy:
                     'signal_reason': str(signal_reason),
                     'entry_score': int(entry_score) if entry_score is not None else None,
                     'entry_min_score': int(entry_min_score) if entry_min_score is not None else None,
+                    'candle_adapter_mode': str(candle_ctx.get("mode") or "SHADOW_ONLY"),
+                    'candle_bias': str(candle_ctx.get("candle_bias") or "NONE"),
+                    'candle_quality_grade': str(candle_ctx.get("candle_quality_grade") or "UNKNOWN"),
+                    'candle_reason_code': str(candle_ctx.get("reason_code") or "NONE"),
+                    'candle_score_long': float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
+                    'candle_score_short': float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
                 }
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
@@ -13972,6 +14113,25 @@ if __name__ == "__main__":
     CFG.cost_microstructure_emit_caution_event = _cfg_bool(
         "cost_microstructure_emit_caution_event",
         CFG.cost_microstructure_emit_caution_event,
+    )
+    CFG.candle_adapter_enabled = _cfg_bool("candle_adapter_enabled", CFG.candle_adapter_enabled)
+    CFG.candle_adapter_mode = str(
+        strategy_cfg.get("candle_adapter_mode", CFG.candle_adapter_mode) or CFG.candle_adapter_mode
+    ).strip().upper()
+    if CFG.candle_adapter_mode not in {"SHADOW_ONLY", "ADVISORY_SCORE", "DISABLED"}:
+        CFG.candle_adapter_mode = "SHADOW_ONLY"
+    CFG.candle_adapter_emit_event = _cfg_bool(
+        "candle_adapter_emit_event",
+        CFG.candle_adapter_emit_event,
+    )
+    CFG.candle_adapter_score_weight = _cfg_float(
+        "candle_adapter_score_weight", CFG.candle_adapter_score_weight
+    )
+    CFG.candle_adapter_min_body_to_range = _cfg_float(
+        "candle_adapter_min_body_to_range", CFG.candle_adapter_min_body_to_range
+    )
+    CFG.candle_adapter_pin_wick_ratio_min = _cfg_float(
+        "candle_adapter_pin_wick_ratio_min", CFG.candle_adapter_pin_wick_ratio_min
     )
     CFG.cost_gate_min_target_to_cost_ratio = _cfg_float(
         "cost_gate_min_target_to_cost_ratio", CFG.cost_gate_min_target_to_cost_ratio

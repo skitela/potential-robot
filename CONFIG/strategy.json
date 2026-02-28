@@ -544,6 +544,12 @@
     "CRYPTO": 1400.0,
     "EQUITY": 120.0
   },
+  "candle_adapter_enabled": true,
+  "candle_adapter_mode": "SHADOW_ONLY",
+  "candle_adapter_emit_event": true,
+  "candle_adapter_score_weight": 6.0,
+  "candle_adapter_min_body_to_range": 0.35,
+  "candle_adapter_pin_wick_ratio_min": 1.6,
   "cost_gate_min_target_to_cost_ratio": 1.15,
   "cost_gate_block_on_unknown_quality": true,
   "cost_guard_auto_relax_enabled": true,
