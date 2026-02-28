@@ -10,6 +10,8 @@ from typing import Any
 UTC = dt.UTC
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "SCHEMAS" / "ranking_benchmark_strict_overlay_v1.json"
+DEFAULT_TRADING_WORKERS = {"scud_once", "db_writer", "dyrygent_trace"}
+DEFAULT_ORCHESTRATION_WORKERS = {"dyrygent_external", "dyrygent_scan", "learner_once"}
 
 
 def _now_utc() -> str:
@@ -44,7 +46,49 @@ def _is_runtime_code_path(path_str: str) -> bool:
     )
 
 
-def evaluate(bench: dict[str, Any], stress: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+def _split_latency_profile(stress_report: dict[str, Any]) -> dict[str, Any]:
+    workers = dict(stress_report.get("workers") or {})
+
+    def _bucket(names: set[str]) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        for n in sorted(names):
+            w = dict(workers.get(n) or {})
+            if not w:
+                continue
+            rows.append(
+                {
+                    "worker": n,
+                    "ok_runs": int(w.get("ok_runs") or 0),
+                    "latency_p50_sec": float(w.get("latency_p50_sec") or 0.0),
+                    "latency_p95_sec": float(w.get("latency_p95_sec") or 0.0),
+                }
+            )
+        if not rows:
+            return {
+                "workers": [],
+                "latency_p50_sec_weighted": "UNKNOWN",
+                "latency_p95_sec_weighted": "UNKNOWN",
+                "latency_p50_sec_max": "UNKNOWN",
+                "latency_p95_sec_max": "UNKNOWN",
+            }
+        total_w = sum(max(1, int(r["ok_runs"])) for r in rows)
+        p50_w = sum(float(r["latency_p50_sec"]) * max(1, int(r["ok_runs"])) for r in rows) / float(total_w)
+        p95_w = sum(float(r["latency_p95_sec"]) * max(1, int(r["ok_runs"])) for r in rows) / float(total_w)
+        return {
+            "workers": rows,
+            "latency_p50_sec_weighted": round(float(p50_w), 6),
+            "latency_p95_sec_weighted": round(float(p95_w), 6),
+            "latency_p50_sec_max": round(max(float(r["latency_p50_sec"]) for r in rows), 6),
+            "latency_p95_sec_max": round(max(float(r["latency_p95_sec"]) for r in rows), 6),
+        }
+
+    return {
+        "trading_path": _bucket(DEFAULT_TRADING_WORKERS),
+        "orchestration_path": _bucket(DEFAULT_ORCHESTRATION_WORKERS),
+    }
+
+
+def evaluate(bench: dict[str, Any], stress: dict[str, Any], policy: dict[str, Any], stress_detailed: dict[str, Any] | None = None) -> dict[str, Any]:
     thr = dict(policy.get("thresholds") or {})
     criteria = dict(((bench.get("gh_v1") or {}).get("criteria")) or {})
     signals = dict(((bench.get("gh_v1") or {}).get("signals")) or {})
@@ -96,6 +140,8 @@ def evaluate(bench: dict[str, Any], stress: dict[str, Any], policy: dict[str, An
         "local_laptop_constraint_ack": True,
     }
 
+    latency_split = _split_latency_profile(stress_detailed or {})
+
     return {
         "schema": "oanda_mt5.ranking_benchmark_strict_overlay.v1",
         "ts_utc": _now_utc(),
@@ -111,6 +157,7 @@ def evaluate(bench: dict[str, Any], stress: dict[str, Any], policy: dict[str, An
             "stress_latency_p50_sec": round(p50, 6),
             "stress_latency_p95_sec": round(p95, 6),
         },
+        "latency_split_diagnostics": latency_split,
         "vps_recommendation": vps_recommendation,
     }
 
@@ -146,10 +193,13 @@ def main() -> int:
     policy = _load_json(SCHEMA_PATH)
     bench = _load_json(benchmark_path)
     stress = _load_json(stress_path)
-    report = evaluate(bench, stress, policy)
+    stress_detailed_path = (root / "EVIDENCE" / "03_stress" / "stress_report.json")
+    stress_detailed = _load_json(stress_detailed_path) if stress_detailed_path.exists() else {}
+    report = evaluate(bench, stress, policy, stress_detailed=stress_detailed)
     report["inputs"] = {
         "benchmark_json": str(benchmark_path),
         "stress_json": str(stress_path),
+        "stress_detailed_json": str(stress_detailed_path) if stress_detailed_path.exists() else "MISSING",
         "policy_json": str(SCHEMA_PATH),
     }
 

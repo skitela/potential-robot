@@ -89,6 +89,7 @@ def main() -> int:
     strict_overlay_path = latest_file(evidence, "ranking_benchmark_strict_overlay_*.json")
     strict_overlay = safe_read_json(strict_overlay_path) if strict_overlay_path else {}
     strict_summary = dict(strict_overlay.get("summary") or {})
+    strict_split = dict(strict_overlay.get("latency_split_diagnostics") or {})
 
     log_metrics = parse_log_kpi(safety_log, hours=max(1, int(args.hours)))
 
@@ -118,6 +119,7 @@ def main() -> int:
             "timeout_count": timeout_count,
             "deadlock_or_crash_proxy_count": deadlock_count,
         },
+        "latency_split_diagnostics": strict_split if strict_split else "UNKNOWN",
         "log_window_metrics": log_metrics,
         "status": "PASS",
     }
