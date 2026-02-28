@@ -10596,6 +10596,37 @@ class SafetyBot:
 
         now_ts = float(time.time())
         interval_s = max(60, int(getattr(CFG, "runtime_metrics_interval_sec", 600)))
+
+        if not self._metrics_10m_anchor:
+            # Lightweight anchor init: snapshot strategy/execution counters only once.
+            strat_metrics = {}
+            exec_metrics = {}
+            try:
+                strat_metrics = self.strategy.metrics_snapshot()
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                strat_metrics = {}
+            try:
+                exec_metrics = self.execution_engine.metrics_snapshot()
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                exec_metrics = {}
+            self._metrics_10m_anchor = {
+                "ts": now_ts,
+                "price_requests_day": int(st.get("price_requests_day", 0) or 0),
+                "sys_requests_day": int(st.get("sys_requests_day", 0) or 0),
+                "order_actions_day": int(st.get("order_actions_day", 0) or 0),
+                "entries_day": int(strat_metrics.get("entries_day", 0) or 0),
+                "rejects_day": int(exec_metrics.get("rejects_day", 0) or 0),
+                "eco_scans_day": int(self._metrics_eco_scans_day),
+                "warn_scans_day": int(self._metrics_warn_scans_day),
+            }
+            self._metrics_10m_last_emit_ts = now_ts
+            return
+
+        if (now_ts - float(self._metrics_10m_last_emit_ts or 0.0)) < float(interval_s):
+            return
+
         strat_metrics = {}
         exec_metrics = {}
         try:
@@ -10616,23 +10647,6 @@ class SafetyBot:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             queue_metrics = {}
         loop_metrics = self._loop_metrics_snapshot()
-
-        if not self._metrics_10m_anchor:
-            self._metrics_10m_anchor = {
-                "ts": now_ts,
-                "price_requests_day": int(st.get("price_requests_day", 0) or 0),
-                "sys_requests_day": int(st.get("sys_requests_day", 0) or 0),
-                "order_actions_day": int(st.get("order_actions_day", 0) or 0),
-                "entries_day": int(strat_metrics.get("entries_day", 0) or 0),
-                "rejects_day": int(exec_metrics.get("rejects_day", 0) or 0),
-                "eco_scans_day": int(self._metrics_eco_scans_day),
-                "warn_scans_day": int(self._metrics_warn_scans_day),
-            }
-            self._metrics_10m_last_emit_ts = now_ts
-            return
-
-        if (now_ts - float(self._metrics_10m_last_emit_ts or 0.0)) < float(interval_s):
-            return
 
         a = dict(self._metrics_10m_anchor)
         cur_price = int(st.get("price_requests_day", 0) or 0)

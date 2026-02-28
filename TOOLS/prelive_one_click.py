@@ -370,6 +370,25 @@ def run_one_click(
     report["steps"]["audit_symbols_get_mt5"] = symbols_step
     report["artifacts"]["symbols_audit_report"] = symbols_obj
 
+    # 6) Runtime KPI snapshot (latency p50/p95, timeout/deadlock proxy).
+    kpi_out = root / "EVIDENCE" / "runtime_kpi" / f"{run_id}_runtime_kpi_snapshot.json"
+    cmd_kpi = [
+        str(python_exe),
+        "-B",
+        "TOOLS/runtime_kpi_snapshot.py",
+        "--root",
+        str(root),
+        "--hours",
+        "24",
+        "--out",
+        str(kpi_out),
+    ]
+    kpi_step = run_cmd(cmd_kpi, cwd=root, timeout_sec=timeout_sec)
+    kpi_obj = _read_json(kpi_out) or {}
+    kpi_step["report"] = str(kpi_out)
+    report["steps"]["runtime_kpi_snapshot"] = kpi_step
+    report["artifacts"]["runtime_kpi_report"] = kpi_obj
+
     prelive_checks = []
     if isinstance(prelive_obj, dict):
         for c in (prelive_obj.get("checks") or []):

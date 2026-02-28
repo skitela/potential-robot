@@ -9,7 +9,9 @@ param(
     [int]$ProgressEverySec = 60,
     [int]$WatchIntervalSec = 60,
     [int]$WatchTimeoutSec = 0,
-    [switch]$ShowReport
+    [switch]$ShowReport,
+    [switch]$StartStabilityGuard,
+    [int]$StabilityGuardIntervalSec = 300
 )
 
 Set-StrictMode -Version Latest
@@ -26,6 +28,7 @@ function Resolve-Root {
 $runtimeRoot = Resolve-Root -InputRoot $Root
 $startScript = Join-Path $runtimeRoot "TOOLS\START_ONLINE_SMART.ps1"
 $watchScript = Join-Path $runtimeRoot "TOOLS\START_ONLINE_SMART_WATCH.ps1"
+$stabilityGuardScript = Join-Path $runtimeRoot "TOOLS\START_RUNTIME_STABILITY_GUARD.ps1"
 
 if (-not (Test-Path $startScript)) {
     Write-Error "Brak skryptu startowego: $startScript"
@@ -87,4 +90,12 @@ if (Test-Path $err) { Write-Output ("ONECLICK err={0}" -f $err) }
 
 if ($watchRc -ne 0) { exit [int]$watchRc }
 if ($startRc -ne 0) { exit [int]$startRc }
+
+if ($StartStabilityGuard) {
+    if (Test-Path $stabilityGuardScript) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $stabilityGuardScript -Root $runtimeRoot -IntervalSec ([Math]::Max(30, [int]$StabilityGuardIntervalSec)) | Write-Output
+    } else {
+        Write-Warning ("ONECLICK: requested stability guard but script missing: {0}" -f $stabilityGuardScript)
+    }
+}
 exit 0
