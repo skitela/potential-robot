@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 _VALID_MODES = {"SHADOW_ONLY", "GATE_ENFORCE", "DISABLED"}
 
@@ -41,25 +40,25 @@ class CostMicrostructureGateConfig:
 class CostMicrostructureGateInput:
     group: str
     symbol: str
-    spread_points: Optional[float]
+    spread_points: float | None
     spread_caution_points: float
     spread_block_points: float
-    tick_age_sec: Optional[float]
+    tick_age_sec: float | None
     max_tick_age_sec: float
-    tick_gap_sec: Optional[float]
+    tick_gap_sec: float | None
     gap_block_sec: float
-    price_jump_points: Optional[float]
+    price_jump_points: float | None
     jump_block_points: float
     ask_lt_bid: bool
     cost_estimation_quality: str
-    cost_feasibility_shadow: Optional[bool]
-    target_move_price: Optional[float]
-    estimated_round_trip_cost_price: Optional[float]
+    cost_feasibility_shadow: bool | None
+    target_move_price: float | None
+    estimated_round_trip_cost_price: float | None
 
 
 def evaluate_cost_microstructure_gate(
     cfg: CostMicrostructureGateConfig, inp: CostMicrostructureGateInput
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     mode = _norm_mode(cfg.mode)
     if not bool(cfg.enabled) or mode == "DISABLED":
         return {

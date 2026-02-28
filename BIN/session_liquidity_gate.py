@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 _VALID_MODES = {"SHADOW_ONLY", "GATE_ENFORCE", "DISABLED"}
 
@@ -27,8 +26,8 @@ class SessionLiquidityGateInput:
     trade_window_id: str
     trade_window_group: str
     strict_group_routing: bool
-    spread_points: Optional[float]
-    tick_age_sec: Optional[float]
+    spread_points: float | None
+    tick_age_sec: float | None
     max_tick_age_sec: float
     spread_caution_points: float
     spread_block_points: float
@@ -36,7 +35,7 @@ class SessionLiquidityGateInput:
 
 def evaluate_session_liquidity_gate(
     cfg: SessionLiquidityGateConfig, inp: SessionLiquidityGateInput
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     mode = _norm_mode(cfg.mode)
     if not bool(cfg.enabled) or mode == "DISABLED":
         return {

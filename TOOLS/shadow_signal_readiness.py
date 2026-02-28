@@ -4,10 +4,9 @@ import argparse
 import datetime as dt
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
-
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 
 def _parse_ts_utc(raw: str) -> dt.datetime | None:
@@ -20,8 +19,8 @@ def _parse_ts_utc(raw: str) -> dt.datetime | None:
         return None
 
 
-def _iter_jsonl(path: Path) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
+def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     if not path.exists():
         return out
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -34,14 +33,14 @@ def _iter_jsonl(path: Path) -> List[Dict[str, Any]]:
     return out
 
 
-def _tail_lines(path: Path, n: int = 100000) -> List[str]:
+def _tail_lines(path: Path, n: int = 100000) -> list[str]:
     if not path.exists():
         return []
     lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     return lines[-int(max(1, n)) :]
 
 
-def build_report(root: Path, hours: int) -> Dict[str, Any]:
+def build_report(root: Path, hours: int) -> dict[str, Any]:
     now = dt.datetime.now(tz=UTC)
     start = now - dt.timedelta(hours=max(1, int(hours)))
 
@@ -53,7 +52,7 @@ def build_report(root: Path, hours: int) -> Dict[str, Any]:
     audit = _iter_jsonl(audit_path)
     app_lines = _tail_lines(app_log_path, 120000)
 
-    gate_event_counts: Dict[str, int] = {}
+    gate_event_counts: dict[str, int] = {}
     for rec in telemetry:
         ts = _parse_ts_utc(str(rec.get("ts_utc") or ""))
         if ts is None or ts < start:

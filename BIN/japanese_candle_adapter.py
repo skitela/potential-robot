@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List
-
+from typing import Any
 
 _VALID_MODES = {"SHADOW_ONLY", "ADVISORY_SCORE", "DISABLED"}
 
@@ -43,7 +42,7 @@ def _safe_ratio(num: float, den: float) -> float:
 
 def evaluate_japanese_candle_adapter(
     cfg: JapaneseCandleAdapterConfig, inp: JapaneseCandleInput
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     mode = _norm_mode(cfg.mode)
     if not bool(cfg.enabled) or mode == "DISABLED":
         return {
@@ -60,14 +59,12 @@ def evaluate_japanese_candle_adapter(
 
     o = float(inp.open_price)
     h = float(inp.high_price)
-    l = float(inp.low_price)
+    low = float(inp.low_price)
     c = float(inp.close_price)
     po = float(inp.prev_open)
-    ph = float(inp.prev_high)
-    pl = float(inp.prev_low)
     pc = float(inp.prev_close)
 
-    rng = max(0.0, h - l)
+    rng = max(0.0, h - low)
     body = abs(c - o)
     min_body = float(max(0.0, cfg.min_body_to_range))
     pin_ratio_min = float(max(0.1, cfg.pin_wick_ratio_min))
@@ -85,11 +82,11 @@ def evaluate_japanese_candle_adapter(
         }
 
     upper_wick = max(0.0, h - max(o, c))
-    lower_wick = max(0.0, min(o, c) - l)
+    lower_wick = max(0.0, min(o, c) - low)
     body_to_range = _safe_ratio(body, rng)
     long_score = 0.0
     short_score = 0.0
-    patterns: List[str] = []
+    patterns: list[str] = []
 
     bullish_engulf = (
         (c > o)
