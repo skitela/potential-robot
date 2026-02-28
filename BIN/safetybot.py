@@ -93,6 +93,11 @@ try:
         SessionLiquidityGateInput,
         evaluate_session_liquidity_gate,
     )
+    from .cost_microstructure_gate import (
+        CostMicrostructureGateConfig,
+        CostMicrostructureGateInput,
+        evaluate_cost_microstructure_gate,
+    )
     from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from .self_heal_guard import SelfHealGuard, SelfHealPolicy
     from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
@@ -109,6 +114,11 @@ except Exception:  # pragma: no cover
         SessionLiquidityGateConfig,
         SessionLiquidityGateInput,
         evaluate_session_liquidity_gate,
+    )
+    from cost_microstructure_gate import (
+        CostMicrostructureGateConfig,
+        CostMicrostructureGateInput,
+        evaluate_cost_microstructure_gate,
     )
     from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
@@ -631,6 +641,47 @@ class CFG:
         "INDEX": 12.0,
         "CRYPTO": 15.0,
         "EQUITY": 15.0,
+    }
+    # Cost + Microstructure gate (operational veto/permit; no strategy mutation).
+    cost_microstructure_gate_enabled: bool = True
+    cost_microstructure_gate_mode: str = "SHADOW_ONLY"  # SHADOW_ONLY / GATE_ENFORCE / DISABLED
+    cost_microstructure_block_on_missing_snapshot: bool = True
+    cost_microstructure_block_on_unknown_quality: bool = True
+    cost_microstructure_emit_caution_event: bool = True
+    cost_microstructure_spread_caution_by_group: Dict[str, float] = {
+        "FX": 22.0,
+        "METAL": 110.0,
+        "INDEX": 85.0,
+        "CRYPTO": 380.0,
+        "EQUITY": 45.0,
+    }
+    cost_microstructure_spread_block_by_group: Dict[str, float] = {
+        "FX": 30.0,
+        "METAL": 170.0,
+        "INDEX": 125.0,
+        "CRYPTO": 620.0,
+        "EQUITY": 75.0,
+    }
+    cost_microstructure_max_tick_age_sec_by_group: Dict[str, float] = {
+        "FX": 6.0,
+        "METAL": 8.0,
+        "INDEX": 10.0,
+        "CRYPTO": 12.0,
+        "EQUITY": 12.0,
+    }
+    cost_microstructure_gap_block_sec_by_group: Dict[str, float] = {
+        "FX": 20.0,
+        "METAL": 25.0,
+        "INDEX": 30.0,
+        "CRYPTO": 35.0,
+        "EQUITY": 35.0,
+    }
+    cost_microstructure_jump_block_points_by_group: Dict[str, float] = {
+        "FX": 80.0,
+        "METAL": 350.0,
+        "INDEX": 200.0,
+        "CRYPTO": 1400.0,
+        "EQUITY": 120.0,
     }
     # Auto-relax for execution guards (no strategy change): only if runtime evidence is sufficient.
     cost_guard_auto_relax_enabled: bool = False
@@ -8832,6 +8883,7 @@ class SafetyBot:
         self._zmq_account_cache: Dict[str, Any] = {}
         self._zmq_last_tick_ts: Dict[str, float] = {}
         self._zmq_last_bar_ts: Dict[str, float] = {}
+        self._micro_tick_state: Dict[str, Dict[str, Any]] = {}
         self.execution_engine._zmq_symbol_info_cache = self._zmq_symbol_info_cache
         self.execution_engine._zmq_account_cache = self._zmq_account_cache
 
@@ -9394,6 +9446,170 @@ class SafetyBot:
                 "max_tick_age_sec": float(max_tick_age_sec),
                 "spread_caution_points": float(spread_caution_points),
                 "spread_block_points": float(spread_block_points),
+            }
+        )
+        return decision
+
+    def _cost_microstructure_gate_eval(self, symbol: str, group: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        grp_u = _group_key(group)
+        mode = str(getattr(CFG, "cost_microstructure_gate_mode", "SHADOW_ONLY") or "SHADOW_ONLY").strip().upper()
+        if mode not in {"SHADOW_ONLY", "GATE_ENFORCE", "DISABLED"}:
+            mode = "SHADOW_ONLY"
+        cfg = CostMicrostructureGateConfig(
+            enabled=bool(getattr(CFG, "cost_microstructure_gate_enabled", True)),
+            mode=mode,
+            block_on_missing_snapshot=bool(getattr(CFG, "cost_microstructure_block_on_missing_snapshot", True)),
+            block_on_unknown_quality=bool(getattr(CFG, "cost_microstructure_block_on_unknown_quality", True)),
+            min_target_to_cost_ratio=float(max(0.0, getattr(CFG, "cost_gate_min_target_to_cost_ratio", 1.10))),
+        )
+
+        base = symbol_base(symbol)
+        snapshot = {}
+        try:
+            snapshot = dict(self._zmq_symbol_info_cache.get(base) or {})
+        except Exception:
+            snapshot = {}
+        micro_state = {}
+        try:
+            micro_state = dict(self._micro_tick_state.get(base) or {})
+        except Exception:
+            micro_state = {}
+
+        spread_points: Optional[float] = None
+        for candidate in (
+            request.get("spread_points"),
+            request.get("spread_at_decision"),
+            snapshot.get("spread"),
+        ):
+            try:
+                v = float(candidate)
+                if v >= 0.0:
+                    spread_points = float(v)
+                    break
+            except Exception:
+                continue
+
+        tick_age_sec: Optional[float] = None
+        try:
+            t_tick = float(self._zmq_last_tick_ts.get(base, 0.0) or 0.0)
+            if t_tick <= 0.0:
+                t_tick = float(snapshot.get("recv_ts", 0.0) or 0.0)
+            if t_tick > 0.0:
+                tick_age_sec = max(0.0, float(time.time()) - float(t_tick))
+        except Exception:
+            tick_age_sec = None
+
+        spread_caution = float(
+            max(
+                0.0,
+                _cfg_group_float(
+                    grp_u,
+                    "cost_microstructure_spread_caution_points",
+                    _cfg_group_map_float("cost_microstructure_spread_caution_by_group", grp_u, 22.0),
+                    symbol=symbol,
+                ),
+            )
+        )
+        spread_block = float(
+            max(
+                spread_caution,
+                _cfg_group_float(
+                    grp_u,
+                    "cost_microstructure_spread_block_points",
+                    _cfg_group_map_float("cost_microstructure_spread_block_by_group", grp_u, spread_caution * 1.25),
+                    symbol=symbol,
+                ),
+            )
+        )
+        max_tick_age_sec = float(
+            max(
+                0.1,
+                _cfg_group_float(
+                    grp_u,
+                    "cost_microstructure_max_tick_age_sec",
+                    _cfg_group_map_float("cost_microstructure_max_tick_age_sec_by_group", grp_u, 6.0),
+                    symbol=symbol,
+                ),
+            )
+        )
+        gap_block_sec = float(
+            max(
+                0.1,
+                _cfg_group_float(
+                    grp_u,
+                    "cost_microstructure_gap_block_sec",
+                    _cfg_group_map_float("cost_microstructure_gap_block_sec_by_group", grp_u, 20.0),
+                    symbol=symbol,
+                ),
+            )
+        )
+        jump_block_points = float(
+            max(
+                0.0,
+                _cfg_group_float(
+                    grp_u,
+                    "cost_microstructure_jump_block_points",
+                    _cfg_group_map_float("cost_microstructure_jump_block_points_by_group", grp_u, 80.0),
+                    symbol=symbol,
+                ),
+            )
+        )
+
+        est_rt = request.get("estimated_round_trip_cost") if isinstance(request.get("estimated_round_trip_cost"), dict) else {}
+        est_comp = request.get("estimated_entry_cost_components") if isinstance(request.get("estimated_entry_cost_components"), dict) else {}
+        quality = str(
+            est_comp.get("cost_estimation_quality")
+            or est_rt.get("cost_estimation_quality")
+            or "UNKNOWN"
+        ).upper()
+
+        inp = CostMicrostructureGateInput(
+            group=grp_u,
+            symbol=str(symbol),
+            spread_points=spread_points,
+            spread_caution_points=spread_caution,
+            spread_block_points=spread_block,
+            tick_age_sec=tick_age_sec,
+            max_tick_age_sec=max_tick_age_sec,
+            tick_gap_sec=(
+                None
+                if micro_state.get("tick_gap_sec") is None
+                else float(max(0.0, float(micro_state.get("tick_gap_sec") or 0.0)))
+            ),
+            gap_block_sec=gap_block_sec,
+            price_jump_points=(
+                None
+                if micro_state.get("price_jump_points") is None
+                else float(max(0.0, float(micro_state.get("price_jump_points") or 0.0)))
+            ),
+            jump_block_points=jump_block_points,
+            ask_lt_bid=bool(micro_state.get("ask_lt_bid", False)),
+            cost_estimation_quality=quality,
+            cost_feasibility_shadow=request.get("cost_feasibility_shadow"),
+            target_move_price=request.get("target_move_price"),
+            estimated_round_trip_cost_price=(
+                est_rt.get("value_price")
+                if isinstance(est_rt, dict)
+                else None
+            ),
+        )
+        decision = dict(evaluate_cost_microstructure_gate(cfg, inp))
+        decision.update(
+            {
+                "symbol_raw": str(symbol),
+                "symbol_canonical": canonical_symbol(symbol),
+                "group": str(grp_u),
+                "spread_points": spread_points,
+                "tick_age_sec": tick_age_sec,
+                "max_tick_age_sec": float(max_tick_age_sec),
+                "tick_gap_sec": inp.tick_gap_sec,
+                "gap_block_sec": float(gap_block_sec),
+                "price_jump_points": inp.price_jump_points,
+                "jump_block_points": float(jump_block_points),
+                "ask_lt_bid": bool(inp.ask_lt_bid),
+                "spread_caution_points": float(spread_caution),
+                "spread_block_points": float(spread_block),
+                "cost_estimation_quality": str(quality),
             }
         )
         return decision
@@ -10325,6 +10541,67 @@ class SafetyBot:
                         }
                     )
 
+            cost_micro = self._cost_microstructure_gate_eval(symbol, grp_u, request)
+            request["cost_microstructure_gate"] = dict(cost_micro)
+            cmg_mode = str(cost_micro.get("mode") or "SHADOW_ONLY").upper()
+            cmg_allow = bool(cost_micro.get("cost_allow_trade", True))
+            cmg_reason = str(cost_micro.get("reason_code") or "CMG_UNKNOWN")
+            cmg_grade = str(cost_micro.get("cost_grade") or "UNKNOWN")
+            cmg_emit_caution = bool(getattr(CFG, "cost_microstructure_emit_caution_event", True))
+            if cmg_mode == "GATE_ENFORCE":
+                if not cmg_allow:
+                    logging.warning(
+                        "ENTRY_BLOCK_COST_MICROSTRUCTURE symbol=%s group=%s reason=%s grade=%s spread=%s tick_age=%s jump=%s gap=%s",
+                        symbol,
+                        grp_u,
+                        cmg_reason,
+                        cmg_grade,
+                        str(cost_micro.get("spread_points") if cost_micro.get("spread_points") is not None else "NA"),
+                        str(cost_micro.get("tick_age_sec") if cost_micro.get("tick_age_sec") is not None else "NA"),
+                        str(cost_micro.get("price_jump_points") if cost_micro.get("price_jump_points") is not None else "NA"),
+                        str(cost_micro.get("tick_gap_sec") if cost_micro.get("tick_gap_sec") is not None else "NA"),
+                    )
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": "ENTRY_BLOCK_COST_MICROSTRUCTURE",
+                            **dict(cost_micro),
+                            "method": "cost_microstructure_gate",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
+                    return self._blocked_result_stub(
+                        retcode=int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006)),
+                        comment=f"COST_MICRO:{cmg_reason}",
+                        symbol=symbol,
+                        request=request,
+                    )
+                if cmg_emit_caution and str(cmg_reason).upper() == "CMG_CAUTION":
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": "ENTRY_CAUTION_COST_MICROSTRUCTURE",
+                            **dict(cost_micro),
+                            "method": "cost_microstructure_gate",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
+            elif cmg_mode == "SHADOW_ONLY":
+                if (not cmg_allow) or (cmg_emit_caution and str(cmg_reason).upper() == "CMG_CAUTION"):
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": (
+                                "ENTRY_SHADOW_BLOCK_COST_MICROSTRUCTURE"
+                                if not cmg_allow
+                                else "ENTRY_SHADOW_CAUTION_COST_MICROSTRUCTURE"
+                            ),
+                            **dict(cost_micro),
+                            "method": "cost_microstructure_gate_shadow",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
+
             # Hard throttle: per-window max trades per module.
             grp_count = int(self._live_window_trade_counts.get(grp_u, 0))
             grp_limit = int(max(1, getattr(CFG, "max_trades_per_window_per_module", 8)))
@@ -10359,7 +10636,7 @@ class SafetyBot:
 
             # Active cost gate in canary mode (no strategy mutation; execution feasibility only).
             cost_mode = str(getattr(CFG, "cost_gate_policy_mode", "DIAGNOSTIC_ONLY") or "DIAGNOSTIC_ONLY").strip().upper()
-            if cost_mode == "CANARY_ACTIVE":
+            if cost_mode == "CANARY_ACTIVE" and cmg_mode != "GATE_ENFORCE":
                 est_rt = request.get("estimated_round_trip_cost") if isinstance(request.get("estimated_round_trip_cost"), dict) else {}
                 est_comp = request.get("estimated_entry_cost_components") if isinstance(request.get("estimated_entry_cost_components"), dict) else {}
                 quality = str(
@@ -13039,6 +13316,25 @@ class SafetyBot:
                     "trade_stops_level": int(data.get("trade_stops_level", 0) or 0),
                     "trade_freeze_level": int(data.get("trade_freeze_level", 0) or 0),
                 }
+                prev = dict(self._micro_tick_state.get(base_symbol) or {})
+                prev_ts = float(prev.get("recv_ts", 0.0) or 0.0)
+                prev_mid = float(prev.get("mid", 0.0) or 0.0)
+                tick_gap_sec = None
+                if prev_ts > 0.0:
+                    tick_gap_sec = max(0.0, float(now_ts) - float(prev_ts))
+                mid = 0.0
+                if bid > 0.0 and ask > 0.0:
+                    mid = (bid + ask) * 0.5
+                price_jump_points = None
+                if point > 0.0 and prev_mid > 0.0 and mid > 0.0:
+                    price_jump_points = abs(float(mid) - float(prev_mid)) / float(point)
+                self._micro_tick_state[base_symbol] = {
+                    "recv_ts": float(now_ts),
+                    "mid": float(mid),
+                    "tick_gap_sec": tick_gap_sec,
+                    "price_jump_points": price_jump_points,
+                    "ask_lt_bid": bool((ask > 0.0 and bid > 0.0) and (ask < bid)),
+                }
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             logging.debug(f"ZMQ_TICK | {symbol} | Bid: {data.get('bid')} Ask: {data.get('ask')}")
@@ -13655,6 +13951,28 @@ if __name__ == "__main__":
         "session_liquidity_emit_caution_event",
         CFG.session_liquidity_emit_caution_event,
     )
+    CFG.cost_microstructure_gate_enabled = _cfg_bool(
+        "cost_microstructure_gate_enabled",
+        CFG.cost_microstructure_gate_enabled,
+    )
+    CFG.cost_microstructure_gate_mode = str(
+        strategy_cfg.get("cost_microstructure_gate_mode", CFG.cost_microstructure_gate_mode)
+        or CFG.cost_microstructure_gate_mode
+    ).strip().upper()
+    if CFG.cost_microstructure_gate_mode not in {"SHADOW_ONLY", "GATE_ENFORCE", "DISABLED"}:
+        CFG.cost_microstructure_gate_mode = "SHADOW_ONLY"
+    CFG.cost_microstructure_block_on_missing_snapshot = _cfg_bool(
+        "cost_microstructure_block_on_missing_snapshot",
+        CFG.cost_microstructure_block_on_missing_snapshot,
+    )
+    CFG.cost_microstructure_block_on_unknown_quality = _cfg_bool(
+        "cost_microstructure_block_on_unknown_quality",
+        CFG.cost_microstructure_block_on_unknown_quality,
+    )
+    CFG.cost_microstructure_emit_caution_event = _cfg_bool(
+        "cost_microstructure_emit_caution_event",
+        CFG.cost_microstructure_emit_caution_event,
+    )
     CFG.cost_gate_min_target_to_cost_ratio = _cfg_float(
         "cost_gate_min_target_to_cost_ratio", CFG.cost_gate_min_target_to_cost_ratio
     )
@@ -13862,6 +14180,26 @@ if __name__ == "__main__":
     CFG.session_liquidity_max_tick_age_sec_by_group = _cfg_group_map(
         "session_liquidity_max_tick_age_sec_by_group",
         dict(getattr(CFG, "session_liquidity_max_tick_age_sec_by_group", {}) or {}),
+    )
+    CFG.cost_microstructure_spread_caution_by_group = _cfg_group_map(
+        "cost_microstructure_spread_caution_by_group",
+        dict(getattr(CFG, "cost_microstructure_spread_caution_by_group", {}) or {}),
+    )
+    CFG.cost_microstructure_spread_block_by_group = _cfg_group_map(
+        "cost_microstructure_spread_block_by_group",
+        dict(getattr(CFG, "cost_microstructure_spread_block_by_group", {}) or {}),
+    )
+    CFG.cost_microstructure_max_tick_age_sec_by_group = _cfg_group_map(
+        "cost_microstructure_max_tick_age_sec_by_group",
+        dict(getattr(CFG, "cost_microstructure_max_tick_age_sec_by_group", {}) or {}),
+    )
+    CFG.cost_microstructure_gap_block_sec_by_group = _cfg_group_map(
+        "cost_microstructure_gap_block_sec_by_group",
+        dict(getattr(CFG, "cost_microstructure_gap_block_sec_by_group", {}) or {}),
+    )
+    CFG.cost_microstructure_jump_block_points_by_group = _cfg_group_map(
+        "cost_microstructure_jump_block_points_by_group",
+        dict(getattr(CFG, "cost_microstructure_jump_block_points_by_group", {}) or {}),
     )
 
     raw_tw = strategy_cfg.get("trade_windows", None)

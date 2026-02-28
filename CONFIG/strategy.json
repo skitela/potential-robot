@@ -504,6 +504,46 @@
     "CRYPTO": 15.0,
     "EQUITY": 15.0
   },
+  "cost_microstructure_gate_enabled": true,
+  "cost_microstructure_gate_mode": "SHADOW_ONLY",
+  "cost_microstructure_block_on_missing_snapshot": true,
+  "cost_microstructure_block_on_unknown_quality": true,
+  "cost_microstructure_emit_caution_event": true,
+  "cost_microstructure_spread_caution_by_group": {
+    "FX": 22.0,
+    "METAL": 110.0,
+    "INDEX": 85.0,
+    "CRYPTO": 380.0,
+    "EQUITY": 45.0
+  },
+  "cost_microstructure_spread_block_by_group": {
+    "FX": 30.0,
+    "METAL": 170.0,
+    "INDEX": 125.0,
+    "CRYPTO": 620.0,
+    "EQUITY": 75.0
+  },
+  "cost_microstructure_max_tick_age_sec_by_group": {
+    "FX": 6.0,
+    "METAL": 8.0,
+    "INDEX": 10.0,
+    "CRYPTO": 12.0,
+    "EQUITY": 12.0
+  },
+  "cost_microstructure_gap_block_sec_by_group": {
+    "FX": 20.0,
+    "METAL": 25.0,
+    "INDEX": 30.0,
+    "CRYPTO": 35.0,
+    "EQUITY": 35.0
+  },
+  "cost_microstructure_jump_block_points_by_group": {
+    "FX": 80.0,
+    "METAL": 350.0,
+    "INDEX": 200.0,
+    "CRYPTO": 1400.0,
+    "EQUITY": 120.0
+  },
   "cost_gate_min_target_to_cost_ratio": 1.15,
   "cost_gate_block_on_unknown_quality": true,
   "cost_guard_auto_relax_enabled": true,
