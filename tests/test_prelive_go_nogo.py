@@ -159,6 +159,26 @@ class TestPreliveGoNoGo(unittest.TestCase):
         chk = {str(c.get("id")): bool(c.get("ok")) for c in checks if isinstance(c, dict)}
         self.assertFalse(chk.get("DEPENDENCY_LOCAL_LINKS", True))
 
+    def test_dependency_requirements_ignores_local_observers_names(self) -> None:
+        root = self._tmpdir()
+        learner = {
+            "ts_utc": "2099-01-01T00:00:00Z",
+            "ttl_sec": 3600,
+            "qa_light": "GREEN",
+        }
+        (root / "META" / "learner_advice.json").write_text(json.dumps(learner), encoding="utf-8")
+        (root / "requirements.txt").write_text("requests>=0\n", encoding="utf-8")
+        (root / "BIN").mkdir(parents=True, exist_ok=True)
+        (root / "BIN" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "BIN" / "mini.py").write_text("import OBSERVERS_DRAFT\nimport common\n", encoding="utf-8")
+        (root / "OBSERVERS_DRAFT").mkdir(parents=True, exist_ok=True)
+        (root / "OBSERVERS_DRAFT" / "common").mkdir(parents=True, exist_ok=True)
+
+        rep = prelive_go_nogo.evaluate_prelive(root)
+        dep = dict(rep.get("dependency_hygiene") or {})
+        self.assertTrue(bool(dep.get("ok_requirements")))
+        self.assertEqual([], list(dep.get("missing_requirements") or []))
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

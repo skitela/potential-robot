@@ -7,8 +7,13 @@ import argparse
 import datetime as dt
 import json
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 try:
     from TOOLS import dependency_hygiene as _dep_hygiene
@@ -126,11 +131,40 @@ def _dependency_hygiene_check(root: Path) -> Dict[str, Any]:
         }
     rep = _dep_hygiene.detect_hygiene(root, _dep_hygiene.REQUIREMENT_FILES_DEFAULT)
     missing = list(rep.get("missing_requirements") or [])
+    local_modules = {str(x).strip().lower() for x in (rep.get("local_modules_detected") or []) if str(x).strip()}
+    top_level_dirs = {
+        p.name.strip().lower() for p in root.iterdir() if p.is_dir() and p.name.strip()
+    }
+    observer_roots = [
+        root / "OBSERVERS_DRAFT",
+        root / "OBSERVERS_IMPLEMENTATION_CANDIDATE",
+    ]
+
+    def _is_local_name(name: str) -> bool:
+        nm = str(name or "").strip()
+        if not nm:
+            return False
+        nml = nm.lower()
+        if nml in local_modules or nml in top_level_dirs:
+            return True
+        if (root / nm).exists():
+            return True
+        for obs in observer_roots:
+            if not obs.exists():
+                continue
+            if (obs / nm).exists():
+                return True
+            if any(obs.glob(f"{nm}.py")):
+                return True
+        return False
+
+    missing_filtered = [m for m in missing if not _is_local_name(str(m))]
     unresolved = int(rep.get("local_unresolved_total") or 0)
     return {
-        "ok_requirements": len(missing) == 0,
+        "ok_requirements": len(missing_filtered) == 0,
         "ok_local_links": unresolved == 0,
-        "missing_requirements": missing,
+        "missing_requirements": missing_filtered,
+        "missing_requirements_raw": missing,
         "local_unresolved_total": unresolved,
         "status": str(rep.get("status") or "UNKNOWN"),
     }
