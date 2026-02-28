@@ -1,0 +1,27 @@
+{
+  "method_id": "RANKING_BENCHMARK_STRICT_OVERLAY_V1",
+  "version": 1,
+  "description": "Stricter gate overlay for local-laptop hard-live canary readiness.",
+  "thresholds": {
+    "min_score_100": 75.0,
+    "min_score_top_target_100": 80.0,
+    "require_prelive_go": true,
+    "min_criteria_0_10": {
+      "C01_RISK_CAPITAL_PROTECTION": 8.5,
+      "C03_EXECUTION_QUALITY": 8.0,
+      "C04_MONITORING_DIAGNOSTICS": 7.0,
+      "C08_COMPLIANCE_AUDITABILITY": 6.0,
+      "C10_OPERATIONAL_READINESS": 6.0
+    },
+    "max_code_hardcoded_path_hits": 20,
+    "stress_max_latency_p50_sec": 0.1,
+    "stress_max_latency_p95_sec": 1.5,
+    "stress_timeout_count_max": 0,
+    "stress_crash_count_max": 0,
+    "stress_deadlock_suspect_count_max": 0
+  },
+  "notes": [
+    "Overlay does not replace benchmark V1. It adds hard operational gates.",
+    "Designed for local workstation constraints and hard-live canary discipline."
+  ]
+}
