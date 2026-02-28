@@ -479,6 +479,31 @@
   "hard_live_contract_file_name": "live_canary_contract.json",
   "no_live_drift_file_name": "no_live_drift_check.json",
   "cost_gate_policy_mode": "CANARY_ACTIVE",
+  "session_liquidity_gate_enabled": true,
+  "session_liquidity_gate_mode": "SHADOW_ONLY",
+  "session_liquidity_block_on_missing_snapshot": true,
+  "session_liquidity_emit_caution_event": true,
+  "session_liquidity_spread_caution_by_group": {
+    "FX": 24.0,
+    "METAL": 120.0,
+    "INDEX": 90.0,
+    "CRYPTO": 400.0,
+    "EQUITY": 50.0
+  },
+  "session_liquidity_spread_block_by_group": {
+    "FX": 32.0,
+    "METAL": 180.0,
+    "INDEX": 130.0,
+    "CRYPTO": 650.0,
+    "EQUITY": 80.0
+  },
+  "session_liquidity_max_tick_age_sec_by_group": {
+    "FX": 8.0,
+    "METAL": 10.0,
+    "INDEX": 12.0,
+    "CRYPTO": 15.0,
+    "EQUITY": 15.0
+  },
   "cost_gate_min_target_to_cost_ratio": 1.15,
   "cost_gate_block_on_unknown_quality": true,
   "cost_guard_auto_relax_enabled": true,

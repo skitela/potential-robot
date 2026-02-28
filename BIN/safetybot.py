@@ -88,6 +88,11 @@ from typing import Dict, Optional, List, Tuple, Any, Callable, Set
 try:
     from . import common_guards as cg
     from . import common_contract as cc
+    from .session_liquidity_gate import (
+        SessionLiquidityGateConfig,
+        SessionLiquidityGateInput,
+        evaluate_session_liquidity_gate,
+    )
     from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from .self_heal_guard import SelfHealGuard, SelfHealPolicy
     from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
@@ -100,6 +105,11 @@ try:
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
+    from session_liquidity_gate import (
+        SessionLiquidityGateConfig,
+        SessionLiquidityGateInput,
+        evaluate_session_liquidity_gate,
+    )
     from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
     from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
@@ -596,6 +606,32 @@ class CFG:
     cost_gate_policy_mode: str = "DIAGNOSTIC_ONLY"  # CANARY_ACTIVE / DIAGNOSTIC_ONLY / DISABLED
     cost_gate_min_target_to_cost_ratio: float = 1.10
     cost_gate_block_on_unknown_quality: bool = True
+    # Session + Liquidity gate (operational veto/permit; no strategy mutation).
+    session_liquidity_gate_enabled: bool = True
+    session_liquidity_gate_mode: str = "SHADOW_ONLY"  # SHADOW_ONLY / GATE_ENFORCE / DISABLED
+    session_liquidity_block_on_missing_snapshot: bool = True
+    session_liquidity_emit_caution_event: bool = True
+    session_liquidity_spread_caution_by_group: Dict[str, float] = {
+        "FX": 24.0,
+        "METAL": 120.0,
+        "INDEX": 90.0,
+        "CRYPTO": 400.0,
+        "EQUITY": 50.0,
+    }
+    session_liquidity_spread_block_by_group: Dict[str, float] = {
+        "FX": 32.0,
+        "METAL": 180.0,
+        "INDEX": 130.0,
+        "CRYPTO": 650.0,
+        "EQUITY": 80.0,
+    }
+    session_liquidity_max_tick_age_sec_by_group: Dict[str, float] = {
+        "FX": 8.0,
+        "METAL": 10.0,
+        "INDEX": 12.0,
+        "CRYPTO": 15.0,
+        "EQUITY": 15.0,
+    }
     # Auto-relax for execution guards (no strategy change): only if runtime evidence is sufficient.
     cost_guard_auto_relax_enabled: bool = False
     cost_guard_auto_relax_window_minutes: int = 360
@@ -9235,6 +9271,133 @@ class SafetyBot:
             "symbol_canonical": sym_canon,
         }
 
+    def _session_liquidity_gate_eval(
+        self,
+        symbol: str,
+        group: str,
+        request: Dict[str, Any],
+        *,
+        tw_ctx: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        grp_u = _group_key(group)
+        mode = str(getattr(CFG, "session_liquidity_gate_mode", "SHADOW_ONLY") or "SHADOW_ONLY").strip().upper()
+        if mode not in {"SHADOW_ONLY", "GATE_ENFORCE", "DISABLED"}:
+            mode = "SHADOW_ONLY"
+        cfg = SessionLiquidityGateConfig(
+            enabled=bool(getattr(CFG, "session_liquidity_gate_enabled", True)),
+            mode=mode,
+            block_on_missing_snapshot=bool(getattr(CFG, "session_liquidity_block_on_missing_snapshot", True)),
+        )
+        tw = dict(tw_ctx or trade_window_ctx(now_utc()) or {})
+        tw_phase = str(tw.get("phase") or "UNKNOWN").upper()
+        tw_window_id = str(tw.get("window_id") or "NONE")
+        tw_group = _group_key(str(tw.get("group") or ""))
+
+        base = symbol_base(symbol)
+        snapshot = {}
+        try:
+            snapshot = dict(self._zmq_symbol_info_cache.get(base) or {})
+        except Exception:
+            snapshot = {}
+
+        spread_points: Optional[float] = None
+        for candidate in (
+            request.get("spread_points"),
+            request.get("spread_at_decision"),
+            snapshot.get("spread"),
+        ):
+            try:
+                v = float(candidate)
+                if v >= 0.0:
+                    spread_points = float(v)
+                    break
+            except Exception:
+                continue
+
+        tick_age_sec: Optional[float] = None
+        try:
+            t_tick = float(self._zmq_last_tick_ts.get(base, 0.0) or 0.0)
+            if t_tick <= 0.0:
+                t_tick = float(snapshot.get("recv_ts", 0.0) or 0.0)
+            if t_tick > 0.0:
+                tick_age_sec = max(0.0, float(time.time()) - float(t_tick))
+        except Exception:
+            tick_age_sec = None
+
+        caution_default = float(
+            _cfg_group_map_float("session_liquidity_spread_caution_by_group", grp_u, 24.0)
+        )
+        block_default = float(
+            _cfg_group_map_float("session_liquidity_spread_block_by_group", grp_u, caution_default * 1.25)
+        )
+        tick_age_default = float(
+            _cfg_group_map_float("session_liquidity_max_tick_age_sec_by_group", grp_u, 8.0)
+        )
+        spread_caution_points = float(
+            max(
+                0.0,
+                _cfg_group_float(
+                    grp_u,
+                    "session_liquidity_spread_caution_points",
+                    caution_default,
+                    symbol=symbol,
+                ),
+            )
+        )
+        spread_block_points = float(
+            max(
+                spread_caution_points,
+                _cfg_group_float(
+                    grp_u,
+                    "session_liquidity_spread_block_points",
+                    block_default,
+                    symbol=symbol,
+                ),
+            )
+        )
+        max_tick_age_sec = float(
+            max(
+                0.1,
+                _cfg_group_float(
+                    grp_u,
+                    "session_liquidity_max_tick_age_sec",
+                    tick_age_default,
+                    symbol=symbol,
+                ),
+            )
+        )
+
+        inp = SessionLiquidityGateInput(
+            group=grp_u,
+            symbol=str(symbol),
+            trade_window_phase=str(tw_phase),
+            trade_window_id=str(tw_window_id),
+            trade_window_group=str(tw_group),
+            strict_group_routing=bool(getattr(CFG, "trade_window_strict_group_routing", True)),
+            spread_points=spread_points,
+            tick_age_sec=tick_age_sec,
+            max_tick_age_sec=max_tick_age_sec,
+            spread_caution_points=spread_caution_points,
+            spread_block_points=spread_block_points,
+        )
+        decision = dict(evaluate_session_liquidity_gate(cfg, inp))
+        decision.update(
+            {
+                "symbol_raw": str(symbol),
+                "symbol_canonical": canonical_symbol(symbol),
+                "group": str(grp_u),
+                "trade_window_phase": str(tw_phase),
+                "trade_window_id": str(tw_window_id),
+                "trade_window_group": str(tw_group),
+                "spread_points": spread_points,
+                "tick_age_sec": tick_age_sec,
+                "max_tick_age_sec": float(max_tick_age_sec),
+                "spread_caution_points": float(spread_caution_points),
+                "spread_block_points": float(spread_block_points),
+            }
+        )
+        return decision
+
     def _window_start_utc(self, tw_ctx: Dict[str, Any], now_dt: dt.datetime) -> int:
         phase = str(tw_ctx.get("phase") or "OFF").upper()
         wid = str(tw_ctx.get("window_id") or "")
@@ -10099,6 +10262,68 @@ class SafetyBot:
                     symbol=symbol,
                     request=request,
                 )
+
+            session_liq = self._session_liquidity_gate_eval(symbol, grp_u, request)
+            request["session_liquidity_gate"] = dict(session_liq)
+            slg_mode = str(session_liq.get("mode") or "SHADOW_ONLY").upper()
+            slg_allow = bool(session_liq.get("allow_trade", True))
+            slg_state = str(session_liq.get("gate_state") or "ALLOW").upper()
+            slg_reason = str(session_liq.get("reason_code") or "SLG_UNKNOWN")
+            emit_caution = bool(getattr(CFG, "session_liquidity_emit_caution_event", True))
+
+            if slg_mode == "GATE_ENFORCE":
+                if not slg_allow:
+                    logging.warning(
+                        "ENTRY_BLOCK_SESSION_LIQUIDITY symbol=%s group=%s reason=%s state=%s phase=%s window=%s spread=%s tick_age=%s",
+                        symbol,
+                        grp_u,
+                        slg_reason,
+                        slg_state,
+                        str(session_liq.get("trade_window_phase") or "UNKNOWN"),
+                        str(session_liq.get("trade_window_id") or "NONE"),
+                        str(session_liq.get("spread_points") if session_liq.get("spread_points") is not None else "NA"),
+                        str(session_liq.get("tick_age_sec") if session_liq.get("tick_age_sec") is not None else "NA"),
+                    )
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": "ENTRY_BLOCK_SESSION_LIQUIDITY",
+                            **dict(session_liq),
+                            "method": "session_liquidity_gate",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
+                    return self._blocked_result_stub(
+                        retcode=int(getattr(mt5, "TRADE_RETCODE_REJECT", 10006)),
+                        comment=f"SESSION_LIQUIDITY:{slg_reason}",
+                        symbol=symbol,
+                        request=request,
+                    )
+                if slg_state == "CAUTION" and emit_caution:
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": "ENTRY_CAUTION_SESSION_LIQUIDITY",
+                            **dict(session_liq),
+                            "method": "session_liquidity_gate",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
+            elif slg_mode == "SHADOW_ONLY":
+                if (not slg_allow) or (slg_state == "CAUTION" and emit_caution):
+                    self._append_execution_telemetry(
+                        {
+                            "event_type": (
+                                "ENTRY_SHADOW_BLOCK_SESSION_LIQUIDITY"
+                                if not slg_allow
+                                else "ENTRY_SHADOW_CAUTION_SESSION_LIQUIDITY"
+                            ),
+                            **dict(session_liq),
+                            "method": "session_liquidity_gate_shadow",
+                            "sample_size_n": 1,
+                            "low_stat_power": True,
+                        }
+                    )
 
             # Hard throttle: per-window max trades per module.
             grp_count = int(self._live_window_trade_counts.get(grp_u, 0))
@@ -13413,6 +13638,23 @@ if __name__ == "__main__":
     ).strip().upper()
     if CFG.cost_gate_policy_mode not in {"CANARY_ACTIVE", "DIAGNOSTIC_ONLY", "DISABLED"}:
         CFG.cost_gate_policy_mode = "DIAGNOSTIC_ONLY"
+    CFG.session_liquidity_gate_enabled = _cfg_bool(
+        "session_liquidity_gate_enabled", CFG.session_liquidity_gate_enabled
+    )
+    CFG.session_liquidity_gate_mode = str(
+        strategy_cfg.get("session_liquidity_gate_mode", CFG.session_liquidity_gate_mode)
+        or CFG.session_liquidity_gate_mode
+    ).strip().upper()
+    if CFG.session_liquidity_gate_mode not in {"SHADOW_ONLY", "GATE_ENFORCE", "DISABLED"}:
+        CFG.session_liquidity_gate_mode = "SHADOW_ONLY"
+    CFG.session_liquidity_block_on_missing_snapshot = _cfg_bool(
+        "session_liquidity_block_on_missing_snapshot",
+        CFG.session_liquidity_block_on_missing_snapshot,
+    )
+    CFG.session_liquidity_emit_caution_event = _cfg_bool(
+        "session_liquidity_emit_caution_event",
+        CFG.session_liquidity_emit_caution_event,
+    )
     CFG.cost_gate_min_target_to_cost_ratio = _cfg_float(
         "cost_gate_min_target_to_cost_ratio", CFG.cost_gate_min_target_to_cost_ratio
     )
@@ -13608,6 +13850,18 @@ if __name__ == "__main__":
     )
     CFG.group_overlap_priority_factor = _cfg_group_map(
         "group_overlap_priority_factor", dict(getattr(CFG, "group_overlap_priority_factor", {}) or {})
+    )
+    CFG.session_liquidity_spread_caution_by_group = _cfg_group_map(
+        "session_liquidity_spread_caution_by_group",
+        dict(getattr(CFG, "session_liquidity_spread_caution_by_group", {}) or {}),
+    )
+    CFG.session_liquidity_spread_block_by_group = _cfg_group_map(
+        "session_liquidity_spread_block_by_group",
+        dict(getattr(CFG, "session_liquidity_spread_block_by_group", {}) or {}),
+    )
+    CFG.session_liquidity_max_tick_age_sec_by_group = _cfg_group_map(
+        "session_liquidity_max_tick_age_sec_by_group",
+        dict(getattr(CFG, "session_liquidity_max_tick_age_sec_by_group", {}) or {}),
     )
 
     raw_tw = strategy_cfg.get("trade_windows", None)
