@@ -103,6 +103,11 @@ try:
         JapaneseCandleInput,
         evaluate_japanese_candle_adapter,
     )
+    from .renko_sensor import (
+        RenkoSensorConfig,
+        RenkoTick,
+        build_renko_bricks,
+    )
     from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from .self_heal_guard import SelfHealGuard, SelfHealPolicy
     from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
@@ -129,6 +134,11 @@ except Exception:  # pragma: no cover
         JapaneseCandleAdapterConfig,
         JapaneseCandleInput,
         evaluate_japanese_candle_adapter,
+    )
+    from renko_sensor import (
+        RenkoSensorConfig,
+        RenkoTick,
+        build_renko_bricks,
     )
     from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
@@ -202,6 +212,13 @@ class CFG:
     zmq_heartbeat_fail_safe_cooldown_sec: int = 30
     zmq_heartbeat_fail_log_interval_sec: int = 15
     zmq_scan_suppressed_log_interval_sec: int = 60
+    # Bridge latency budget (safe defaults, configurable in CONFIG/strategy.json).
+    bridge_default_timeout_ms: int = 1200
+    bridge_default_retries: int = 1
+    bridge_heartbeat_timeout_ms: int = 900
+    bridge_heartbeat_retries: int = 1
+    bridge_trade_timeout_ms: int = 1200
+    bridge_trade_retries: int = 1
     run_loop_idle_sleep_sec: float = 0.01
     run_loop_scan_slow_warn_ms: int = 1500
     run_loop_scan_stats_window: int = 120
@@ -706,6 +723,30 @@ class CFG:
     candle_adapter_score_weight: float = 6.0
     candle_adapter_min_body_to_range: float = 0.35
     candle_adapter_pin_wick_ratio_min: float = 1.6
+    # Renko adapter (advisory; no direct execution). Default SHADOW_ONLY to avoid strategy drift.
+    renko_adapter_enabled: bool = True
+    renko_adapter_mode: str = "SHADOW_ONLY"  # SHADOW_ONLY / ADVISORY_SCORE / DISABLED
+    renko_adapter_emit_event: bool = True
+    renko_adapter_score_weight: float = 4.0
+    renko_adapter_price_source: str = "MID"  # MID / BID / ASK
+    renko_adapter_tick_limit: int = 1200
+    renko_adapter_cache_ttl_sec: float = 5.0
+    renko_adapter_min_bricks_ready: int = 3
+    renko_adapter_brick_size_points_default: float = 8.0
+    renko_adapter_brick_size_points_by_group: Dict[str, float] = {
+        "FX": 8.0,
+        "METAL": 80.0,
+        "INDEX": 40.0,
+        "CRYPTO": 120.0,
+        "EQUITY": 20.0,
+    }
+    # Renko data path (P0 data contract): persist tick snapshots for deterministic Renko build.
+    # This does not alter entry/exit logic; it only stores data for Renko sensor analysis.
+    renko_tick_store_enabled: bool = True
+    renko_tick_store_min_interval_ms: int = 200
+    renko_tick_store_min_price_delta_points: float = 0.0
+    renko_tick_store_max_rows_per_symbol: int = 120000
+    renko_tick_store_prune_every: int = 500
     # Auto-relax for execution guards (no strategy change): only if runtime evidence is sufficient.
     cost_guard_auto_relax_enabled: bool = False
     cost_guard_auto_relax_window_minutes: int = 360
@@ -3377,6 +3418,7 @@ VERDICT_FILE_NAME = "verdict.json"
 MARKET_SNAPSHOT_FILE_NAME = "market_snapshot.json"
 DECISION_EVENTS_DB_NAME = "decision_events.sqlite"
 M5_BARS_DB_NAME = "m5_bars.sqlite"
+TICK_SNAPSHOTS_DB_NAME = "tick_snapshots.sqlite"
 
 # --- DB migration constants (P0) ---
 LEGACY_DB_NAMES = [
@@ -4354,7 +4396,181 @@ class M5BarsStore:
         rs["time"] = rs["time_utc"].dt.tz_convert(TZ_PL)
         return rs[["time", "open", "high", "low", "close"]].reset_index(drop=True)
 
-    
+class TickSnapshotsStore:
+    """SQLite tick snapshot store for Renko/offline analytics (no direct trading decisions)."""
+
+    def __init__(self, db_dir: Path):
+        self.db_dir = db_dir
+        self.db_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.db_dir / TICK_SNAPSHOTS_DB_NAME
+        self._lock = threading.Lock()
+        self._last_ts_msc: Dict[str, int] = {}
+        self._last_bid_ask: Dict[str, Tuple[float, float]] = {}
+        self._insert_counter: Dict[str, int] = {}
+        self.conn = sqlite3.connect(str(self.db_path), timeout=5, isolation_level=None, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA synchronous=NORMAL;")
+        self.conn.execute("PRAGMA foreign_keys=ON;")
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tick_snapshots (
+                symbol TEXT NOT NULL,
+                ts_utc TEXT NOT NULL,
+                ts_msc INTEGER NOT NULL,
+                bid REAL NOT NULL,
+                ask REAL NOT NULL,
+                mid REAL NOT NULL,
+                spread_points REAL,
+                point REAL,
+                digits INTEGER,
+                recv_ts_utc TEXT,
+                PRIMARY KEY(symbol, ts_msc)
+            );
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_tick_snapshots_symbol_ts_msc ON tick_snapshots(symbol, ts_msc);"
+        )
+
+    def _prune_symbol(self, symbol: str, keep_rows: int) -> None:
+        keep = max(1000, int(keep_rows))
+        cur = sqlite_exec_retry(
+            self.conn,
+            """
+            SELECT ts_msc
+            FROM tick_snapshots
+            WHERE symbol=?
+            ORDER BY ts_msc DESC
+            LIMIT 1 OFFSET ?
+            """,
+            (str(symbol), int(keep - 1)),
+        ).fetchone()
+        if not cur:
+            return
+        cutoff = int(cur[0] or 0)
+        if cutoff <= 0:
+            return
+        sqlite_exec_retry(
+            self.conn,
+            "DELETE FROM tick_snapshots WHERE symbol=? AND ts_msc < ?",
+            (str(symbol), int(cutoff)),
+        )
+
+    def upsert_tick_snapshot(self, base_symbol: str, tick: Dict[str, Any], recv_ts: float) -> bool:
+        if not bool(getattr(CFG, "renko_tick_store_enabled", True)):
+            return False
+        try:
+            symbol = str(base_symbol or "").strip().upper()
+            if not symbol:
+                return False
+
+            ts_msc = int(tick.get("timestamp_ms") or 0)
+            if ts_msc <= 0:
+                return False
+            ts_sec = int(ts_msc // 1000)
+            _maybe_update_mt5_server_epoch_offset(
+                int(ts_sec),
+                source="zmq_tick",
+                max_age_s=max(10, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180))),
+            )
+            ts_utc = mt5_epoch_to_utc_dt(int(ts_sec)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            recv_ts_utc = dt.datetime.fromtimestamp(float(max(0.0, recv_ts)), tz=UTC).replace(
+                microsecond=0
+            ).isoformat().replace("+00:00", "Z")
+
+            bid = float(tick.get("bid", 0.0) or 0.0)
+            ask = float(tick.get("ask", 0.0) or 0.0)
+            if bid <= 0.0 or ask <= 0.0:
+                return False
+            mid = (bid + ask) * 0.5
+            point = float(tick.get("point", 0.0) or 0.0)
+            spread_pts = float(tick.get("spread_points", 0.0) or 0.0)
+            if spread_pts <= 0.0 and point > 0.0:
+                spread_pts = max(0.0, (ask - bid) / point)
+            digits = int(tick.get("digits", 0) or 0)
+
+            min_interval_ms = max(0, int(getattr(CFG, "renko_tick_store_min_interval_ms", 200)))
+            min_delta_pts = float(max(0.0, float(getattr(CFG, "renko_tick_store_min_price_delta_points", 0.0))))
+            prev_ts_msc = int(self._last_ts_msc.get(symbol, 0) or 0)
+            if prev_ts_msc > 0 and (ts_msc - prev_ts_msc) < min_interval_ms:
+                return False
+
+            prev_bid, prev_ask = self._last_bid_ask.get(symbol, (0.0, 0.0))
+            if min_delta_pts > 0.0 and point > 0.0 and prev_bid > 0.0 and prev_ask > 0.0:
+                delta_pts = max(abs(bid - prev_bid), abs(ask - prev_ask)) / point
+                if delta_pts < min_delta_pts:
+                    return False
+
+            row = (
+                symbol,
+                ts_utc,
+                int(ts_msc),
+                float(bid),
+                float(ask),
+                float(mid),
+                float(spread_pts),
+                float(point),
+                int(digits),
+                recv_ts_utc,
+            )
+            with self._lock:
+                sqlite_exec_retry(
+                    self.conn,
+                    """
+                    INSERT OR REPLACE INTO tick_snapshots(
+                        symbol, ts_utc, ts_msc, bid, ask, mid, spread_points, point, digits, recv_ts_utc
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    row,
+                )
+                self._last_ts_msc[symbol] = int(ts_msc)
+                self._last_bid_ask[symbol] = (float(bid), float(ask))
+                n = int(self._insert_counter.get(symbol, 0) or 0) + 1
+                self._insert_counter[symbol] = n
+                prune_every = max(10, int(getattr(CFG, "renko_tick_store_prune_every", 500)))
+                if (n % prune_every) == 0:
+                    keep_rows = max(1000, int(getattr(CFG, "renko_tick_store_max_rows_per_symbol", 120000)))
+                    self._prune_symbol(symbol, keep_rows)
+            return True
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return False
+
+    def read_recent_ticks(self, base_symbol: str, limit: int = 4000) -> List[Dict[str, Any]]:
+        symbol = str(base_symbol or "").strip().upper()
+        if not symbol:
+            return []
+        lim = max(1, int(limit))
+        with self._lock:
+            rows = sqlite_exec_retry(
+                self.conn,
+                """
+                SELECT ts_utc, ts_msc, bid, ask, mid, spread_points, point, digits, recv_ts_utc
+                FROM tick_snapshots
+                WHERE symbol=?
+                ORDER BY ts_msc DESC
+                LIMIT ?
+                """,
+                (symbol, int(lim)),
+            ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in reversed(rows):
+            out.append(
+                {
+                    "symbol": symbol,
+                    "ts_utc": row[0],
+                    "ts_msc": int(row[1]),
+                    "bid": float(row[2]),
+                    "ask": float(row[3]),
+                    "mid": float(row[4]),
+                    "spread_points": (None if row[5] is None else float(row[5])),
+                    "point": (None if row[6] is None else float(row[6])),
+                    "digits": (None if row[7] is None else int(row[7])),
+                    "recv_ts_utc": row[8],
+                }
+            )
+        return out
+
 
 class RequestGovernor:
     """
@@ -6658,6 +6874,7 @@ class StandardStrategy:
         self._skip_total: Dict[str, int] = {}
         self._spread_entry_sum_day: float = 0.0
         self._spread_entry_count_day: int = 0
+        self._renko_eval_cache: Dict[str, Dict[str, Any]] = {}
 
     def _metrics_roll_day(self) -> None:
         day_key = str(pl_day_key(now_utc()))
@@ -6827,6 +7044,236 @@ class StandardStrategy:
         long_s = float(candle_ctx.get("candle_score_long", 0.0) or 0.0)
         short_s = float(candle_ctx.get("candle_score_short", 0.0) or 0.0)
         weight = float(max(0.0, getattr(CFG, "candle_adapter_score_weight", 6.0)))
+        delta = (long_s - short_s) if str(signal).upper() == "BUY" else (short_s - long_s)
+        adjusted = int(round(float(base_score) + float(delta) * float(weight)))
+        return int(max(0, min(100, adjusted)))
+
+    def _evaluate_renko_context(
+        self,
+        *,
+        symbol: str,
+        grp: str,
+        signal: str,
+        point: float,
+    ) -> Dict[str, Any]:
+        mode = str(getattr(CFG, "renko_adapter_mode", "SHADOW_ONLY") or "SHADOW_ONLY").strip().upper()
+        if mode not in {"SHADOW_ONLY", "ADVISORY_SCORE", "DISABLED"}:
+            mode = "SHADOW_ONLY"
+        base = symbol_base(symbol)
+        symbol_canon = canonical_symbol(symbol)
+        grp_u = _group_key(grp)
+        if (not bool(getattr(CFG, "renko_adapter_enabled", True))) or mode == "DISABLED":
+            return {
+                "ready": False,
+                "mode": mode,
+                "renko_bias": "NONE",
+                "renko_score_long": 0.0,
+                "renko_score_short": 0.0,
+                "renko_quality_grade": "UNKNOWN",
+                "renko_no_trade_hint": False,
+                "reason_code": "RENKO_ADAPTER_DISABLED",
+                "symbol_raw": str(symbol),
+                "symbol_canonical": str(symbol_canon),
+                "group": str(grp_u),
+            }
+        if float(point or 0.0) <= 0.0:
+            return {
+                "ready": False,
+                "mode": mode,
+                "renko_bias": "NONE",
+                "renko_score_long": 0.0,
+                "renko_score_short": 0.0,
+                "renko_quality_grade": "UNKNOWN",
+                "renko_no_trade_hint": False,
+                "reason_code": "RENKO_POINT_INVALID",
+                "symbol_raw": str(symbol),
+                "symbol_canonical": str(symbol_canon),
+                "group": str(grp_u),
+            }
+
+        ttl = float(max(0.5, getattr(CFG, "renko_adapter_cache_ttl_sec", 5.0)))
+        now_ts = float(time.time())
+        cache = dict(self._renko_eval_cache.get(base) or {})
+        if float(cache.get("cache_expire_ts", 0.0) or 0.0) >= now_ts:
+            return dict(cache.get("payload") or {})
+
+        tick_store = getattr(self.engine, "tick_store", None)
+        if tick_store is None:
+            out = {
+                "ready": False,
+                "mode": mode,
+                "renko_bias": "NONE",
+                "renko_score_long": 0.0,
+                "renko_score_short": 0.0,
+                "renko_quality_grade": "UNKNOWN",
+                "renko_no_trade_hint": False,
+                "reason_code": "RENKO_TICK_STORE_UNAVAILABLE",
+                "symbol_raw": str(symbol),
+                "symbol_canonical": str(symbol_canon),
+                "group": str(grp_u),
+            }
+            self._renko_eval_cache[base] = {"cache_expire_ts": now_ts + ttl, "payload": dict(out)}
+            return out
+
+        tick_limit = int(max(100, getattr(CFG, "renko_adapter_tick_limit", 1200)))
+        t0 = float(time.perf_counter())
+        rows = tick_store.read_recent_ticks(base, limit=tick_limit) if hasattr(tick_store, "read_recent_ticks") else []
+        if not rows:
+            out = {
+                "ready": False,
+                "mode": mode,
+                "renko_bias": "NONE",
+                "renko_score_long": 0.0,
+                "renko_score_short": 0.0,
+                "renko_quality_grade": "UNKNOWN",
+                "renko_no_trade_hint": False,
+                "reason_code": "RENKO_NO_TICKS",
+                "symbol_raw": str(symbol),
+                "symbol_canonical": str(symbol_canon),
+                "group": str(grp_u),
+                "renko_eval_ms": int(round((time.perf_counter() - t0) * 1000.0)),
+            }
+            self._renko_eval_cache[base] = {"cache_expire_ts": now_ts + ttl, "payload": dict(out)}
+            return out
+
+        ticks: List[RenkoTick] = []
+        for row in rows:
+            try:
+                ticks.append(
+                    RenkoTick(
+                        ts_msc=int(row.get("ts_msc") or 0),
+                        bid=float(row.get("bid") or 0.0),
+                        ask=float(row.get("ask") or 0.0),
+                    )
+                )
+            except Exception:
+                continue
+        if not ticks:
+            out = {
+                "ready": False,
+                "mode": mode,
+                "renko_bias": "NONE",
+                "renko_score_long": 0.0,
+                "renko_score_short": 0.0,
+                "renko_quality_grade": "UNKNOWN",
+                "renko_no_trade_hint": False,
+                "reason_code": "RENKO_TICK_PARSE_FAIL",
+                "symbol_raw": str(symbol),
+                "symbol_canonical": str(symbol_canon),
+                "group": str(grp_u),
+                "renko_eval_ms": int(round((time.perf_counter() - t0) * 1000.0)),
+            }
+            self._renko_eval_cache[base] = {"cache_expire_ts": now_ts + ttl, "payload": dict(out)}
+            return out
+
+        brick_pts = float(
+            max(
+                1.0,
+                _cfg_group_map_float(
+                    "renko_adapter_brick_size_points_by_group",
+                    grp_u,
+                    float(getattr(CFG, "renko_adapter_brick_size_points_default", 8.0)),
+                ),
+            )
+        )
+        src = str(getattr(CFG, "renko_adapter_price_source", "MID") or "MID").strip().upper()
+        renko_out = build_renko_bricks(
+            RenkoSensorConfig(
+                brick_size_points=float(brick_pts),
+                point=float(point),
+                price_source=src,
+            ),
+            ticks,
+        )
+        bricks_count = int(renko_out.get("bricks_count", 0) or 0)
+        min_ready = int(max(1, getattr(CFG, "renko_adapter_min_bricks_ready", 3)))
+        ready = bool(renko_out.get("ready", False)) and (bricks_count >= min_ready)
+        last_dir = str(renko_out.get("last_brick_dir") or "NONE").upper()
+        run_len = int(max(0, renko_out.get("run_length", 0) or 0))
+        reversal_flag = bool(renko_out.get("reversal_flag", False))
+        qflags = renko_out.get("quality_flags") if isinstance(renko_out.get("quality_flags"), dict) else {}
+        ask_lt_bid_count = int(qflags.get("ask_lt_bid_count", 0) or 0)
+        non_mono_count = int(qflags.get("non_monotonic_ts_count", 0) or 0)
+        quality = "POOR"
+        if ready:
+            quality = "GOOD"
+        elif bool(renko_out.get("ready", False)):
+            quality = "FAIR"
+        if ask_lt_bid_count > 0 or non_mono_count > 0:
+            quality = "POOR"
+
+        long_s = 0.0
+        short_s = 0.0
+        no_trade_hint = False
+        if ready:
+            run_bonus = min(0.35, max(0.0, float(run_len - 1) * 0.07))
+            base_score = min(0.95, 0.55 + run_bonus)
+            if last_dir == "UP":
+                long_s = base_score
+                short_s = 0.20
+            elif last_dir == "DOWN":
+                short_s = base_score
+                long_s = 0.20
+            else:
+                long_s = 0.30
+                short_s = 0.30
+            if reversal_flag:
+                long_s *= 0.85
+                short_s *= 0.85
+                if run_len <= 1:
+                    no_trade_hint = True
+        bias = "NONE"
+        if long_s > short_s:
+            bias = "UP"
+        elif short_s > long_s:
+            bias = "DOWN"
+        if quality == "POOR":
+            no_trade_hint = True
+
+        reason = str(renko_out.get("reason_code") or "RENKO_UNKNOWN")
+        if ready:
+            reason = "RENKO_OK"
+        elif bool(renko_out.get("ready", False)) and bricks_count < min_ready:
+            reason = "RENKO_BRICKS_TOO_FEW"
+
+        out = {
+            "ready": bool(ready),
+            "mode": mode,
+            "renko_bias": bias,
+            "renko_score_long": float(max(0.0, min(1.0, long_s))),
+            "renko_score_short": float(max(0.0, min(1.0, short_s))),
+            "renko_quality_grade": str(quality),
+            "renko_no_trade_hint": bool(no_trade_hint),
+            "reason_code": str(reason),
+            "last_brick_dir": str(last_dir),
+            "run_length": int(run_len),
+            "reversal_flag": bool(reversal_flag),
+            "bricks_count": int(bricks_count),
+            "brick_size_points": float(brick_pts),
+            "price_source": str(src),
+            "ask_lt_bid_count": int(ask_lt_bid_count),
+            "non_monotonic_ts_count": int(non_mono_count),
+            "symbol_raw": str(symbol),
+            "symbol_canonical": str(symbol_canon),
+            "group": str(grp_u),
+            "renko_eval_ms": int(round((time.perf_counter() - t0) * 1000.0)),
+        }
+        self._renko_eval_cache[base] = {"cache_expire_ts": now_ts + ttl, "payload": dict(out)}
+        return out
+
+    def _apply_renko_advisory_score(
+        self,
+        *,
+        signal: str,
+        base_score: int,
+        renko_ctx: Dict[str, Any],
+    ) -> int:
+        mode = str(renko_ctx.get("mode") or "SHADOW_ONLY").upper()
+        if mode != "ADVISORY_SCORE":
+            return int(base_score)
+        long_s = float(renko_ctx.get("renko_score_long", 0.0) or 0.0)
+        short_s = float(renko_ctx.get("renko_score_short", 0.0) or 0.0)
+        weight = float(max(0.0, getattr(CFG, "renko_adapter_score_weight", 4.0)))
         delta = (long_s - short_s) if str(signal).upper() == "BUY" else (short_s - long_s)
         adjusted = int(round(float(base_score) + float(delta) * float(weight)))
         return int(max(0, min(100, adjusted)))
@@ -8343,8 +8790,15 @@ class StandardStrategy:
                 regime=regime,
                 ind=ind,
             )
+            renko_ctx = self._evaluate_renko_context(
+                symbol=symbol,
+                grp=grp,
+                signal=signal,
+                point=float(getattr(info, "point", 0.0) or 0.0),
+            )
             try:
                 self._scan_meta.setdefault("candle_context", {})[symbol_base(symbol)] = dict(candle_ctx)
+                self._scan_meta.setdefault("renko_context", {})[symbol_base(symbol)] = dict(renko_ctx)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             if bool(getattr(CFG, "candle_adapter_emit_event", True)):
@@ -8361,6 +8815,25 @@ class StandardStrategy:
                     float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
                     float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
                     c_patterns,
+                )
+            if bool(getattr(CFG, "renko_adapter_emit_event", True)):
+                logging.info(
+                    "RENKO_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s "
+                    "long=%.3f short=%.3f run=%s rev=%s bricks=%s brick_pts=%.2f eval_ms=%s",
+                    symbol,
+                    grp_u,
+                    str(renko_ctx.get("mode") or "SHADOW_ONLY"),
+                    int(bool(renko_ctx.get("ready", False))),
+                    str(renko_ctx.get("renko_bias") or "NONE"),
+                    str(renko_ctx.get("renko_quality_grade") or "UNKNOWN"),
+                    str(renko_ctx.get("reason_code") or "NONE"),
+                    float(renko_ctx.get("renko_score_long", 0.0) or 0.0),
+                    float(renko_ctx.get("renko_score_short", 0.0) or 0.0),
+                    int(renko_ctx.get("run_length", 0) or 0),
+                    int(bool(renko_ctx.get("reversal_flag", False))),
+                    int(renko_ctx.get("bricks_count", 0) or 0),
+                    float(renko_ctx.get("brick_size_points", 0.0) or 0.0),
+                    int(renko_ctx.get("renko_eval_ms", 0) or 0),
                 )
 
             if grp_u == "FX":
@@ -8411,6 +8884,11 @@ class StandardStrategy:
                         signal=signal,
                         base_score=int(fx_score),
                         candle_ctx=candle_ctx,
+                    )
+                    entry_score = self._apply_renko_advisory_score(
+                        signal=signal,
+                        base_score=int(entry_score),
+                        renko_ctx=renko_ctx,
                     )
                     entry_min_score = int(min_score)
                     try:
@@ -8496,6 +8974,11 @@ class StandardStrategy:
                         base_score=int(metal_score),
                         candle_ctx=candle_ctx,
                     )
+                    entry_score = self._apply_renko_advisory_score(
+                        signal=signal,
+                        base_score=int(entry_score),
+                        renko_ctx=renko_ctx,
+                    )
                     entry_min_score = int(min_score)
                     try:
                         entry_spread_cap_points = float(metal_parts.get("spread_cap_points", 0.0) or 0.0)
@@ -8562,6 +9045,11 @@ class StandardStrategy:
                         signal=signal,
                         base_score=int(crypto_score),
                         candle_ctx=candle_ctx,
+                    )
+                    entry_score = self._apply_renko_advisory_score(
+                        signal=signal,
+                        base_score=int(entry_score),
+                        renko_ctx=renko_ctx,
                     )
                     entry_min_score = int(min_score)
                     try:
@@ -8655,6 +9143,12 @@ class StandardStrategy:
                     'candle_reason_code': str(candle_ctx.get("reason_code") or "NONE"),
                     'candle_score_long': float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
                     'candle_score_short': float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
+                    'renko_adapter_mode': str(renko_ctx.get("mode") or "SHADOW_ONLY"),
+                    'renko_bias': str(renko_ctx.get("renko_bias") or "NONE"),
+                    'renko_quality_grade': str(renko_ctx.get("renko_quality_grade") or "UNKNOWN"),
+                    'renko_reason_code': str(renko_ctx.get("reason_code") or "NONE"),
+                    'renko_score_long': float(renko_ctx.get("renko_score_long", 0.0) or 0.0),
+                    'renko_score_short': float(renko_ctx.get("renko_score_short", 0.0) or 0.0),
                 }
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
@@ -9022,12 +9516,24 @@ class SafetyBot:
         self._metrics_warn_scans_day = 0
         self._metrics_10m_last_emit_ts = 0.0
         self._metrics_10m_anchor: Dict[str, Any] = {}
+        self._runtime_loop_id: int = 0
         self._last_group_budget_log_ts = 0.0
         self._loop_scan_durations_ms: List[int] = []
         self._loop_scan_runs: int = 0
         self._loop_scan_errors: int = 0
         self._loop_heartbeat_fail_total: int = 0
         self._loop_heartbeat_recoveries: int = 0
+        self._loop_section_durations_ms: Dict[str, List[int]] = {
+            "tick_ingest": [],
+            "bridge_send": [],
+            "bridge_wait": [],
+            "bridge_parse": [],
+            "session_gate": [],
+            "cost_gate": [],
+            "decision_core": [],
+            "execution_call": [],
+            "io_log": [],
+        }
         self._last_scan_suppressed_log_ts: float = 0.0
         self._last_heartbeat_fail_log_ts: float = 0.0
         self._last_loop_health_emit_ts: float = 0.0
@@ -9091,7 +9597,9 @@ class SafetyBot:
         # --- stores for Scout ---
         self.decision_store = DecisionEventStore(self.db_dir)
         self.bars_store = M5BarsStore(self.db_dir)
+        self.tick_store = TickSnapshotsStore(self.db_dir)
         self.execution_engine.bars_store = self.bars_store
+        self.execution_engine.tick_store = self.tick_store
         self._zmq_m5_feature_cache: Dict[str, Dict[str, Any]] = {}
         self._zmq_symbol_info_cache: Dict[str, Dict[str, Any]] = {}
         self._zmq_account_cache: Dict[str, Any] = {}
@@ -9162,6 +9670,7 @@ class SafetyBot:
         self._refresh_cost_guard_auto_relax_state(tw_ctx=_tw_init)
 
     def _append_jsonl_record(self, path: Path, payload: Dict[str, Any]) -> None:
+        io_t0 = time.perf_counter()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -9169,6 +9678,12 @@ class SafetyBot:
                 f.write(line + "\n")
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        finally:
+            try:
+                io_ms = int((time.perf_counter() - io_t0) * 1000.0)
+                self._record_section_duration("io_log", io_ms)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _emit_unit_diagnostic(
         self,
@@ -9821,6 +10336,12 @@ class SafetyBot:
                 "price_jump_points": inp.price_jump_points,
                 "jump_block_points": float(jump_block_points),
                 "ask_lt_bid": bool(inp.ask_lt_bid),
+                "tick_rate_1s": micro_state.get("tick_rate_1s"),
+                "spread_roll_mean_points": micro_state.get("spread_roll_mean_points"),
+                "spread_roll_p95_points": micro_state.get("spread_roll_p95_points"),
+                "stale_tick_flag": bool(micro_state.get("stale_tick_flag", False)),
+                "burst_flag": bool(micro_state.get("burst_flag", False)),
+                "quality_flags": str(micro_state.get("quality_flags") or "UNKNOWN"),
                 "spread_caution_points": float(spread_caution),
                 "spread_block_points": float(spread_block),
                 "cost_estimation_quality": str(quality),
@@ -10574,6 +11095,80 @@ class SafetyBot:
         if len(self._loop_scan_durations_ms) > win:
             self._loop_scan_durations_ms = self._loop_scan_durations_ms[-win:]
 
+    def _record_section_duration(self, section: str, duration_ms: int) -> None:
+        key = str(section or "").strip().lower()
+        if not key:
+            return
+        win = max(
+            16,
+            int(
+                getattr(
+                    CFG,
+                    "run_loop_section_stats_window",
+                    getattr(CFG, "run_loop_scan_stats_window", 120),
+                )
+            ),
+        )
+        arr = self._loop_section_durations_ms.setdefault(key, [])
+        arr.append(int(max(0, duration_ms)))
+        if len(arr) > win:
+            self._loop_section_durations_ms[key] = arr[-win:]
+
+    def _record_bridge_diag(self, diag: Dict[str, Any], *, action: str) -> None:
+        if not isinstance(diag, dict) or not diag:
+            return
+        send_ms = int(max(0, int(diag.get("bridge_send_ms", 0) or 0)))
+        wait_ms = int(max(0, int(diag.get("bridge_wait_ms", 0) or 0)))
+        parse_ms = int(max(0, int(diag.get("bridge_parse_ms", 0) or 0)))
+        total_ms = int(max(0, int(diag.get("bridge_total_ms", 0) or 0)))
+        reason = str(diag.get("bridge_timeout_reason") or "NONE").strip().upper() or "NONE"
+        status = str(diag.get("status") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        loop_id = str(diag.get("loop_id") or "none")
+        cmd_id = str(diag.get("command_id") or "")
+        attempts = int(max(0, int(diag.get("attempts", 0) or 0)))
+        timeout_budget_ms = int(max(1, int(diag.get("timeout_budget_ms", 1) or 1)))
+        self._record_section_duration("bridge_send", send_ms)
+        self._record_section_duration("bridge_wait", wait_ms)
+        self._record_section_duration("bridge_parse", parse_ms)
+        logging.info(
+            "BRIDGE_DIAG action=%s loop_id=%s command_id=%s status=%s reason=%s attempts=%s "
+            "send_ms=%s wait_ms=%s parse_ms=%s total_ms=%s timeout_budget_ms=%s",
+            str(action or "").upper(),
+            loop_id,
+            cmd_id,
+            status,
+            reason,
+            attempts,
+            send_ms,
+            wait_ms,
+            parse_ms,
+            total_ms,
+            timeout_budget_ms,
+        )
+
+    def _section_metrics_snapshot(self) -> Dict[str, Dict[str, int]]:
+        out: Dict[str, Dict[str, int]] = {}
+        for section in (
+            "tick_ingest",
+            "bridge_send",
+            "bridge_wait",
+            "bridge_parse",
+            "session_gate",
+            "cost_gate",
+            "decision_core",
+            "execution_call",
+            "io_log",
+        ):
+            arr = list(self._loop_section_durations_ms.get(section, []))
+            out[section] = {
+                "n": int(len(arr)),
+                "p50_ms": int(self._percentile_int(arr, 0.50)),
+                "p95_ms": int(self._percentile_int(arr, 0.95)),
+                "p99_ms": int(self._percentile_int(arr, 0.99)),
+                "max_ms": int(max(arr)) if arr else 0,
+            }
+        return out
+
     def _loop_metrics_snapshot(self) -> Dict[str, Any]:
         arr = list(self._loop_scan_durations_ms)
         return {
@@ -10697,6 +11292,46 @@ class SafetyBot:
             int(queue_metrics.get("queue_timeout", 0)),
             int(queue_metrics.get("queue_full", 0)),
         )
+        sec = self._section_metrics_snapshot()
+        logging.info(
+            "RUNTIME_SECTION_METRICS_10M "
+            "tick_ingest_p50_ms=%s tick_ingest_p95_ms=%s tick_ingest_p99_ms=%s "
+            "bridge_send_p50_ms=%s bridge_send_p95_ms=%s bridge_send_p99_ms=%s "
+            "bridge_wait_p50_ms=%s bridge_wait_p95_ms=%s bridge_wait_p99_ms=%s "
+            "bridge_parse_p50_ms=%s bridge_parse_p95_ms=%s bridge_parse_p99_ms=%s "
+            "session_gate_p50_ms=%s session_gate_p95_ms=%s session_gate_p99_ms=%s "
+            "cost_gate_p50_ms=%s cost_gate_p95_ms=%s cost_gate_p99_ms=%s "
+            "decision_core_p50_ms=%s decision_core_p95_ms=%s decision_core_p99_ms=%s "
+            "execution_call_p50_ms=%s execution_call_p95_ms=%s execution_call_p99_ms=%s "
+            "io_log_p50_ms=%s io_log_p95_ms=%s io_log_p99_ms=%s",
+            int((sec.get("tick_ingest") or {}).get("p50_ms", 0)),
+            int((sec.get("tick_ingest") or {}).get("p95_ms", 0)),
+            int((sec.get("tick_ingest") or {}).get("p99_ms", 0)),
+            int((sec.get("bridge_send") or {}).get("p50_ms", 0)),
+            int((sec.get("bridge_send") or {}).get("p95_ms", 0)),
+            int((sec.get("bridge_send") or {}).get("p99_ms", 0)),
+            int((sec.get("bridge_wait") or {}).get("p50_ms", 0)),
+            int((sec.get("bridge_wait") or {}).get("p95_ms", 0)),
+            int((sec.get("bridge_wait") or {}).get("p99_ms", 0)),
+            int((sec.get("bridge_parse") or {}).get("p50_ms", 0)),
+            int((sec.get("bridge_parse") or {}).get("p95_ms", 0)),
+            int((sec.get("bridge_parse") or {}).get("p99_ms", 0)),
+            int((sec.get("session_gate") or {}).get("p50_ms", 0)),
+            int((sec.get("session_gate") or {}).get("p95_ms", 0)),
+            int((sec.get("session_gate") or {}).get("p99_ms", 0)),
+            int((sec.get("cost_gate") or {}).get("p50_ms", 0)),
+            int((sec.get("cost_gate") or {}).get("p95_ms", 0)),
+            int((sec.get("cost_gate") or {}).get("p99_ms", 0)),
+            int((sec.get("decision_core") or {}).get("p50_ms", 0)),
+            int((sec.get("decision_core") or {}).get("p95_ms", 0)),
+            int((sec.get("decision_core") or {}).get("p99_ms", 0)),
+            int((sec.get("execution_call") or {}).get("p50_ms", 0)),
+            int((sec.get("execution_call") or {}).get("p95_ms", 0)),
+            int((sec.get("execution_call") or {}).get("p99_ms", 0)),
+            int((sec.get("io_log") or {}).get("p50_ms", 0)),
+            int((sec.get("io_log") or {}).get("p95_ms", 0)),
+            int((sec.get("io_log") or {}).get("p99_ms", 0)),
+        )
 
         self._metrics_10m_anchor = {
             "ts": now_ts,
@@ -10755,7 +11390,9 @@ class SafetyBot:
                     request=request,
                 )
 
+            session_gate_t0 = time.perf_counter()
             session_liq = self._session_liquidity_gate_eval(symbol, grp_u, request)
+            self._record_section_duration("session_gate", int((time.perf_counter() - session_gate_t0) * 1000.0))
             request["session_liquidity_gate"] = dict(session_liq)
             slg_mode = str(session_liq.get("mode") or "SHADOW_ONLY").upper()
             slg_allow = bool(session_liq.get("allow_trade", True))
@@ -10817,7 +11454,9 @@ class SafetyBot:
                         }
                     )
 
+            cost_gate_t0 = time.perf_counter()
             cost_micro = self._cost_microstructure_gate_eval(symbol, grp_u, request)
+            self._record_section_duration("cost_gate", int((time.perf_counter() - cost_gate_t0) * 1000.0))
             request["cost_microstructure_gate"] = dict(cost_micro)
             cmg_mode = str(cost_micro.get("mode") or "SHADOW_ONLY").upper()
             cmg_allow = bool(cost_micro.get("cost_allow_trade", True))
@@ -11121,6 +11760,7 @@ class SafetyBot:
                         "fallback_deviation_points": int(req_dev_points),
                     },
                 )
+            exec_call_t0 = time.perf_counter()
             reply = self._send_trade_command(
                 signal=signal,
                 symbol=symbol,
@@ -11147,6 +11787,7 @@ class SafetyBot:
                 risk_reopen=risk_reopen,
                 policy_shadow_mode=bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
             )
+            self._record_section_duration("execution_call", int((time.perf_counter() - exec_call_t0) * 1000.0))
             if not isinstance(reply, dict):
                 logging.error(f"HYBRID_DISPATCH_FAIL | No valid reply for symbol={symbol}")
                 return None
@@ -13418,6 +14059,8 @@ class SafetyBot:
         }
         command["command_id"] = str(command["msg_id"])
         command["request_id"] = str(command["msg_id"])
+        command["loop_id"] = int(getattr(self, "_runtime_loop_id", 0) or 0)
+        command["bridge_contract_version"] = "bridge.safe.v1"
         command["request_ts_utc"] = now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
         command["request_ts_semantics"] = "UTC"
         command["request_hash"] = str(build_request_hash(command))
@@ -13436,7 +14079,13 @@ class SafetyBot:
                 risk_level="HIGH",
                 details={"symbol": str(command["payload"].get("symbol") or ""), "phase": "send_trade_command"},
             )
-        reply = self.zmq_bridge.send_command(command)
+        reply = self.zmq_bridge.send_command(
+            command,
+            timeout_ms=int(max(1, getattr(CFG, "bridge_trade_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))),
+            max_retries=int(max(1, getattr(CFG, "bridge_trade_retries", getattr(CFG, "bridge_default_retries", 1)))),
+            loop_id=str(int(command.get("loop_id") or 0)),
+        )
+        self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="TRADE")
         if not isinstance(reply, dict):
             logging.error("ZMQ_SEND_FAIL | No reply from MQL5 for TRADE command.")
             return None
@@ -13570,6 +14219,7 @@ class SafetyBot:
                 self.execution_engine._zmq_tick_cache[symbol] = data
                 self.execution_engine._zmq_tick_cache[base_symbol] = data
             self._zmq_last_tick_ts[base_symbol] = now_ts
+            tick_persisted = False
 
             # Snapshot metadata for strict no-fetch symbol_info replacement.
             try:
@@ -13595,6 +14245,24 @@ class SafetyBot:
                 prev = dict(self._micro_tick_state.get(base_symbol) or {})
                 prev_ts = float(prev.get("recv_ts", 0.0) or 0.0)
                 prev_mid = float(prev.get("mid", 0.0) or 0.0)
+                mql5_tick_gap_sec: Optional[float] = None
+                mql5_price_jump_points: Optional[float] = None
+                mql5_ask_lt_bid: Optional[bool] = None
+                try:
+                    if data.get("tick_gap_sec") is not None:
+                        mql5_tick_gap_sec = max(0.0, float(data.get("tick_gap_sec") or 0.0))
+                except Exception:
+                    mql5_tick_gap_sec = None
+                try:
+                    if data.get("price_jump_points") is not None:
+                        mql5_price_jump_points = max(0.0, float(data.get("price_jump_points") or 0.0))
+                except Exception:
+                    mql5_price_jump_points = None
+                try:
+                    if data.get("ask_lt_bid") is not None:
+                        mql5_ask_lt_bid = bool(data.get("ask_lt_bid"))
+                except Exception:
+                    mql5_ask_lt_bid = None
                 tick_gap_sec = None
                 if prev_ts > 0.0:
                     tick_gap_sec = max(0.0, float(now_ts) - float(prev_ts))
@@ -13604,16 +14272,47 @@ class SafetyBot:
                 price_jump_points = None
                 if point > 0.0 and prev_mid > 0.0 and mid > 0.0:
                     price_jump_points = abs(float(mid) - float(prev_mid)) / float(point)
+                if mql5_tick_gap_sec is not None:
+                    tick_gap_sec = float(mql5_tick_gap_sec)
+                if mql5_price_jump_points is not None:
+                    price_jump_points = float(mql5_price_jump_points)
+                ask_lt_bid_flag = bool((ask > 0.0 and bid > 0.0) and (ask < bid))
+                if mql5_ask_lt_bid is not None:
+                    ask_lt_bid_flag = bool(mql5_ask_lt_bid)
                 self._micro_tick_state[base_symbol] = {
                     "recv_ts": float(now_ts),
                     "mid": float(mid),
                     "tick_gap_sec": tick_gap_sec,
                     "price_jump_points": price_jump_points,
-                    "ask_lt_bid": bool((ask > 0.0 and bid > 0.0) and (ask < bid)),
+                    "ask_lt_bid": bool(ask_lt_bid_flag),
+                    "tick_rate_1s": (
+                        None if data.get("tick_rate_1s") is None else int(max(0, int(data.get("tick_rate_1s") or 0)))
+                    ),
+                    "spread_roll_mean_points": (
+                        None
+                        if data.get("spread_roll_mean_points") is None
+                        else float(max(0.0, float(data.get("spread_roll_mean_points") or 0.0)))
+                    ),
+                    "spread_roll_p95_points": (
+                        None
+                        if data.get("spread_roll_p95_points") is None
+                        else float(max(0.0, float(data.get("spread_roll_p95_points") or 0.0)))
+                    ),
+                    "stale_tick_flag": bool(data.get("stale_tick_flag", False)),
+                    "burst_flag": bool(data.get("burst_flag", False)),
+                    "quality_flags": str(data.get("quality_flags") or "UNKNOWN"),
                 }
+                if bool(getattr(CFG, "renko_tick_store_enabled", True)) and getattr(self, "tick_store", None) is not None:
+                    tick_persisted = bool(self.tick_store.upsert_tick_snapshot(base_symbol, data, recv_ts=now_ts))
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            logging.debug(f"ZMQ_TICK | {symbol} | Bid: {data.get('bid')} Ask: {data.get('ask')}")
+            logging.debug(
+                "ZMQ_TICK | %s | Bid: %s Ask: %s persisted=%s",
+                symbol,
+                data.get("bid"),
+                data.get("ask"),
+                int(bool(tick_persisted)),
+            )
 
         # Przetwarzanie danych barowych (M5)
         elif msg_type == "BAR":
@@ -13682,22 +14381,33 @@ class SafetyBot:
         heartbeat_failures = 0
         heartbeat_fail_safe_active = False
         heartbeat_fail_safe_until = 0.0
+        loop_id = 0
 
         try:
             while True:
                 now = time.time()
+                loop_id = int(loop_id) + 1
+                self._runtime_loop_id = int(loop_id)
 
                 # 1. Receive ZMQ data (non-blocking, short timeout)
+                tick_ingest_t0 = time.perf_counter()
                 market_data = self.zmq_bridge.receive_data(timeout=100)
                 if market_data:
                     self._handle_market_data(market_data)
+                self._record_section_duration("tick_ingest", int((time.perf_counter() - tick_ingest_t0) * 1000.0))
 
                 # 2. Synchronous heartbeat over REQ/REP
                 if (now - last_heartbeat_ts) >= heartbeat_interval:
                     if heartbeat_fail_safe_active and now < float(heartbeat_fail_safe_until):
                         pass
                     else:
-                        hb_reply = self.zmq_bridge.send_command({"action": "HEARTBEAT"})
+                        hb_reply = self.zmq_bridge.send_command(
+                            {"action": "HEARTBEAT", "loop_id": int(loop_id)},
+                            timeout_ms=int(max(1, getattr(CFG, "bridge_heartbeat_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))),
+                            max_retries=int(max(1, getattr(CFG, "bridge_heartbeat_retries", getattr(CFG, "bridge_default_retries", 1)))),
+                            loop_id=str(int(loop_id)),
+                        )
+                        self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="HEARTBEAT")
                         hb_hash_ok = False
                         try:
                             hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
@@ -13782,6 +14492,7 @@ class SafetyBot:
                         finally:
                             scan_ms = int((time.perf_counter() - scan_start_ts) * 1000.0)
                             self._record_scan_duration(scan_ms)
+                            self._record_section_duration("decision_core", scan_ms)
                             if scan_ms >= int(scan_slow_warn_ms):
                                 logging.warning(
                                     "SCAN_SLOW scan_ms=%s threshold_ms=%s",
@@ -13942,6 +14653,12 @@ if __name__ == "__main__":
         "zmq_scan_suppressed_log_interval_sec",
         CFG.zmq_scan_suppressed_log_interval_sec,
     )
+    CFG.bridge_default_timeout_ms = _cfg_int("bridge_default_timeout_ms", CFG.bridge_default_timeout_ms)
+    CFG.bridge_default_retries = _cfg_int("bridge_default_retries", CFG.bridge_default_retries)
+    CFG.bridge_heartbeat_timeout_ms = _cfg_int("bridge_heartbeat_timeout_ms", CFG.bridge_heartbeat_timeout_ms)
+    CFG.bridge_heartbeat_retries = _cfg_int("bridge_heartbeat_retries", CFG.bridge_heartbeat_retries)
+    CFG.bridge_trade_timeout_ms = _cfg_int("bridge_trade_timeout_ms", CFG.bridge_trade_timeout_ms)
+    CFG.bridge_trade_retries = _cfg_int("bridge_trade_retries", CFG.bridge_trade_retries)
     CFG.run_loop_idle_sleep_sec = _cfg_float("run_loop_idle_sleep_sec", CFG.run_loop_idle_sleep_sec)
     CFG.run_loop_scan_slow_warn_ms = _cfg_int(
         "run_loop_scan_slow_warn_ms",
@@ -14331,6 +15048,72 @@ if __name__ == "__main__":
     CFG.candle_adapter_pin_wick_ratio_min = _cfg_float(
         "candle_adapter_pin_wick_ratio_min", CFG.candle_adapter_pin_wick_ratio_min
     )
+    CFG.renko_adapter_enabled = _cfg_bool("renko_adapter_enabled", CFG.renko_adapter_enabled)
+    CFG.renko_adapter_mode = str(
+        strategy_cfg.get("renko_adapter_mode", CFG.renko_adapter_mode) or CFG.renko_adapter_mode
+    ).strip().upper()
+    if CFG.renko_adapter_mode not in {"SHADOW_ONLY", "ADVISORY_SCORE", "DISABLED"}:
+        CFG.renko_adapter_mode = "SHADOW_ONLY"
+    CFG.renko_adapter_emit_event = _cfg_bool(
+        "renko_adapter_emit_event", CFG.renko_adapter_emit_event
+    )
+    CFG.renko_adapter_score_weight = _cfg_float(
+        "renko_adapter_score_weight", CFG.renko_adapter_score_weight
+    )
+    CFG.renko_adapter_price_source = str(
+        strategy_cfg.get("renko_adapter_price_source", CFG.renko_adapter_price_source)
+        or CFG.renko_adapter_price_source
+    ).strip().upper()
+    if CFG.renko_adapter_price_source not in {"MID", "BID", "ASK"}:
+        CFG.renko_adapter_price_source = "MID"
+    CFG.renko_adapter_tick_limit = _cfg_int(
+        "renko_adapter_tick_limit", CFG.renko_adapter_tick_limit
+    )
+    CFG.renko_adapter_cache_ttl_sec = _cfg_float(
+        "renko_adapter_cache_ttl_sec", CFG.renko_adapter_cache_ttl_sec
+    )
+    CFG.renko_adapter_min_bricks_ready = _cfg_int(
+        "renko_adapter_min_bricks_ready", CFG.renko_adapter_min_bricks_ready
+    )
+    CFG.renko_adapter_brick_size_points_default = _cfg_float(
+        "renko_adapter_brick_size_points_default", CFG.renko_adapter_brick_size_points_default
+    )
+    def _cfg_group_float_map(name: str, fallback: Dict[str, float]) -> Dict[str, float]:
+        raw = strategy_cfg.get(name, None)
+        if raw is None:
+            return dict(fallback)
+        if not isinstance(raw, dict):
+            raise SystemExit(f"CONFIG_STRATEGY_FAIL: {name} must be object")
+        out: Dict[str, float] = {}
+        for k, v in raw.items():
+            g = _group_key(str(k or ""))
+            if g not in {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}:
+                continue
+            try:
+                out[g] = float(v)
+            except Exception:
+                continue
+        return dict(out) if out else dict(fallback)
+    CFG.renko_adapter_brick_size_points_by_group = _cfg_group_float_map(
+        "renko_adapter_brick_size_points_by_group",
+        dict(getattr(CFG, "renko_adapter_brick_size_points_by_group", {}) or {}),
+    )
+    CFG.renko_tick_store_enabled = _cfg_bool(
+        "renko_tick_store_enabled", CFG.renko_tick_store_enabled
+    )
+    CFG.renko_tick_store_min_interval_ms = _cfg_int(
+        "renko_tick_store_min_interval_ms", CFG.renko_tick_store_min_interval_ms
+    )
+    CFG.renko_tick_store_min_price_delta_points = _cfg_float(
+        "renko_tick_store_min_price_delta_points",
+        CFG.renko_tick_store_min_price_delta_points,
+    )
+    CFG.renko_tick_store_max_rows_per_symbol = _cfg_int(
+        "renko_tick_store_max_rows_per_symbol", CFG.renko_tick_store_max_rows_per_symbol
+    )
+    CFG.renko_tick_store_prune_every = _cfg_int(
+        "renko_tick_store_prune_every", CFG.renko_tick_store_prune_every
+    )
     CFG.cost_gate_min_target_to_cost_ratio = _cfg_float(
         "cost_gate_min_target_to_cost_ratio", CFG.cost_gate_min_target_to_cost_ratio
     )
@@ -14693,7 +15476,10 @@ if __name__ == "__main__":
 
     incident_journal = IncidentJournal(_paths["logs"])
 
-    zmq_bridge = ZMQBridge()
+    zmq_bridge = ZMQBridge(
+        req_timeout_ms=int(max(1, getattr(CFG, "bridge_default_timeout_ms", 1200))),
+        req_retries=int(max(1, getattr(CFG, "bridge_default_retries", 1))),
+    )
     zmq_bridge.setup_sockets()
 
     bot = SafetyBot(

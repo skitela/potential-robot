@@ -103,6 +103,9 @@ class Test2RExecutionContracts(unittest.TestCase):
 
         result = bridge.send_command(cmd)
         self.assertIsInstance(result, dict)
+        diag = result.get("__bridge_diag") if isinstance(result, dict) else {}
+        self.assertIsInstance(diag, dict)
+        self.assertEqual("OK", str((diag or {}).get("status")))
         sent = json.loads(bridge.req_socket.send_string.call_args.args[0])
         self.assertEqual("UTC", sent.get("request_ts_semantics"))
         self.assertEqual("m-2", sent.get("command_id"))

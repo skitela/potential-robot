@@ -45,6 +45,11 @@ class TestZMQBridgeE2E(unittest.TestCase):
         self.assertEqual("PROCESSED", result.get("status"))
         self.assertEqual("msg-1", result.get("correlation_id"))
         self.assertEqual(request_hash, result.get("request_hash"))
+        self.assertIsInstance(result.get("__bridge_diag"), dict)
+        self.assertEqual("OK", (result.get("__bridge_diag") or {}).get("status"))
+        self.assertIn("bridge_send_ms", result.get("__bridge_diag") or {})
+        self.assertIn("bridge_wait_ms", result.get("__bridge_diag") or {})
+        self.assertIn("bridge_parse_ms", result.get("__bridge_diag") or {})
         self.assertEqual(1, bridge.req_socket.send_string.call_count)
 
         sent_raw = bridge.req_socket.send_string.call_args.args[0]
@@ -63,6 +68,9 @@ class TestZMQBridgeE2E(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(3, bridge.req_socket.send_string.call_count)
         self.assertEqual(3, bridge._reconnect_req_socket.call_count)
+        diag = bridge.get_last_command_diag()
+        self.assertEqual("FAILED", diag.get("status"))
+        self.assertEqual("TIMEOUT_NO_RESPONSE", diag.get("bridge_timeout_reason"))
 
     def test_send_command_desync_wrong_correlation_id(self):
         bridge = self._build_bridge(retries=2)

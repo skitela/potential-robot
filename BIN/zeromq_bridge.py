@@ -136,13 +136,23 @@ class ZMQBridge:
         self.pull_socket: Optional[zmq.Socket] = None
         self.req_socket: Optional[zmq.Socket] = None
         self._audit_log_lock = threading.Lock()
+        self._diag_lock = threading.Lock()
         self._audit_log_file: Optional[Path] = Path(self.audit_log_path) if self.audit_log_path else None
+        self._last_command_diag: Dict[str, Any] = {}
 
         logging.info(
             f"ZMQBridge zainicjalizowany. Odbiór danych na porcie {pull_port}, komunikacja REQ/REP na porcie {req_port}."
         )
         if self.audit_log_path:
             logging.info(f"Dziennik audytu będzie zapisywany w: {self.audit_log_path}")
+
+    def _set_last_command_diag(self, diag: Dict[str, Any]) -> None:
+        with self._diag_lock:
+            self._last_command_diag = dict(diag or {})
+
+    def get_last_command_diag(self) -> Dict[str, Any]:
+        with self._diag_lock:
+            return dict(self._last_command_diag)
 
     def _write_audit_log(self, event_type: str, message_id: str, data: Dict[str, Any]):
         """Zapisuje zdarzenie do pliku dziennika audytu w sposób bezpieczny wątkowo."""
@@ -225,7 +235,14 @@ class ZMQBridge:
             logging.error(f"Niespodziewany błąd podczas odbierania danych ZMQ: {e}")
             return None
 
-    def send_command(self, command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def send_command(
+        self,
+        command: Dict[str, Any],
+        *,
+        timeout_ms: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        loop_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Wysyła komendę do Agenta MQL5 z mechanizmem ponowień i oczekiwaniem na odpowiedź.
         Loguje operacje do dziennika audytu.
@@ -238,6 +255,9 @@ class ZMQBridge:
             logging.error("Nieprawidłowy typ komendy - oczekiwano obiektu JSON.")
             return None
 
+        effective_timeout_ms = int(max(1, timeout_ms if timeout_ms is not None else self.req_timeout_ms))
+        effective_retries = int(max(1, max_retries if max_retries is not None else self.req_retries))
+
         original_command = dict(command)
         original_command.setdefault("__v", PROTOCOL_VERSION)
         original_command.setdefault("schema_version", PROTOCOL_VERSION)
@@ -249,8 +269,39 @@ class ZMQBridge:
         original_command["request_hash"] = str(build_request_hash(original_command))
         original_command.setdefault("request_ts_utc", _utc_now_iso_z())
         original_command.setdefault("request_ts_semantics", "UTC")
+        if loop_id is None:
+            loop_id = original_command.get("loop_id")
+        if loop_id is not None:
+            original_command["loop_id"] = str(loop_id)
 
-        for attempt in range(self.req_retries):
+        diag: Dict[str, Any] = {
+            "loop_id": str(original_command.get("loop_id") or "none"),
+            "command_id": msg_id,
+            "action": str(original_command.get("action") or "").upper(),
+            "timeout_budget_ms": int(effective_timeout_ms),
+            "max_retries": int(effective_retries),
+            "attempts": 0,
+            "bridge_send_ms": 0,
+            "bridge_wait_ms": 0,
+            "bridge_parse_ms": 0,
+            "bridge_total_ms": 0,
+            "bridge_timeout_reason": "NONE",
+            "status": "PENDING",
+            "fallback_used": False,
+            "channel": "REQ_REP",
+            "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+        }
+
+        self._set_last_command_diag(diag)
+        cmd_start_t0 = time.perf_counter()
+        last_reason = "UNKNOWN"
+
+        for attempt in range(effective_retries):
+            send_ms = 0
+            wait_ms = 0
+            parse_ms = 0
+            elapsed_ms = 0
+            diag["attempts"] = int(attempt + 1)
             try:
                 logging.debug(f"Wysyłanie komendy (próba {attempt + 1}/{self.req_retries}): {original_command}")
                 self._write_audit_log(
@@ -263,20 +314,25 @@ class ZMQBridge:
                         "endpoint": f"tcp://127.0.0.1:{self.req_port}",
                         "attempt": int(attempt + 1),
                         "retry_count": int(attempt),
-                        "timeout_budget_ms": int(self.req_timeout_ms),
+                        "timeout_budget_ms": int(effective_timeout_ms),
                     },
                 )
+                send_t0 = time.perf_counter()
                 message = json.dumps(original_command, separators=(",", ":"))
-                t0 = time.perf_counter()
                 self.req_socket.send_string(message)
+                send_ms = int((time.perf_counter() - send_t0) * 1000.0)
+                wait_t0 = time.perf_counter()
 
-                if self.req_socket.poll(self.req_timeout_ms):
+                if self.req_socket.poll(effective_timeout_ms):
+                    wait_ms = int((time.perf_counter() - wait_t0) * 1000.0)
                     reply_message = self.req_socket.recv_string()
                     logging.debug(f"Odebrano odpowiedź: {reply_message}")
+                    parse_t0 = time.perf_counter()
                     try:
                         reply_data = json.loads(reply_message)
                         correlation_id = reply_data.get('correlation_id')
-                        elapsed_ms = int((time.perf_counter() - t0) * 1000.0)
+                        parse_ms = int((time.perf_counter() - parse_t0) * 1000.0)
+                        elapsed_ms = int((time.perf_counter() - cmd_start_t0) * 1000.0)
                         self._write_audit_log(
                             "REPLY_RECEIVED",
                             correlation_id or "unknown",
@@ -287,8 +343,11 @@ class ZMQBridge:
                                 "endpoint": f"tcp://127.0.0.1:{self.req_port}",
                                 "attempt": int(attempt + 1),
                                 "retry_count": int(attempt),
+                                "send_ms": int(send_ms),
+                                "wait_ms": int(wait_ms),
+                                "parse_ms": int(parse_ms),
                                 "elapsed_ms": int(elapsed_ms),
-                                "timeout_budget_ms": int(self.req_timeout_ms),
+                                "timeout_budget_ms": int(effective_timeout_ms),
                             },
                         )
                          
@@ -306,6 +365,7 @@ class ZMQBridge:
                                     msg_id,
                                     {"expected": req_hash_sent, "got": req_hash_reply},
                                 )
+                                last_reason = "REQUEST_HASH_MISMATCH"
                                 continue
 
                             got_resp_hash = str(reply_data.get("response_hash") or "")
@@ -322,21 +382,60 @@ class ZMQBridge:
                                         msg_id,
                                         {"expected": exp_resp_hash, "got": got_resp_hash},
                                     )
+                                    last_reason = "RESPONSE_HASH_MISMATCH"
                                     continue
                             else:
                                 logging.warning("Reply missing response_hash for msg_id=%s", msg_id)
+                                last_reason = "RESPONSE_HASH_MISSING"
 
-                            rtt_ms = int((time.perf_counter() - t0) * 1000.0)
-                            logging.info("ZMQ_RTT msg_id=%s rtt_ms=%s action=%s", msg_id, rtt_ms, str(original_command.get("action") or ""))
+                            rtt_ms = int((time.perf_counter() - cmd_start_t0) * 1000.0)
+                            diag.update(
+                                {
+                                    "bridge_send_ms": int(send_ms),
+                                    "bridge_wait_ms": int(wait_ms),
+                                    "bridge_parse_ms": int(parse_ms),
+                                    "bridge_total_ms": int(rtt_ms),
+                                    "bridge_timeout_reason": "NONE",
+                                    "status": "OK",
+                                    "fallback_used": False,
+                                }
+                            )
+                            self._set_last_command_diag(diag)
+                            reply_data["__bridge_diag"] = dict(diag)
+                            logging.info(
+                                "ZMQ_RTT msg_id=%s loop_id=%s send_ms=%s wait_ms=%s parse_ms=%s rtt_ms=%s action=%s",
+                                msg_id,
+                                str(diag.get("loop_id") or "none"),
+                                int(send_ms),
+                                int(wait_ms),
+                                int(parse_ms),
+                                int(rtt_ms),
+                                str(original_command.get("action") or ""),
+                            )
                             return reply_data
                         else:
                             logging.warning(f"Odebrano odpowiedź z nieprawidłowym correlation_id. Oczekiwano {msg_id}, otrzymano {correlation_id}.")
+                            last_reason = "CORRELATION_MISMATCH"
                     except json.JSONDecodeError:
                         logging.error(f"Nie udało się zdeserializować odpowiedzi od MQL5: {reply_message}")
                         self._write_audit_log("REPLY_INVALID_JSON", msg_id, {"raw_reply": reply_message})
+                        diag.update(
+                            {
+                                "bridge_send_ms": int(send_ms),
+                                "bridge_wait_ms": int(wait_ms),
+                                "bridge_parse_ms": int(parse_ms),
+                                "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
+                                "bridge_timeout_reason": "PARSE_ERROR",
+                                "status": "FAILED",
+                                "fallback_used": True,
+                            }
+                        )
+                        self._set_last_command_diag(diag)
                         return None 
                 else:
+                    last_reason = "TIMEOUT_NO_RESPONSE"
                     logging.warning(f"Timeout (próba {attempt + 1}). Brak odpowiedzi od MQL5 dla msg_id: {msg_id}.")
+                    wait_ms = int((time.perf_counter() - wait_t0) * 1000.0)
                     self._write_audit_log(
                         "COMMAND_TIMEOUT",
                         msg_id,
@@ -346,7 +445,9 @@ class ZMQBridge:
                             "endpoint": f"tcp://127.0.0.1:{self.req_port}",
                             "attempt": int(attempt + 1),
                             "retry_count": int(attempt),
-                            "timeout_budget_ms": int(self.req_timeout_ms),
+                            "send_ms": int(send_ms),
+                            "wait_ms": int(wait_ms),
+                            "timeout_budget_ms": int(effective_timeout_ms),
                             "fail_safe_decision_tag": "retry",
                         },
                     )
@@ -355,8 +456,21 @@ class ZMQBridge:
             except (TypeError, json.JSONDecodeError) as e:
                 logging.error(f"B??d serializacji komendy do JSON: {e}")
                 self._write_audit_log("COMMAND_SERIALIZATION_ERROR", msg_id, {"error": str(e)})
+                diag.update(
+                    {
+                        "bridge_send_ms": int(send_ms),
+                        "bridge_wait_ms": int(wait_ms),
+                        "bridge_parse_ms": int(parse_ms),
+                        "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
+                        "bridge_timeout_reason": "SERIALIZATION_ERROR",
+                        "status": "FAILED",
+                        "fallback_used": True,
+                    }
+                )
+                self._set_last_command_diag(diag)
                 return None
             except zmq.Again:
+                last_reason = "SEND_TIMEOUT"
                 logging.warning(
                     f"Timeout wysylki REQ (pr?ba {attempt + 1}). Brak aktywnego peera dla msg_id: {msg_id}."
                 )
@@ -369,13 +483,15 @@ class ZMQBridge:
                         "endpoint": f"tcp://127.0.0.1:{self.req_port}",
                         "attempt": int(attempt + 1),
                         "retry_count": int(attempt),
-                        "timeout_budget_ms": int(self.req_timeout_ms),
+                        "send_ms": int(send_ms),
+                        "timeout_budget_ms": int(effective_timeout_ms),
                         "fail_safe_decision_tag": "retry",
                     },
                 )
                 self._reconnect_req_socket()
             except zmq.ZMQError as e:
                 logging.error(f"B??d gniazda ZMQ podczas wysy?ania komendy: {e}")
+                last_reason = "ZMQ_ERROR"
                 self._reconnect_req_socket()
         
         logging.error(f"Nie udało się wysłać komendy i otrzymać odpowiedzi po {self.req_retries} próbach dla msg_id: {msg_id}.")
@@ -386,11 +502,21 @@ class ZMQBridge:
                 "phase": "command_fail",
                 "channel": "REQ_REP",
                 "endpoint": f"tcp://127.0.0.1:{self.req_port}",
-                "retries": int(self.req_retries),
-                "timeout_budget_ms": int(self.req_timeout_ms),
+                "retries": int(effective_retries),
+                "timeout_budget_ms": int(effective_timeout_ms),
+                "bridge_timeout_reason": str(last_reason),
                 "fail_safe_decision_tag": "no_trade",
             },
         )
+        diag.update(
+            {
+                "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
+                "bridge_timeout_reason": str(last_reason or "COMMAND_FAILED"),
+                "status": "FAILED",
+                "fallback_used": True,
+            }
+        )
+        self._set_last_command_diag(diag)
         return None
 
     def _reconnect_req_socket(self):

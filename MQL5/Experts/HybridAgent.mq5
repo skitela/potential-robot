@@ -32,6 +32,10 @@ input string InpPolicyRuntimeRelativePath = "OANDA_MT5_SYSTEM\\policy_runtime.js
 input int    InpSmaFastPeriod = 20;
 input int    InpAdxPeriod = 14;
 input int    InpAtrPeriod = 14;
+input uint   InpP0MicroWindowSize = 32;
+input uint   InpP0TickStaleMs = 1500;
+input uint   InpP0BurstGapMs = 120;
+input uint   InpP0BurstCountThreshold = 8;
 
 string G_Symbol = "";
 string G_SymbolUpper = "";
@@ -53,6 +57,21 @@ int G_ATRHandle = INVALID_HANDLE;
 string G_ReplyCacheMsgId[];
 string G_ReplyCachePayload[];
 ulong  G_ReplyCacheTs[];
+
+// Lightweight incremental runtime features (P0 telemetry from MQL5 side).
+double G_MicroSpreadRing[];
+int    G_MicroSpreadCount = 0;
+int    G_MicroSpreadPos = 0;
+double G_MicroSpreadSum = 0.0;
+long   G_MicroLastTickMsc = 0;
+double G_MicroLastMid = 0.0;
+double G_MicroPriceJumpPoints = 0.0;
+double G_MicroTickGapSec = 0.0;
+int    G_MicroTickRate1s = 0;
+ulong  G_MicroTickRateWindowStartMs = 0;
+int    G_MicroBurstCount = 0;
+bool   G_MicroBurstFlag = false;
+bool   G_MicroAskLtBid = false;
 
 #define POLICY_GROUP_COUNT 5
 string G_PolicyGroupNames[POLICY_GROUP_COUNT] = {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"};
@@ -287,6 +306,121 @@ bool IsWindowActive(
   if(start < end)
     return (cur >= start && cur <= end);
   return (cur >= start || cur <= end);
+}
+
+void MicroInitState()
+{
+  int win = (int)MathMax(4, MathMin(256, (int)InpP0MicroWindowSize));
+  ArrayResize(G_MicroSpreadRing, win);
+  for(int i = 0; i < win; i++)
+    G_MicroSpreadRing[i] = 0.0;
+  G_MicroSpreadCount = 0;
+  G_MicroSpreadPos = 0;
+  G_MicroSpreadSum = 0.0;
+  G_MicroLastTickMsc = 0;
+  G_MicroLastMid = 0.0;
+  G_MicroPriceJumpPoints = 0.0;
+  G_MicroTickGapSec = 0.0;
+  G_MicroTickRate1s = 0;
+  G_MicroTickRateWindowStartMs = 0;
+  G_MicroBurstCount = 0;
+  G_MicroBurstFlag = false;
+  G_MicroAskLtBid = false;
+}
+
+void MicroPushSpread(const double spread_points)
+{
+  int sz = ArraySize(G_MicroSpreadRing);
+  if(sz <= 0)
+    return;
+  double val = MathMax(0.0, spread_points);
+  if(G_MicroSpreadCount < sz)
+  {
+    G_MicroSpreadRing[G_MicroSpreadPos] = val;
+    G_MicroSpreadSum += val;
+    G_MicroSpreadCount++;
+    G_MicroSpreadPos = (G_MicroSpreadPos + 1) % sz;
+    return;
+  }
+  double old = G_MicroSpreadRing[G_MicroSpreadPos];
+  G_MicroSpreadRing[G_MicroSpreadPos] = val;
+  G_MicroSpreadSum += (val - old);
+  G_MicroSpreadPos = (G_MicroSpreadPos + 1) % sz;
+}
+
+double MicroSpreadMeanPoints()
+{
+  if(G_MicroSpreadCount <= 0)
+    return 0.0;
+  return (G_MicroSpreadSum / (double)G_MicroSpreadCount);
+}
+
+double MicroSpreadP95Points()
+{
+  int n = G_MicroSpreadCount;
+  if(n <= 0)
+    return 0.0;
+  double tmp[];
+  ArrayResize(tmp, n);
+  for(int i = 0; i < n; i++)
+    tmp[i] = G_MicroSpreadRing[i];
+  ArraySort(tmp);
+  int idx = (int)MathFloor((double)(n - 1) * 0.95);
+  if(idx < 0)
+    idx = 0;
+  if(idx >= n)
+    idx = n - 1;
+  return tmp[idx];
+}
+
+void MicroUpdateFromTick(const MqlTick &tick)
+{
+  double point = SymbolInfoDouble(G_Symbol, SYMBOL_POINT);
+  double spread_points = 0.0;
+  if(point > 0.0)
+    spread_points = (tick.ask - tick.bid) / point;
+  G_MicroAskLtBid = (tick.ask > 0.0 && tick.bid > 0.0 && tick.ask < tick.bid);
+  MicroPushSpread(spread_points);
+
+  long tick_msc = (long)tick.time_msc;
+  if(tick_msc <= 0)
+    tick_msc = (long)TimeCurrent() * 1000;
+
+  ulong now_ms = (ulong)GetTickCount();
+  if(G_MicroTickRateWindowStartMs == 0 || (now_ms - G_MicroTickRateWindowStartMs) >= 1000)
+  {
+    G_MicroTickRateWindowStartMs = now_ms;
+    G_MicroTickRate1s = 0;
+  }
+  G_MicroTickRate1s++;
+
+  if(G_MicroLastTickMsc > 0)
+  {
+    long gap_ms = tick_msc - G_MicroLastTickMsc;
+    if(gap_ms < 0)
+      gap_ms = 0;
+    G_MicroTickGapSec = ((double)gap_ms / 1000.0);
+    if((uint)gap_ms <= (uint)MathMax(1, (int)InpP0BurstGapMs))
+      G_MicroBurstCount++;
+    else
+      G_MicroBurstCount = 1;
+  }
+  else
+  {
+    G_MicroTickGapSec = 0.0;
+    G_MicroBurstCount = 1;
+  }
+  G_MicroBurstFlag = (G_MicroBurstCount >= (int)MathMax(2, (int)InpP0BurstCountThreshold));
+
+  double mid = 0.0;
+  if(tick.bid > 0.0 && tick.ask > 0.0)
+    mid = (tick.bid + tick.ask) * 0.5;
+  G_MicroPriceJumpPoints = 0.0;
+  if(point > 0.0 && G_MicroLastMid > 0.0 && mid > 0.0)
+    G_MicroPriceJumpPoints = MathAbs(mid - G_MicroLastMid) / point;
+  if(mid > 0.0)
+    G_MicroLastMid = mid;
+  G_MicroLastTickMsc = tick_msc;
 }
 
 bool LoadPolicyRuntimeFile(string &error_msg)
@@ -1095,6 +1229,9 @@ void SendTickData()
   if(!SymbolInfoTick(G_Symbol, tick))
     return;
 
+  // Keep incremental metrics current even when timer cadence is the only event source.
+  MicroUpdateFromTick(tick);
+
   int digits = (int)SymbolInfoInteger(G_Symbol, SYMBOL_DIGITS);
   int stops_level = (int)SymbolInfoInteger(G_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
   int freeze_level = (int)SymbolInfoInteger(G_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
@@ -1107,6 +1244,18 @@ void SendTickData()
   double spread_points = 0.0;
   if(point > 0.0)
     spread_points = (tick.ask - tick.bid) / point;
+  long now_msc = (long)TimeCurrent() * 1000;
+  long stale_ms = now_msc - (long)tick.time_msc;
+  if(stale_ms < 0)
+    stale_ms = 0;
+  bool stale_tick_flag = ((uint)stale_ms > (uint)MathMax(1, (int)InpP0TickStaleMs));
+  string quality_flags = "Q_OK";
+  if(G_MicroAskLtBid)
+    quality_flags = "Q_ASK_LT_BID";
+  else if(stale_tick_flag)
+    quality_flags = "Q_STALE_TICK";
+  else if(G_MicroBurstFlag)
+    quality_flags = "Q_BURST";
 
   string json = StringFormat(
     "{\"type\":\"TICK\",\"symbol\":\"%s\",\"timestamp_ms\":%I64d,\"bid\":%.5f,\"ask\":%.5f,\"volume\":%I64d,"
@@ -1114,6 +1263,9 @@ void SendTickData()
     "\"trade_tick_size\":%.10f,\"trade_tick_value\":%.10f,"
     "\"volume_min\":%.6f,\"volume_max\":%.6f,\"volume_step\":%.6f,"
     "\"trade_stops_level\":%d,\"trade_freeze_level\":%d,"
+    "\"tick_gap_sec\":%.6f,\"tick_rate_1s\":%d,\"price_jump_points\":%.6f,"
+    "\"spread_roll_mean_points\":%.6f,\"spread_roll_p95_points\":%.6f,"
+    "\"stale_tick_flag\":%s,\"burst_flag\":%s,\"ask_lt_bid\":%s,\"quality_flags\":\"%s\","
     "\"schema_version\":\"%s\",\"__v\":\"%s\"}",
     JsonEscape(G_SymbolUpper),
     (long)tick.time_msc,
@@ -1130,6 +1282,15 @@ void SendTickData()
     vol_step,
     stops_level,
     freeze_level,
+    G_MicroTickGapSec,
+    G_MicroTickRate1s,
+    G_MicroPriceJumpPoints,
+    MicroSpreadMeanPoints(),
+    MicroSpreadP95Points(),
+    (stale_tick_flag ? "true" : "false"),
+    (G_MicroBurstFlag ? "true" : "false"),
+    (G_MicroAskLtBid ? "true" : "false"),
+    JsonEscape(quality_flags),
     PROTOCOL_VERSION,
     PROTOCOL_VERSION
   );
@@ -1709,6 +1870,7 @@ int OnInit()
   G_PolicyLastError = "";
   G_LastPolicyReloadMs = 0;
   G_LastPolicyOpenFailLogMs = 0;
+  MicroInitState();
   RefreshPolicyRuntime();
 
   if(!InitIndicatorHandles())
@@ -1766,7 +1928,13 @@ void OnTimer()
   SendAccountData();
 }
 
-// Intentionally empty: all logic is timer-driven for deterministic cadence.
+// OnTick keeps micro-metrics incremental and opportunistically services commands.
 void OnTick()
 {
+  MqlTick tick;
+  if(SymbolInfoTick(G_Symbol, tick))
+    MicroUpdateFromTick(tick);
+
+  // Fast command servicing path: keeps REQ/REP bridge wait low during active market ticks.
+  ProcessCommands();
 }
