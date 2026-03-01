@@ -11122,28 +11122,38 @@ class SafetyBot:
         parse_ms = int(max(0, int(diag.get("bridge_parse_ms", 0) or 0)))
         total_ms = int(max(0, int(diag.get("bridge_total_ms", 0) or 0)))
         reason = str(diag.get("bridge_timeout_reason") or "NONE").strip().upper() or "NONE"
+        subreason = str(diag.get("bridge_timeout_subreason") or "NONE").strip().upper() or "NONE"
         status = str(diag.get("status") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        command_type = str(diag.get("command_type") or str(action or "").upper() or "OTHER").strip().upper() or "OTHER"
+        budget_bucket = str(diag.get("timeout_budget_bucket") or "UNKNOWN").strip().upper() or "UNKNOWN"
         loop_id = str(diag.get("loop_id") or "none")
         cmd_id = str(diag.get("command_id") or "")
         attempts = int(max(0, int(diag.get("attempts", 0) or 0)))
         timeout_budget_ms = int(max(1, int(diag.get("timeout_budget_ms", 1) or 1)))
+        queue_wait_ms = int(max(0, int(diag.get("command_queue_wait_ms", 0) or 0)))
+        audit_lock_wait_ms = int(max(0, int(diag.get("audit_log_lock_wait_max_ms", 0) or 0)))
         self._record_section_duration("bridge_send", send_ms)
         self._record_section_duration("bridge_wait", wait_ms)
         self._record_section_duration("bridge_parse", parse_ms)
         logging.info(
-            "BRIDGE_DIAG action=%s loop_id=%s command_id=%s status=%s reason=%s attempts=%s "
-            "send_ms=%s wait_ms=%s parse_ms=%s total_ms=%s timeout_budget_ms=%s",
+            "BRIDGE_DIAG action=%s command_type=%s loop_id=%s command_id=%s status=%s reason=%s subreason=%s attempts=%s "
+            "send_ms=%s wait_ms=%s parse_ms=%s total_ms=%s timeout_budget_ms=%s timeout_budget_bucket=%s queue_wait_ms=%s audit_lock_wait_max_ms=%s",
             str(action or "").upper(),
+            command_type,
             loop_id,
             cmd_id,
             status,
             reason,
+            subreason,
             attempts,
             send_ms,
             wait_ms,
             parse_ms,
             total_ms,
             timeout_budget_ms,
+            budget_bucket,
+            queue_wait_ms,
+            audit_lock_wait_ms,
         )
 
     def _section_metrics_snapshot(self) -> Dict[str, Dict[str, int]]:

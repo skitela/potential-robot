@@ -136,6 +136,7 @@ class ZMQBridge:
         self.pull_socket: Optional[zmq.Socket] = None
         self.req_socket: Optional[zmq.Socket] = None
         self._audit_log_lock = threading.Lock()
+        self._command_lock = threading.Lock()
         self._diag_lock = threading.Lock()
         self._audit_log_file: Optional[Path] = Path(self.audit_log_path) if self.audit_log_path else None
         self._last_command_diag: Dict[str, Any] = {}
@@ -154,10 +155,32 @@ class ZMQBridge:
         with self._diag_lock:
             return dict(self._last_command_diag)
 
-    def _write_audit_log(self, event_type: str, message_id: str, data: Dict[str, Any]):
+    @staticmethod
+    def _command_type(action: Any) -> str:
+        act = str(action or "").strip().upper()
+        if act == "HEARTBEAT":
+            return "HEARTBEAT"
+        if act == "TRADE":
+            return "TRADE"
+        return "OTHER"
+
+    @staticmethod
+    def _timeout_budget_bucket(timeout_budget_ms: int) -> str:
+        v = int(max(1, int(timeout_budget_ms or 1)))
+        if v <= 300:
+            return "LE_300MS"
+        if v <= 600:
+            return "301_600MS"
+        if v <= 900:
+            return "601_900MS"
+        if v <= 1200:
+            return "901_1200MS"
+        return "GT_1200MS"
+
+    def _write_audit_log(self, event_type: str, message_id: str, data: Dict[str, Any]) -> int:
         """Zapisuje zdarzenie do pliku dziennika audytu w sposób bezpieczny wątkowo."""
         if not self._audit_log_file:
-            return
+            return 0
         event_type_norm = str(event_type or "").strip().upper()
         log_entry = {
             "timestamp_utc": _utc_now_iso_z(),
@@ -169,13 +192,17 @@ class ZMQBridge:
             "data": data
         }
         
+        lock_wait_ms = 0
         try:
+            lock_t0 = time.perf_counter()
             with self._audit_log_lock:
+                lock_wait_ms = int((time.perf_counter() - lock_t0) * 1000.0)
                 self._audit_log_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(self._audit_log_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(log_entry, separators=(",", ":")) + "\n")
         except Exception as e:
             logging.error(f"Nie udało się zapisać do dziennika audytu: {e}")
+        return int(lock_wait_ms)
 
     def setup_sockets(self) -> None:
         """
@@ -258,266 +285,323 @@ class ZMQBridge:
         effective_timeout_ms = int(max(1, timeout_ms if timeout_ms is not None else self.req_timeout_ms))
         effective_retries = int(max(1, max_retries if max_retries is not None else self.req_retries))
 
-        original_command = dict(command)
-        original_command.setdefault("__v", PROTOCOL_VERSION)
-        original_command.setdefault("schema_version", PROTOCOL_VERSION)
-        if "msg_id" not in original_command:
-            original_command["msg_id"] = str(uuid.uuid4())
-        msg_id = str(original_command["msg_id"])
-        original_command.setdefault("command_id", msg_id)
-        original_command.setdefault("request_id", msg_id)
-        original_command["request_hash"] = str(build_request_hash(original_command))
-        original_command.setdefault("request_ts_utc", _utc_now_iso_z())
-        original_command.setdefault("request_ts_semantics", "UTC")
-        if loop_id is None:
-            loop_id = original_command.get("loop_id")
-        if loop_id is not None:
-            original_command["loop_id"] = str(loop_id)
+        queue_wait_t0 = time.perf_counter()
+        self._command_lock.acquire()
+        command_queue_wait_ms = int((time.perf_counter() - queue_wait_t0) * 1000.0)
 
-        diag: Dict[str, Any] = {
-            "loop_id": str(original_command.get("loop_id") or "none"),
-            "command_id": msg_id,
-            "action": str(original_command.get("action") or "").upper(),
-            "timeout_budget_ms": int(effective_timeout_ms),
-            "max_retries": int(effective_retries),
-            "attempts": 0,
-            "bridge_send_ms": 0,
-            "bridge_wait_ms": 0,
-            "bridge_parse_ms": 0,
-            "bridge_total_ms": 0,
-            "bridge_timeout_reason": "NONE",
-            "status": "PENDING",
-            "fallback_used": False,
-            "channel": "REQ_REP",
-            "endpoint": f"tcp://127.0.0.1:{self.req_port}",
-        }
+        try:
+            original_command = dict(command)
+            original_command.setdefault("__v", PROTOCOL_VERSION)
+            original_command.setdefault("schema_version", PROTOCOL_VERSION)
+            if "msg_id" not in original_command:
+                original_command["msg_id"] = str(uuid.uuid4())
+            msg_id = str(original_command["msg_id"])
+            original_command.setdefault("command_id", msg_id)
+            original_command.setdefault("request_id", msg_id)
+            original_command["request_hash"] = str(build_request_hash(original_command))
+            original_command.setdefault("request_ts_utc", _utc_now_iso_z())
+            original_command.setdefault("request_ts_semantics", "UTC")
+            if loop_id is None:
+                loop_id = original_command.get("loop_id")
+            if loop_id is not None:
+                original_command["loop_id"] = str(loop_id)
 
-        self._set_last_command_diag(diag)
-        cmd_start_t0 = time.perf_counter()
-        last_reason = "UNKNOWN"
+            action_norm = str(original_command.get("action") or "").strip().upper()
+            command_type = self._command_type(action_norm)
+            budget_bucket = self._timeout_budget_bucket(effective_timeout_ms)
 
-        for attempt in range(effective_retries):
-            send_ms = 0
-            wait_ms = 0
-            parse_ms = 0
-            elapsed_ms = 0
-            diag["attempts"] = int(attempt + 1)
-            try:
-                logging.debug(f"Wysyłanie komendy (próba {attempt + 1}/{self.req_retries}): {original_command}")
-                self._write_audit_log(
-                    "COMMAND_SENT",
-                    msg_id,
-                    {
-                        **original_command,
-                        "phase": "command_send",
-                        "channel": "REQ_REP",
-                        "endpoint": f"tcp://127.0.0.1:{self.req_port}",
-                        "attempt": int(attempt + 1),
-                        "retry_count": int(attempt),
-                        "timeout_budget_ms": int(effective_timeout_ms),
-                    },
-                )
-                send_t0 = time.perf_counter()
-                message = json.dumps(original_command, separators=(",", ":"))
-                self.req_socket.send_string(message)
-                send_ms = int((time.perf_counter() - send_t0) * 1000.0)
-                wait_t0 = time.perf_counter()
+            diag: Dict[str, Any] = {
+                "loop_id": str(original_command.get("loop_id") or "none"),
+                "command_id": msg_id,
+                "action": action_norm,
+                "command_type": command_type,
+                "timeout_budget_ms": int(effective_timeout_ms),
+                "timeout_budget_bucket": budget_bucket,
+                "max_retries": int(effective_retries),
+                "attempts": 0,
+                "bridge_send_ms": 0,
+                "bridge_wait_ms": 0,
+                "bridge_parse_ms": 0,
+                "bridge_total_ms": 0,
+                "bridge_timeout_reason": "NONE",
+                "bridge_timeout_subreason": "NONE",
+                "status": "PENDING",
+                "fallback_used": False,
+                "channel": "REQ_REP",
+                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                "command_queue_wait_ms": int(command_queue_wait_ms),
+                "audit_log_lock_wait_max_ms": 0,
+            }
 
-                if self.req_socket.poll(effective_timeout_ms):
-                    wait_ms = int((time.perf_counter() - wait_t0) * 1000.0)
-                    reply_message = self.req_socket.recv_string()
-                    logging.debug(f"Odebrano odpowiedź: {reply_message}")
-                    parse_t0 = time.perf_counter()
-                    try:
-                        reply_data = json.loads(reply_message)
-                        correlation_id = reply_data.get('correlation_id')
-                        parse_ms = int((time.perf_counter() - parse_t0) * 1000.0)
-                        elapsed_ms = int((time.perf_counter() - cmd_start_t0) * 1000.0)
-                        self._write_audit_log(
-                            "REPLY_RECEIVED",
-                            correlation_id or "unknown",
-                            {
-                                **reply_data,
-                                "phase": "reply_receive",
-                                "channel": "REQ_REP",
-                                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
-                                "attempt": int(attempt + 1),
-                                "retry_count": int(attempt),
-                                "send_ms": int(send_ms),
-                                "wait_ms": int(wait_ms),
-                                "parse_ms": int(parse_ms),
-                                "elapsed_ms": int(elapsed_ms),
-                                "timeout_budget_ms": int(effective_timeout_ms),
-                            },
-                        )
-                         
-                        if correlation_id == msg_id:
-                            req_hash_reply = str(reply_data.get("request_hash") or "")
-                            req_hash_sent = str(original_command.get("request_hash") or "")
-                            if req_hash_reply and req_hash_reply != req_hash_sent:
-                                logging.warning(
-                                    "Hash request mismatch in reply. expected=%s got=%s",
-                                    req_hash_sent,
-                                    req_hash_reply,
-                                )
-                                self._write_audit_log(
-                                    "REPLY_REQUEST_HASH_MISMATCH",
-                                    msg_id,
-                                    {"expected": req_hash_sent, "got": req_hash_reply},
-                                )
-                                last_reason = "REQUEST_HASH_MISMATCH"
-                                continue
+            self._set_last_command_diag(diag)
+            cmd_start_t0 = time.perf_counter()
+            last_reason = "UNKNOWN"
+            last_subreason = "UNKNOWN"
+            max_audit_lock_wait_ms = 0
 
-                            got_resp_hash = str(reply_data.get("response_hash") or "")
-                            if got_resp_hash:
-                                exp_resp_hash = str(build_response_hash(reply_data))
-                                if got_resp_hash != exp_resp_hash:
-                                    logging.warning(
-                                        "Response hash mismatch. expected=%s got=%s",
-                                        exp_resp_hash,
-                                        got_resp_hash,
-                                    )
+            for attempt in range(effective_retries):
+                send_ms = 0
+                wait_ms = 0
+                parse_ms = 0
+                elapsed_ms = 0
+                diag["attempts"] = int(attempt + 1)
+                try:
+                    lock_wait_ms = self._write_audit_log(
+                        "COMMAND_SENT",
+                        msg_id,
+                        {
+                            **original_command,
+                            "phase": "command_send",
+                            "channel": "REQ_REP",
+                            "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                            "attempt": int(attempt + 1),
+                            "retry_count": int(attempt),
+                            "timeout_budget_ms": int(effective_timeout_ms),
+                            "timeout_budget_bucket": budget_bucket,
+                            "command_type": command_type,
+                            "command_queue_wait_ms": int(command_queue_wait_ms),
+                        },
+                    )
+                    max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
+
+                    send_t0 = time.perf_counter()
+                    message = json.dumps(original_command, separators=(",", ":"))
+                    self.req_socket.send_string(message)
+                    send_ms = int((time.perf_counter() - send_t0) * 1000.0)
+                    wait_t0 = time.perf_counter()
+
+                    if self.req_socket.poll(effective_timeout_ms):
+                        wait_ms = int((time.perf_counter() - wait_t0) * 1000.0)
+                        reply_message = self.req_socket.recv_string()
+                        parse_t0 = time.perf_counter()
+                        try:
+                            reply_data = json.loads(reply_message)
+                            correlation_id = reply_data.get("correlation_id")
+                            parse_ms = int((time.perf_counter() - parse_t0) * 1000.0)
+                            elapsed_ms = int((time.perf_counter() - cmd_start_t0) * 1000.0)
+                            response_budget_state = "OVER_BUDGET" if int(elapsed_ms) > int(effective_timeout_ms) else "ON_BUDGET"
+                            lock_wait_ms = self._write_audit_log(
+                                "REPLY_RECEIVED",
+                                correlation_id or "unknown",
+                                {
+                                    **reply_data,
+                                    "phase": "reply_receive",
+                                    "channel": "REQ_REP",
+                                    "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                                    "attempt": int(attempt + 1),
+                                    "retry_count": int(attempt),
+                                    "send_ms": int(send_ms),
+                                    "wait_ms": int(wait_ms),
+                                    "parse_ms": int(parse_ms),
+                                    "elapsed_ms": int(elapsed_ms),
+                                    "timeout_budget_ms": int(effective_timeout_ms),
+                                    "timeout_budget_bucket": budget_bucket,
+                                    "command_action": action_norm,
+                                    "command_type": command_type,
+                                    "command_queue_wait_ms": int(command_queue_wait_ms),
+                                    "response_budget_state": response_budget_state,
+                                    "response_over_budget": bool(response_budget_state == "OVER_BUDGET"),
+                                },
+                            )
+                            max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
+
+                            if correlation_id == msg_id:
+                                req_hash_reply = str(reply_data.get("request_hash") or "")
+                                req_hash_sent = str(original_command.get("request_hash") or "")
+                                if req_hash_reply and req_hash_reply != req_hash_sent:
                                     self._write_audit_log(
-                                        "REPLY_RESPONSE_HASH_MISMATCH",
+                                        "REPLY_REQUEST_HASH_MISMATCH",
                                         msg_id,
-                                        {"expected": exp_resp_hash, "got": got_resp_hash},
+                                        {"expected": req_hash_sent, "got": req_hash_reply},
                                     )
-                                    last_reason = "RESPONSE_HASH_MISMATCH"
+                                    last_reason = "REQUEST_HASH_MISMATCH"
+                                    last_subreason = "HASH_MISMATCH"
                                     continue
-                            else:
-                                logging.warning("Reply missing response_hash for msg_id=%s", msg_id)
-                                last_reason = "RESPONSE_HASH_MISSING"
 
-                            rtt_ms = int((time.perf_counter() - cmd_start_t0) * 1000.0)
+                                got_resp_hash = str(reply_data.get("response_hash") or "")
+                                if got_resp_hash:
+                                    exp_resp_hash = str(build_response_hash(reply_data))
+                                    if got_resp_hash != exp_resp_hash:
+                                        self._write_audit_log(
+                                            "REPLY_RESPONSE_HASH_MISMATCH",
+                                            msg_id,
+                                            {"expected": exp_resp_hash, "got": got_resp_hash},
+                                        )
+                                        last_reason = "RESPONSE_HASH_MISMATCH"
+                                        last_subreason = "HASH_MISMATCH"
+                                        continue
+                                else:
+                                    last_reason = "RESPONSE_HASH_MISSING"
+                                    last_subreason = "HASH_MISSING"
+
+                                rtt_ms = int((time.perf_counter() - cmd_start_t0) * 1000.0)
+                                diag.update(
+                                    {
+                                        "bridge_send_ms": int(send_ms),
+                                        "bridge_wait_ms": int(wait_ms),
+                                        "bridge_parse_ms": int(parse_ms),
+                                        "bridge_total_ms": int(rtt_ms),
+                                        "bridge_timeout_reason": "NONE",
+                                        "bridge_timeout_subreason": "NONE",
+                                        "status": "OK",
+                                        "fallback_used": False,
+                                        "audit_log_lock_wait_max_ms": int(max_audit_lock_wait_ms),
+                                        "response_budget_state": response_budget_state,
+                                    }
+                                )
+                                self._set_last_command_diag(diag)
+                                reply_data["__bridge_diag"] = dict(diag)
+                                logging.info(
+                                    "ZMQ_RTT msg_id=%s loop_id=%s send_ms=%s wait_ms=%s parse_ms=%s rtt_ms=%s action=%s",
+                                    msg_id,
+                                    str(diag.get("loop_id") or "none"),
+                                    int(send_ms),
+                                    int(wait_ms),
+                                    int(parse_ms),
+                                    int(rtt_ms),
+                                    str(original_command.get("action") or ""),
+                                )
+                                return reply_data
+                            last_reason = "CORRELATION_MISMATCH"
+                            last_subreason = "CORRELATION_MISMATCH"
+                        except json.JSONDecodeError:
+                            self._write_audit_log("REPLY_INVALID_JSON", msg_id, {"raw_reply": reply_message})
                             diag.update(
                                 {
                                     "bridge_send_ms": int(send_ms),
                                     "bridge_wait_ms": int(wait_ms),
                                     "bridge_parse_ms": int(parse_ms),
-                                    "bridge_total_ms": int(rtt_ms),
-                                    "bridge_timeout_reason": "NONE",
-                                    "status": "OK",
-                                    "fallback_used": False,
+                                    "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
+                                    "bridge_timeout_reason": "PARSE_ERROR",
+                                    "bridge_timeout_subreason": "INVALID_JSON",
+                                    "status": "FAILED",
+                                    "fallback_used": True,
+                                    "audit_log_lock_wait_max_ms": int(max_audit_lock_wait_ms),
                                 }
                             )
                             self._set_last_command_diag(diag)
-                            reply_data["__bridge_diag"] = dict(diag)
-                            logging.info(
-                                "ZMQ_RTT msg_id=%s loop_id=%s send_ms=%s wait_ms=%s parse_ms=%s rtt_ms=%s action=%s",
-                                msg_id,
-                                str(diag.get("loop_id") or "none"),
-                                int(send_ms),
-                                int(wait_ms),
-                                int(parse_ms),
-                                int(rtt_ms),
-                                str(original_command.get("action") or ""),
-                            )
-                            return reply_data
-                        else:
-                            logging.warning(f"Odebrano odpowiedź z nieprawidłowym correlation_id. Oczekiwano {msg_id}, otrzymano {correlation_id}.")
-                            last_reason = "CORRELATION_MISMATCH"
-                    except json.JSONDecodeError:
-                        logging.error(f"Nie udało się zdeserializować odpowiedzi od MQL5: {reply_message}")
-                        self._write_audit_log("REPLY_INVALID_JSON", msg_id, {"raw_reply": reply_message})
-                        diag.update(
+                            return None
+                    else:
+                        last_reason = "TIMEOUT_NO_RESPONSE"
+                        timeout_subreason = "NO_RESPONSE"
+                        if int(command_queue_wait_ms) >= 50:
+                            timeout_subreason = "QUEUE"
+                        elif int(max_audit_lock_wait_ms) >= 25:
+                            timeout_subreason = "LOCK"
+                        last_subreason = timeout_subreason
+                        wait_ms = int((time.perf_counter() - wait_t0) * 1000.0)
+                        lock_wait_ms = self._write_audit_log(
+                            "COMMAND_TIMEOUT",
+                            msg_id,
                             {
-                                "bridge_send_ms": int(send_ms),
-                                "bridge_wait_ms": int(wait_ms),
-                                "bridge_parse_ms": int(parse_ms),
-                                "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
-                                "bridge_timeout_reason": "PARSE_ERROR",
-                                "status": "FAILED",
-                                "fallback_used": True,
-                            }
+                                "phase": "recv_timeout",
+                                "channel": "REQ_REP",
+                                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                                "attempt": int(attempt + 1),
+                                "retry_count": int(attempt),
+                                "action": action_norm,
+                                "command_type": command_type,
+                                "timeout_budget_bucket": budget_bucket,
+                                "send_ms": int(send_ms),
+                                "wait_ms": int(wait_ms),
+                                "timeout_budget_ms": int(effective_timeout_ms),
+                                "bridge_timeout_reason": "TIMEOUT_NO_RESPONSE",
+                                "bridge_timeout_subreason": timeout_subreason,
+                                "command_queue_wait_ms": int(command_queue_wait_ms),
+                                "audit_log_lock_wait_ms": int(max_audit_lock_wait_ms),
+                                "wait_over_budget": bool(int(wait_ms) >= int(effective_timeout_ms)),
+                                "fail_safe_decision_tag": "retry",
+                            },
                         )
-                        self._set_last_command_diag(diag)
-                        return None 
-                else:
-                    last_reason = "TIMEOUT_NO_RESPONSE"
-                    logging.warning(f"Timeout (próba {attempt + 1}). Brak odpowiedzi od MQL5 dla msg_id: {msg_id}.")
-                    wait_ms = int((time.perf_counter() - wait_t0) * 1000.0)
-                    self._write_audit_log(
-                        "COMMAND_TIMEOUT",
+                        max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
+                        self._reconnect_req_socket()
+
+                except (TypeError, json.JSONDecodeError) as e:
+                    self._write_audit_log("COMMAND_SERIALIZATION_ERROR", msg_id, {"error": str(e)})
+                    diag.update(
+                        {
+                            "bridge_send_ms": int(send_ms),
+                            "bridge_wait_ms": int(wait_ms),
+                            "bridge_parse_ms": int(parse_ms),
+                            "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
+                            "bridge_timeout_reason": "SERIALIZATION_ERROR",
+                            "bridge_timeout_subreason": "SERIALIZATION",
+                            "status": "FAILED",
+                            "fallback_used": True,
+                            "audit_log_lock_wait_max_ms": int(max_audit_lock_wait_ms),
+                        }
+                    )
+                    self._set_last_command_diag(diag)
+                    return None
+                except zmq.Again:
+                    last_reason = "SEND_TIMEOUT"
+                    last_subreason = "NO_ACTIVE_PEER"
+                    lock_wait_ms = self._write_audit_log(
+                        "COMMAND_SEND_TIMEOUT",
                         msg_id,
                         {
-                            "phase": "recv_timeout",
+                            "phase": "send_timeout",
                             "channel": "REQ_REP",
                             "endpoint": f"tcp://127.0.0.1:{self.req_port}",
                             "attempt": int(attempt + 1),
                             "retry_count": int(attempt),
+                            "action": action_norm,
+                            "command_type": command_type,
+                            "timeout_budget_bucket": budget_bucket,
                             "send_ms": int(send_ms),
-                            "wait_ms": int(wait_ms),
                             "timeout_budget_ms": int(effective_timeout_ms),
+                            "bridge_timeout_reason": "SEND_TIMEOUT",
+                            "bridge_timeout_subreason": "NO_ACTIVE_PEER",
+                            "command_queue_wait_ms": int(command_queue_wait_ms),
+                            "audit_log_lock_wait_ms": int(max_audit_lock_wait_ms),
                             "fail_safe_decision_tag": "retry",
                         },
                     )
+                    max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
+                    self._reconnect_req_socket()
+                except zmq.ZMQError:
+                    last_reason = "ZMQ_ERROR"
+                    last_subreason = "SOCKET_ERROR"
                     self._reconnect_req_socket()
 
-            except (TypeError, json.JSONDecodeError) as e:
-                logging.error(f"B??d serializacji komendy do JSON: {e}")
-                self._write_audit_log("COMMAND_SERIALIZATION_ERROR", msg_id, {"error": str(e)})
-                diag.update(
-                    {
-                        "bridge_send_ms": int(send_ms),
-                        "bridge_wait_ms": int(wait_ms),
-                        "bridge_parse_ms": int(parse_ms),
-                        "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
-                        "bridge_timeout_reason": "SERIALIZATION_ERROR",
-                        "status": "FAILED",
-                        "fallback_used": True,
-                    }
-                )
-                self._set_last_command_diag(diag)
-                return None
-            except zmq.Again:
-                last_reason = "SEND_TIMEOUT"
-                logging.warning(
-                    f"Timeout wysylki REQ (pr?ba {attempt + 1}). Brak aktywnego peera dla msg_id: {msg_id}."
-                )
-                self._write_audit_log(
-                    "COMMAND_SEND_TIMEOUT",
-                    msg_id,
-                    {
-                        "phase": "send_timeout",
-                        "channel": "REQ_REP",
-                        "endpoint": f"tcp://127.0.0.1:{self.req_port}",
-                        "attempt": int(attempt + 1),
-                        "retry_count": int(attempt),
-                        "send_ms": int(send_ms),
-                        "timeout_budget_ms": int(effective_timeout_ms),
-                        "fail_safe_decision_tag": "retry",
-                    },
-                )
-                self._reconnect_req_socket()
-            except zmq.ZMQError as e:
-                logging.error(f"B??d gniazda ZMQ podczas wysy?ania komendy: {e}")
-                last_reason = "ZMQ_ERROR"
-                self._reconnect_req_socket()
-        
-        logging.error(f"Nie udało się wysłać komendy i otrzymać odpowiedzi po {self.req_retries} próbach dla msg_id: {msg_id}.")
-        self._write_audit_log(
-            "COMMAND_FAILED",
-            msg_id,
-            {
-                "phase": "command_fail",
-                "channel": "REQ_REP",
-                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
-                "retries": int(effective_retries),
-                "timeout_budget_ms": int(effective_timeout_ms),
-                "bridge_timeout_reason": str(last_reason),
-                "fail_safe_decision_tag": "no_trade",
-            },
-        )
-        diag.update(
-            {
-                "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
-                "bridge_timeout_reason": str(last_reason or "COMMAND_FAILED"),
-                "status": "FAILED",
-                "fallback_used": True,
-            }
-        )
-        self._set_last_command_diag(diag)
-        return None
+            final_reason = str(last_reason or "COMMAND_FAILED")
+            final_subreason = str(last_subreason or "UNKNOWN")
+            if final_reason == "TIMEOUT_NO_RESPONSE":
+                final_subreason = "RETRY_CEILING"
+
+            self._write_audit_log(
+                "COMMAND_FAILED",
+                msg_id,
+                {
+                    "phase": "command_fail",
+                    "channel": "REQ_REP",
+                    "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                    "retries": int(effective_retries),
+                    "action": action_norm,
+                    "command_type": command_type,
+                    "timeout_budget_bucket": budget_bucket,
+                    "timeout_budget_ms": int(effective_timeout_ms),
+                    "bridge_timeout_reason": final_reason,
+                    "bridge_timeout_subreason": final_subreason,
+                    "command_queue_wait_ms": int(command_queue_wait_ms),
+                    "audit_log_lock_wait_ms": int(max_audit_lock_wait_ms),
+                    "fail_safe_decision_tag": "no_trade",
+                },
+            )
+            diag.update(
+                {
+                    "bridge_total_ms": int((time.perf_counter() - cmd_start_t0) * 1000.0),
+                    "bridge_timeout_reason": final_reason,
+                    "bridge_timeout_subreason": final_subreason,
+                    "status": "FAILED",
+                    "fallback_used": True,
+                    "audit_log_lock_wait_max_ms": int(max_audit_lock_wait_ms),
+                }
+            )
+            self._set_last_command_diag(diag)
+            return None
+        finally:
+            self._command_lock.release()
 
     def _reconnect_req_socket(self):
         """Prywatna metoda do resetowania gniazda REQ w przypadku timeoutu lub błędu."""

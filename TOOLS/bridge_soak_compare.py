@@ -116,11 +116,43 @@ def _extract_timeout_reason(obj: Dict[str, Any]) -> str:
     data = obj.get("data")
     if not isinstance(data, dict):
         data = {}
-    for key in ("bridge_timeout_reason", "reason", "phase", "error"):
+    reason = str(data.get("bridge_timeout_reason") or data.get("reason") or "").upper()
+    subreason = str(data.get("bridge_timeout_subreason") or "").upper()
+    if reason and subreason and subreason != "NONE":
+        return f"{reason}:{subreason}"
+    if reason:
+        return reason
+    for key in ("phase", "error"):
         value = data.get(key)
         if value:
             return str(value).upper()
     return "UNKNOWN"
+
+
+def _extract_command_type(obj: Dict[str, Any]) -> str:
+    data = obj.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    cmd_type = str(data.get("command_type") or "").strip().upper()
+    if cmd_type:
+        return cmd_type
+    action = str(data.get("action") or data.get("command_action") or "").strip().upper()
+    if action == "HEARTBEAT":
+        return "HEARTBEAT"
+    if action == "TRADE":
+        return "TRADE"
+    return "OTHER"
+
+
+def _extract_timeout_budget(obj: Dict[str, Any]) -> str:
+    data = obj.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    budget = data.get("timeout_budget_ms")
+    try:
+        return str(int(budget))
+    except Exception:
+        return "UNKNOWN"
 
 
 def _parse_window(
@@ -134,7 +166,12 @@ def _parse_window(
     reply_parse: List[float] = []
     event_counts: Counter[str] = Counter()
     timeout_reason_counts: Counter[str] = Counter()
+    timeout_reason_by_command_type: Counter[str] = Counter()
+    timeout_reason_by_timeout_budget: Counter[str] = Counter()
     audit_reason_counts: Counter[str] = Counter()
+    late_response_by_command_type: Counter[str] = Counter()
+    late_response_by_timeout_budget: Counter[str] = Counter()
+    late_response_count = 0
     command_sent_count = 0
     command_timeout_count = 0
 
@@ -151,7 +188,12 @@ def _parse_window(
             command_sent_count += 1
         elif event_type == "COMMAND_TIMEOUT":
             command_timeout_count += 1
-            timeout_reason_counts[_extract_timeout_reason(obj)] += 1
+            reason = _extract_timeout_reason(obj)
+            cmd_type = _extract_command_type(obj)
+            budget = _extract_timeout_budget(obj)
+            timeout_reason_counts[reason] += 1
+            timeout_reason_by_command_type[f"{cmd_type}|{reason}"] += 1
+            timeout_reason_by_timeout_budget[f"{budget}|{reason}"] += 1
         elif event_type == "COMMAND_FAILED":
             audit_reason_counts[_extract_timeout_reason(obj)] += 1
         elif event_type == "REPLY_RECEIVED":
@@ -163,6 +205,16 @@ def _parse_window(
                     sink.append(float(data.get(src_key)))
                 except Exception:
                     pass
+            response_over_budget = bool(data.get("response_over_budget"))
+            if not response_over_budget:
+                state = str(data.get("response_budget_state") or "").upper()
+                response_over_budget = state == "OVER_BUDGET"
+            if response_over_budget:
+                late_response_count += 1
+                cmd_type = _extract_command_type(obj)
+                budget = _extract_timeout_budget(obj)
+                late_response_by_command_type[cmd_type] += 1
+                late_response_by_timeout_budget[budget] += 1
 
     runtime_scan_p50: List[float] = []
     runtime_scan_p95: List[float] = []
@@ -280,10 +332,23 @@ def _parse_window(
         },
         "reasons": {
             "bridge_timeout_reason_top": top_timeout_reasons,
+            "bridge_timeout_reason_by_command_type": [
+                {"key": key, "count": count}
+                for key, count in timeout_reason_by_command_type.most_common(20)
+            ],
+            "bridge_timeout_reason_by_timeout_budget_ms": [
+                {"key": key, "count": count}
+                for key, count in timeout_reason_by_timeout_budget.most_common(20)
+            ],
             "bridge_diag_status_counts": dict(bridge_diag_status),
             "bridge_diag_reason_counts": dict(bridge_diag_reason),
             "audit_event_counts": dict(event_counts),
             "audit_reason_counts": dict(audit_reason_counts),
+            "late_response_over_budget": {
+                "count": int(late_response_count),
+                "by_command_type": dict(late_response_by_command_type),
+                "by_timeout_budget_ms": dict(late_response_by_timeout_budget),
+            },
         },
         "heartbeat_failsafe_events": {
             "current_window": heartbeat_failsafe_window,
@@ -480,6 +545,17 @@ def _render_txt(report: Dict[str, Any]) -> str:
     lines.append("TOP_BRIDGE_TIMEOUT_REASON")
     for item in (reasons.get("bridge_timeout_reason_top") or []):
         lines.append(f"- {item.get('reason')}: {item.get('count')}")
+    lines.append("")
+    lines.append("TIMEOUT_REASON_BY_COMMAND_TYPE")
+    for item in (reasons.get("bridge_timeout_reason_by_command_type") or []):
+        lines.append(f"- {item.get('key')}: {item.get('count')}")
+    lines.append("")
+    lines.append("TIMEOUT_REASON_BY_TIMEOUT_BUDGET_MS")
+    for item in (reasons.get("bridge_timeout_reason_by_timeout_budget_ms") or []):
+        lines.append(f"- {item.get('key')}: {item.get('count')}")
+    lines.append("")
+    lines.append("LATE_RESPONSE_OVER_BUDGET")
+    lines.append(str(reasons.get("late_response_over_budget")))
     lines.append("")
     lines.append("HEARTBEAT_FAILSAFE_EVENTS")
     hb = after.get("heartbeat_failsafe_events") or {}
