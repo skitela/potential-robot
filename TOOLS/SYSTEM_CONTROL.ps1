@@ -694,6 +694,9 @@ try {
                     log_age_sec = $logAgeSec
                     log_ttl_sec = [int]$ttl
                 }
+                if (-not ([bool]$runningByPid -or [bool]$runningByHeartbeat)) {
+                    $hasError = $true
+                }
             }
         }
         "start" {

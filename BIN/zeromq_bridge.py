@@ -309,6 +309,16 @@ class ZMQBridge:
             action_norm = str(original_command.get("action") or "").strip().upper()
             command_type = self._command_type(action_norm)
             budget_bucket = self._timeout_budget_bucket(effective_timeout_ms)
+            hb_loop_lag_ms = 0
+            hb_market_data_stale_ms = -1
+            try:
+                hb_loop_lag_ms = int(max(0, int(original_command.get("hb_loop_lag_ms", 0) or 0)))
+            except Exception:
+                hb_loop_lag_ms = 0
+            try:
+                hb_market_data_stale_ms = int(original_command.get("hb_market_data_stale_ms", -1) or -1)
+            except Exception:
+                hb_market_data_stale_ms = -1
 
             diag: Dict[str, Any] = {
                 "loop_id": str(original_command.get("loop_id") or "none"),
@@ -360,6 +370,8 @@ class ZMQBridge:
                             "timeout_budget_bucket": budget_bucket,
                             "command_type": command_type,
                             "command_queue_wait_ms": int(command_queue_wait_ms),
+                            "hb_loop_lag_ms": int(hb_loop_lag_ms),
+                            "hb_market_data_stale_ms": int(hb_market_data_stale_ms),
                         },
                     )
                     max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
@@ -399,6 +411,8 @@ class ZMQBridge:
                                     "command_action": action_norm,
                                     "command_type": command_type,
                                     "command_queue_wait_ms": int(command_queue_wait_ms),
+                                    "hb_loop_lag_ms": int(hb_loop_lag_ms),
+                                    "hb_market_data_stale_ms": int(hb_market_data_stale_ms),
                                     "response_budget_state": response_budget_state,
                                     "response_over_budget": bool(response_budget_state == "OVER_BUDGET"),
                                 },
@@ -484,12 +498,16 @@ class ZMQBridge:
                     else:
                         last_reason = "TIMEOUT_NO_RESPONSE"
                         if command_type == "HEARTBEAT":
-                            if int(command_queue_wait_ms) >= 200:
+                            if int(hb_loop_lag_ms) >= 1000:
+                                timeout_subreason = "HB_LOOP_BUSY"
+                            elif int(command_queue_wait_ms) >= 200:
                                 timeout_subreason = "HB_LOOP_BUSY"
                             elif int(command_queue_wait_ms) >= 50:
                                 timeout_subreason = "HB_QUEUE_DELAY"
                             elif int(max_audit_lock_wait_ms) >= 25:
                                 timeout_subreason = "HB_LOCK_CONTENTION"
+                            elif int(hb_market_data_stale_ms) >= 0 and int(hb_market_data_stale_ms) >= 120000:
+                                timeout_subreason = "HB_NO_WORKER_RESPONSE"
                             else:
                                 timeout_subreason = "HB_NO_WORKER_RESPONSE"
                         else:
@@ -519,6 +537,8 @@ class ZMQBridge:
                                 "bridge_timeout_subreason": timeout_subreason,
                                 "command_queue_wait_ms": int(command_queue_wait_ms),
                                 "audit_log_lock_wait_ms": int(max_audit_lock_wait_ms),
+                                "hb_loop_lag_ms": int(hb_loop_lag_ms),
+                                "hb_market_data_stale_ms": int(hb_market_data_stale_ms),
                                 "wait_over_budget": bool(int(wait_ms) >= int(effective_timeout_ms)),
                                 "fail_safe_decision_tag": "retry",
                             },
@@ -564,6 +584,8 @@ class ZMQBridge:
                             "bridge_timeout_subreason": "NO_ACTIVE_PEER",
                             "command_queue_wait_ms": int(command_queue_wait_ms),
                             "audit_log_lock_wait_ms": int(max_audit_lock_wait_ms),
+                            "hb_loop_lag_ms": int(hb_loop_lag_ms),
+                            "hb_market_data_stale_ms": int(hb_market_data_stale_ms),
                             "fail_safe_decision_tag": "retry",
                         },
                     )
@@ -598,6 +620,8 @@ class ZMQBridge:
                     "bridge_timeout_subreason": final_subreason,
                     "command_queue_wait_ms": int(command_queue_wait_ms),
                     "audit_log_lock_wait_ms": int(max_audit_lock_wait_ms),
+                    "hb_loop_lag_ms": int(hb_loop_lag_ms),
+                    "hb_market_data_stale_ms": int(hb_market_data_stale_ms),
                     "fail_safe_decision_tag": "no_trade",
                 },
             )

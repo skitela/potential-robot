@@ -57,7 +57,14 @@ def _stats(values: List[float]) -> Dict[str, Any]:
 
 def _iter_lines_from_offset(path: Path, offset_bytes: int) -> Iterable[str]:
     with path.open("rb") as fh:
-        fh.seek(max(0, int(offset_bytes)))
+        try:
+            size = int(path.stat().st_size)
+        except Exception:
+            size = 0
+        seek_pos = max(0, int(offset_bytes))
+        if seek_pos > size:
+            seek_pos = 0
+        fh.seek(seek_pos)
         while True:
             raw = fh.readline()
             if not raw:
