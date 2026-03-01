@@ -48,10 +48,14 @@ def main() -> int:
 
     write_targets = [
         lab_root / "EVIDENCE" / "daily" / "lab_daily_report_latest.json",
-        lab_root / "RUN" / "lab_daily_state.json",
+        lab_root / "EVIDENCE" / "ingest" / "lab_mt5_ingest_latest.json",
+        lab_root / "EVIDENCE" / "retention" / "lab_snapshot_retention_latest.json",
         lab_data_root / "reports" / "daily" / f"lab_daily_report_{stamp}.json",
+        lab_data_root / "reports" / "ingest" / f"lab_mt5_ingest_{stamp}.json",
+        lab_data_root / "reports" / "retention" / f"lab_snapshot_retention_{stamp}.json",
         lab_data_root / "reports" / "dp" / f"lab_dp_report_{stamp}.json",
         lab_data_root / "registry" / "lab_registry.sqlite",
+        lab_data_root / "data_curated" / "mt5_history.sqlite",
         lab_data_root / "snapshots" / stamp / "decision_events.sqlite",
     ]
 

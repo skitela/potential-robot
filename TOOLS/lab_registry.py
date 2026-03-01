@@ -16,6 +16,38 @@ def connect_registry(db_path: Path) -> sqlite3.Connection:
 
 
 def init_registry_schema(conn: sqlite3.Connection) -> None:
+    # Generic job-level runs (ingest, pipeline, scheduler, etc.).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_runs (
+            run_id TEXT PRIMARY KEY,
+            run_type TEXT NOT NULL,
+            started_at_utc TEXT NOT NULL,
+            finished_at_utc TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            dataset_hash TEXT NOT NULL,
+            config_hash TEXT NOT NULL,
+            readiness TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            evidence_path TEXT NOT NULL,
+            details_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ingest_watermarks (
+            source_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            last_ts_utc TEXT NOT NULL,
+            updated_at_utc TEXT NOT NULL,
+            PRIMARY KEY (source_type, symbol, timeframe)
+        )
+        """
+    )
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS experiment_runs (
@@ -54,6 +86,75 @@ def init_registry_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+
+
+def insert_job_run(conn: sqlite3.Connection, payload: Dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO job_runs (
+            run_id, run_type, started_at_utc, finished_at_utc, status, source_type,
+            dataset_hash, config_hash, readiness, reason, evidence_path, details_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            str(payload.get("run_id") or ""),
+            str(payload.get("run_type") or "UNKNOWN"),
+            str(payload.get("started_at_utc") or ""),
+            str(payload.get("finished_at_utc") or ""),
+            str(payload.get("status") or "UNKNOWN"),
+            str(payload.get("source_type") or "UNKNOWN"),
+            str(payload.get("dataset_hash") or ""),
+            str(payload.get("config_hash") or ""),
+            str(payload.get("readiness") or "N/A"),
+            str(payload.get("reason") or "UNKNOWN"),
+            str(payload.get("evidence_path") or ""),
+            str(payload.get("details_json") or "{}"),
+        ],
+    )
+    conn.commit()
+
+
+def upsert_ingest_watermark(
+    conn: sqlite3.Connection,
+    *,
+    source_type: str,
+    symbol: str,
+    timeframe: str,
+    last_ts_utc: str,
+    updated_at_utc: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO ingest_watermarks (source_type, symbol, timeframe, last_ts_utc, updated_at_utc)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source_type, symbol, timeframe) DO UPDATE SET
+            last_ts_utc=excluded.last_ts_utc,
+            updated_at_utc=excluded.updated_at_utc
+        """,
+        [str(source_type), str(symbol), str(timeframe), str(last_ts_utc), str(updated_at_utc)],
+    )
+    conn.commit()
+
+
+def get_ingest_watermark(
+    conn: sqlite3.Connection,
+    *,
+    source_type: str,
+    symbol: str,
+    timeframe: str,
+) -> str | None:
+    row = conn.execute(
+        """
+        SELECT last_ts_utc
+        FROM ingest_watermarks
+        WHERE source_type = ? AND symbol = ? AND timeframe = ?
+        """,
+        [str(source_type), str(symbol), str(timeframe)],
+    ).fetchone()
+    if row is None:
+        return None
+    val = row["last_ts_utc"]
+    return None if val is None else str(val)
 
 
 def insert_experiment_run(conn: sqlite3.Connection, payload: Dict[str, Any]) -> None:
@@ -120,4 +221,29 @@ def fetch_latest_runs(conn: sqlite3.Connection, *, limit: int = 10) -> List[Dict
         """,
         [max(1, int(limit))],
     ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fetch_latest_job_runs(conn: sqlite3.Connection, *, run_type: str | None = None, limit: int = 20) -> List[Dict[str, Any]]:
+    if run_type:
+        rows = conn.execute(
+            """
+            SELECT run_id, run_type, started_at_utc, finished_at_utc, status, source_type, reason, evidence_path
+            FROM job_runs
+            WHERE run_type = ?
+            ORDER BY started_at_utc DESC
+            LIMIT ?
+            """,
+            [str(run_type), max(1, int(limit))],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT run_id, run_type, started_at_utc, finished_at_utc, status, source_type, reason, evidence_path
+            FROM job_runs
+            ORDER BY started_at_utc DESC
+            LIMIT ?
+            """,
+            [max(1, int(limit))],
+        ).fetchall()
     return [dict(r) for r in rows]

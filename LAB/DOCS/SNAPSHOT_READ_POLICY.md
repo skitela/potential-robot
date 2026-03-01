@@ -13,8 +13,9 @@ Zmniejszyć ryzyko kolizji odczytu z runtime i utrzymać determinizm danych wej�
 
 ## Implementacja
 - Snapshot manager: `TOOLS/lab_snapshot_manager.py`
+- Snapshot retention: `TOOLS/lab_snapshot_retention.py`
 - Pipeline LAB: `TOOLS/lab_daily_pipeline.py --snapshot-policy ...`
 
 ## Uwagi operacyjne
 - Snapshoty zwiększają I/O przy starcie batcha, ale poprawiają izolację.
-- Zalecana retencja snapshotów: 7-14 dni.
+- Zalecana retencja snapshotow: 7-14 dni (domyslnie 14).

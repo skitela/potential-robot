@@ -1,39 +1,53 @@
 # RUNBOOK LAB Scheduler
 
 ## Cel
-Bezpieczne uruchamianie pipeline LAB 1x dziennie bez wpływu na runtime.
+Bezpieczne uruchamianie LAB 1x dziennie bez wplywu na runtime execution path.
 
 ## Start (manual)
 ```powershell
-py -B TOOLS/lab_scheduler.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-days 180
+py -B TOOLS/lab_scheduler.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-days 180 --snapshot-retention-days 14
 ```
 
 ## Start przez wrapper PS1
 ```powershell
-powershell -ExecutionPolicy Bypass -File TOOLS\run_lab_scheduler.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -FocusGroup FX -LookbackDays 180
+powershell -ExecutionPolicy Bypass -File TOOLS\run_lab_scheduler.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -FocusGroup FX -LookbackDays 180 -SnapshotRetentionDays 14
 ```
 
-## Wyłączenie
-Scheduler jest uruchamiany jednorazowo (`run-once`). Nie ma procesu rezydentnego.
-Jeśli job utknie:
-1. Sprawdź lock: `C:\OANDA_MT5_LAB_DATA\run\lab_scheduler.lock`
-2. Sprawdź status: `C:\OANDA_MT5_LAB_DATA\run\lab_scheduler_status.json`
-3. Po potwierdzeniu braku aktywnego procesu usuń lock ręcznie.
+## Rejestracja dziennego Task Schedulera (Windows)
+```powershell
+powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -TaskName OANDA_MT5_LAB_DAILY -StartTime 03:30
+```
 
-## Status
-- `C:\OANDA_MT5_LAB_DATA\run\lab_scheduler_status.json`
-- `LAB/EVIDENCE/daily/lab_daily_report_latest.json` (pointer)
+## Usuniecie zadania
+```powershell
+powershell -ExecutionPolicy Bypass -File TOOLS\unregister_lab_scheduler_task.ps1 -TaskName OANDA_MT5_LAB_DAILY
+```
 
-## Skip reasons
+## Wylogika i sekwencja
+1. MT5 ingest (read-only) -> `TOOLS/lab_mt5_history_ingest.py`
+2. LAB daily pipeline -> `TOOLS/lab_daily_pipeline.py`
+3. Snapshot retention -> `TOOLS/lab_snapshot_retention.py`
+
+## Zabezpieczenia
+- lock: `C:\OANDA_MT5_LAB_DATA\run\lab_scheduler.lock`
+- skip przy aktywnym oknie (`ACTIVE_WINDOW`) domyslnie
+- resource governor (`CPU_HIGH`, `MEM_LOW`)
+- timeout per step
+- low-priority best-effort
+
+## Status i evidence
+- scheduler status: `C:\OANDA_MT5_LAB_DATA\run\lab_scheduler_status.json`
+- ingest pointer: `LAB/EVIDENCE/ingest/lab_mt5_ingest_latest.json`
+- daily pointer: `LAB/EVIDENCE/daily/lab_daily_report_latest.json`
+- retention pointer: `LAB/EVIDENCE/retention/lab_snapshot_retention_latest.json`
+
+## Typowe skip reasons
 - `LOCK_HELD`
-- `ACTIVE_WINDOW` (domyślnie scheduler nie odpala w aktywnym oknie)
+- `ACTIVE_WINDOW`
+- `CPU_HIGH`
+- `MEM_LOW`
 
-## Timeout
-- Domyślny timeout: 1800s (konfigurowalny `--timeout-sec`).
-- Timeout kończy job bezpiecznie i zapisuje status `TIMEOUT`.
-
-## Retencja/Cleanup
-- Raporty: `C:\OANDA_MT5_LAB_DATA\reports\`
-- Registry: `C:\OANDA_MT5_LAB_DATA\registry\lab_registry.sqlite`
-- Snapshoty: `C:\OANDA_MT5_LAB_DATA\snapshots\`
-- Zalecenie: retencja snapshotów 7-14 dni; raportów 30-90 dni.
+## Parametry operacyjne
+- `--timeout-sec` domyslnie `1800`
+- `--snapshot-retention-days` domyslnie `14`
+- `--skip-snapshot-retention` gdy chcesz pominac retention w danym runie

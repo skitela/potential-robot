@@ -1,7 +1,7 @@
 # OANDA MT5 LAB (Offline, odseparowany od runtime)
 
 Ten katalog to warstwa kodu i dokumentacji LAB.
-Cięższe artefakty i dane LAB domyślnie trafiają poza repo do `LAB_DATA_ROOT` (`C:/OANDA_MT5_LAB_DATA`).
+Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C:/OANDA_MT5_LAB_DATA`).
 
 ## Cel
 - Maksymalizacja wyniku netto po kosztach (`net after costs`) dla scalpingu.
@@ -9,31 +9,47 @@ Cięższe artefakty i dane LAB domyślnie trafiają poza repo do `LAB_DATA_ROOT`
 - Zero ingerencji w execution path runtime.
 
 ## Twarde zasady
-- LAB nie wysyła zleceń i nie mutuje `CONFIG/strategy.json`.
-- LAB nie mutuje ryzyka kapitałowego.
-- LAB nie zapisuje do katalogów runtime (`BIN`, `MQL5`, `RUN`, `LOGS`, `DB`, `META`, `CONFIG`).
+- LAB nie wysyla zlecen i nie mutuje `CONFIG/strategy.json`.
+- LAB nie mutuje ryzyka kapitalowego.
+- LAB nie zapisuje do katalogow runtime (`BIN`, `MQL5`, `RUN`, `LOGS`, `DB`, `META`, `CONFIG`).
 - Wynik LAB to rekomendacje + evidence, nie automatyczna aktywacja.
 
 ## Start (manual, FX)
 1. Jednorazowy run:
    - `python -B TOOLS/lab_daily_pipeline.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-days 180 --daily-guard`
 2. Odczyt:
-   - szczegóły: `C:\OANDA_MT5_LAB_DATA\reports\daily\lab_daily_report_*.json`
-   - wskaźnik dla operatora: `LAB/EVIDENCE/daily/lab_daily_report_latest.json`
+   - szczegoly: `C:\OANDA_MT5_LAB_DATA\reports\daily\lab_daily_report_*.json`
+   - wskaznik dla operatora: `LAB/EVIDENCE/daily/lab_daily_report_latest.json`
 
 ## Snapshot-read policy
-- Domyślnie: `PREFER_SNAPSHOT`.
+- Domyslnie: `PREFER_SNAPSHOT`.
 - Pipeline tworzy snapshoty SQLite (`decision_events`, `m5_bars`) w `LAB_DATA_ROOT/snapshots/*`.
-- Gdy snapshot się nie uda, fallback do runtime DB w trybie read-only.
+- Gdy snapshot sie nie uda, fallback do runtime DB w trybie read-only.
+- Retencja snapshotow: `TOOLS/lab_snapshot_retention.py` (domyslnie 14 dni).
+
+## MT5 history ingest (read-only)
+- Skrypt: `TOOLS/lab_mt5_history_ingest.py`
+- Zrodlo: lokalny terminal MT5 (OANDA TMS), bez zewnetrznych API.
+- Start manual:
+  - `py -3.12 -B TOOLS/lab_mt5_history_ingest.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --timeframes M1 --lookback-days 180`
+- Wyniki:
+  - curated DB: `C:\OANDA_MT5_LAB_DATA\data_curated\mt5_history.sqlite`
+  - raport: `C:\OANDA_MT5_LAB_DATA\reports\ingest\lab_mt5_ingest_*.json`
+  - pointer operatora: `LAB/EVIDENCE/ingest/lab_mt5_ingest_latest.json`
 
 ## Scheduler (bezpieczny)
 - Skrypt: `TOOLS/lab_scheduler.py`
-- Zabezpieczenia: lock, skip przy `ACTIVE` oknie (domyślnie), timeout, low-priority.
+- Sekwencja: ingest MT5 -> pipeline -> retencja snapshotow.
+- Zabezpieczenia: lock, skip przy `ACTIVE` oknie (domyslnie), resource governor, timeout, low-priority.
 - Runbook: `LAB/DOCS/RUNBOOK_LAB_SCHEDULER.md`
+- Rejestracja zadania dziennego:
+  - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 03:30`
 
-## Registry eksperymentów (MVP)
+## Registry eksperymentow (MVP)
 - SQLite: `LAB_DATA_ROOT/registry/lab_registry.sqlite`
 - Tabele:
+  - `job_runs`
+  - `ingest_watermarks`
   - `experiment_runs`
   - `candidate_scores`
 
@@ -42,4 +58,4 @@ Cięższe artefakty i dane LAB domyślnie trafiają poza repo do `LAB_DATA_ROOT`
   - cel i wagi rankingu,
   - progi promocji LAB->SHADOW,
   - safety,
-  - domyślna polityka storage/scheduler.
+  - domyslna polityka storage/scheduler.

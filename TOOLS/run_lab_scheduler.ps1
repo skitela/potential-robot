@@ -5,6 +5,8 @@ param(
     [int]$LookbackDays = 180,
     [int]$HorizonMinutes = 60,
     [int]$TimeoutSec = 1800,
+    [int]$SnapshotRetentionDays = 14,
+    [switch]$SkipSnapshotRetention,
     [switch]$AllowActiveWindow,
     [switch]$Force
 )
@@ -20,9 +22,11 @@ $argsList = @(
     "--focus-group", $FocusGroup,
     "--lookback-days", [string]$LookbackDays,
     "--horizon-minutes", [string]$HorizonMinutes,
-    "--timeout-sec", [string]$TimeoutSec
+    "--timeout-sec", [string]$TimeoutSec,
+    "--snapshot-retention-days", [string]$SnapshotRetentionDays
 )
 if ($AllowActiveWindow) { $argsList += "--allow-active-window" }
 if ($Force) { $argsList += "--force" }
+if ($SkipSnapshotRetention) { $argsList += "--skip-snapshot-retention" }
 
 py @argsList

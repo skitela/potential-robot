@@ -66,8 +66,8 @@
   },
   "external_data_connectors": {
     "mt5_history_import": {
-      "enabled": false,
-      "status": "PLANNED"
+      "enabled": true,
+      "status": "LOCAL_READ_ONLY_V1"
     },
     "oanda_rest_import": {
       "enabled": false,

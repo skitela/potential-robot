@@ -1,9 +1,12 @@
-# External Data Plan (PLANNED)
+# External Data Plan (Stage v1)
 
-Status: planowany, bez aktywnego pobierania.
+Status:
+- MT5 local history ingest: ACTIVE (read-only, local terminal).
+- OANDA REST: PLANNED/OFF.
+- Manual CSV: PLANNED/OFF.
 
 ## Kolejnosc wdrozenia
-1. MT5 history export/import (najmniejsze ryzyko zgodnosci).
+1. MT5 history import z lokalnego terminala (wdrozone v1).
 2. OANDA REST history import (tylko read-only, jawny mapping instrumentow).
 3. CSV manual import do porownan i testow spojnosc.
 

@@ -53,3 +53,43 @@ def test_registry_insert_and_fetch(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0]["run_id"] == "LAB_20260302T000000Z"
     assert rows[0]["readiness"] == "HOLD"
+
+
+def test_job_runs_and_watermarks(tmp_path: Path) -> None:
+    db = tmp_path / "registry.sqlite"
+    conn = lr.connect_registry(db)
+    try:
+        lr.init_registry_schema(conn)
+        lr.insert_job_run(
+            conn,
+            {
+                "run_id": "INGEST_20260302T010000Z",
+                "run_type": "INGEST_MT5",
+                "started_at_utc": "2026-03-02T01:00:00Z",
+                "finished_at_utc": "2026-03-02T01:00:05Z",
+                "status": "PASS",
+                "source_type": "MT5",
+                "dataset_hash": "c" * 64,
+                "config_hash": "d" * 64,
+                "readiness": "N/A",
+                "reason": "INGEST_OK",
+                "evidence_path": "C:/x.json",
+                "details_json": "{\"rows\": 10}",
+            },
+        )
+        lr.upsert_ingest_watermark(
+            conn,
+            source_type="MT5",
+            symbol="EURUSD",
+            timeframe="M1",
+            last_ts_utc="2026-03-02T01:00:00Z",
+            updated_at_utc="2026-03-02T01:00:05Z",
+        )
+        got = lr.get_ingest_watermark(conn, source_type="MT5", symbol="EURUSD", timeframe="M1")
+        job_rows = lr.fetch_latest_job_runs(conn, run_type="INGEST_MT5", limit=3)
+    finally:
+        conn.close()
+
+    assert got == "2026-03-02T01:00:00Z"
+    assert len(job_rows) == 1
+    assert job_rows[0]["run_id"] == "INGEST_20260302T010000Z"

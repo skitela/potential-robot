@@ -24,6 +24,7 @@ try:
         init_registry_schema,
         insert_candidate_scores,
         insert_experiment_run,
+        insert_job_run,
     )
     from TOOLS.lab_snapshot_manager import make_snapshots
 except Exception:  # pragma: no cover
@@ -34,6 +35,7 @@ except Exception:  # pragma: no cover
         init_registry_schema,
         insert_candidate_scores,
         insert_experiment_run,
+        insert_job_run,
     )
     from lab_snapshot_manager import make_snapshots
 
@@ -656,6 +658,32 @@ def main() -> int:
             },
         )
         insert_candidate_scores(conn, run_id, leaderboard)
+        insert_job_run(
+            conn,
+            {
+                "run_id": f"{run_id}_JOB",
+                "run_type": "LAB_PIPELINE",
+                "started_at_utc": report["generated_at_utc"],
+                "finished_at_utc": iso_utc(dt.datetime.now(tz=UTC)),
+                "status": "PASS",
+                "source_type": str(snapshot_mode),
+                "dataset_hash": dataset_hash,
+                "config_hash": config_hash,
+                "readiness": readiness,
+                "reason": reason,
+                "evidence_path": str(out_path),
+                "details_json": json.dumps(
+                    {
+                        "focus_group": focus_group,
+                        "focus_windows": focus_windows,
+                        "pairs_total": len(leaderboard),
+                        "pairs_ready": ready_count,
+                        "dp_status": dp_status,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
         latest_runs = fetch_latest_runs(conn, limit=5)
     finally:
         conn.close()
