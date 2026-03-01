@@ -100,6 +100,7 @@ def _scan_safetybot_log(path: Path) -> Dict[str, Any]:
         "q_timeout_samples": [],
         "q_full_samples": [],
         "bridge_rtt_samples": [],
+        "bridge_rtt_action_counts": {},
         "section_metrics_samples": {
             "tick_ingest": [],
             "bridge_send": [],
@@ -125,6 +126,7 @@ def _scan_safetybot_log(path: Path) -> Dict[str, Any]:
 
     first_ts: str | None = None
     last_ts: str | None = None
+    rtt_action_counts: Dict[str, int] = {}
     with path.open("r", encoding="utf-8", errors="ignore") as fh:
         for line in fh:
             line = line.rstrip("\n")
@@ -183,12 +185,15 @@ def _scan_safetybot_log(path: Path) -> Dict[str, Any]:
             if m:
                 out["matched_lines_zmq_rtt"] += 1
                 out["bridge_rtt_samples"].append(float(m.group("rtt")))
+                action = str(m.group("action") or "UNKNOWN").upper()
+                rtt_action_counts[action] = int(rtt_action_counts.get(action, 0)) + 1
             m = ORDER_LAT_RE.search(line)
             if m:
                 out["matched_lines_execution"] += 1
                 out["execution_latency_samples"].append(float(m.group("lat")))
     out["first_ts_local"] = first_ts or "UNKNOWN"
     out["last_ts_local"] = last_ts or "UNKNOWN"
+    out["bridge_rtt_action_counts"] = rtt_action_counts
     out["status"] = "OK"
     return out
 
@@ -492,8 +497,29 @@ def _summarize_health(log_scan: Dict[str, Any], audit_scan: Dict[str, Any]) -> D
     q_backpressure = log_scan.get("q_backpressure_samples", [])
     q_timeouts = log_scan.get("q_timeout_samples", [])
     q_full = log_scan.get("q_full_samples", [])
+    bridge_rtt_samples = log_scan.get("bridge_rtt_samples", [])
+    rtt_n = len(bridge_rtt_samples) if isinstance(bridge_rtt_samples, list) else 0
+    reply_n = int(audit_scan.get("reply_received_count", 0) or 0)
+    empty_expl = "NON_EMPTY"
+    if rtt_n == 0:
+        if reply_n == 0 and sent > 0:
+            empty_expl = "NO_SUCCESSFUL_REPLIES_IN_WINDOW"
+        elif reply_n == 0 and sent == 0:
+            empty_expl = "NO_COMMAND_ACTIVITY_IN_WINDOW"
+        elif reply_n > 0:
+            empty_expl = "LOG_WINDOW_OR_PATTERN_MISMATCH"
+        else:
+            empty_expl = "UNKNOWN"
     return {
         "bridge_commands": {"sent": sent, "timeouts": tout, "timeout_rate": round(timeout_rate, 6)},
+        "bridge_rtt_observability": {
+            "bridge_rtt_sampling_scope": "ALL_ACTIONS_FROM_SAFETYBOT_LOG_ZMQ_RTT",
+            "bridge_rtt_samples_count": int(rtt_n),
+            "bridge_rtt_success_count": int(reply_n),
+            "bridge_rtt_timeout_count": int(tout),
+            "bridge_rtt_action_counts": dict(log_scan.get("bridge_rtt_action_counts") or {}),
+            "bridge_rtt_empty_list_explanation": empty_expl,
+        },
         "queue_counters_runtime_metrics": {
             "q_backpressure_drops_max": int(max(q_backpressure)) if q_backpressure else "UNKNOWN",
             "q_timeouts_max": int(max(q_timeouts)) if q_timeouts else "UNKNOWN",
