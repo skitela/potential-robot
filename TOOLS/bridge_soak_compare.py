@@ -174,6 +174,8 @@ def _parse_window(
     late_response_count = 0
     command_sent_count = 0
     command_timeout_count = 0
+    command_sent_by_type: Counter[str] = Counter()
+    command_timeout_by_type: Counter[str] = Counter()
 
     first_audit_ts = "UNKNOWN"
     last_audit_ts = "UNKNOWN"
@@ -186,12 +188,14 @@ def _parse_window(
         event_counts[event_type] += 1
         if event_type == "COMMAND_SENT":
             command_sent_count += 1
+            command_sent_by_type[_extract_command_type(obj)] += 1
         elif event_type == "COMMAND_TIMEOUT":
             command_timeout_count += 1
             reason = _extract_timeout_reason(obj)
             cmd_type = _extract_command_type(obj)
             budget = _extract_timeout_budget(obj)
             timeout_reason_counts[reason] += 1
+            command_timeout_by_type[cmd_type] += 1
             timeout_reason_by_command_type[f"{cmd_type}|{reason}"] += 1
             timeout_reason_by_timeout_budget[f"{budget}|{reason}"] += 1
         elif event_type == "COMMAND_FAILED":
@@ -288,6 +292,18 @@ def _parse_window(
                     heartbeat_failsafe_historical += 1
 
     timeout_rate = (float(command_timeout_count) / float(command_sent_count)) if command_sent_count > 0 else 0.0
+    timeout_rates_by_type: Dict[str, Any] = {}
+    for cmd_type in sorted(set(list(command_sent_by_type.keys()) + list(command_timeout_by_type.keys()))):
+        sent_n = int(command_sent_by_type.get(cmd_type, 0))
+        tout_n = int(command_timeout_by_type.get(cmd_type, 0))
+        timeout_rates_by_type[cmd_type] = {
+            "sent": sent_n,
+            "timeouts": tout_n,
+            "timeout_rate": round((float(tout_n) / float(sent_n)) if sent_n > 0 else 0.0, 6),
+        }
+    timeout_rate_trade = (timeout_rates_by_type.get("TRADE") or {}).get("timeout_rate", 0.0)
+    timeout_rate_hb = (timeout_rates_by_type.get("HEARTBEAT") or {}).get("timeout_rate", 0.0)
+    timeout_rate_other = (timeout_rates_by_type.get("OTHER") or {}).get("timeout_rate", 0.0)
 
     def _section_summary(section: str) -> Dict[str, Any]:
         rows = section_samples.get(section, [])
@@ -323,6 +339,10 @@ def _parse_window(
             "bridge_wait": _stats(reply_wait),
             "bridge_parse": _stats(reply_parse),
             "timeout_rate": round(timeout_rate, 6),
+            "timeout_rate_all": round(timeout_rate, 6),
+            "timeout_rate_heartbeat": timeout_rate_hb,
+            "timeout_rate_trade_path": timeout_rate_trade,
+            "timeout_rate_other": timeout_rate_other,
             "command_sent": command_sent_count,
             "command_timeout": command_timeout_count,
             "decision_core": _section_summary("decision_core"),
@@ -344,6 +364,9 @@ def _parse_window(
             "bridge_diag_reason_counts": dict(bridge_diag_reason),
             "audit_event_counts": dict(event_counts),
             "audit_reason_counts": dict(audit_reason_counts),
+            "command_counts_by_type": dict(command_sent_by_type),
+            "timeout_counts_by_type": dict(command_timeout_by_type),
+            "timeout_rates_by_type": timeout_rates_by_type,
             "late_response_over_budget": {
                 "count": int(late_response_count),
                 "by_command_type": dict(late_response_by_command_type),
@@ -539,6 +562,10 @@ def _render_txt(report: Dict[str, Any]) -> str:
     for key in ("bridge_send", "bridge_wait", "bridge_parse", "full_loop", "decision_core", "tick_ingest"):
         lines.append(f"- {key}: {am.get(key)}")
     lines.append(f"- timeout_rate: {am.get('timeout_rate')}")
+    lines.append(f"- timeout_rate_all: {am.get('timeout_rate_all')}")
+    lines.append(f"- timeout_rate_heartbeat: {am.get('timeout_rate_heartbeat')}")
+    lines.append(f"- timeout_rate_trade_path: {am.get('timeout_rate_trade_path')}")
+    lines.append(f"- timeout_rate_other: {am.get('timeout_rate_other')}")
     lines.append(f"- command_sent: {am.get('command_sent')}")
     lines.append(f"- command_timeout: {am.get('command_timeout')}")
     lines.append("")
@@ -556,6 +583,9 @@ def _render_txt(report: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("LATE_RESPONSE_OVER_BUDGET")
     lines.append(str(reasons.get("late_response_over_budget")))
+    lines.append("")
+    lines.append("TIMEOUT_RATES_BY_TYPE")
+    lines.append(str(reasons.get("timeout_rates_by_type")))
     lines.append("")
     lines.append("HEARTBEAT_FAILSAFE_EVENTS")
     hb = after.get("heartbeat_failsafe_events") or {}

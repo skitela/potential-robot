@@ -483,11 +483,21 @@ class ZMQBridge:
                             return None
                     else:
                         last_reason = "TIMEOUT_NO_RESPONSE"
-                        timeout_subreason = "NO_RESPONSE"
-                        if int(command_queue_wait_ms) >= 50:
-                            timeout_subreason = "QUEUE"
-                        elif int(max_audit_lock_wait_ms) >= 25:
-                            timeout_subreason = "LOCK"
+                        if command_type == "HEARTBEAT":
+                            if int(command_queue_wait_ms) >= 200:
+                                timeout_subreason = "HB_LOOP_BUSY"
+                            elif int(command_queue_wait_ms) >= 50:
+                                timeout_subreason = "HB_QUEUE_DELAY"
+                            elif int(max_audit_lock_wait_ms) >= 25:
+                                timeout_subreason = "HB_LOCK_CONTENTION"
+                            else:
+                                timeout_subreason = "HB_NO_WORKER_RESPONSE"
+                        else:
+                            timeout_subreason = "NO_RESPONSE"
+                            if int(command_queue_wait_ms) >= 50:
+                                timeout_subreason = "QUEUE"
+                            elif int(max_audit_lock_wait_ms) >= 25:
+                                timeout_subreason = "LOCK"
                         last_subreason = timeout_subreason
                         wait_ms = int((time.perf_counter() - wait_t0) * 1000.0)
                         lock_wait_ms = self._write_audit_log(
@@ -567,7 +577,10 @@ class ZMQBridge:
             final_reason = str(last_reason or "COMMAND_FAILED")
             final_subreason = str(last_subreason or "UNKNOWN")
             if final_reason == "TIMEOUT_NO_RESPONSE":
-                final_subreason = "RETRY_CEILING"
+                if command_type == "HEARTBEAT":
+                    final_subreason = "HB_REPLY_MISSED_WINDOW"
+                else:
+                    final_subreason = "RETRY_CEILING"
 
             self._write_audit_log(
                 "COMMAND_FAILED",
