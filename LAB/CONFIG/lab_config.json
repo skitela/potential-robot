@@ -1,0 +1,69 @@
+{
+  "schema": "oanda_mt5.lab_config.v1",
+  "objective": {
+    "primary": "MAX_NET_AFTER_COSTS",
+    "description_pl": "Maksymalizacja wyniku netto po kosztach dla scalpingu, z priorytetem stabilnosci i powtarzalnosci.",
+    "weights": {
+      "net_pips_per_trade": 0.45,
+      "win_rate": 0.2,
+      "sample_size": 0.15,
+      "loss_day_penalty": 0.1,
+      "cost_share_penalty": 0.1
+    }
+  },
+  "phase_scope": {
+    "active_phase": "PHASE_1_FX",
+    "group_priority": [
+      "FX",
+      "METAL",
+      "INDEX",
+      "CRYPTO"
+    ],
+    "phase_windows_by_group": {
+      "FX": [
+        "FX_ASIA",
+        "FX_AM"
+      ],
+      "METAL": [
+        "METAL_PM"
+      ],
+      "INDEX": [
+        "INDEX_EU",
+        "INDEX_US"
+      ],
+      "CRYPTO": []
+    }
+  },
+  "promotion_gates": {
+    "lab_to_shadow": {
+      "min_days_covered": 10,
+      "min_explore_trades": 120,
+      "min_strict_trades": 40,
+      "min_explore_win_rate": 0.52,
+      "min_explore_net_pips_per_trade": 0.25,
+      "min_strict_net_pips_per_trade": 0.05,
+      "max_explore_loss_day_ratio": 0.4,
+      "max_explore_cost_share": 0.65
+    }
+  },
+  "runtime_safety": {
+    "mutate_live_strategy": false,
+    "mutate_risk_parameters": false,
+    "risk_budget_change_requires_operator": true,
+    "note_pl": "Laboratorium jest tylko analityczne. Nie modyfikuje live config ani ryzyka kapitalowego."
+  },
+  "external_data_connectors": {
+    "mt5_history_import": {
+      "enabled": false,
+      "status": "PLANNED"
+    },
+    "oanda_rest_import": {
+      "enabled": false,
+      "status": "PLANNED"
+    },
+    "manual_csv_import": {
+      "enabled": false,
+      "status": "PLANNED"
+    }
+  }
+}

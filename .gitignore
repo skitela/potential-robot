@@ -40,6 +40,10 @@ DIAG/
 EVIDENCE/*
 !EVIDENCE/oanda_limits_audit_report.md
 
+# LAB generated outputs
+LAB/EVIDENCE/*
+LAB/RUN/*
+
 # Large reference docs (keep curated text elsewhere)
 DOCS/OANDA/
 DOCS/OANDA/_extract/
