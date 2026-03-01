@@ -17,8 +17,34 @@ if (-not (Test-Path $safetyPath)) {
     throw "Missing safetybot log: $safetyPath"
 }
 
+function Test-RuntimeHealthy {
+    param([string]$RuntimeRoot)
+    $statusPath = Join-Path $RuntimeRoot "RUN\system_control_last.json"
+    if (-not (Test-Path $statusPath)) { return $false }
+    try {
+        $obj = Get-Content -Raw -Encoding UTF8 $statusPath | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    if (($obj.status -ne "PASS") -or ($obj.action -ne "status")) { return $false }
+    if ($null -eq $obj.components) { return $false }
+    foreach ($c in $obj.components) {
+        if (-not [bool]$c.running) { return $false }
+    }
+    return $true
+}
+
 Write-Host "RUN_BRIDGE_SOAK_AUDIT start_utc=$utcNow duration_sec=$DurationSec"
 & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile safety_only | Out-Host
+if (-not (Test-RuntimeHealthy -RuntimeRoot $Root)) {
+    Write-Host "RUN_BRIDGE_SOAK_AUDIT runtime status FAIL -> attempting start safety_only"
+    & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action start -Profile safety_only | Out-Host
+    Start-Sleep -Seconds 3
+    & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile safety_only | Out-Host
+}
+if (-not (Test-RuntimeHealthy -RuntimeRoot $Root)) {
+    throw "Runtime is not healthy (status FAIL or component not running). Aborting soak to avoid report gaps."
+}
 
 $markerDir = Join-Path $Root "EVIDENCE\bridge_audit"
 New-Item -ItemType Directory -Path $markerDir -Force | Out-Null
@@ -53,6 +79,21 @@ Start-Sleep -Seconds $DurationSec
 
 & python (Join-Path $Root "TOOLS\latency_stage2_section_profile.py") --per-section-sample-limit 5000 | Out-Host
 & python (Join-Path $Root "TOOLS\bridge_soak_compare.py") --start-marker $markerPath | Out-Host
+
+$latestCompare = Get-ChildItem (Join-Path $Root "EVIDENCE\bridge_audit") -Filter "bridge_soak_compare_*.json" |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($latestCompare) {
+    try {
+        $cmp = Get-Content -Raw -Encoding UTF8 $latestCompare.FullName | ConvertFrom-Json
+        $sent = [int]($cmp.after_soak_window.metrics.command_sent)
+        $nWait = [int]($cmp.after_soak_window.metrics.bridge_wait.n)
+        if ($sent -le 0 -or $nWait -le 0) {
+            throw "No command samples in soak window (command_sent=$sent, bridge_wait.n=$nWait)."
+        }
+    } catch {
+        throw "Invalid/empty soak comparison output: $($_.Exception.Message)"
+    }
+}
 
 & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile safety_only | Out-Host
 Write-Host "RUN_BRIDGE_SOAK_AUDIT done"
