@@ -2,8 +2,10 @@ param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
     [string]$FocusGroup = "FX",
-    [int]$LookbackDays = 30,
+    [int]$LookbackDays = 180,
     [int]$HorizonMinutes = 60,
+    [int]$TimeoutSec = 1800,
+    [switch]$AllowActiveWindow,
     [switch]$Force
 )
 
@@ -12,14 +14,15 @@ Set-Location -Path $Root
 
 $argsList = @(
     "-B",
-    "TOOLS\lab_daily_pipeline.py",
+    "TOOLS\lab_scheduler.py",
     "--root", $Root,
     "--lab-data-root", $LabDataRoot,
     "--focus-group", $FocusGroup,
     "--lookback-days", [string]$LookbackDays,
     "--horizon-minutes", [string]$HorizonMinutes,
-    "--daily-guard"
+    "--timeout-sec", [string]$TimeoutSec
 )
+if ($AllowActiveWindow) { $argsList += "--allow-active-window" }
 if ($Force) { $argsList += "--force" }
 
 py @argsList

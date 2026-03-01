@@ -9,7 +9,7 @@ Status: planowany, bez aktywnego pobierania.
 
 ## Warunki aktywacji
 - Schemat danych i walidacja quality flags.
-- Rozdzielenie storage LAB od runtime (`LAB/DATA_RAW`, `LAB/DATA_CURATED`).
+- Rozdzielenie storage LAB od runtime (`LAB_DATA_ROOT/data_raw`, `LAB_DATA_ROOT/data_curated`).
 - Brak zapisow do execution path.
 
 ## Minimalne pola dla datasetow

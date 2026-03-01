@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oanda://schemas/lab_recommendation_v1",
+  "title": "LAB Recommendation v1",
+  "type": "object",
+  "required": [
+    "recommendation_id",
+    "type_primary",
+    "type_change",
+    "readiness",
+    "summary",
+    "expected_benefit",
+    "risks",
+    "evidence_paths",
+    "dataset_hash",
+    "config_hash",
+    "code_ref",
+    "review_required",
+    "touches_hot_path"
+  ],
+  "properties": {
+    "recommendation_id": {
+      "type": "string",
+      "minLength": 4
+    },
+    "type_primary": {
+      "type": "string",
+      "enum": ["DQ", "DP", "HYBRID"]
+    },
+    "type_change": {
+      "type": "string",
+      "enum": ["S", "L", "H"]
+    },
+    "readiness": {
+      "type": "string",
+      "enum": ["LAB_ONLY", "SHADOW_CANDIDATE", "REJECT", "HOLD"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "expected_benefit": {
+      "type": "string"
+    },
+    "risks": {
+      "type": "string"
+    },
+    "evidence_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dataset_hash": {
+      "type": "string",
+      "minLength": 32
+    },
+    "config_hash": {
+      "type": "string",
+      "minLength": 32
+    },
+    "code_ref": {
+      "type": "string"
+    },
+    "rejection_reason": {
+      "type": ["string", "null"]
+    },
+    "review_required": {
+      "type": "boolean"
+    },
+    "touches_hot_path": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "score": {
+      "type": "number"
+    }
+  },
+  "additionalProperties": true
+}

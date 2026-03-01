@@ -11,6 +11,32 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from TOOLS.lab_guardrails import (
+        canonical_json_hash,
+        ensure_write_parent,
+        file_sha256,
+        resolve_lab_data_root,
+    )
+    from TOOLS.lab_registry import (
+        connect_registry,
+        fetch_latest_runs,
+        init_registry_schema,
+        insert_candidate_scores,
+        insert_experiment_run,
+    )
+    from TOOLS.lab_snapshot_manager import make_snapshots
+except Exception:  # pragma: no cover
+    from lab_guardrails import canonical_json_hash, ensure_write_parent, file_sha256, resolve_lab_data_root
+    from lab_registry import (
+        connect_registry,
+        fetch_latest_runs,
+        init_registry_schema,
+        insert_candidate_scores,
+        insert_experiment_run,
+    )
+    from lab_snapshot_manager import make_snapshots
+
 UTC = dt.timezone.utc
 
 
@@ -61,15 +87,15 @@ def iso_utc(ts: dt.datetime) -> str:
     return ts.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def write_json(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+def write_json(path: Path, payload: Dict[str, Any], *, root: Path, lab_data_root: Path) -> None:
+    out = ensure_write_parent(path, root=root, lab_data_root=lab_data_root)
+    tmp = out.with_suffix(out.suffix + ".tmp")
     text = json.dumps(payload, indent=2, ensure_ascii=False)
     try:
         tmp.write_text(text + "\n", encoding="utf-8")
-        tmp.replace(path)
+        tmp.replace(out)
     except Exception:
-        path.write_text(text + "\n", encoding="utf-8")
+        out.write_text(text + "\n", encoding="utf-8")
         try:
             if tmp.exists():
                 tmp.unlink()
@@ -98,7 +124,15 @@ def should_skip_daily(state_path: Path, current: dt.datetime) -> bool:
     return ts.date() == current.date()
 
 
-def update_daily_state(state_path: Path, current: dt.datetime, status: str, report_path: Path) -> None:
+def update_daily_state(
+    state_path: Path,
+    current: dt.datetime,
+    status: str,
+    report_path: Path,
+    *,
+    root: Path,
+    lab_data_root: Path,
+) -> None:
     write_json(
         state_path,
         {
@@ -106,6 +140,8 @@ def update_daily_state(state_path: Path, current: dt.datetime, status: str, repo
             "last_status": str(status),
             "last_report_path": str(report_path),
         },
+        root=root,
+        lab_data_root=lab_data_root,
     )
 
 
@@ -137,6 +173,9 @@ def run_shadow_policy_report(
     horizon_minutes: int,
     out_path: Path,
     timeout_sec: int,
+    strategy_path: Path,
+    db_events: Path,
+    db_bars: Path,
 ) -> Tuple[int, List[str], List[str]]:
     cmd = [
         python_exe,
@@ -144,6 +183,12 @@ def run_shadow_policy_report(
         str((root / "TOOLS" / "shadow_policy_daily_report.py").resolve()),
         "--root",
         str(root),
+        "--strategy-path",
+        str(strategy_path),
+        "--db-events",
+        str(db_events),
+        "--db-bars",
+        str(db_bars),
         "--lookback-days",
         str(max(1, int(lookback_days))),
         "--horizon-minutes",
@@ -163,6 +208,36 @@ def run_shadow_policy_report(
     stdout_tail = (cp.stdout or "").splitlines()[-40:]
     stderr_tail = (cp.stderr or "").splitlines()[-40:]
     return int(cp.returncode), stdout_tail, stderr_tail
+
+
+def run_dp_report(
+    *,
+    root: Path,
+    python_exe: str,
+    lab_data_root: Path,
+    out_path: Path,
+    timeout_sec: int,
+) -> Tuple[int, List[str], List[str]]:
+    cmd = [
+        python_exe,
+        "-B",
+        str((root / "TOOLS" / "lab_dp_report.py").resolve()),
+        "--root",
+        str(root),
+        "--lab-data-root",
+        str(lab_data_root),
+        "--out",
+        str(out_path),
+    ]
+    cp = subprocess.run(
+        cmd,
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=max(60, int(timeout_sec)),
+        check=False,
+    )
+    return int(cp.returncode), (cp.stdout or "").splitlines()[-40:], (cp.stderr or "").splitlines()[-40:]
 
 
 def build_stats(rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str], KeyStats]:
@@ -266,9 +341,11 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="LAB daily pipeline (offline learning, no runtime mutation).")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--python", default=sys.executable)
+    ap.add_argument("--lab-data-root", default="")
     ap.add_argument("--lookback-days", type=int, default=30)
     ap.add_argument("--horizon-minutes", type=int, default=60)
     ap.add_argument("--focus-group", default="FX")
+    ap.add_argument("--snapshot-policy", default="PREFER_SNAPSHOT", choices=["PREFER_SNAPSHOT", "FORCE_RUNTIME"])
     ap.add_argument("--daily-guard", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--timeout-sec", type=int, default=180)
@@ -282,11 +359,14 @@ def main() -> int:
     lab_root = (root / "LAB").resolve()
     now = now_utc()
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
+    lab_data_root = Path(args.lab_data_root).resolve() if str(args.lab_data_root).strip() else resolve_lab_data_root(root)
 
     cfg_path = lab_root / "CONFIG" / "lab_config.json"
-    strategy_path = root / "CONFIG" / "strategy.json"
-    daily_dir = lab_root / "EVIDENCE" / "daily"
-    run_dir = lab_root / "RUN"
+    strategy_path = (root / "CONFIG" / "strategy.json").resolve()
+    daily_dir = (lab_data_root / "reports" / "daily").resolve()
+    run_dir = (lab_data_root / "run").resolve()
+    registry_path = (lab_data_root / "registry" / "lab_registry.sqlite").resolve()
+
     run_dir.mkdir(parents=True, exist_ok=True)
     daily_dir.mkdir(parents=True, exist_ok=True)
 
@@ -296,18 +376,23 @@ def main() -> int:
         raise FileNotFoundError(f"Missing strategy config: {strategy_path}")
 
     state_path = run_dir / "lab_daily_state.json"
+    default_out = daily_dir / f"lab_daily_report_{stamp}.json"
+    out_path = Path(args.out).resolve() if str(args.out).strip() else default_out
+    out_path = ensure_write_parent(out_path, root=root, lab_data_root=lab_data_root)
+
     if bool(args.daily_guard) and not bool(args.force) and should_skip_daily(state_path, now):
-        skip_out = Path(args.out).resolve() if args.out else (daily_dir / f"lab_daily_report_{stamp}.json")
         payload = {
             "schema": "oanda_mt5.lab_daily_pipeline.v1",
             "status": "SKIP_ALREADY_RUN_TODAY",
             "generated_at_utc": iso_utc(now),
             "root": str(root),
             "lab_root": str(lab_root),
+            "lab_data_root": str(lab_data_root),
             "daily_guard": True,
         }
-        write_json(skip_out, payload)
-        print(f"LAB_DAILY_PIPELINE_OK status={payload['status']} out={skip_out}")
+        write_json(out_path, payload, root=root, lab_data_root=lab_data_root)
+        update_daily_state(state_path, now, "SKIP_ALREADY_RUN_TODAY", out_path, root=root, lab_data_root=lab_data_root)
+        print(f"LAB_DAILY_PIPELINE_OK status={payload['status']} out={out_path}")
         return 0
 
     lab_cfg = load_json(cfg_path)
@@ -315,8 +400,29 @@ def main() -> int:
     focus_group = str(args.focus_group or "FX").upper()
     focus_windows = sorted([wid for wid, grp in window_groups.items() if grp == focus_group])
 
-    base_out = daily_dir / f"shadow_policy_base_{stamp}.json"
+    snapshot_mode = "RUNTIME"
+    db_events = (root / "DB" / "decision_events.sqlite").resolve()
+    db_bars = (root / "DB" / "m5_bars.sqlite").resolve()
+    snapshot_report: Dict[str, Any] = {"status": "SKIPPED"}
+    if str(args.snapshot_policy).upper() == "PREFER_SNAPSHOT":
+        results = make_snapshots(root=root, lab_data_root=lab_data_root)
+        snapshot_report = {"status": "PARTIAL", "results": results}
+        ev = (results.get("decision_events") or {}).get("snapshot")
+        br = (results.get("m5_bars") or {}).get("snapshot")
+        ev_ok = (results.get("decision_events") or {}).get("status") == "OK"
+        br_ok = (results.get("m5_bars") or {}).get("status") == "OK"
+        if ev and br and ev_ok and br_ok:
+            db_events = Path(ev).resolve()
+            db_bars = Path(br).resolve()
+            snapshot_mode = "SNAPSHOT"
+            snapshot_report["status"] = "PASS"
     python_exe = resolve_python_exe(str(args.python))
+
+    base_out = ensure_write_parent(
+        lab_data_root / "reports" / "shadow_policy" / f"shadow_policy_base_{stamp}.json",
+        root=root,
+        lab_data_root=lab_data_root,
+    )
     rc, stdout_tail, stderr_tail = run_shadow_policy_report(
         root=root,
         python_exe=python_exe,
@@ -324,6 +430,9 @@ def main() -> int:
         horizon_minutes=max(1, int(args.horizon_minutes)),
         out_path=base_out,
         timeout_sec=max(60, int(args.timeout_sec)),
+        strategy_path=strategy_path,
+        db_events=db_events,
+        db_bars=db_bars,
     )
     if rc != 0:
         report = {
@@ -332,14 +441,16 @@ def main() -> int:
             "generated_at_utc": iso_utc(now),
             "root": str(root),
             "lab_root": str(lab_root),
+            "lab_data_root": str(lab_data_root),
+            "snapshot_mode": snapshot_mode,
+            "snapshot_report": snapshot_report,
             "base_report_path": str(base_out),
             "base_report_rc": int(rc),
             "base_stdout_tail": stdout_tail,
             "base_stderr_tail": stderr_tail,
         }
-        out_path = Path(args.out).resolve() if args.out else (daily_dir / f"lab_daily_report_{stamp}.json")
-        write_json(out_path, report)
-        update_daily_state(state_path, now, "FAIL_BASE_REPORT", out_path)
+        write_json(out_path, report, root=root, lab_data_root=lab_data_root)
+        update_daily_state(state_path, now, "FAIL_BASE_REPORT", out_path, root=root, lab_data_root=lab_data_root)
         print(f"LAB_DAILY_PIPELINE_FAIL status=FAIL_BASE_REPORT out={out_path}")
         return int(rc)
 
@@ -358,10 +469,7 @@ def main() -> int:
         key = (str(rec.get("window_id") or "NONE").upper(), str(rec.get("symbol") or "UNKNOWN").upper())
         rec_map[key] = rec
 
-    gates = (
-        (lab_cfg.get("promotion_gates") or {})
-        .get("lab_to_shadow", {})
-    )
+    gates = ((lab_cfg.get("promotion_gates") or {}).get("lab_to_shadow", {}))
     weights = (lab_cfg.get("objective") or {}).get("weights", {})
 
     leaderboard: List[Dict[str, Any]] = []
@@ -377,11 +485,9 @@ def main() -> int:
         if ready:
             ready_count += 1
         explore_total_trades += int(explore.trades)
-
         action = decide_lab_action(ready, explore, strict, failed)
         score = compute_lab_score(explore=explore, strict=strict, weights=weights)
         src_rec = rec_map.get(key, {})
-
         leaderboard.append(
             {
                 "window_id": window_id,
@@ -412,10 +518,15 @@ def main() -> int:
                     "reason_code": src_rec.get("reason_code"),
                     "confidence": src_rec.get("confidence"),
                 },
+                "type_primary": "DQ",
+                "type_change": "S",
             }
         )
 
-    leaderboard.sort(key=lambda r: (float(r.get("lab_score") or -9999.0), int(r.get("explore", {}).get("trades") or 0)), reverse=True)
+    leaderboard.sort(
+        key=lambda r: (float(r.get("lab_score") or -9999.0), int(r.get("explore", {}).get("trades") or 0)),
+        reverse=True,
+    )
     for i, row in enumerate(leaderboard, start=1):
         row["rank"] = i
 
@@ -428,19 +539,50 @@ def main() -> int:
         "focus_windows": focus_windows,
     }
 
-    out_path = Path(args.out).resolve() if args.out else (daily_dir / f"lab_daily_report_{stamp}.json")
+    # DP report (MVP) from existing telemetry.
+    dp_out = ensure_write_parent(
+        lab_data_root / "reports" / "dp" / f"lab_dp_report_{stamp}.json",
+        root=root,
+        lab_data_root=lab_data_root,
+    )
+    dp_rc, dp_stdout_tail, dp_stderr_tail = run_dp_report(
+        root=root,
+        python_exe=python_exe,
+        lab_data_root=lab_data_root,
+        out_path=dp_out,
+        timeout_sec=max(60, int(args.timeout_sec)),
+    )
+    dp_status = "PASS" if dp_rc == 0 else "FAIL"
+    dp_report = load_json(dp_out) if dp_rc == 0 and dp_out.exists() else {}
+
+    dataset_hash = file_sha256(base_out) if base_out.exists() else canonical_json_hash(base)
+    config_hash = canonical_json_hash(lab_cfg)
+    top_score = float(leaderboard[0]["lab_score"]) if leaderboard else -9999.0
+    readiness = "SHADOW_CANDIDATE" if ready_count > 0 else "HOLD"
+    reason = "HAS_READY_CANDIDATES" if ready_count > 0 else "NO_READY_CANDIDATES"
+    run_id = f"LAB_{stamp}"
+
     report = {
         "schema": "oanda_mt5.lab_daily_pipeline.v1",
         "status": "PASS",
         "generated_at_utc": iso_utc(now),
+        "run_id": run_id,
         "root": str(root),
         "lab_root": str(lab_root),
+        "lab_data_root": str(lab_data_root),
         "objective": lab_cfg.get("objective") or {},
         "range_utc": base.get("range_utc") or {},
         "focus": {
             "active_phase": ((lab_cfg.get("phase_scope") or {}).get("active_phase") or "PHASE_1_FX"),
             "focus_group": focus_group,
             "focus_windows": focus_windows,
+        },
+        "snapshot_policy": {
+            "mode": str(args.snapshot_policy).upper(),
+            "active_source": snapshot_mode,
+            "db_events": str(db_events),
+            "db_bars": str(db_bars),
+            "report": snapshot_report,
         },
         "promotion_gates": gates,
         "base_report": {
@@ -452,10 +594,36 @@ def main() -> int:
         },
         "summary": summary,
         "leaderboard": leaderboard,
+        "dp_module": {
+            "status": dp_status,
+            "report_path": str(dp_out),
+            "stdout_tail": dp_stdout_tail,
+            "stderr_tail": dp_stderr_tail,
+            "recommendations": list(dp_report.get("recommendations") or []),
+        },
+        "recommendation": {
+            "recommendation_id": f"{run_id}_MAIN",
+            "type_primary": "HYBRID",
+            "type_change": "H",
+            "readiness": readiness,
+            "summary": "LAB daily recommendation (DQ + DP MVP)",
+            "expected_benefit": "Incremental improvement in net-after-costs selection and path efficiency.",
+            "risks": "Overfitting risk if promoted without shadow/canary checks.",
+            "evidence_paths": [str(base_out), str(dp_out), str(out_path)],
+            "dataset_hash": dataset_hash,
+            "config_hash": config_hash,
+            "code_ref": "local",
+            "rejection_reason": (None if ready_count > 0 else "NO_READY_CANDIDATES"),
+            "review_required": True,
+            "touches_hot_path": False,
+            "reason": reason,
+            "score": top_score,
+        },
         "safeguards": [
             "LAB offline analytics only; no runtime strategy mutation",
             "No capital risk parameter change allowed",
             "Promotion gates are recommendations for operator review",
+            "Write boundary guard blocks runtime path writes",
         ],
         "next_step": [
             "Only READY_FOR_SHADOW pairs can be considered for shadow enable proposal",
@@ -463,16 +631,55 @@ def main() -> int:
             "External connectors stay planned/off by default",
         ],
     }
-    write_json(out_path, report)
+    write_json(out_path, report, root=root, lab_data_root=lab_data_root)
 
-    latest_path = daily_dir / "lab_daily_report_latest.json"
-    write_json(latest_path, report)
+    # Registry (SQLite MVP).
+    conn = connect_registry(registry_path)
+    try:
+        init_registry_schema(conn)
+        insert_experiment_run(
+            conn,
+            {
+                "run_id": run_id,
+                "ts_utc": report["generated_at_utc"],
+                "dataset_hash": dataset_hash,
+                "config_hash": config_hash,
+                "score": top_score,
+                "readiness": readiness,
+                "reason": reason,
+                "type_primary": "HYBRID",
+                "type_change": "H",
+                "review_required": True,
+                "touches_hot_path": False,
+                "evidence_paths_json": json.dumps([str(base_out), str(dp_out), str(out_path)], ensure_ascii=False),
+                "report_path": str(out_path),
+            },
+        )
+        insert_candidate_scores(conn, run_id, leaderboard)
+        latest_runs = fetch_latest_runs(conn, limit=5)
+    finally:
+        conn.close()
+
+    # Repo-local lightweight pointers for operator panel.
+    pointer_json = (lab_root / "EVIDENCE" / "daily" / "lab_daily_report_latest.json").resolve()
+    pointer_txt = (lab_root / "EVIDENCE" / "daily" / "lab_daily_report_latest.txt").resolve()
+    pointer_payload = {
+        "schema": "oanda_mt5.lab_report_pointer.v1",
+        "generated_at_utc": report["generated_at_utc"],
+        "external_report_path": str(out_path),
+        "external_dp_report_path": str(dp_out),
+        "lab_data_root": str(lab_data_root),
+        "summary": summary,
+        "registry_latest_runs": latest_runs,
+    }
+    write_json(pointer_json, pointer_payload, root=root, lab_data_root=lab_data_root)
 
     txt_lines: List[str] = []
     txt_lines.append("LAB_DAILY_PIPELINE")
     txt_lines.append(f"Generated UTC: {report['generated_at_utc']}")
     txt_lines.append(f"Focus: group={focus_group} windows={','.join(focus_windows) if focus_windows else 'NONE'}")
     txt_lines.append(f"Range UTC: {report['range_utc'].get('start')} -> {report['range_utc'].get('end_exclusive')}")
+    txt_lines.append(f"Snapshot source: {snapshot_mode}")
     txt_lines.append("")
     txt_lines.append("SUMMARY")
     for k, v in summary.items():
@@ -485,19 +692,17 @@ def main() -> int:
             f"status={row['promotion_status']} action={row['lab_action']} "
             f"explore_n={row['explore']['trades']} explore_net_pt={row['explore']['net_pips_per_trade']}"
         )
-    txt_path = out_path.with_suffix(".txt")
-    txt_path.write_text("\n".join(txt_lines) + "\n", encoding="utf-8")
-    latest_txt_path = daily_dir / "lab_daily_report_latest.txt"
-    latest_txt_path.write_text("\n".join(txt_lines) + "\n", encoding="utf-8")
+    txt_lines.append("")
+    txt_lines.append(f"EXTERNAL_REPORT: {out_path}")
+    txt_lines.append(f"DP_REPORT: {dp_out}")
+    ensure_write_parent(pointer_txt, root=root, lab_data_root=lab_data_root).write_text(
+        "\n".join(txt_lines) + "\n", encoding="utf-8"
+    )
 
-    update_daily_state(state_path, now, "PASS", out_path)
-
+    update_daily_state(state_path, now, "PASS", out_path, root=root, lab_data_root=lab_data_root)
     print(
-        "LAB_DAILY_PIPELINE_OK status=PASS focus_group={0} pairs={1} ready={2} out={3}".format(
-            focus_group,
-            len(leaderboard),
-            ready_count,
-            str(out_path),
+        "LAB_DAILY_PIPELINE_OK status=PASS focus_group={0} pairs={1} ready={2} report={3}".format(
+            focus_group, len(leaderboard), ready_count, str(out_path)
         )
     )
     return 0

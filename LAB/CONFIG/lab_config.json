@@ -52,6 +52,18 @@
     "risk_budget_change_requires_operator": true,
     "note_pl": "Laboratorium jest tylko analityczne. Nie modyfikuje live config ani ryzyka kapitalowego."
   },
+  "storage": {
+    "lab_data_root_default": "C:/OANDA_MT5_LAB_DATA",
+    "snapshot_policy_default": "PREFER_SNAPSHOT",
+    "registry_sqlite_relpath": "registry/lab_registry.sqlite"
+  },
+  "scheduler": {
+    "enabled_default": false,
+    "run_frequency": "daily",
+    "allow_active_window": false,
+    "timeout_sec": 1800,
+    "low_priority_required": true
+  },
   "external_data_connectors": {
     "mt5_history_import": {
       "enabled": false,

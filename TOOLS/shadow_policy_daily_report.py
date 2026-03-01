@@ -510,6 +510,9 @@ def update_daily_state(state_path: Path, now: dt.datetime, status: str, report_p
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Daily strict/explore shadow policy replay report (per symbol, per window).")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
+    ap.add_argument("--strategy-path", default="")
+    ap.add_argument("--db-events", default="")
+    ap.add_argument("--db-bars", default="")
     ap.add_argument("--lookback-days", type=int, default=3)
     ap.add_argument("--start-date", default="", help="Optional UTC date YYYY-MM-DD (inclusive).")
     ap.add_argument("--end-date", default="", help="Optional UTC date YYYY-MM-DD (exclusive).")
@@ -544,9 +547,9 @@ def main() -> int:
         print(f"SHADOW_POLICY_DAILY_REPORT_OK status={payload['status']} out={out_path}")
         return 0
 
-    strategy_path = root / "CONFIG" / "strategy.json"
-    db_events = root / "DB" / "decision_events.sqlite"
-    db_bars = root / "DB" / "m5_bars.sqlite"
+    strategy_path = Path(args.strategy_path).resolve() if str(args.strategy_path).strip() else (root / "CONFIG" / "strategy.json")
+    db_events = Path(args.db_events).resolve() if str(args.db_events).strip() else (root / "DB" / "decision_events.sqlite")
+    db_bars = Path(args.db_bars).resolve() if str(args.db_bars).strip() else (root / "DB" / "m5_bars.sqlite")
     if not strategy_path.exists():
         raise FileNotFoundError(f"Missing strategy config: {strategy_path}")
     if not db_events.exists():
