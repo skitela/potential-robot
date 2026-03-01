@@ -141,6 +141,27 @@ def cycle_once(
                 [
                     python_exe,
                     "-B",
+                    str((root / "TOOLS" / "data_retention_cycle.py").resolve()),
+                    "--root",
+                    str(root),
+                    "--policy",
+                    str((root / "CONFIG" / "data_retention_policy.json").resolve()),
+                    "--daily-guard",
+                    "--apply",
+                    "--out",
+                    str((hk_dir / f"data_retention_cycle_{stamp}.json").resolve()),
+                ],
+                cwd=root,
+                timeout_sec=max(60, int(timeout_sec)),
+            )
+        )
+        tasks[-1]["task"] = "data_retention_cycle_daily"
+
+        tasks.append(
+            run_cmd(
+                [
+                    python_exe,
+                    "-B",
                     str((root / "TOOLS" / "runtime_housekeeping.py").resolve()),
                     "--root",
                     str(root),
@@ -190,6 +211,28 @@ def cycle_once(
             )
         )
         tasks[-1]["task"] = "sqlite_maintenance_passive"
+
+        tasks.append(
+            run_cmd(
+                [
+                    python_exe,
+                    "-B",
+                    str((root / "TOOLS" / "shadow_policy_daily_report.py").resolve()),
+                    "--root",
+                    str(root),
+                    "--lookback-days",
+                    "3",
+                    "--horizon-minutes",
+                    "60",
+                    "--daily-guard",
+                    "--out",
+                    str((root / "EVIDENCE" / "offline_replay" / "daily" / f"shadow_policy_daily_report_{stamp}.json").resolve()),
+                ],
+                cwd=root,
+                timeout_sec=max(60, int(timeout_sec)),
+            )
+        )
+        tasks[-1]["task"] = "shadow_policy_daily_report"
 
         if bool(run_benchmark_outside_active):
             tasks.append(
