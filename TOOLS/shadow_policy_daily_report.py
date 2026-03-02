@@ -653,6 +653,16 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
+def _format_txt_metric(key: str, value: Any) -> str:
+    """Human-readable txt formatter (append PLN suffix for monetary fields)."""
+    if key in {"net_pln_sum", "net_pln_per_trade"}:
+        try:
+            return f"{float(value):.2f} zł"
+        except Exception:
+            return f"{value} zł"
+    return str(value)
+
+
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
@@ -962,11 +972,11 @@ def main() -> int:
         txt_lines.append("")
         txt_lines.append("SUMMARY_STRICT")
         for k, v in summary_strict.items():
-            txt_lines.append(f"- {k}: {v}")
+            txt_lines.append(f"- {k}: {_format_txt_metric(k, v)}")
         txt_lines.append("")
         txt_lines.append("SUMMARY_EXPLORE")
         for k, v in summary_explore.items():
-            txt_lines.append(f"- {k}: {v}")
+            txt_lines.append(f"- {k}: {_format_txt_metric(k, v)}")
         txt_lines.append("")
         txt_lines.append("TOP_RECOMMENDATIONS")
         for r in recs[:50]:
