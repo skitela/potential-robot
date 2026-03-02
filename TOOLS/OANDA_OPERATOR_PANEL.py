@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+import sys
 import tkinter as tk
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,15 @@ SYSTEM_STATUS_PATH = WORKSPACE_ROOT / "RUN" / "system_control_last.json"
 REPAIR_STATUS_PATH = WORKSPACE_ROOT / "RUN" / "codex_repair_last.json"
 LIVE_STATUS_PATH = WORKSPACE_ROOT / "RUN" / "live_trade_monitor_status.json"
 DB_PATH = WORKSPACE_ROOT / "DB" / "decision_events.sqlite"
+RETENTION_DAILY_ROOT = WORKSPACE_ROOT / "EVIDENCE" / "retention" / "daily"
+RETENTION_RUNS_ROOT = WORKSPACE_ROOT / "EVIDENCE" / "retention" / "runs"
+RETENTION_INCIDENTS_ROOT = WORKSPACE_ROOT / "EVIDENCE" / "retention" / "incidents"
+RETENTION_POLICY_PATH = WORKSPACE_ROOT / "CONFIG" / "data_retention_policy.json"
+AGENT_REFRESH_SCRIPT = OBS_ROOT / "tools" / "operator_run_agent_once.py"
+LAB_INSIGHTS_SCRIPT = WORKSPACE_ROOT / "TOOLS" / "lab_insights_digest.py"
+LAB_INSIGHTS_POINTER_JSON = WORKSPACE_ROOT / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.json"
+LAB_INSIGHTS_POINTER_TXT = WORKSPACE_ROOT / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.txt"
+LAB_INSIGHTS_SEEN_PATH = WORKSPACE_ROOT / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_seen.json"
 
 AGENTS = {
     "Agent Informacyjny": "agent_informacyjny",
@@ -39,6 +49,7 @@ class OperatorPanel(tk.Tk):
         super().__init__()
         self.title("OANDA Panel Operatora")
         self.configure(bg="#1E2430")
+        self._insights_blink_on = False
         self._set_geometry()
         self._build_widgets()
         self._refresh_status()
@@ -124,6 +135,66 @@ class OperatorPanel(tk.Tk):
             command=self._stop_monitor,
         ).grid(row=0, column=1, padx=6, pady=4, sticky="ew")
 
+        tk.Button(
+            monitor_frame,
+            text="ODSWIEZ AGENTOW TERAZ",
+            bg="#1F8D7E",
+            fg="white",
+            font=("Segoe UI", 9, "bold"),
+            width=25,
+            height=2,
+            command=self._refresh_all_agents_now,
+        ).grid(row=1, column=0, padx=6, pady=4, sticky="ew")
+
+        tk.Button(
+            monitor_frame,
+            text="DASHBOARD RETENCJI",
+            bg="#4F6A2C",
+            fg="white",
+            font=("Segoe UI", 9, "bold"),
+            width=25,
+            height=2,
+            command=self._open_retention_dashboard,
+        ).grid(row=1, column=1, padx=6, pady=4, sticky="ew")
+
+        tk.Button(
+            monitor_frame,
+            text="AKTUALIZUJ WNIOSKI LAB",
+            bg="#6D5C1E",
+            fg="white",
+            font=("Segoe UI", 9, "bold"),
+            width=25,
+            height=2,
+            command=self._refresh_lab_insights_now,
+        ).grid(row=2, column=0, padx=6, pady=4, sticky="ew")
+
+        self.lab_insights_btn = tk.Button(
+            monitor_frame,
+            text="WNIOSKI Z LABORATORIUM",
+            bg="#3B3F48",
+            fg="white",
+            font=("Segoe UI", 9, "bold"),
+            width=25,
+            height=2,
+            command=self._open_lab_insights,
+        )
+        self.lab_insights_btn.grid(row=2, column=1, padx=6, pady=4, sticky="ew")
+
+        self.auto_refresh_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            monitor_frame,
+            text="Auto-odswiez raport przed otwarciem agenta",
+            variable=self.auto_refresh_var,
+            onvalue=True,
+            offvalue=False,
+            fg="#D6E2F0",
+            bg="#1E2430",
+            selectcolor="#1E2430",
+            activebackground="#1E2430",
+            activeforeground="#D6E2F0",
+            anchor="w",
+        ).grid(row=3, column=0, columnspan=2, padx=6, pady=(2, 6), sticky="w")
+
         agents_frame = tk.LabelFrame(
             self,
             text="Agenci - podglad raportow",
@@ -170,6 +241,24 @@ class OperatorPanel(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Blad", f"{description}\n\n{exc}")
 
+    def _run_command_blocking(self, command: list[str], *, timeout_sec: int = 120) -> tuple[int, str, str]:
+        try:
+            cp = subprocess.run(
+                command,
+                cwd=str(WORKSPACE_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=max(15, int(timeout_sec)),
+                check=False,
+            )
+            return int(cp.returncode), str(cp.stdout or ""), str(cp.stderr or "")
+        except subprocess.TimeoutExpired as exc:
+            out = str(getattr(exc, "stdout", "") or "")
+            err = str(getattr(exc, "stderr", "") or "")
+            return 124, out, err
+        except Exception as exc:
+            return 125, "", f"{type(exc).__name__}: {exc}"
+
     def _start_system(self) -> None:
         self._run_command(["cmd", "/c", str(WORKSPACE_ROOT / "start.bat")], "Nie udalo sie uruchomic systemu.")
 
@@ -193,7 +282,131 @@ class OperatorPanel(tk.Tk):
             "Nie udalo sie zatrzymac monitora agentow.",
         )
 
+    def _refresh_all_agents_now(self) -> None:
+        result = self._run_agents_once("all")
+        insights = self._run_lab_insights_update()
+        if result.get("status") != "PASS":
+            messagebox.showwarning(
+                "Ostrzezenie",
+                "Nie wszystkie agenty odswiezyly sie poprawnie.\n"
+                f"Status: {result.get('status', 'UNKNOWN')}\n"
+                f"Szczegoly: {result.get('error', 'sprawdz outputs/operator/agent_refresh_last.json')}\n"
+                f"Wnioski LAB: {insights.get('status', 'UNKNOWN')} ({insights.get('error', insights.get('reason', ''))})",
+            )
+            self._refresh_lab_insights_indicator()
+            return
+        runs = result.get("runs", [])
+        ok_count = sum(1 for r in runs if str(r.get("status")).upper() == "PASS")
+        messagebox.showinfo(
+            "Odswiezanie agentow",
+            "Odswiezono agentow: {0}/{1}\nWnioski LAB: {2}".format(
+                ok_count,
+                len(runs),
+                str(insights.get("status", "UNKNOWN")).upper(),
+            ),
+        )
+        self._refresh_lab_insights_indicator()
+
+    def _run_lab_insights_update(self) -> dict:
+        if not LAB_INSIGHTS_SCRIPT.exists():
+            return {"status": "FAIL", "error": f"MISSING_SCRIPT: {LAB_INSIGHTS_SCRIPT}"}
+        rc, out, err = self._run_command_blocking(
+            [sys.executable, str(LAB_INSIGHTS_SCRIPT), "--root", str(WORKSPACE_ROOT)],
+            timeout_sec=120,
+        )
+        payload: dict = {}
+        raw = (out or "").strip()
+        if raw:
+            try:
+                payload = json.loads(raw.splitlines()[-1])
+            except Exception:
+                payload = {"status": "FAIL", "error": "INVALID_JSON_FROM_LAB_INSIGHTS", "raw": raw[:4000]}
+        if rc != 0 and not payload:
+            payload = {"status": "FAIL", "error": f"LAB_INSIGHTS_RC_{rc}", "stderr": (err or "")[:4000]}
+        if not payload:
+            payload = {"status": "FAIL", "error": "LAB_INSIGHTS_EMPTY_OUTPUT"}
+        return payload
+
+    def _refresh_lab_insights_now(self) -> None:
+        result = self._run_lab_insights_update()
+        self._refresh_lab_insights_indicator()
+        if str(result.get("status", "")).upper() == "PASS":
+            messagebox.showinfo("Wnioski LAB", "Zaktualizowano wnioski z laboratorium.")
+            return
+        messagebox.showwarning(
+            "Wnioski LAB",
+            "Nie udalo sie zaktualizowac wnioskow LAB.\n"
+            f"Status: {result.get('status', 'UNKNOWN')}\n"
+            f"Szczegoly: {result.get('error', result.get('reason', 'UNKNOWN'))}",
+        )
+
+    def _open_lab_insights(self) -> None:
+        if bool(getattr(self, "auto_refresh_var", None) and self.auto_refresh_var.get()):
+            self._run_lab_insights_update()
+        payload = _read_json_safe(LAB_INSIGHTS_POINTER_JSON) or {}
+        body = _build_lab_insights_text(payload)
+        self._show_text_window("Wnioski z laboratorium", body)
+        self._mark_lab_insights_seen(payload)
+        self._refresh_lab_insights_indicator()
+
+    def _mark_lab_insights_seen(self, payload: dict) -> None:
+        ts = str(payload.get("generated_at_utc", "")).strip()
+        if not ts:
+            return
+        LAB_INSIGHTS_SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LAB_INSIGHTS_SEEN_PATH.write_text(
+            json.dumps({"seen_generated_at_utc": ts, "updated_at_utc": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _refresh_lab_insights_indicator(self) -> None:
+        btn = getattr(self, "lab_insights_btn", None)
+        if btn is None:
+            return
+        latest = _read_json_safe(LAB_INSIGHTS_POINTER_JSON) or {}
+        seen = _read_json_safe(LAB_INSIGHTS_SEEN_PATH) or {}
+        latest_ts = _parse_utc(str(latest.get("generated_at_utc", "")))
+        seen_ts = _parse_utc(str(seen.get("seen_generated_at_utc", "")))
+        has_new = bool(latest_ts and (seen_ts is None or latest_ts > seen_ts))
+        if has_new:
+            self._insights_blink_on = not bool(self._insights_blink_on)
+            btn.configure(bg="#E0A01C" if self._insights_blink_on else "#3B3F48")
+            return
+        self._insights_blink_on = False
+        btn.configure(bg="#3B3F48")
+
+    def _run_agents_once(self, agent_key: str) -> dict:
+        if not AGENT_REFRESH_SCRIPT.exists():
+            return {
+                "status": "FAIL",
+                "error": f"MISSING_SCRIPT: {AGENT_REFRESH_SCRIPT}",
+            }
+        rc, out, err = self._run_command_blocking(
+            [sys.executable, str(AGENT_REFRESH_SCRIPT), "--root", str(WORKSPACE_ROOT), "--agent", str(agent_key)],
+            timeout_sec=150,
+        )
+        payload: dict = {}
+        raw = (out or "").strip()
+        if raw:
+            try:
+                payload = json.loads(raw.splitlines()[-1])
+            except Exception:
+                payload = {"status": "FAIL", "error": "INVALID_JSON_FROM_REFRESH", "raw": raw[:4000]}
+        if rc != 0 and not payload:
+            payload = {"status": "FAIL", "error": f"REFRESH_RC_{rc}", "stderr": (err or "")[:4000]}
+        return payload
+
     def _open_agent_report(self, agent_key: str, label: str) -> None:
+        if bool(getattr(self, "auto_refresh_var", None) and self.auto_refresh_var.get()):
+            refresh = self._run_agents_once(agent_key)
+            if str(refresh.get("status", "")).upper() not in {"PASS", "PARTIAL_FAIL"}:
+                messagebox.showwarning(
+                    "Ostrzezenie",
+                    "Nie udalo sie odswiezyc danych agenta przed podgladem.\n"
+                    f"Status: {refresh.get('status', 'UNKNOWN')}\n"
+                    "Pokazuje ostatni dostepny raport.",
+                )
+
         agent_dir = REPORTS_ROOT / agent_key
         if not agent_dir.exists():
             messagebox.showinfo("Brak danych", f"Brak katalogu raportow:\n{agent_dir}")
@@ -218,11 +431,59 @@ class OperatorPanel(tk.Tk):
         else:
             body = _build_guardian_summary(payload, latest)
 
+        self._show_text_window(f"{label} - podsumowanie", body)
+
+    def _open_retention_dashboard(self) -> None:
+        body = _build_retention_dashboard()
+        metrics = _retention_dashboard_metrics()
+        self._show_retention_dashboard_window("Retencja danych - dashboard", body, metrics)
+
+    def _show_text_window(self, title: str, body: str) -> None:
         top = tk.Toplevel(self)
-        top.title(f"{label} - podsumowanie")
-        top.geometry("840x560")
+        top.title(title)
+        top.geometry("860x580")
         txt = scrolledtext.ScrolledText(top, wrap="word", font=("Consolas", 10))
         txt.pack(fill="both", expand=True)
+        txt.insert("1.0", body)
+        txt.configure(state="disabled")
+
+    def _show_retention_dashboard_window(self, title: str, body: str, metrics: dict) -> None:
+        top = tk.Toplevel(self)
+        top.title(title)
+        top.geometry("900x620")
+
+        cards = tk.Frame(top, bg="#1E2430")
+        cards.pack(fill="x", padx=10, pady=(10, 6))
+
+        status = str(metrics.get("status", "UNKNOWN")).upper()
+        removed = int(_safe_float(metrics.get("removed_lines_today", 0)))
+        reclaimed_mb = float(_safe_float(metrics.get("reclaimed_mb_today", 0.0)))
+        incident_pack = bool(metrics.get("incident_pack_today", False))
+
+        card_defs = [
+            ("Status retencji", status, _retention_status_color(status)),
+            ("Usuniete rekordy dzis", str(removed), "#2F63C6"),
+            ("Zwolnione miejsce dzis", f"{reclaimed_mb:.2f} MB", "#1F8D7E"),
+            (
+                "Paczka incydentowa",
+                "TAK" if incident_pack else "NIE",
+                "#C2871E" if incident_pack else "#2E9E45",
+            ),
+        ]
+
+        for idx, (label, value, color) in enumerate(card_defs):
+            card = tk.Frame(cards, bg=color, bd=1, relief="ridge")
+            card.grid(row=0, column=idx, padx=6, pady=4, sticky="nsew")
+            cards.grid_columnconfigure(idx, weight=1)
+            tk.Label(card, text=label, bg=color, fg="white", font=("Segoe UI", 9, "bold")).pack(
+                anchor="w", padx=8, pady=(6, 0)
+            )
+            tk.Label(card, text=value, bg=color, fg="white", font=("Segoe UI", 12, "bold")).pack(
+                anchor="w", padx=8, pady=(0, 8)
+            )
+
+        txt = scrolledtext.ScrolledText(top, wrap="word", font=("Consolas", 10))
+        txt.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         txt.insert("1.0", body)
         txt.configure(state="disabled")
 
@@ -230,6 +491,7 @@ class OperatorPanel(tk.Tk):
         self.system_status_var.set(f"System: {self._read_system_status()}")
         self.monitor_status_var.set(f"Monitor: {self._read_monitor_status()}")
         self.repair_status_var.set(f"Naprawa: {self._read_repair_status()}")
+        self._refresh_lab_insights_indicator()
         self.after(5000, self._refresh_status)
 
     def _read_system_status(self) -> str:
@@ -779,6 +1041,250 @@ def _translate_tech_text(text: str) -> str:
     for src, dst in replacements:
         out = out.replace(src, dst)
     return out
+
+
+def _build_lab_insights_text(payload: dict) -> str:
+    if LAB_INSIGHTS_POINTER_TXT.exists():
+        try:
+            return LAB_INSIGHTS_POINTER_TXT.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    if not payload:
+        return (
+            "WNIOSEK Z LABORATORIUM\n"
+            "Brak danych. Kliknij 'AKTUALIZUJ WNIOSKI LAB' i sprawdz ponownie."
+        )
+    snapshot = payload.get("snapshot", {}) if isinstance(payload.get("snapshot"), dict) else {}
+    lines = [
+        "WNIOSEK Z LABORATORIUM",
+        "=" * 72,
+        f"Generated UTC: {payload.get('generated_at_utc', 'UNKNOWN')}",
+        f"Status: {payload.get('status', 'UNKNOWN')}",
+        "",
+        "[1] STAN",
+        f"- Scheduler: {snapshot.get('scheduler_status', 'UNKNOWN')} ({snapshot.get('scheduler_reason', 'UNKNOWN')})",
+        f"- Jakosc ingestu: {snapshot.get('ingest_quality_grade', 'UNKNOWN')}",
+        f"- Wiersze pobrane/wstawione: {snapshot.get('ingest_rows_fetched_total', 0)} / {snapshot.get('ingest_rows_inserted_total', 0)}",
+        "",
+        "[2] UCZENIE",
+        f"- Pary gotowe do shadow: {snapshot.get('pairs_ready_for_shadow', 0)} / {snapshot.get('pairs_total', 0)}",
+        f"- Explore trades: {snapshot.get('explore_total_trades', 0)}",
+        "",
+        "[3] REKOMENDACJA",
+        f"- {payload.get('recommendation', 'BRAK')}",
+        "",
+        f"Pelny raport: {payload.get('report_path', 'UNKNOWN')}",
+    ]
+    return "\n".join(lines)
+
+
+def _latest_json(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    files = [p for p in path.glob("*.json") if p.is_file()]
+    if not files:
+        return None
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[0]
+
+
+def _retention_status_color(status: str) -> str:
+    key = str(status or "").strip().upper()
+    if key in {"PASS", "OK"}:
+        return "#2E9E45"
+    if key in {"SKIP_ALREADY_RUN_TODAY", "WARN", "PARTIAL_FAIL"}:
+        return "#C2871E"
+    if key in {"FAIL", "ERROR", "UNKNOWN"}:
+        return "#C3382A"
+    return "#4D5A6A"
+
+
+def _retention_dashboard_metrics() -> dict:
+    policy = _read_json_safe(RETENTION_POLICY_PATH) or {}
+    outputs = policy.get("outputs", {}) if isinstance(policy.get("outputs"), dict) else {}
+    state_file_rel = str(outputs.get("daily_state_file", "RUN/retention_cycle_state.json"))
+    state_file = WORKSPACE_ROOT / state_file_rel
+    state = _read_json_safe(state_file) or {}
+
+    latest_daily_path = _latest_json(RETENTION_DAILY_ROOT)
+    latest_daily = _read_json_safe(latest_daily_path) if latest_daily_path else None
+
+    status = str(state.get("last_status", "UNKNOWN")).upper()
+    last_run_ts = str(state.get("last_run_ts_utc", "UNKNOWN"))
+    removed_lines = 0
+    reclaimed_mb = 0.0
+    incident_pack = False
+    if latest_daily and isinstance(latest_daily.get("runs"), list) and latest_daily["runs"]:
+        run = latest_daily["runs"][-1]
+        if isinstance(run, dict):
+            summary = run.get("summary", {}) if isinstance(run.get("summary"), dict) else {}
+            removed_lines = int(_safe_float(summary.get("lines_removed", 0)))
+            reclaimed_mb = int(_safe_float(summary.get("bytes_reclaimed_estimate", 0))) / (1024.0 * 1024.0)
+            incident_pack = bool(str(run.get("incident_pack_path", "")).strip())
+            run_ts = str(run.get("ts_utc", "")).strip()
+            if run_ts:
+                last_run_ts = run_ts
+    return {
+        "status": status,
+        "last_run_ts_utc": last_run_ts,
+        "removed_lines_today": removed_lines,
+        "reclaimed_mb_today": reclaimed_mb,
+        "incident_pack_today": incident_pack,
+    }
+
+
+def _build_retention_dashboard() -> str:
+    policy = _read_json_safe(RETENTION_POLICY_PATH) or {}
+    tx = policy.get("transactional", {}) if isinstance(policy.get("transactional"), dict) else {}
+    mt = policy.get("maintenance", {}) if isinstance(policy.get("maintenance"), dict) else {}
+    outputs = policy.get("outputs", {}) if isinstance(policy.get("outputs"), dict) else {}
+    state_file_rel = str(outputs.get("daily_state_file", "RUN/retention_cycle_state.json"))
+    state_file = WORKSPACE_ROOT / state_file_rel
+    state = _read_json_safe(state_file) or {}
+
+    latest_daily_path = _latest_json(RETENTION_DAILY_ROOT)
+    latest_run_path = _latest_json(RETENTION_RUNS_ROOT)
+    latest_daily = _read_json_safe(latest_daily_path) if latest_daily_path else None
+    latest_run = _read_json_safe(latest_run_path) if latest_run_path else None
+
+    lines = [
+        "DASHBOARD RETENCJI DANYCH",
+        "=" * 72,
+        "",
+        "[1] CO ROBI RETENCJA",
+        "- Porzadkuje dane, zeby nie bylo szumu informacyjnego.",
+        "- Trzyma dlugo dane transakcyjne (do analizy strategii).",
+        "- Krocej trzyma dane techniczne/serwisowe (do napraw i diagnostyki).",
+        "",
+        "[2] AKTYWNE ZASADY (UTC)",
+        f"- Dane transakcyjne: {tx.get('execution_telemetry_days', 'UNKNOWN')} dni",
+        f"- Dziennik incydentow tradingowych: {tx.get('incident_journal_days', 'UNKNOWN')} dni",
+        f"- Dane techniczne (audit trail): {mt.get('audit_trail_days', 'UNKNOWN')} dni",
+        f"- Paczki anomalii: {mt.get('keep_anomaly_packs_days', 'UNKNOWN')} dni",
+        "",
+        "[3] OSTATNI CYKL",
+        f"- Czas: {state.get('last_run_ts_utc', 'UNKNOWN')}",
+        f"- Status: {state.get('last_status', 'UNKNOWN')}",
+    ]
+
+    if latest_daily and isinstance(latest_daily.get("runs"), list) and latest_daily["runs"]:
+        run = latest_daily["runs"][-1]
+        summary = run.get("summary", {}) if isinstance(run.get("summary"), dict) else {}
+        targets = run.get("targets", []) if isinstance(run.get("targets"), list) else []
+        reclaimed_bytes = int(_safe_float(summary.get("bytes_reclaimed_estimate", 0)))
+        reclaimed_mb = reclaimed_bytes / (1024.0 * 1024.0)
+        lines.extend(
+            [
+                "",
+                "[4] CO ZOSTALO ZROBIONE DZISIAJ",
+                f"- Ostatni run: {run.get('ts_utc', 'UNKNOWN')}",
+                f"- Usuniete rekordy: {int(_safe_float(summary.get('lines_removed', 0)))}",
+                f"- Usuniete rekordy anomalii: {int(_safe_float(summary.get('lines_removed_anomaly', 0)))}",
+                f"- Zwolnione miejsce: {reclaimed_mb:.2f} MB",
+            ]
+        )
+        for row in targets:
+            if not isinstance(row, dict):
+                continue
+            removed = int(_safe_float(row.get("lines_removed", 0)))
+            keep_days = row.get("keep_days", "UNKNOWN")
+            if removed <= 0:
+                continue
+            kind = str(row.get("kind", "UNKNOWN")).upper()
+            if kind == "TRANSACTIONAL":
+                lines.append(f"  * Dane transakcyjne: usunieto {removed} rekordow starszych niz {keep_days} dni.")
+            elif kind == "MAINTENANCE":
+                lines.append(f"  * Dane techniczne: usunieto {removed} rekordow starszych niz {keep_days} dni.")
+            else:
+                lines.append(f"  * {kind}: usunieto {removed} rekordow starszych niz {keep_days} dni.")
+        incident_pack = str(run.get("incident_pack_path", "")).strip()
+        lines.append(
+            "- Paczka incydentowa: "
+            + ("utworzona (anomalia zachowana do audytu)." if incident_pack else "brak (nie bylo anomalii do zachowania).")
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "[4] CO ZOSTALO ZROBIONE DZISIAJ",
+                "- Brak raportu dziennego retencji lub brak runow.",
+            ]
+        )
+
+    seven_day_removed_lines = 0
+    seven_day_reclaimed = 0
+    seven_day_runs = 0
+    if RETENTION_DAILY_ROOT.exists():
+        daily_files = sorted(
+            [p for p in RETENTION_DAILY_ROOT.glob("retention_daily_*.json") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:7]
+        for dpath in daily_files:
+            obj = _read_json_safe(dpath)
+            if not obj:
+                continue
+            runs = obj.get("runs", [])
+            if not isinstance(runs, list):
+                continue
+            for run in runs:
+                if not isinstance(run, dict):
+                    continue
+                seven_day_runs += 1
+                sm = run.get("summary", {})
+                if not isinstance(sm, dict):
+                    continue
+                seven_day_removed_lines += int(_safe_float(sm.get("lines_removed", 0)))
+                seven_day_reclaimed += int(_safe_float(sm.get("bytes_reclaimed_estimate", 0)))
+
+    lines.extend(
+        [
+            "",
+            "[5] OSTATNIE 7 DNI",
+            f"- Liczba cykli retencji: {seven_day_runs}",
+            f"- Suma usunietych rekordow: {seven_day_removed_lines}",
+            f"- Suma zwolnionego miejsca: {seven_day_reclaimed / (1024.0 * 1024.0):.2f} MB",
+        ]
+    )
+
+    if latest_run and isinstance(latest_run.get("report_retention_cleanup"), dict):
+        cln = latest_run["report_retention_cleanup"]
+        lines.extend(
+            [
+                "",
+                "[6] SPRZATANIE STARYCH RAPORTOW RETENCJI",
+                f"- Usuniete raporty cykli: {cln.get('removed_run_reports', 'UNKNOWN')}",
+                f"- Usuniete raporty dzienne: {cln.get('removed_daily_reports', 'UNKNOWN')}",
+                f"- Usuniete stare paczki incydentowe: {cln.get('removed_incident_packs', 'UNKNOWN')}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "[6] SPRZATANIE STARYCH RAPORTOW RETENCJI",
+                "- Brak danych o ostatnim cleanup raportow retencji.",
+            ]
+        )
+
+    incident_count = 0
+    if RETENTION_INCIDENTS_ROOT.exists():
+        incident_count = sum(1 for _ in RETENTION_INCIDENTS_ROOT.glob("incident_pack_*.json"))
+    lines.extend(
+        [
+            "",
+            "[7] STAN DANYCH RETENCYJNYCH",
+            f"- Raporty dzienne: {sum(1 for _ in RETENTION_DAILY_ROOT.glob('*.json')) if RETENTION_DAILY_ROOT.exists() else 0}",
+            f"- Raporty cykli: {sum(1 for _ in RETENTION_RUNS_ROOT.glob('*.json')) if RETENTION_RUNS_ROOT.exists() else 0}",
+            f"- Paczki incydentowe: {incident_count}",
+            "",
+            "[8] DLACZEGO TO JEST WAZNE",
+            "- Dashboard jest oparty o persisted reports z retencji (read-only).",
+            "- To nie zmienia strategii tradingowej.",
+            "- Cel: mniej szumu, szybsza analiza i lepsza jakosc danych do decyzji.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def main() -> int:

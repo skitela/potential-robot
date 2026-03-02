@@ -18,6 +18,11 @@ powershell -ExecutionPolicy Bypass -File TOOLS\run_lab_scheduler.ps1 -Root C:\OA
 powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -TaskName OANDA_MT5_LAB_DAILY -StartTime 03:30
 ```
 
+## Rejestracja digestu informacyjnego co 3h
+```powershell
+powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_insights_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -TaskName OANDA_MT5_LAB_INSIGHTS_Q3H
+```
+
 ## Rejestracja user-level (bez admin, fallback)
 ```powershell
 powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -TaskName OANDA_MT5_LAB_DAILY_USER -StartTime 03:30

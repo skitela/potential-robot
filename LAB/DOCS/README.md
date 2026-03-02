@@ -46,6 +46,14 @@ Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C
   - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 03:30`
   - fallback bez admin: `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 03:30`
 
+## Wnioski LAB (digest)
+- Generator: `TOOLS/lab_insights_digest.py`
+- Harmonogram co 3h:
+  - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_insights_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA`
+- Wyniki:
+  - `LAB/EVIDENCE/lab_insights/lab_insights_latest.json`
+  - `LAB/EVIDENCE/lab_insights/lab_insights_latest.txt`
+
 ## Registry eksperymentow (MVP)
 - SQLite: `LAB_DATA_ROOT/registry/lab_registry.sqlite`
 - Tabele:
