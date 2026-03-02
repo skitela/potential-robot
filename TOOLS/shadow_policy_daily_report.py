@@ -663,6 +663,25 @@ def _format_txt_metric(key: str, value: Any) -> str:
     return str(value)
 
 
+def _format_signed_pln(value: Any) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return "n/a"
+    return f"{v:+.2f} zł"
+
+
+def _action_operator_label(action: str) -> str:
+    a = str(action or "").upper()
+    if a == "POLUZUJ":
+        return "POLUZUJ I OBSERWUJ"
+    if a == "TRZYMAJ":
+        return "TRZYMAJ I OBSERWUJ"
+    if a == "DOCIŚNIJ":
+        return "DOCIŚNIJ"
+    return "OBSERWUJ"
+
+
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
@@ -950,6 +969,17 @@ def main() -> int:
                 "explore": explore_rows,
             },
             "recommendations_tomorrow_per_window_symbol": recs,
+            "recommendations_operator_compact": [
+                {
+                    "window_id": r.get("window_id"),
+                    "symbol": r.get("symbol"),
+                    "strict_net_pln_sum": r.get("strict", {}).get("net_pln_sum", 0.0),
+                    "explore_net_pln_sum": r.get("explore", {}).get("net_pln_sum", 0.0),
+                    "action": r.get("action_tomorrow"),
+                    "action_operator": _action_operator_label(str(r.get("action_tomorrow") or "")),
+                }
+                for r in recs
+            ],
             "thresholds": {
                 "min_sample": int(args.min_sample),
                 "poluzuj_threshold_pips_per_trade": float(args.poluzuj_threshold_pips_per_trade),
@@ -986,6 +1016,25 @@ def main() -> int:
             )
         txt_path = out_path.with_suffix(".txt")
         txt_path.write_text("\n".join(txt_lines) + "\n", encoding="utf-8")
+
+        compact_lines: List[str] = []
+        compact_lines.append("SYMULACJA SHADOW (kwoty w zł)")
+        compact_lines.append(f"Generated UTC: {report['generated_at_utc']}")
+        compact_lines.append(f"Range UTC: {start_iso} -> {end_iso}")
+        compact_lines.append("")
+        compact_lines.append("WINDOW|SYMBOL|STRICT_NET|EXPLORE_NET|REKOMENDACJA")
+        for r in recs:
+            compact_lines.append(
+                "{0}|{1}|{2}|{3}|{4}".format(
+                    str(r.get("window_id") or ""),
+                    str(r.get("symbol") or ""),
+                    _format_signed_pln(r.get("strict", {}).get("net_pln_sum", 0.0)),
+                    _format_signed_pln(r.get("explore", {}).get("net_pln_sum", 0.0)),
+                    _action_operator_label(str(r.get("action_tomorrow") or "")),
+                )
+            )
+        compact_path = out_path.with_name(out_path.stem + "_operator.txt")
+        compact_path.write_text("\n".join(compact_lines) + "\n", encoding="utf-8")
 
         update_daily_state(state_path, now, "PASS", out_path)
         print(
