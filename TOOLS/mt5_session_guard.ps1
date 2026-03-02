@@ -65,13 +65,14 @@ function Read-AppendedLines {
 
     $item = Get-Item -Path $Path -ErrorAction Stop
     $len = [int64]$item.Length
-
+    $start = [int64]0
     if (-not $Offsets.ContainsKey($Path)) {
-        $Offsets[$Path] = $len
-        return @()
+        # First read: consume recent tail to infer current connectivity state quickly.
+        $start = [int64]([Math]::Max(0, ($len - [int64]$MaxReadBytes)))
+    } else {
+        $start = [int64]$Offsets[$Path]
+        if ($len -lt $start) { $start = 0 }
     }
-    $start = [int64]$Offsets[$Path]
-    if ($len -lt $start) { $start = 0 }
     if (($len - $start) -le 0) {
         $Offsets[$Path] = $len
         return @()
