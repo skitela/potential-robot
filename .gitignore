@@ -62,6 +62,7 @@ HOTFIX/
 LOCK/
 META/
 OANDAKEY/
+CONFIG/strategy.backup_*.json
 
 # Defensive ignore for accidental secret drops (DPAPI artifacts)
 LLM_SECRETS_DPAPI/

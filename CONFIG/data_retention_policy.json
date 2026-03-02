@@ -1,0 +1,24 @@
+{
+  "schema": "oanda_mt5.data_retention_policy.v1",
+  "time_basis": "UTC",
+  "transactional": {
+    "execution_telemetry_days": 180,
+    "incident_journal_days": 180,
+    "archive_removed_raw": true
+  },
+  "maintenance": {
+    "audit_trail_days": 14,
+    "archive_removed_raw": false,
+    "keep_anomaly_packs_days": 90
+  },
+  "outputs": {
+    "archive_root": "ARCHIVE/retention",
+    "reports_root": "EVIDENCE/retention",
+    "daily_state_file": "RUN/retention_cycle_state.json"
+  },
+  "report_retention": {
+    "run_reports_keep_days": 30,
+    "daily_reports_keep_days": 120,
+    "incident_packs_keep_days": 120
+  }
+}

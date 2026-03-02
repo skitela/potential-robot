@@ -36,7 +36,7 @@ function Find-ProcByNeedle {
 }
 
 $pythonExe = Resolve-PythonExe
-$existing = Find-ProcByNeedle -Needle "operator_runtime_service.py"
+$existing = @(Find-ProcByNeedle -Needle "operator_runtime_service.py")
 if ($existing.Count -gt 0) {
     Write-Output ("runtime_service_already_running_pid=" + $existing[0].ProcessId)
     exit 0
@@ -50,4 +50,3 @@ $errLog = Join-Path $jobsDir ("runtime_service_" + (Get-Date -Format "yyyyMMdd_H
 $p = Start-Process -FilePath $pythonExe -ArgumentList $argList -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
 Write-Output ("runtime_service_started_pid=" + $p.Id)
 exit 0
-
