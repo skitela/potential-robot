@@ -551,11 +551,12 @@ class OperatorPanel(tk.Tk):
             return "guard OFF / brak statusu"
         connected = str(payload.get("connected_state", "UNKNOWN")).upper()
         retries = int(payload.get("policy_retry_window", 0))
+        vh_warn = int(payload.get("virtual_hosting_warning_window", 0))
         reason = str(payload.get("last_restart_reason", "NONE"))
         allow = bool(payload.get("repairs_allowed", True))
         if not allow:
-            return f"{connected} repairs=OFF retry_window={retries} last={reason}"
-        return f"{connected} retry_window={retries} last={reason}"
+            return f"{connected} repairs=OFF retry_window={retries} vh_warn={vh_warn} last={reason}"
+        return f"{connected} retry_window={retries} vh_warn={vh_warn} last={reason}"
 
 
 def _read_json_safe(path: Path) -> dict | None:

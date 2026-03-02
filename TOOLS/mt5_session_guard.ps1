@@ -8,6 +8,7 @@ param(
     [int]$DisconnectBurstThreshold = 3,
     [int]$PolicyRetryWindowSec = 600,
     [int]$PolicyRetryThreshold = 12,
+    [int]$VirtualHostWarnWindowSec = 3600,
     [switch]$DryRun
 )
 
@@ -262,6 +263,7 @@ $offsets = @{}
 $lostEvents = New-Object System.Collections.ArrayList
 $policyRetryEvents = New-Object System.Collections.ArrayList
 $severeEvents = New-Object System.Collections.ArrayList
+$virtualHostWarnEvents = New-Object System.Collections.ArrayList
 
 $lastLostAt = $null
 $lastAuthAt = $null
@@ -274,6 +276,7 @@ $authRx = [regex]'(?i)\bauthorized on .* through access server\b'
 $syncRx = [regex]'(?i)\bterminal synchronized with oanda\b'
 $policyRetryRx = [regex]'(?i)\bPOLICY_RUNTIME_OPEN_RETRY\b'
 $severeRx = [regex]'(?i)\b(POLICY_RUNTIME_FAILSAFE|FAIL-SAFE ACTIVATED|ZMQ_INIT_FAIL)\b'
+$virtualHostWarnRx = [regex]'(?i)\bVirtual Hosting\b.*failed to get list of virtual hosts\b'
 
 Write-Output ("MT5_SESSION_GUARD start root={0} mt5_dir={1} poll={2}s cooldown={3}s" -f $runtimeRoot, $mt5DataDirResolved, [int]$PollSec, [int]$RestartCooldownSec)
 
@@ -330,6 +333,17 @@ while ($true) {
                             }
                         }
                     }
+                    if ($virtualHostWarnRx.IsMatch($msg)) {
+                        if (-not $isBootstrapRead) {
+                            [void]$virtualHostWarnEvents.Add($now)
+                            Append-Jsonl -Path $eventPath -Payload @{
+                                ts_utc = $nowUtc
+                                event = "VIRTUAL_HOSTING_WARNING"
+                                severity = "WARNING_ONLY"
+                                message = $msg
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -337,6 +351,7 @@ while ($true) {
         Prune-Timestamps -List $lostEvents -WindowSec ([Math]::Max(60, [int]$DisconnectBurstWindowSec)) -Now $now
         Prune-Timestamps -List $policyRetryEvents -WindowSec ([Math]::Max(120, [int]$PolicyRetryWindowSec)) -Now $now
         Prune-Timestamps -List $severeEvents -WindowSec 120 -Now $now
+        Prune-Timestamps -List $virtualHostWarnEvents -WindowSec ([Math]::Max(300, [int]$VirtualHostWarnWindowSec)) -Now $now
 
         $desired = Get-SystemDesiredState -Path $desiredStatePath
         $allowRepair = ([string]$desired.state -eq "RUNNING")
@@ -428,6 +443,7 @@ while ($true) {
             lost_events_window = [int]$lostEvents.Count
             policy_retry_window = [int]$policyRetryEvents.Count
             severe_events_window = [int]$severeEvents.Count
+            virtual_hosting_warning_window = [int]$virtualHostWarnEvents.Count
             last_restart_utc = $(if ($null -eq $lastRestartAt) { "" } else { $lastRestartAt.ToUniversalTime().ToString("o") })
             last_restart_reason = $lastReason
             cooldown_ok = [bool]$cooldownOk
@@ -437,6 +453,7 @@ while ($true) {
                 disconnect_burst_threshold = [int]$DisconnectBurstThreshold
                 policy_retry_window_sec = [int]$PolicyRetryWindowSec
                 policy_retry_threshold = [int]$PolicyRetryThreshold
+                virtual_hosting_warn_window_sec = [int]$VirtualHostWarnWindowSec
                 restart_cooldown_sec = [int]$RestartCooldownSec
             }
             dry_run = [bool]$DryRun
