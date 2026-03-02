@@ -7,7 +7,8 @@ param(
     [int]$LookbackDays = 180,
     [int]$HorizonMinutes = 60,
     [int]$TimeoutSec = 1800,
-    [int]$SnapshotRetentionDays = 14
+    [int]$SnapshotRetentionDays = 14,
+    [int]$RepeatMinutes = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,7 +37,33 @@ $argList = @(
 $arguments = $argList -join " "
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments -WorkingDirectory $Root
-$trigger = New-ScheduledTaskTrigger -Daily -At $StartTime
+if ($RepeatMinutes -gt 0) {
+    $hm = $StartTime.Trim().Split(":")
+    if ($hm.Count -ne 2) {
+        throw "Invalid StartTime format. Expected HH:mm, got: $StartTime"
+    }
+    $hour = [int]$hm[0]
+    $minute = [int]$hm[1]
+    if ($hour -lt 0 -or $hour -gt 23 -or $minute -lt 0 -or $minute -gt 59) {
+        throw "Invalid StartTime values. Expected HH:mm, got: $StartTime"
+    }
+    $now = Get-Date
+    $startBoundary = Get-Date -Year $now.Year -Month $now.Month -Day $now.Day -Hour $hour -Minute $minute -Second 0
+    if ($startBoundary -le $now) {
+        $startBoundary = $startBoundary.AddDays(1)
+    }
+    $repeatInterval = New-TimeSpan -Minutes ([Math]::Max(1, [int]$RepeatMinutes)
+    )
+    # Long-running repetition window (about 10 years) for practical "always on" behavior.
+    $repeatDuration = New-TimeSpan -Days 3650
+    $trigger = New-ScheduledTaskTrigger `
+        -Once `
+        -At $startBoundary `
+        -RepetitionInterval $repeatInterval `
+        -RepetitionDuration $repeatDuration
+} else {
+    $trigger = New-ScheduledTaskTrigger -Daily -At $StartTime
+}
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -51,7 +78,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "OANDA MT5 LAB daily ingest/pipeline scheduler" `
+    -Description $(if ($RepeatMinutes -gt 0) { "OANDA MT5 LAB scheduler (every $RepeatMinutes min, active-window aware)" } else { "OANDA MT5 LAB daily ingest/pipeline scheduler" }) `
     -Force | Out-Null
 
 $task = Get-ScheduledTask -TaskName $TaskName
