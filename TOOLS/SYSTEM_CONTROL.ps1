@@ -556,6 +556,41 @@ function Remove-LockSafe {
     }
 }
 
+function Stop-BackgroundGuard {
+    param(
+        [string]$RuntimeRoot,
+        [string]$Name,
+        [string]$PidFileRel,
+        [switch]$Dry
+    )
+    $pidPath = Join-Path $RuntimeRoot $PidFileRel
+    $pidVal = Get-LockPid -LockPath $pidPath
+    $state = "not_running"
+    if ($null -ne $pidVal -and [int]$pidVal -gt 0) {
+        $state = (Stop-PidSafely -ProcessId ([int]$pidVal) -Dry:$Dry)
+    }
+    $cleanup = "missing"
+    if (Test-Path $pidPath) {
+        if ($Dry) {
+            $cleanup = "dry_run"
+        } else {
+            try {
+                Remove-Item -Force $pidPath -ErrorAction Stop
+                $cleanup = "removed"
+            } catch {
+                $cleanup = "remove_failed"
+            }
+        }
+    }
+    return [ordered]@{
+        name = $Name
+        pid_file = $pidPath
+        pid = if ($null -eq $pidVal) { $null } else { [int]$pidVal }
+        stop_state = $state
+        pid_cleanup = $cleanup
+    }
+}
+
 function Write-JsonAtomic {
     param(
         [Parameter(Mandatory = $true)]
@@ -583,6 +618,33 @@ function Write-JsonAtomic {
         }
     }
     return [bool]$wrote
+}
+
+function Write-SystemDesiredState {
+    param(
+        [string]$RuntimeRoot,
+        [string]$DesiredState,
+        [switch]$Dry
+    )
+    $path = Join-Path $RuntimeRoot "RUN\system_desired_state.json"
+    if ($Dry) {
+        return [ordered]@{
+            path = $path
+            status = "dry_run"
+            desired_state = $DesiredState
+        }
+    }
+    $payload = [ordered]@{
+        desired_state = [string]$DesiredState
+        ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+        source = "SYSTEM_CONTROL"
+    }
+    $ok = Write-JsonAtomic -Path $path -Object $payload
+    return [ordered]@{
+        path = $path
+        status = if ($ok) { "written" } else { "write_failed" }
+        desired_state = $DesiredState
+    }
 }
 
 $runtimeRoot = Resolve-Root -InputRoot $Root
@@ -778,11 +840,37 @@ try {
                     lock_cleanup = $lockState
                 }
             }
+            $guards = @(
+                @{ name = "MT5RiskGuard"; pid_rel = "RUN\mt5_risk_guard.pid" },
+                @{ name = "MT5SessionGuard"; pid_rel = "RUN\mt5_session_guard.pid" }
+            )
+            $result.guards = @()
+            foreach ($g in $guards) {
+                $gstop = Stop-BackgroundGuard -RuntimeRoot $runtimeRoot -Name ([string]$g.name) -PidFileRel ([string]$g.pid_rel) -Dry:$DryRun
+                $result.guards += $gstop
+                if (([string]$gstop.stop_state) -eq "force_failed" -or ([string]$gstop.pid_cleanup) -eq "remove_failed") {
+                    $hasError = $true
+                }
+            }
         }
     }
 } finally {
     if ($Action -in @("start", "stop")) {
         Release-ControlLock
+    }
+}
+
+$desiredWrite = $null
+if (($Action -eq "start") -and (-not $hasError)) {
+    $desiredWrite = Write-SystemDesiredState -RuntimeRoot $runtimeRoot -DesiredState "RUNNING" -Dry:$DryRun
+}
+if (($Action -eq "stop") -and (-not $hasError)) {
+    $desiredWrite = Write-SystemDesiredState -RuntimeRoot $runtimeRoot -DesiredState "STOPPED" -Dry:$DryRun
+}
+if ($null -ne $desiredWrite) {
+    $result.desired_state = $desiredWrite
+    if (([string]$desiredWrite.status) -eq "write_failed") {
+        $hasError = $true
     }
 }
 

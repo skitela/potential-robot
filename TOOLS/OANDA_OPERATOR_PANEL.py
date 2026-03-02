@@ -27,6 +27,7 @@ OPERATOR_STATUS_PATH = OBS_ROOT / "outputs" / "operator" / "operator_runtime_sta
 SYSTEM_STATUS_PATH = WORKSPACE_ROOT / "RUN" / "system_control_last.json"
 REPAIR_STATUS_PATH = WORKSPACE_ROOT / "RUN" / "codex_repair_last.json"
 LIVE_STATUS_PATH = WORKSPACE_ROOT / "RUN" / "live_trade_monitor_status.json"
+MT5_SESSION_GUARD_STATUS_PATH = WORKSPACE_ROOT / "RUN" / "mt5_session_guard_status.json"
 DB_PATH = WORKSPACE_ROOT / "DB" / "decision_events.sqlite"
 RETENTION_DAILY_ROOT = WORKSPACE_ROOT / "EVIDENCE" / "retention" / "daily"
 RETENTION_RUNS_ROOT = WORKSPACE_ROOT / "EVIDENCE" / "retention" / "runs"
@@ -235,11 +236,13 @@ class OperatorPanel(tk.Tk):
         self.monitor_status_var = tk.StringVar(value="Monitor: UNKNOWN")
         self.repair_status_var = tk.StringVar(value="Naprawa: brak danych")
         self.policy_runtime_var = tk.StringVar(value="Policy runtime: brak danych")
+        self.session_guard_var = tk.StringVar(value="Sesja MT5: brak danych")
 
         tk.Label(status_frame, textvariable=self.system_status_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
         tk.Label(status_frame, textvariable=self.monitor_status_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
         tk.Label(status_frame, textvariable=self.repair_status_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
         tk.Label(status_frame, textvariable=self.policy_runtime_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
+        tk.Label(status_frame, textvariable=self.session_guard_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
 
     def _run_command(self, command: list[str], description: str) -> None:
         try:
@@ -498,6 +501,7 @@ class OperatorPanel(tk.Tk):
         self.monitor_status_var.set(f"Monitor: {self._read_monitor_status()}")
         self.repair_status_var.set(f"Naprawa: {self._read_repair_status()}")
         self.policy_runtime_var.set(f"Policy runtime: {self._read_policy_runtime_retry_status()}")
+        self.session_guard_var.set(f"Sesja MT5: {self._read_mt5_session_guard_status()}")
         self._refresh_lab_insights_indicator()
         self.after(5000, self._refresh_status)
 
@@ -540,6 +544,18 @@ class OperatorPanel(tk.Tk):
         if count >= int(POLICY_RUNTIME_RETRY_ALERT_THRESHOLD):
             return f"ALERT retry_1h={count} top={top_reason} last={last_local}"
         return f"retry_1h={count} top={top_reason} last={last_local}"
+
+    def _read_mt5_session_guard_status(self) -> str:
+        payload = _read_json_safe(MT5_SESSION_GUARD_STATUS_PATH)
+        if not payload:
+            return "guard OFF / brak statusu"
+        connected = str(payload.get("connected_state", "UNKNOWN")).upper()
+        retries = int(payload.get("policy_retry_window", 0))
+        reason = str(payload.get("last_restart_reason", "NONE"))
+        allow = bool(payload.get("repairs_allowed", True))
+        if not allow:
+            return f"{connected} repairs=OFF retry_window={retries} last={reason}"
+        return f"{connected} retry_window={retries} last={reason}"
 
 
 def _read_json_safe(path: Path) -> dict | None:

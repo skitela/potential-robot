@@ -403,6 +403,84 @@ function Start-RiskPopupGuard {
     }
 }
 
+function Start-Mt5SessionGuard {
+    param([string]$RuntimeRoot)
+    $scriptPath = Join-Path $RuntimeRoot "TOOLS\mt5_session_guard.ps1"
+    $pidPath = Join-Path $RuntimeRoot "RUN\mt5_session_guard.pid"
+    $statusPath = Join-Path $RuntimeRoot "RUN\mt5_session_guard_status.json"
+    if (-not (Test-Path $scriptPath)) {
+        return [ordered]@{
+            ok = $false
+            status = "missing_script"
+            script = $scriptPath
+        }
+    }
+
+    $pidObj = Read-JsonFileSafe -Path $pidPath
+    $existingPid = $null
+    if ($null -ne $pidObj -and $null -ne $pidObj.pid) {
+        try { $existingPid = [int]$pidObj.pid } catch { $existingPid = $null }
+    }
+    if ($null -ne $existingPid) {
+        $proc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
+        if ($null -ne $proc) {
+            $statusObj = Read-JsonFileSafe -Path $statusPath
+            $isDryRunGuard = $false
+            if ($null -ne $statusObj -and $null -ne $statusObj.dry_run) {
+                try { $isDryRunGuard = [bool]$statusObj.dry_run } catch { $isDryRunGuard = $false }
+            }
+            if ($isDryRunGuard -and (-not $DryRun)) {
+                try {
+                    Stop-Process -Id $existingPid -ErrorAction SilentlyContinue
+                    Start-Sleep -Milliseconds 400
+                } catch {
+                    return [ordered]@{
+                        ok = $false
+                        status = "failed_to_replace_dry_run_guard"
+                        pid = $existingPid
+                        error = $_.Exception.Message
+                    }
+                }
+            } else {
+                return [ordered]@{
+                    ok = $true
+                    status = "already_running"
+                    pid = $existingPid
+                    pid_file = $pidPath
+                }
+            }
+        }
+    }
+
+    try {
+        $argList = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $scriptPath,
+            "-Root", $RuntimeRoot
+        )
+        if ($DryRun) {
+            $argList += "-DryRun"
+        }
+        $proc = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WorkingDirectory $RuntimeRoot -WindowStyle Hidden -PassThru
+        Start-Sleep -Milliseconds 400
+        return [ordered]@{
+            ok = $true
+            status = "started"
+            pid = [int]$proc.Id
+            pid_file = $pidPath
+            dry_run = [bool]$DryRun
+        }
+    } catch {
+        return [ordered]@{
+            ok = $false
+            status = "start_failed"
+            error = $_.Exception.Message
+            script = $scriptPath
+        }
+    }
+}
+
 function Read-KeyEnv {
     param([Parameter(Mandatory = $true)][string]$Path)
     $cfg = [ordered]@{}
@@ -734,6 +812,14 @@ if ($rc -eq 0) {
         Write-Output ("START_WITH_OANDAKEY WARN: risk popup guard failed status={0}" -f [string]$riskGuard.status)
     } else {
         Write-Output ("START_WITH_OANDAKEY RISK_GUARD status={0} pid={1}" -f [string]$riskGuard.status, [string]$riskGuard.pid)
+    }
+    $sessionGuard = Start-Mt5SessionGuard -RuntimeRoot $runtimeRoot
+    $status.mt5_session_guard = $sessionGuard
+    [void](Write-JsonAtomic -Path $statusPath -Object $status)
+    if (-not [bool]$sessionGuard.ok) {
+        Write-Output ("START_WITH_OANDAKEY WARN: mt5 session guard failed status={0}" -f [string]$sessionGuard.status)
+    } else {
+        Write-Output ("START_WITH_OANDAKEY MT5_SESSION_GUARD status={0} pid={1}" -f [string]$sessionGuard.status, [string]$sessionGuard.pid)
     }
     Write-Output ("START_WITH_OANDAKEY PASS drive={0} dry_run={1}" -f $drive, [int]([bool]$DryRun))
     exit 0
