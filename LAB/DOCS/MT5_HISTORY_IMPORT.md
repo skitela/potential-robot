@@ -26,6 +26,22 @@ py -3.12 -B TOOLS/lab_mt5_history_ingest.py --root C:\OANDA_MT5_SYSTEM --lab-dat
 - Deduplikacja:
   - `PRIMARY KEY(symbol, timeframe, ts_utc)` + `INSERT OR IGNORE`.
 
+## Mapowanie symboli brokerowych
+- Ingest przyjmuje symbole kanoniczne (np. `EURUSD`) i rozwiązuje je do symbolu brokera (np. `EURUSD.a`) deterministycznie:
+  - `EXACT` -> `PREFIX` -> `CONTAINS`.
+- Raport zawiera dla kazdego wpisu:
+  - `symbol` (kanoniczny),
+  - `broker_symbol`,
+  - `symbol_resolution_mode`.
+
+## Metryki jakosci v1.1
+- Raport ingestu zawiera:
+  - `rows_fetched_total`,
+  - `rows_inserted_total`,
+  - `rows_deduped_total`,
+  - `gap_events_total` (luki czasowe vs TF),
+  - `symbols_resolved` / `symbols_unresolved`.
+
 ## Registry
 Tabela `job_runs` rejestruje kazdy run ingestu:
 - `run_type=INGEST_MT5`

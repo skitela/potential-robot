@@ -113,11 +113,74 @@ def _symbols_for_group(strategy_cfg: Dict[str, Any], focus_group: str) -> List[s
     return selected
 
 
+def _tf_seconds(tf: str) -> int:
+    upper = str(tf or "").strip().upper()
+    mapping = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
+    return int(mapping.get(upper, 60))
+
+
+def _build_symbol_index(symbols_from_terminal: List[str]) -> Dict[str, str]:
+    idx: Dict[str, str] = {}
+    for s in symbols_from_terminal:
+        su = str(s or "").strip().upper()
+        if su and su not in idx:
+            idx[su] = str(s)
+    return idx
+
+
+def resolve_broker_symbol(raw_symbol: str, symbols_from_terminal: List[str]) -> Tuple[str | None, str]:
+    raw = str(raw_symbol or "").strip()
+    raw_u = raw.upper()
+    if not raw_u:
+        return None, "EMPTY"
+    if not symbols_from_terminal:
+        return None, "NO_TERMINAL_SYMBOLS"
+    idx = _build_symbol_index(symbols_from_terminal)
+    if raw_u in idx:
+        return idx[raw_u], "EXACT"
+
+    # Deterministic suffix match (e.g. EURUSD.a / EURUSD_pro).
+    prefix_matches = sorted(
+        [s for s in symbols_from_terminal if str(s).upper().startswith(raw_u)],
+        key=lambda x: (len(str(x)), str(x)),
+    )
+    if prefix_matches:
+        return str(prefix_matches[0]), "PREFIX"
+
+    # Deterministic contains fallback for unusual broker naming.
+    contains_matches = sorted(
+        [s for s in symbols_from_terminal if raw_u in str(s).upper()],
+        key=lambda x: (len(str(x)), str(x)),
+    )
+    if contains_matches:
+        return str(contains_matches[0]), "CONTAINS"
+    return None, "NOT_FOUND"
+
+
+def count_gap_events(rows: List[Dict[str, Any]], expected_interval_sec: int) -> int:
+    if len(rows) < 2:
+        return 0
+    expected = max(1, int(expected_interval_sec))
+    gaps = 0
+    prev = parse_ts_utc(str(rows[0].get("ts_utc") or ""))
+    for row in rows[1:]:
+        curr = parse_ts_utc(str(row.get("ts_utc") or ""))
+        if prev is None or curr is None:
+            prev = curr
+            continue
+        delta = int((curr - prev).total_seconds())
+        if delta > int(expected * 1.5):
+            gaps += 1
+        prev = curr
+    return int(gaps)
+
+
 def _create_history_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS mt5_rates (
             symbol TEXT NOT NULL,
+            broker_symbol TEXT NOT NULL DEFAULT '',
             timeframe TEXT NOT NULL,
             ts_utc TEXT NOT NULL,
             open REAL NOT NULL,
@@ -134,6 +197,9 @@ def _create_history_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    cols = {str(r[1]).lower() for r in conn.execute("PRAGMA table_info(mt5_rates)").fetchall()}
+    if "broker_symbol" not in cols:
+        conn.execute("ALTER TABLE mt5_rates ADD COLUMN broker_symbol TEXT NOT NULL DEFAULT ''")
     conn.commit()
 
 
@@ -141,6 +207,7 @@ def _insert_rates(
     conn: sqlite3.Connection,
     *,
     symbol: str,
+    broker_symbol: str,
     timeframe: str,
     rows: List[Dict[str, Any]],
     source_terminal: str,
@@ -152,13 +219,14 @@ def _insert_rates(
     cur = conn.executemany(
         """
         INSERT OR IGNORE INTO mt5_rates (
-            symbol, timeframe, ts_utc, open, high, low, close,
+            symbol, broker_symbol, timeframe, ts_utc, open, high, low, close,
             tick_volume, spread, real_volume, source_terminal, ingest_run_id, ingested_at_utc
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             [
                 symbol,
+                broker_symbol,
                 timeframe,
                 str(r["ts_utc"]),
                 float(r["open"]),
@@ -267,6 +335,7 @@ def main() -> int:
             raise RuntimeError(f"mt5.account_info=None last_error={mt5.last_error()!r}")
         term = mt5.terminal_info()
         terminal_name = str(getattr(term, "name", "UNKNOWN")) if term is not None else "UNKNOWN"
+        available_symbols = [str(s.name) for s in (mt5.symbols_get() or []) if getattr(s, "name", None)]
 
         conn_data = sqlite3.connect(str(dataset_sqlite), timeout=20)
         conn_data.row_factory = sqlite3.Row
@@ -280,25 +349,45 @@ def main() -> int:
         details: List[Dict[str, Any]] = []
         inserted_total = 0
         dedup_total = 0
+        fetched_total = 0
+        gap_events_total = 0
+        symbols_resolved = 0
+        symbols_unresolved = 0
         end_utc = dt.datetime.now(tz=UTC)
 
         for symbol in symbols:
-            if not bool(mt5.symbol_select(symbol, True)):
-                details.append({"symbol": symbol, "status": "SKIP_SYMBOL_SELECT_FAIL"})
+            broker_symbol, resolution_mode = resolve_broker_symbol(symbol, available_symbols)
+            if not broker_symbol:
+                symbols_unresolved += 1
+                details.append({"symbol": symbol, "symbol_resolution_mode": resolution_mode, "status": "SKIP_SYMBOL_NOT_FOUND"})
+                continue
+            symbols_resolved += 1
+            if not bool(mt5.symbol_select(broker_symbol, True)):
+                details.append(
+                    {
+                        "symbol": symbol,
+                        "broker_symbol": broker_symbol,
+                        "symbol_resolution_mode": resolution_mode,
+                        "status": "SKIP_SYMBOL_SELECT_FAIL",
+                    }
+                )
                 continue
             for tf in tfs:
                 tf_mt5 = _tf_to_mt5(tf, mt5)
+                tf_sec = _tf_seconds(tf)
                 wm = get_ingest_watermark(conn_reg, source_type="MT5", symbol=symbol, timeframe=tf)
                 wm_dt = parse_ts_utc(wm)
                 if wm_dt is None:
                     start_utc = end_utc - dt.timedelta(days=max(1, int(args.lookback_days)))
                 else:
                     start_utc = wm_dt - dt.timedelta(minutes=max(0, int(args.overlap_minutes)))
-                rates = mt5.copy_rates_range(symbol, tf_mt5, start_utc, end_utc)
+                rates = mt5.copy_rates_range(broker_symbol, tf_mt5, start_utc, end_utc)
                 if rates is None:
                     details.append(
                         {
                             "symbol": symbol,
+                            "broker_symbol": broker_symbol,
+                            "symbol_resolution_mode": resolution_mode,
                             "timeframe": tf,
                             "status": "FAIL_COPY_RATES",
                             "last_error": repr(mt5.last_error()),
@@ -338,9 +427,13 @@ def main() -> int:
                             "real_volume": int(rr.get("real_volume") or 0),
                         }
                     )
+                fetched_total += int(len(rows))
+                gap_events = count_gap_events(rows, expected_interval_sec=tf_sec)
+                gap_events_total += int(gap_events)
                 inserted = _insert_rates(
                     conn_data,
                     symbol=symbol,
+                    broker_symbol=broker_symbol,
                     timeframe=tf,
                     rows=rows,
                     source_terminal=terminal_name,
@@ -364,6 +457,8 @@ def main() -> int:
                 details.append(
                     {
                         "symbol": symbol,
+                        "broker_symbol": broker_symbol,
+                        "symbol_resolution_mode": resolution_mode,
                         "timeframe": tf,
                         "status": "PASS",
                         "rows_fetched": len(rows),
@@ -371,6 +466,7 @@ def main() -> int:
                         "rows_deduped": int(dedup),
                         "start_utc": iso_utc(start_utc),
                         "end_utc": iso_utc(end_utc),
+                        "gap_events": int(gap_events),
                         "watermark_after": max_ts,
                     }
                 )
@@ -410,9 +506,13 @@ def main() -> int:
                 "config_hash": config_hash,
                 "summary": {
                     "symbols_requested": len(symbols),
+                    "symbols_resolved": int(symbols_resolved),
+                    "symbols_unresolved": int(symbols_unresolved),
                     "timeframes_requested": tfs,
+                    "rows_fetched_total": int(fetched_total),
                     "rows_inserted_total": int(inserted_total),
                     "rows_deduped_total": int(dedup_total),
+                    "gap_events_total": int(gap_events_total),
                 },
                 "details": details,
             }
@@ -437,6 +537,8 @@ def main() -> int:
                     {
                         "rows_inserted_total": int(inserted_total),
                         "rows_deduped_total": int(dedup_total),
+                        "rows_fetched_total": int(fetched_total),
+                        "gap_events_total": int(gap_events_total),
                         "symbols": symbols,
                         "timeframes": tfs,
                     },
@@ -453,6 +555,8 @@ def main() -> int:
             "reason": reason,
             "rows_inserted_total": int(inserted_total),
             "rows_deduped_total": int(dedup_total),
+            "rows_fetched_total": int(fetched_total),
+            "gap_events_total": int(gap_events_total),
             "symbols_requested": len(symbols),
             "report_path": str(report_path),
             "dataset_path": str(dataset_sqlite),
@@ -467,6 +571,8 @@ def main() -> int:
                     f"Reason: {reason}",
                     f"Rows inserted: {inserted_total}",
                     f"Rows deduped: {dedup_total}",
+                    f"Rows fetched: {fetched_total}",
+                    f"Gap events: {gap_events_total}",
                     f"Symbols: {len(symbols)}",
                     f"Report: {report_path}",
                 ]
@@ -475,7 +581,14 @@ def main() -> int:
             encoding="utf-8",
         )
         print(
-            f"LAB_MT5_INGEST_OK status={status} rows_inserted={inserted_total} rows_deduped={dedup_total} out={report_path}"
+            "LAB_MT5_INGEST_OK status={0} rows_fetched={1} rows_inserted={2} rows_deduped={3} gaps={4} out={5}".format(
+                status,
+                int(fetched_total),
+                int(inserted_total),
+                int(dedup_total),
+                int(gap_events_total),
+                str(report_path),
+            )
         )
         return 0 if status in {"PASS", "SKIP"} else 1
     except Exception as exc:
