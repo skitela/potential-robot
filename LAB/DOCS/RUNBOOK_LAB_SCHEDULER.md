@@ -18,6 +18,11 @@ powershell -ExecutionPolicy Bypass -File TOOLS\run_lab_scheduler.ps1 -Root C:\OA
 powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -TaskName OANDA_MT5_LAB_DAILY -StartTime 03:30
 ```
 
+## Rejestracja user-level (bez admin, fallback)
+```powershell
+powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -TaskName OANDA_MT5_LAB_DAILY_USER -StartTime 03:30
+```
+
 ## Usuniecie zadania
 ```powershell
 powershell -ExecutionPolicy Bypass -File TOOLS\unregister_lab_scheduler_task.ps1 -TaskName OANDA_MT5_LAB_DAILY
@@ -51,3 +56,6 @@ powershell -ExecutionPolicy Bypass -File TOOLS\unregister_lab_scheduler_task.ps1
 - `--timeout-sec` domyslnie `1800`
 - `--snapshot-retention-days` domyslnie `14`
 - `--skip-snapshot-retention` gdy chcesz pominac retention w danym runie
+- `priority_set`:
+  - `OK_PSUTIL` lub `OK_WINAPI` = low-priority ustawione,
+  - `FAILED_WINAPI:*` / `ERROR:*` = best-effort fail (niefatalne).

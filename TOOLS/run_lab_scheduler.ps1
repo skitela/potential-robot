@@ -29,4 +29,14 @@ if ($AllowActiveWindow) { $argsList += "--allow-active-window" }
 if ($Force) { $argsList += "--force" }
 if ($SkipSnapshotRetention) { $argsList += "--skip-snapshot-retention" }
 
-py @argsList
+$pyVersionArgs = @()
+try {
+    & py -3.12 -c "import sys; print(sys.version)" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $pyVersionArgs = @("-3.12")
+    }
+} catch {
+    $pyVersionArgs = @()
+}
+
+py @($pyVersionArgs + $argsList)

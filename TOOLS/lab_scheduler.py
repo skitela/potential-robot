@@ -29,13 +29,37 @@ def iso_utc(ts: dt.datetime) -> str:
 
 
 def set_low_priority_best_effort() -> str:
+    # Preferred path: psutil on Windows (clear error surfaces, no raw WinAPI handling).
+    try:
+        if os.name == "nt":
+            import psutil  # type: ignore
+
+            proc = psutil.Process(os.getpid())
+            proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            return "OK_PSUTIL"
+    except Exception:
+        # Fallback to WinAPI path below.
+        pass
     try:
         if os.name != "nt":
             return "UNSUPPORTED_NON_WINDOWS"
-        process = ctypes.windll.kernel32.GetCurrentProcess()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        from ctypes import wintypes
+
+        get_current_process = kernel32.GetCurrentProcess
+        get_current_process.argtypes = []
+        get_current_process.restype = wintypes.HANDLE
+        set_priority_class = kernel32.SetPriorityClass
+        set_priority_class.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        set_priority_class.restype = wintypes.BOOL
+
+        process = get_current_process()
         BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-        ok = ctypes.windll.kernel32.SetPriorityClass(process, BELOW_NORMAL_PRIORITY_CLASS)
-        return "OK" if ok else "FAILED"
+        ok = bool(set_priority_class(process, BELOW_NORMAL_PRIORITY_CLASS))
+        if ok:
+            return "OK_WINAPI"
+        err = int(ctypes.get_last_error())
+        return f"FAILED_WINAPI:{err}"
     except Exception as exc:
         return f"ERROR:{type(exc).__name__}"
 
@@ -405,6 +429,7 @@ def main() -> int:
             {
                 "status": final_status,
                 "reason": reason,
+                "python_executable": str(args.python),
                 "window_phase": phase,
                 "priority_set": priority,
                 "resource_governor": {"cpu_pct": cpu_pct, "mem_available_mb": mem_mb},

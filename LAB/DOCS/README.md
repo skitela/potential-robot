@@ -44,6 +44,7 @@ Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C
 - Runbook: `LAB/DOCS/RUNBOOK_LAB_SCHEDULER.md`
 - Rejestracja zadania dziennego:
   - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 03:30`
+  - fallback bez admin: `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 03:30`
 
 ## Registry eksperymentow (MVP)
 - SQLite: `LAB_DATA_ROOT/registry/lab_registry.sqlite`
