@@ -280,41 +280,44 @@ while ($true) {
     $now = Get-Date
     try {
         $nowUtc = $now.ToUniversalTime().ToString("o")
-        $activeLog = ""
+        $activeLogs = @()
         if (-not [string]::IsNullOrWhiteSpace($mt5DataDirResolved)) {
-            $logsDir = Join-Path $mt5DataDirResolved "logs"
-            if (Test-Path $logsDir) {
+            $candidateDirs = @(
+                (Join-Path $mt5DataDirResolved "logs"),
+                (Join-Path $mt5DataDirResolved "MQL5\Logs")
+            )
+            foreach ($logsDir in $candidateDirs) {
+                if (-not (Test-Path $logsDir)) { continue }
                 $lf = Get-ChildItem -Path $logsDir -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                if ($null -ne $lf) {
-                    $activeLog = $lf.FullName
-                    $newLines = Read-AppendedLines -Path $activeLog -Offsets $offsets
-                    foreach ($line in $newLines) {
-                        $msg = [string]$line
-                        if ([string]::IsNullOrWhiteSpace($msg)) { continue }
-                        if ($disconnectRx.IsMatch($msg)) {
-                            $lastLostAt = $now
-                            [void]$lostEvents.Add($now)
-                            $connectedState = "DISCONNECTED"
-                            Append-Jsonl -Path $eventPath -Payload @{
-                                ts_utc = $nowUtc
-                                event = "BROKER_CONNECTION_LOST"
-                                message = $msg
-                            }
+                if ($null -eq $lf) { continue }
+                $activeLogs += @($lf.FullName)
+                $newLines = Read-AppendedLines -Path $lf.FullName -Offsets $offsets
+                foreach ($line in $newLines) {
+                    $msg = [string]$line
+                    if ([string]::IsNullOrWhiteSpace($msg)) { continue }
+                    if ($disconnectRx.IsMatch($msg)) {
+                        $lastLostAt = $now
+                        [void]$lostEvents.Add($now)
+                        $connectedState = "DISCONNECTED"
+                        Append-Jsonl -Path $eventPath -Payload @{
+                            ts_utc = $nowUtc
+                            event = "BROKER_CONNECTION_LOST"
+                            message = $msg
                         }
-                        if ($authRx.IsMatch($msg) -or $syncRx.IsMatch($msg)) {
-                            $lastAuthAt = $now
-                            $connectedState = "CONNECTED"
-                        }
-                        if ($policyRetryRx.IsMatch($msg)) {
-                            [void]$policyRetryEvents.Add($now)
-                        }
-                        if ($severeRx.IsMatch($msg)) {
-                            [void]$severeEvents.Add($now)
-                            Append-Jsonl -Path $eventPath -Payload @{
-                                ts_utc = $nowUtc
-                                event = "SEVERE_MT5_EVENT"
-                                message = $msg
-                            }
+                    }
+                    if ($authRx.IsMatch($msg) -or $syncRx.IsMatch($msg)) {
+                        $lastAuthAt = $now
+                        $connectedState = "CONNECTED"
+                    }
+                    if ($policyRetryRx.IsMatch($msg)) {
+                        [void]$policyRetryEvents.Add($now)
+                    }
+                    if ($severeRx.IsMatch($msg)) {
+                        [void]$severeEvents.Add($now)
+                        Append-Jsonl -Path $eventPath -Payload @{
+                            ts_utc = $nowUtc
+                            event = "SEVERE_MT5_EVENT"
+                            message = $msg
                         }
                     }
                 }
@@ -403,7 +406,8 @@ while ($true) {
             ts_utc = (Get-Date).ToUniversalTime().ToString("o")
             root = $runtimeRoot
             mt5_data_dir = $mt5DataDirResolved
-            mt5_log = $activeLog
+            mt5_log = $(if (@($activeLogs).Count -gt 0) { [string]$activeLogs[0] } else { "" })
+            mt5_logs = @($activeLogs)
             connected_state = $connectedState
             desired_state = [string]$desired.state
             desired_state_source = [string]$desired.source
