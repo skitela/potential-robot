@@ -45,6 +45,21 @@ def latest_json(root: Path, pattern: str = "*.json") -> Path | None:
     return files[0]
 
 
+def latest_json_prefer_status(root: Path, *, preferred_status: str = "PASS") -> Path | None:
+    if not root.exists():
+        return None
+    files = [p for p in root.glob("*.json") if p.is_file()]
+    if not files:
+        return None
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    preferred = str(preferred_status).upper()
+    for p in files:
+        payload = load_json(p) or {}
+        if str(payload.get("status", "")).upper() == preferred:
+            return p
+    return files[0]
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Generate lightweight LAB insights digest for operator panel.")
     ap.add_argument("--root", default=r"C:\OANDA_MT5_SYSTEM")
@@ -68,7 +83,7 @@ def main() -> int:
     pointer_txt = root / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.txt"
 
     ingest_path = latest_json(reports_ingest)
-    daily_path = latest_json(reports_daily)
+    daily_path = latest_json_prefer_status(reports_daily, preferred_status="PASS")
     retention_path = latest_json(reports_retention)
     status_payload = load_json(run_status) or {}
     ingest_payload = load_json(ingest_path) if ingest_path else {}
@@ -169,4 +184,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
