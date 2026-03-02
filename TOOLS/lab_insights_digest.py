@@ -141,7 +141,9 @@ def main() -> int:
         interval_source = "DEFAULT_3H"
     if start_utc > now:
         start_utc = now - dt.timedelta(hours=3)
-    hours_span = max(1.0, round((now - start_utc).total_seconds() / 3600.0, 2))
+    hours_span_exact = max(1.0, round((now - start_utc).total_seconds() / 3600.0, 2))
+    # Human summary uses 3h buckets: 3, 6, 9... until insights are viewed.
+    hours_bucket_3h = max(3, int((hours_span_exact // 3) * 3))
 
     ingest_window = reports_in_window(reports_ingest, start_utc, now)
     daily_window = reports_in_window(reports_daily, start_utc, now)
@@ -244,7 +246,8 @@ def main() -> int:
         "interval": {
             "start_utc": iso_utc(start_utc),
             "end_utc": iso_utc(now),
-            "hours": hours_span,
+            "hours": hours_span_exact,
+            "hours_bucket_3h": hours_bucket_3h,
             "source": interval_source,
         },
         "sources": {
@@ -321,10 +324,11 @@ def main() -> int:
         "",
         "[1] CZAS I ZRODLA",
         "Przez ostatnie {0} godziny pracowalem na danych historycznych pobranych z OANDA TMS (zrodlo zewnetrzne)".format(
-            report["interval"]["hours"]
+            report["interval"]["hours_bucket_3h"]
         ),
         "oraz na danych zapisanych w systemie (zrodlo wewnetrzne).",
         "Okno raportu: {0} -> {1}".format(report["interval"]["start_utc"], report["interval"]["end_utc"]),
+        "Dokladny zakres czasu: {0} h".format(report["interval"]["hours"]),
         "",
         "[2] CO ZROBILEM",
         "- Uruchomienia ingestu MT5: {0}".format(wa["ingest_runs"]),
@@ -375,6 +379,7 @@ def main() -> int:
                 "report_path": str(out_path),
                 "pointer_path": str(pointer_json),
                 "interval_hours": report["interval"]["hours"],
+                "interval_hours_bucket_3h": report["interval"]["hours_bucket_3h"],
             },
             ensure_ascii=False,
         )
