@@ -40,7 +40,11 @@ py -3.12 -B TOOLS/lab_mt5_history_ingest.py --root C:\OANDA_MT5_SYSTEM --lab-dat
   - `rows_inserted_total`,
   - `rows_deduped_total`,
   - `gap_events_total` (luki czasowe vs TF),
-  - `symbols_resolved` / `symbols_unresolved`.
+  - `symbols_resolved` / `symbols_unresolved`,
+  - `invalid_ohlc_total`,
+  - `negative_spread_total`,
+  - `nonpositive_close_total`,
+  - `quality_grade` (`OK` / `REVIEW_REQUIRED`).
 
 ## Registry
 Tabela `job_runs` rejestruje kazdy run ingestu:

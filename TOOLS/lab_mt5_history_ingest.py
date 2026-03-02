@@ -175,6 +175,31 @@ def count_gap_events(rows: List[Dict[str, Any]], expected_interval_sec: int) -> 
     return int(gaps)
 
 
+def count_bar_anomalies(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    invalid_ohlc = 0
+    negative_spread = 0
+    nonpositive_close = 0
+    for row in rows:
+        o = float(row.get("open") or 0.0)
+        h = float(row.get("high") or 0.0)
+        l = float(row.get("low") or 0.0)
+        c = float(row.get("close") or 0.0)
+        sp = int(row.get("spread") or 0)
+        if sp < 0:
+            negative_spread += 1
+        if c <= 0.0:
+            nonpositive_close += 1
+        hi_ref = max(o, c, l)
+        lo_ref = min(o, c, h)
+        if h < hi_ref or l > lo_ref or h < l:
+            invalid_ohlc += 1
+    return {
+        "invalid_ohlc_count": int(invalid_ohlc),
+        "negative_spread_count": int(negative_spread),
+        "nonpositive_close_count": int(nonpositive_close),
+    }
+
+
 def _create_history_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -351,6 +376,9 @@ def main() -> int:
         dedup_total = 0
         fetched_total = 0
         gap_events_total = 0
+        invalid_ohlc_total = 0
+        negative_spread_total = 0
+        nonpositive_close_total = 0
         symbols_resolved = 0
         symbols_unresolved = 0
         end_utc = dt.datetime.now(tz=UTC)
@@ -430,6 +458,10 @@ def main() -> int:
                 fetched_total += int(len(rows))
                 gap_events = count_gap_events(rows, expected_interval_sec=tf_sec)
                 gap_events_total += int(gap_events)
+                anomalies = count_bar_anomalies(rows)
+                invalid_ohlc_total += int(anomalies["invalid_ohlc_count"])
+                negative_spread_total += int(anomalies["negative_spread_count"])
+                nonpositive_close_total += int(anomalies["nonpositive_close_count"])
                 inserted = _insert_rates(
                     conn_data,
                     symbol=symbol,
@@ -467,6 +499,9 @@ def main() -> int:
                         "start_utc": iso_utc(start_utc),
                         "end_utc": iso_utc(end_utc),
                         "gap_events": int(gap_events),
+                        "invalid_ohlc_count": int(anomalies["invalid_ohlc_count"]),
+                        "negative_spread_count": int(anomalies["negative_spread_count"]),
+                        "nonpositive_close_count": int(anomalies["nonpositive_close_count"]),
                         "watermark_after": max_ts,
                     }
                 )
@@ -487,6 +522,11 @@ def main() -> int:
         finished = dt.datetime.now(tz=UTC)
         status = "PASS" if any(d.get("status") == "PASS" for d in details) else "SKIP"
         reason = "INGEST_OK" if status == "PASS" else "NO_DATA_FETCHED"
+        quality_grade = (
+            "REVIEW_REQUIRED"
+            if int(invalid_ohlc_total) > 0 or int(negative_spread_total) > 0 or int(nonpositive_close_total) > 0
+            else "OK"
+        )
 
         report.update(
             {
@@ -513,6 +553,10 @@ def main() -> int:
                     "rows_inserted_total": int(inserted_total),
                     "rows_deduped_total": int(dedup_total),
                     "gap_events_total": int(gap_events_total),
+                    "invalid_ohlc_total": int(invalid_ohlc_total),
+                    "negative_spread_total": int(negative_spread_total),
+                    "nonpositive_close_total": int(nonpositive_close_total),
+                    "quality_grade": str(quality_grade),
                 },
                 "details": details,
             }
@@ -539,6 +583,10 @@ def main() -> int:
                         "rows_deduped_total": int(dedup_total),
                         "rows_fetched_total": int(fetched_total),
                         "gap_events_total": int(gap_events_total),
+                        "invalid_ohlc_total": int(invalid_ohlc_total),
+                        "negative_spread_total": int(negative_spread_total),
+                        "nonpositive_close_total": int(nonpositive_close_total),
+                        "quality_grade": str(quality_grade),
                         "symbols": symbols,
                         "timeframes": tfs,
                     },
@@ -557,6 +605,7 @@ def main() -> int:
             "rows_deduped_total": int(dedup_total),
             "rows_fetched_total": int(fetched_total),
             "gap_events_total": int(gap_events_total),
+            "quality_grade": str(quality_grade),
             "symbols_requested": len(symbols),
             "report_path": str(report_path),
             "dataset_path": str(dataset_sqlite),
@@ -573,6 +622,7 @@ def main() -> int:
                     f"Rows deduped: {dedup_total}",
                     f"Rows fetched: {fetched_total}",
                     f"Gap events: {gap_events_total}",
+                    f"Quality grade: {quality_grade}",
                     f"Symbols: {len(symbols)}",
                     f"Report: {report_path}",
                 ]
@@ -581,12 +631,13 @@ def main() -> int:
             encoding="utf-8",
         )
         print(
-            "LAB_MT5_INGEST_OK status={0} rows_fetched={1} rows_inserted={2} rows_deduped={3} gaps={4} out={5}".format(
+            "LAB_MT5_INGEST_OK status={0} rows_fetched={1} rows_inserted={2} rows_deduped={3} gaps={4} quality={5} out={6}".format(
                 status,
                 int(fetched_total),
                 int(inserted_total),
                 int(dedup_total),
                 int(gap_events_total),
+                str(quality_grade),
                 str(report_path),
             )
         )
