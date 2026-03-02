@@ -9,6 +9,7 @@ param(
     [int]$PolicyRetryWindowSec = 600,
     [int]$PolicyRetryThreshold = 12,
     [int]$VirtualHostWarnWindowSec = 3600,
+    [int]$VirtualHostWarnAlertThreshold = 5,
     [switch]$DryRun
 )
 
@@ -355,6 +356,7 @@ while ($true) {
 
         $desired = Get-SystemDesiredState -Path $desiredStatePath
         $allowRepair = ([string]$desired.state -eq "RUNNING")
+        $virtualHostWarnAlert = ([int]$virtualHostWarnEvents.Count -ge [int]([Math]::Max(1, [int]$VirtualHostWarnAlertThreshold)))
 
         $cooldownOk = $true
         if ($null -ne $lastRestartAt) {
@@ -444,6 +446,7 @@ while ($true) {
             policy_retry_window = [int]$policyRetryEvents.Count
             severe_events_window = [int]$severeEvents.Count
             virtual_hosting_warning_window = [int]$virtualHostWarnEvents.Count
+            virtual_hosting_warning_alert = [bool]$virtualHostWarnAlert
             last_restart_utc = $(if ($null -eq $lastRestartAt) { "" } else { $lastRestartAt.ToUniversalTime().ToString("o") })
             last_restart_reason = $lastReason
             cooldown_ok = [bool]$cooldownOk
@@ -454,6 +457,7 @@ while ($true) {
                 policy_retry_window_sec = [int]$PolicyRetryWindowSec
                 policy_retry_threshold = [int]$PolicyRetryThreshold
                 virtual_hosting_warn_window_sec = [int]$VirtualHostWarnWindowSec
+                virtual_hosting_warn_alert_threshold = [int]$VirtualHostWarnAlertThreshold
                 restart_cooldown_sec = [int]$RestartCooldownSec
             }
             dry_run = [bool]$DryRun

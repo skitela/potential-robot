@@ -552,10 +552,15 @@ class OperatorPanel(tk.Tk):
         connected = str(payload.get("connected_state", "UNKNOWN")).upper()
         retries = int(payload.get("policy_retry_window", 0))
         vh_warn = int(payload.get("virtual_hosting_warning_window", 0))
+        vh_alert = bool(payload.get("virtual_hosting_warning_alert", False))
         reason = str(payload.get("last_restart_reason", "NONE"))
         allow = bool(payload.get("repairs_allowed", True))
         if not allow:
+            if vh_alert:
+                return f"{connected} repairs=OFF retry_window={retries} vh_warn=ALERT({vh_warn}) last={reason}"
             return f"{connected} repairs=OFF retry_window={retries} vh_warn={vh_warn} last={reason}"
+        if vh_alert:
+            return f"{connected} retry_window={retries} vh_warn=ALERT({vh_warn}) last={reason}"
         return f"{connected} retry_window={retries} vh_warn={vh_warn} last={reason}"
 
 
