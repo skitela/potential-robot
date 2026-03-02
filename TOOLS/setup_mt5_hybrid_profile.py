@@ -36,6 +36,7 @@ DEFAULT_BASE_SYMBOLS = [
     "XAUUSD",
     "XAGUSD",
 ]
+GROUP_CHOICES = ("ANY", "FX", "METAL", "INDEX", "CRYPTO", "EQUITY")
 
 
 @dataclass
@@ -60,6 +61,32 @@ def _load_strategy_symbols(root: Path) -> List[str]:
     except Exception:
         return list(DEFAULT_BASE_SYMBOLS)
     return list(DEFAULT_BASE_SYMBOLS)
+
+
+def _guess_group(base_symbol: str) -> str:
+    b = str(base_symbol or "").strip().upper()
+    if not b:
+        return "OTHER"
+    if any(k in b for k in ("XAU", "GOLD", "XAG", "SILVER", "PLATIN", "PALLAD", "COPPER", "XPT", "XPD")):
+        return "METAL"
+    if any(k in b for k in ("US500", "US100", "US30", "JP225", "DE40", "EU50", "SPX", "NAS", "DAX")):
+        return "INDEX"
+    if any(k in b for k in ("BTC", "ETH", "LTC", "XRP", "DOGE", "SOL")):
+        return "CRYPTO"
+    if len(b) == 6 and b.isalpha():
+        return "FX"
+    return "EQUITY"
+
+
+def _filter_symbols_for_focus(symbols: List[str], focus_group: str) -> List[str]:
+    fg = str(focus_group or "ANY").strip().upper()
+    if fg == "ANY":
+        return list(symbols)
+    out: List[str] = []
+    for sym in symbols:
+        if _guess_group(sym) == fg:
+            out.append(sym)
+    return out
 
 
 def _find_terminal_data_dir() -> Optional[Path]:
@@ -183,7 +210,25 @@ def _build_chart_text(template_text: str, symbol: str, description: str) -> str:
     out = _replace_line(out, "period_size", "5")
     # Ensure agent block still active.
     out = _replace_line(out, "expertmode", "5")
+    out = _replace_input(out, "InpEnablePythonTimeoutWatchdog", "true")
+    out = _replace_input(out, "InpPolicyRuntimeReloadSec", "15")
+    out = _replace_input(out, "InpPolicyRuntimeRequireFile", "true")
     return out
+
+
+def _replace_input(chart_text: str, input_key: str, input_value: str) -> str:
+    m = re.search(r"(?is)<inputs>\s*(.*?)\s*</inputs>", chart_text)
+    if not m:
+        return chart_text
+    body = m.group(1)
+    line = f"{input_key}={input_value}"
+    pat = re.compile(rf"(?mi)^{re.escape(input_key)}=.*$")
+    if pat.search(body):
+        body_new = pat.sub(line, body, count=1)
+    else:
+        suffix = "" if body.endswith(("\n", "\r")) else "\r\n"
+        body_new = f"{body}{suffix}{line}"
+    return chart_text[: m.start(1)] + body_new + chart_text[m.end(1) :]
 
 
 def _write_profile(data_dir: Path, profile_name: str, symbols: List[str], template_path: Path) -> Path:
@@ -234,7 +279,7 @@ def _launch_mt5(mt5_exe: Path, profile_name: str) -> bool:
         return False
 
 
-def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool) -> SetupResult:
+def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool, focus_group: str) -> SetupResult:
     data_dir = _find_terminal_data_dir()
     if data_dir is None:
         return SetupResult(False, "Nie znaleziono katalogu danych MT5 z HybridAgent.mq5.")
@@ -244,6 +289,9 @@ def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool) -> SetupRe
         return SetupResult(False, "Brak źródłowego pliku .chr z HybridAgent (expertmode=5) w Profiles/deleted.")
 
     symbols_base = _load_strategy_symbols(root)
+    symbols_base = _filter_symbols_for_focus(symbols_base, focus_group)
+    if not symbols_base:
+        return SetupResult(False, f"Brak symboli po filtrowaniu focus-group={focus_group}.")
     available = _extract_available_symbols(root)
     resolved = [_resolve_symbol(b, available) for b in symbols_base]
     # Keep deterministic order and unique values.
@@ -270,6 +318,7 @@ def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool) -> SetupRe
         "profile_dir": str(profile_dir),
         "template_used": str(template),
         "symbols": symbols,
+        "focus_group": str(focus_group).upper(),
         "launched": launched,
         "mt5_exe": str(mt5_exe),
     }
@@ -288,12 +337,13 @@ def main() -> int:
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]), help="Repo root.")
     ap.add_argument("--profile", default=DEFAULT_PROFILE_NAME, help="MT5 profile name under MQL5/Profiles/Charts.")
     ap.add_argument("--mt5-exe", default=str(DEFAULT_MT5_EXE), help="Path to terminal64.exe.")
+    ap.add_argument("--focus-group", default="ANY", choices=GROUP_CHOICES, help="Filter symbols by group before profile write.")
     ap.add_argument("--no-launch", action="store_true", help="Do not restart/launch MT5.")
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
     mt5_exe = Path(args.mt5_exe)
-    res = setup(root, args.profile, mt5_exe, launch=(not args.no_launch))
+    res = setup(root, args.profile, mt5_exe, launch=(not args.no_launch), focus_group=str(args.focus_group))
     print(res.message)
     return 0 if res.ok else 2
 

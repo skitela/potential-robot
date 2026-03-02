@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -35,6 +37,8 @@ LAB_INSIGHTS_SCRIPT = WORKSPACE_ROOT / "TOOLS" / "lab_insights_digest.py"
 LAB_INSIGHTS_POINTER_JSON = WORKSPACE_ROOT / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.json"
 LAB_INSIGHTS_POINTER_TXT = WORKSPACE_ROOT / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.txt"
 LAB_INSIGHTS_SEEN_PATH = WORKSPACE_ROOT / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_seen.json"
+POLICY_RUNTIME_RETRY_LOOKBACK_MIN = 60
+POLICY_RUNTIME_RETRY_ALERT_THRESHOLD = 5
 
 AGENTS = {
     "Agent Informacyjny": "agent_informacyjny",
@@ -230,10 +234,12 @@ class OperatorPanel(tk.Tk):
         self.system_status_var = tk.StringVar(value="System: UNKNOWN")
         self.monitor_status_var = tk.StringVar(value="Monitor: UNKNOWN")
         self.repair_status_var = tk.StringVar(value="Naprawa: brak danych")
+        self.policy_runtime_var = tk.StringVar(value="Policy runtime: brak danych")
 
         tk.Label(status_frame, textvariable=self.system_status_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
         tk.Label(status_frame, textvariable=self.monitor_status_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
         tk.Label(status_frame, textvariable=self.repair_status_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
+        tk.Label(status_frame, textvariable=self.policy_runtime_var, fg="#D6E2F0", bg="#1E2430", anchor="w").pack(fill="x")
 
     def _run_command(self, command: list[str], description: str) -> None:
         try:
@@ -491,6 +497,7 @@ class OperatorPanel(tk.Tk):
         self.system_status_var.set(f"System: {self._read_system_status()}")
         self.monitor_status_var.set(f"Monitor: {self._read_monitor_status()}")
         self.repair_status_var.set(f"Naprawa: {self._read_repair_status()}")
+        self.policy_runtime_var.set(f"Policy runtime: {self._read_policy_runtime_retry_status()}")
         self._refresh_lab_insights_indicator()
         self.after(5000, self._refresh_status)
 
@@ -522,6 +529,18 @@ class OperatorPanel(tk.Tk):
         ts = str(payload.get("ts_utc", ""))
         return f"{status} ({ts})"
 
+    def _read_policy_runtime_retry_status(self) -> str:
+        snapshot = _read_policy_runtime_retry_snapshot(POLICY_RUNTIME_RETRY_LOOKBACK_MIN)
+        status = str(snapshot.get("status", "UNKNOWN")).upper()
+        if status != "OK":
+            return str(snapshot.get("message", "brak danych"))
+        count = int(snapshot.get("count_lookback", 0))
+        top_reason = str(snapshot.get("top_reason", "NONE"))
+        last_local = str(snapshot.get("last_local", ""))
+        if count >= int(POLICY_RUNTIME_RETRY_ALERT_THRESHOLD):
+            return f"ALERT retry_1h={count} top={top_reason} last={last_local}"
+        return f"retry_1h={count} top={top_reason} last={last_local}"
+
 
 def _read_json_safe(path: Path) -> dict | None:
     if not path.exists():
@@ -548,6 +567,86 @@ def _fmt_money(value: float | None) -> str:
     if value is None:
         return "UNKNOWN"
     return f"{value:.2f}"
+
+
+def _find_mt5_data_dir() -> Path | None:
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        return None
+    base = Path(appdata) / "MetaQuotes" / "Terminal"
+    if not base.exists():
+        return None
+    candidates: list[tuple[float, Path]] = []
+    for d in base.iterdir():
+        if not d.is_dir():
+            continue
+        marker_mq5 = d / "MQL5" / "Experts" / "HybridAgent.mq5"
+        marker_ex5 = d / "MQL5" / "Experts" / "HybridAgent.ex5"
+        marker = marker_mq5 if marker_mq5.exists() else marker_ex5
+        if marker.exists():
+            try:
+                ts = float(marker.stat().st_mtime)
+            except Exception:
+                ts = 0.0
+            candidates.append((ts, d))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+def _read_policy_runtime_retry_snapshot(lookback_min: int) -> dict:
+    mt5_dir = _find_mt5_data_dir()
+    if mt5_dir is None:
+        return {"status": "NO_MT5_DIR", "message": "brak katalogu MT5"}
+    logs_dir = mt5_dir / "MQL5" / "Logs"
+    if not logs_dir.exists():
+        return {"status": "NO_LOG_DIR", "message": "brak MQL5/Logs"}
+
+    now_local = datetime.now()
+    window_start = now_local - timedelta(minutes=max(1, int(lookback_min)))
+    date_keys = {now_local.strftime("%Y%m%d"), window_start.strftime("%Y%m%d")}
+    files = [logs_dir / f"{k}.log" for k in sorted(date_keys)]
+    line_re = re.compile(
+        r"^(?P<date>\d{4}\.\d{2}\.\d{2})\s+(?P<time>\d{2}:\d{2}:\d{2}\.\d{3}).*?POLICY_RUNTIME_OPEN_RETRY reason=(?P<reason>.+)$"
+    )
+
+    count = 0
+    reasons: Counter[str] = Counter()
+    last_dt: datetime | None = None
+    for f in files:
+        if not f.exists():
+            continue
+        try:
+            lines = f.read_text(encoding="utf-16le", errors="ignore").splitlines()
+            if len(lines) <= 1:
+                lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            m = line_re.search(str(line))
+            if not m:
+                continue
+            try:
+                ts = datetime.strptime(f"{m.group('date')} {m.group('time')}", "%Y.%m.%d %H:%M:%S.%f")
+            except Exception:
+                continue
+            if ts < window_start:
+                continue
+            count += 1
+            reason = str(m.group("reason")).strip()
+            reasons[reason] += 1
+            if last_dt is None or ts > last_dt:
+                last_dt = ts
+
+    top_reason = reasons.most_common(1)[0][0] if reasons else "NONE"
+    return {
+        "status": "OK",
+        "count_lookback": int(count),
+        "top_reason": top_reason,
+        "last_local": last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "NONE",
+        "lookback_min": int(lookback_min),
+    }
 
 
 def _safe_float(value: object) -> float:
