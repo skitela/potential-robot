@@ -24,6 +24,111 @@ class ReplayOutcome:
     net_pips: float
 
 
+class PipValueResolver:
+    """Best-effort resolver: pip value per 1 lot in account currency (preferably PLN)."""
+
+    def __init__(self, mt5_path: str = "") -> None:
+        self.enabled = False
+        self.account_currency = "UNKNOWN"
+        self._mt5 = None
+        self._cache: Dict[str, Tuple[Optional[float], Optional[str]]] = {}
+        self._symbol_name_map: Dict[str, str] = {}
+        try:
+            import MetaTrader5 as mt5  # type: ignore
+        except Exception:
+            return
+        init_ok = False
+        try:
+            path = str(mt5_path or "").strip()
+            if path:
+                init_ok = bool(mt5.initialize(path=path))
+            else:
+                init_ok = bool(mt5.initialize())
+        except Exception:
+            init_ok = False
+        if not init_ok:
+            return
+        self._mt5 = mt5
+        self.enabled = True
+        try:
+            ai = mt5.account_info()
+            self.account_currency = str(getattr(ai, "currency", "") or "UNKNOWN").upper()
+        except Exception:
+            self.account_currency = "UNKNOWN"
+        try:
+            for s in mt5.symbols_get() or []:
+                name = str(getattr(s, "name", "") or "").upper()
+                if not name:
+                    continue
+                self._symbol_name_map[name] = name
+                if name.endswith(".PRO"):
+                    base = name[:-4]
+                    self._symbol_name_map.setdefault(base, name)
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        if self.enabled and self._mt5 is not None:
+            try:
+                self._mt5.shutdown()
+            except Exception:
+                pass
+        self.enabled = False
+
+    def _resolve_symbol_name(self, symbol: str) -> Optional[str]:
+        s = str(symbol or "").upper().strip()
+        if not s:
+            return None
+        cands = [s]
+        if not s.endswith(".PRO"):
+            cands.append(f"{s}.PRO")
+        if s.endswith(".PRO"):
+            cands.append(s[:-4])
+        for c in cands:
+            if c in self._symbol_name_map:
+                return self._symbol_name_map[c]
+        return None
+
+    def pip_value_per_lot(self, symbol: str) -> Tuple[Optional[float], Optional[str]]:
+        key = str(symbol or "").upper().strip()
+        if not key:
+            return None, None
+        if key in self._cache:
+            return self._cache[key]
+        if not self.enabled or self._mt5 is None:
+            self._cache[key] = (None, None)
+            return self._cache[key]
+        resolved = self._resolve_symbol_name(key)
+        if not resolved:
+            self._cache[key] = (None, None)
+            return self._cache[key]
+        try:
+            info = self._mt5.symbol_info(resolved)
+        except Exception:
+            info = None
+        if info is None:
+            self._cache[key] = (None, resolved)
+            return self._cache[key]
+        point = float(getattr(info, "point", 0.0) or 0.0)
+        digits = int(getattr(info, "digits", 0) or 0)
+        tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
+        tick_value = float(getattr(info, "trade_tick_value", 0.0) or 0.0)
+        if tick_value <= 0.0:
+            tick_value = float(getattr(info, "trade_tick_value_profit", 0.0) or 0.0)
+        if point <= 0.0:
+            self._cache[key] = (None, resolved)
+            return self._cache[key]
+        if tick_size <= 0.0:
+            tick_size = point
+        pip = point * 10.0 if digits in (3, 5) else point
+        if tick_size <= 0.0 or pip <= 0.0 or tick_value <= 0.0:
+            self._cache[key] = (None, resolved)
+            return self._cache[key]
+        pip_value = tick_value * (pip / tick_size)
+        self._cache[key] = (float(pip_value), resolved)
+        return self._cache[key]
+
+
 def now_utc() -> dt.datetime:
     return dt.datetime.now(tz=UTC)
 
@@ -299,6 +404,8 @@ def update_bucket(
     key: Tuple[str, str, str],
     outcome: ReplayOutcome,
     recorded_pnl_net: Optional[float],
+    monetary_net_pln: Optional[float],
+    monetary_source: str,
     eligibility_reason: str,
 ) -> None:
     b = buckets.setdefault(
@@ -318,6 +425,9 @@ def update_bucket(
             "net_pips_sum": 0.0,
             "recorded_pnl_sum": 0.0,
             "recorded_pnl_nonnull": 0,
+            "net_pln_sum": 0.0,
+            "net_pln_nonnull": 0,
+            "net_pln_source_counts": defaultdict(int),
             "eligibility_reasons": defaultdict(int),
         },
     )
@@ -346,6 +456,10 @@ def update_bucket(
     if recorded_pnl_net is not None:
         b["recorded_pnl_nonnull"] += 1
         b["recorded_pnl_sum"] += float(recorded_pnl_net)
+    if monetary_net_pln is not None:
+        b["net_pln_nonnull"] += 1
+        b["net_pln_sum"] += float(monetary_net_pln)
+    b["net_pln_source_counts"][str(monetary_source or "NONE")] += 1
     b["eligibility_reasons"][str(eligibility_reason)] += 1
 
 
@@ -374,6 +488,10 @@ def finalize_buckets(buckets: Dict[Tuple[str, str, str], Dict[str, Any]]) -> Lis
                 "net_pips_per_trade": round(float(b["net_pips_sum"]) / n, 3) if n else 0.0,
                 "recorded_pnl_sum": round(float(b["recorded_pnl_sum"]), 5),
                 "recorded_pnl_nonnull": int(b["recorded_pnl_nonnull"]),
+                "net_pln_sum": round(float(b["net_pln_sum"]), 2),
+                "net_pln_per_trade": round(float(b["net_pln_sum"]) / n, 2) if n else 0.0,
+                "net_pln_nonnull": int(b["net_pln_nonnull"]),
+                "net_pln_source_counts": dict(sorted(b["net_pln_source_counts"].items(), key=lambda kv: kv[1], reverse=True)),
                 "eligibility_reasons": dict(sorted(b["eligibility_reasons"].items(), key=lambda kv: kv[1], reverse=True)),
             }
         )
@@ -392,6 +510,8 @@ def aggregate_by_window_symbol(rows: Iterable[Dict[str, Any]]) -> Dict[Tuple[str
                 "losses": 0.0,
                 "net_pips_sum": 0.0,
                 "cost_pips_sum": 0.0,
+                "net_pln_sum": 0.0,
+                "net_pln_nonnull": 0.0,
             },
         )
         st["trades"] += float(row.get("trades") or 0.0)
@@ -399,6 +519,8 @@ def aggregate_by_window_symbol(rows: Iterable[Dict[str, Any]]) -> Dict[Tuple[str
         st["losses"] += float(row.get("losses") or 0.0)
         st["net_pips_sum"] += float(row.get("net_pips_sum") or 0.0)
         st["cost_pips_sum"] += float(row.get("cost_pips_sum") or 0.0)
+        st["net_pln_sum"] += float(row.get("net_pln_sum") or 0.0)
+        st["net_pln_nonnull"] += float(row.get("net_pln_nonnull") or 0.0)
     return agg
 
 
@@ -465,12 +587,14 @@ def recommendation_for_tomorrow(
                     "win_rate": round(s_wr, 4),
                     "net_pips_per_trade": round(s_net_pt, 3),
                     "net_pips_sum": round(float(s["net_pips_sum"]), 2),
+                    "net_pln_sum": round(float(s.get("net_pln_sum", 0.0)), 2),
                 },
                 "explore": {
                     "trades": e_n,
                     "win_rate": round(e_wr, 4),
                     "net_pips_per_trade": round(e_net_pt, 3),
                     "net_pips_sum": round(float(e["net_pips_sum"]), 2),
+                    "net_pln_sum": round(float(e.get("net_pln_sum", 0.0)), 2),
                 },
             }
         )
@@ -525,6 +649,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--poluzuj-threshold-pips-per-trade", type=float, default=0.5)
     ap.add_argument("--docisnij-threshold-pips-per-trade", type=float, default=-1.5)
     ap.add_argument("--improvement-margin-pips", type=float, default=0.75)
+    ap.add_argument("--mt5-path", default="")
     return ap.parse_args()
 
 
@@ -584,6 +709,7 @@ def main() -> int:
 
     conn_e = sqlite_connect(db_events)
     conn_b = sqlite_connect(db_bars)
+    pip_resolver = PipValueResolver(mt5_path=str(args.mt5_path or ""))
     try:
         rows = conn_e.execute(
             """
@@ -595,6 +721,7 @@ def main() -> int:
                 sl,
                 tp,
                 spread_points,
+                volume,
                 outcome_pnl_net,
                 grp,
                 window_group,
@@ -621,6 +748,10 @@ def main() -> int:
             "events_missing_prices": 0,
             "events_no_bars_in_horizon": 0,
             "events_ambiguous_worst_sl": 0,
+            "monetary_net_pln_nonnull": 0,
+            "monetary_recorded_nonzero_count": 0,
+            "monetary_estimated_count": 0,
+            "monetary_unavailable_count": 0,
         }
 
         relax_reasons = {
@@ -644,6 +775,7 @@ def main() -> int:
             sl = row["sl"]
             tp = row["tp"]
             spread_points = float(row["spread_points"] or 0.0)
+            volume = float(row["volume"] or 0.0)
             if ts is None or entry_price is None or sl is None or tp is None or not symbol or not signal:
                 quality["events_missing_prices"] += 1
                 continue
@@ -700,10 +832,26 @@ def main() -> int:
 
             key = (day, window_id, symbol)
             recorded_pnl_net = None if row["outcome_pnl_net"] is None else float(row["outcome_pnl_net"])
+            monetary_source = "NONE"
+            monetary_net_pln: Optional[float] = None
+            if recorded_pnl_net is not None and abs(recorded_pnl_net) > 1e-12:
+                monetary_net_pln = float(recorded_pnl_net)
+                monetary_source = "RECORDED_OUTCOME_PNL_NET"
+                quality["monetary_recorded_nonzero_count"] += 1
+            else:
+                pip_value_per_lot, resolved_symbol = pip_resolver.pip_value_per_lot(symbol)
+                if pip_value_per_lot is not None and volume > 0.0:
+                    monetary_net_pln = float(outcome.net_pips) * float(pip_value_per_lot) * float(volume)
+                    monetary_source = f"ESTIMATED_PIPS_X_PIPVALUE:{resolved_symbol or symbol}"
+                    quality["monetary_estimated_count"] += 1
+                else:
+                    quality["monetary_unavailable_count"] += 1
+            if monetary_net_pln is not None:
+                quality["monetary_net_pln_nonnull"] += 1
             if s_ok:
-                update_bucket(strict_buckets, key, outcome, recorded_pnl_net, s_reason)
+                update_bucket(strict_buckets, key, outcome, recorded_pnl_net, monetary_net_pln, monetary_source, s_reason)
             if e_ok:
-                update_bucket(explore_buckets, key, outcome, recorded_pnl_net, e_reason)
+                update_bucket(explore_buckets, key, outcome, recorded_pnl_net, monetary_net_pln, monetary_source, e_reason)
 
         strict_rows = finalize_buckets(strict_buckets)
         explore_rows = finalize_buckets(explore_buckets)
@@ -726,6 +874,8 @@ def main() -> int:
             losses = int(sum(int(r["losses"]) for r in rows_in))
             net_sum = float(sum(float(r["net_pips_sum"]) for r in rows_in))
             cost_sum = float(sum(float(r["cost_pips_sum"]) for r in rows_in))
+            net_pln_sum = float(sum(float(r.get("net_pln_sum") or 0.0) for r in rows_in))
+            net_pln_nonnull = int(sum(int(r.get("net_pln_nonnull") or 0) for r in rows_in))
             return {
                 "trades": n,
                 "wins": wins,
@@ -734,6 +884,10 @@ def main() -> int:
                 "net_pips_sum": round(net_sum, 2),
                 "net_pips_per_trade": round((net_sum / n) if n else 0.0, 3),
                 "cost_pips_sum": round(cost_sum, 2),
+                "net_pln_sum": round(net_pln_sum, 2),
+                "net_pln_per_trade": round((net_pln_sum / n) if n else 0.0, 2),
+                "net_pln_nonnull": net_pln_nonnull,
+                "net_pln_coverage": round((net_pln_nonnull / n) if n else 0.0, 4),
             }
 
         summary_strict = summary(strict_rows)
@@ -751,6 +905,11 @@ def main() -> int:
                 "horizon_minutes": int(args.horizon_minutes),
                 "same_bar_tp_sl_rule": "worst_case_sl",
                 "cost_model": "spread_points_to_pips_only",
+                "monetary_model": {
+                    "account_currency": pip_resolver.account_currency,
+                    "method": "recorded_outcome_pnl_net_else_estimated_pips_x_mt5_pip_value",
+                    "note": "Estimated PLN uses current MT5 symbol pip value and event volume.",
+                },
             },
             "policy_modes": {
                 "strict": "current_policy_all_scope_checks",
@@ -771,6 +930,9 @@ def main() -> int:
                 "delta_explore_minus_strict_net_pips": round(
                     float(summary_explore["net_pips_sum"]) - float(summary_strict["net_pips_sum"]), 2
                 ),
+                "delta_explore_minus_strict_net_pln": round(
+                    float(summary_explore["net_pln_sum"]) - float(summary_strict["net_pln_sum"]), 2
+                ),
                 "delta_explore_minus_strict_trades": int(summary_explore["trades"]) - int(summary_strict["trades"]),
             },
             "results_per_day_window_symbol": {
@@ -786,7 +948,7 @@ def main() -> int:
             },
             "notes": [
                 "Shadow analytics only; no runtime strategy mutation performed.",
-                "Financial account-currency PnL remains dependent on recorded outcome fields; this report is pip-model replay.",
+                "Monetary PLN fields are best-effort: recorded outcome PnL preferred, fallback uses MT5 pip value estimate.",
             ],
         }
 
@@ -827,6 +989,7 @@ def main() -> int:
     finally:
         conn_e.close()
         conn_b.close()
+        pip_resolver.close()
 
 
 if __name__ == "__main__":
