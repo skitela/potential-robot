@@ -1,6 +1,8 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
-    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA"
+    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
+    [switch]$SkipProfileSweep,
+    [double]$ProfileSweepMinIntervalHours = 6.0
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,5 +24,20 @@ $argsList = @(
     "--root", $Root,
     "--lab-data-root", $LabDataRoot
 )
+
+if (-not $SkipProfileSweep) {
+    try {
+        $sweepArgs = @(
+            "-B",
+            "TOOLS\lab_strategy_profile_sweep.py",
+            "--root", $Root,
+            "--lab-data-root", $LabDataRoot,
+            "--min-interval-hours", [string]$ProfileSweepMinIntervalHours
+        )
+        py @($pyVersionArgs + $sweepArgs) | Out-Null
+    } catch {
+        # Digest ma przejść nawet gdy sweep się nie uda.
+    }
+}
 
 py @($pyVersionArgs + $argsList)

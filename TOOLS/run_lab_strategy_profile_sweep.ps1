@@ -9,7 +9,9 @@ param(
     [int]$MinSample = 20,
     [double]$PoluzujThresholdPipsPerTrade = 0.5,
     [double]$DocisnijThresholdPipsPerTrade = -1.5,
-    [int]$TimeoutSec = 1800
+    [int]$TimeoutSec = 1800,
+    [double]$MinIntervalHours = 6.0,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,9 +29,10 @@ $argsList = @(
     "--min-sample", [string]$MinSample,
     "--poluzuj-threshold-pips-per-trade", [string]$PoluzujThresholdPipsPerTrade,
     "--docisnij-threshold-pips-per-trade", [string]$DocisnijThresholdPipsPerTrade,
-    "--timeout-sec", [string]$TimeoutSec
+    "--timeout-sec", [string]$TimeoutSec,
+    "--min-interval-hours", [string]$MinIntervalHours
 )
 if ($ProfileRequireBias) { $argsList += "--profile-require-bias" }
+if ($Force) { $argsList += "--force" }
 
 py -3.12 @argsList
-

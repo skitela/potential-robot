@@ -149,6 +149,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--poluzuj-threshold-pips-per-trade", type=float, default=0.5)
     ap.add_argument("--docisnij-threshold-pips-per-trade", type=float, default=-1.5)
     ap.add_argument("--timeout-sec", type=int, default=1800)
+    ap.add_argument("--min-interval-hours", type=float, default=6.0)
+    ap.add_argument("--state-file", default="")
+    ap.add_argument("--force", action="store_true")
     ap.add_argument("--out", default="")
     return ap.parse_args()
 
@@ -166,8 +169,48 @@ def main() -> int:
     strategy_path = Path(args.strategy_path).resolve() if str(args.strategy_path).strip() else (root / "CONFIG" / "strategy.json")
     db_events = Path(args.db_events).resolve() if str(args.db_events).strip() else (root / "DB" / "decision_events.sqlite")
     db_bars = Path(args.db_bars).resolve() if str(args.db_bars).strip() else (root / "DB" / "m5_bars.sqlite")
+    state_path = (
+        Path(args.state_file).resolve()
+        if str(args.state_file).strip()
+        else (lab_data_root / "run" / "lab_strategy_profile_sweep_state.json").resolve()
+    )
     profiles = parse_profiles(str(args.profiles))
     python_exe = str(args.python or "").strip() or str(sys.executable)
+
+    if not bool(args.force) and state_path.exists():
+        previous = load_json(state_path) or {}
+        last_ts = previous.get("last_run_utc")
+        if str(last_ts or "").strip():
+            try:
+                last_run = dt.datetime.fromisoformat(str(last_ts).replace("Z", "+00:00")).astimezone(UTC)
+                elapsed_h = (now - last_run).total_seconds() / 3600.0
+                if elapsed_h < float(args.min_interval_hours):
+                    skip = {
+                        "schema": "oanda_mt5.lab_strategy_profile_sweep.v1",
+                        "generated_at_utc": iso_utc(now),
+                        "status": "SKIP_MIN_INTERVAL",
+                        "root": str(root),
+                        "lab_data_root": str(lab_data_root),
+                        "min_interval_hours": float(args.min_interval_hours),
+                        "elapsed_hours_since_last_run": round(float(elapsed_h), 3),
+                        "last_run_utc": iso_utc(last_run),
+                        "state_path": str(state_path),
+                    }
+                    write_json(out_path, skip, root=root, lab_data_root=lab_data_root)
+                    write_json(
+                        state_path,
+                        {"last_run_utc": iso_utc(last_run), "last_status": "SKIP_MIN_INTERVAL", "last_report_path": str(out_path)},
+                        root=root,
+                        lab_data_root=lab_data_root,
+                    )
+                    print(
+                        "LAB_STRATEGY_PROFILE_SWEEP_OK status=SKIP_MIN_INTERVAL min_interval_h={0} elapsed_h={1:.3f} out={2}".format(
+                            float(args.min_interval_hours), float(elapsed_h), str(out_path)
+                        )
+                    )
+                    return 0
+            except Exception:
+                pass
 
     profile_runs: List[Dict[str, Any]] = []
     for profile in profiles:
@@ -262,6 +305,12 @@ def main() -> int:
         ],
     }
     write_json(out_path, report, root=root, lab_data_root=lab_data_root)
+    write_json(
+        state_path,
+        {"last_run_utc": iso_utc(now), "last_status": report["status"], "last_report_path": str(out_path)},
+        root=root,
+        lab_data_root=lab_data_root,
+    )
     print(
         "LAB_STRATEGY_PROFILE_SWEEP_OK status={0} profiles={1} winner={2} out={3}".format(
             report["status"], len(profile_runs), winner, str(out_path)

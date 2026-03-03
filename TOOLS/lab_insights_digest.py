@@ -117,6 +117,7 @@ def main() -> int:
     reports_ingest = lab_data_root / "reports" / "ingest"
     reports_daily = lab_data_root / "reports" / "daily"
     reports_retention = lab_data_root / "reports" / "retention"
+    reports_profiles = lab_data_root / "reports" / "profiles"
     run_status = lab_data_root / "run" / "lab_scheduler_status.json"
     pointer_json = root / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.json"
     pointer_txt = root / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.txt"
@@ -148,10 +149,12 @@ def main() -> int:
     ingest_window = reports_in_window(reports_ingest, start_utc, now)
     daily_window = reports_in_window(reports_daily, start_utc, now)
     retention_window = reports_in_window(reports_retention, start_utc, now)
+    profile_window = reports_in_window(reports_profiles, start_utc, now)
 
     latest_ingest = latest_payload(reports_ingest)
     latest_daily_pass = latest_payload_prefer_status(reports_daily, status="PASS")
     latest_retention = latest_payload(reports_retention)
+    latest_profile_sweep = latest_payload_prefer_status(reports_profiles, status="PASS")
     status_payload = load_json(run_status) or {}
 
     # Aggregate ingest window.
@@ -219,6 +222,9 @@ def main() -> int:
     latest_ingest_summary = dict((latest_ingest or {}).get("summary") or {})
     latest_daily_summary = dict((latest_daily_pass or {}).get("summary") or {})
     latest_ret_summary = dict((latest_retention or {}).get("summary") or {})
+    latest_profile_status = str((latest_profile_sweep or {}).get("status") or "UNKNOWN").upper()
+    latest_profile_winner = str((latest_profile_sweep or {}).get("winner_by_explore_net_pips_per_trade") or "UNKNOWN").upper()
+    latest_profile_runs = list((latest_profile_sweep or {}).get("runs") or [])
     scheduler_status = str((status_payload or {}).get("status") or "UNKNOWN").upper()
     scheduler_reason = str((status_payload or {}).get("reason") or "UNKNOWN")
     pairs_ready = _safe_int(latest_daily_summary.get("pairs_ready_for_shadow"))
@@ -262,6 +268,8 @@ def main() -> int:
             "latest_pairs_total": pairs_total,
             "latest_explore_total_trades": explore_total_trades_latest,
             "latest_retention_removed_dirs": _safe_int(latest_ret_summary.get("snapshot_dirs_removed")),
+            "latest_profile_sweep_status": latest_profile_status,
+            "latest_profile_sweep_winner": latest_profile_winner,
         },
         "window_aggregate": {
             "ingest_runs": ingest_runs,
@@ -269,6 +277,7 @@ def main() -> int:
             "daily_pass_runs": daily_pass_runs,
             "daily_skip_runs": daily_skip_runs,
             "retention_runs": len(retention_window),
+            "profile_sweep_runs": len(profile_window),
             "symbols_processed": sorted(symbols),
             "windows_processed": sorted(windows),
             "rows_fetched_total": rows_fetched,
@@ -292,6 +301,16 @@ def main() -> int:
                 "symbol": str((worst_row or {}).get("symbol", "")),
                 "explore_net_pips_per_trade": _safe_float(((worst_row or {}).get("explore") or {}).get("net_pips_per_trade")),
             },
+            "profile_sweep_latest_runs": [
+                {
+                    "profile": str(r.get("profile") or "").upper(),
+                    "status": str(r.get("status") or "").upper(),
+                    "action_hint": str(r.get("action_hint") or "UNKNOWN"),
+                    "explore_net_pips_per_trade": _safe_float((r.get("metrics") or {}).get("explore_net_pips_per_trade")),
+                    "explore_trades": _safe_int((r.get("metrics") or {}).get("explore_trades")),
+                }
+                for r in latest_profile_runs
+            ],
         },
         "recommendation": recommendation,
     }
@@ -361,10 +380,32 @@ def main() -> int:
                 wa["worst_row"]["window_id"], wa["worst_row"]["symbol"], wa["worst_row"]["explore_net_pips_per_trade"]
             )
         )
+    txt_lines.append("")
+    txt_lines.append("[4] PROFILE STRATEGII (LAB-ONLY)")
+    txt_lines.append(
+        "- Sweep profile runs (okno): {0}, ostatni status: {1}, zwyciezca: {2}".format(
+            wa.get("profile_sweep_runs", 0),
+            report["snapshot"].get("latest_profile_sweep_status", "UNKNOWN"),
+            report["snapshot"].get("latest_profile_sweep_winner", "UNKNOWN"),
+        )
+    )
+    profile_rows = list(wa.get("profile_sweep_latest_runs") or [])
+    if profile_rows:
+        for r in profile_rows:
+            txt_lines.append(
+                "- {0}: action={1}, explore_n={2}, explore_net/trade={3:.3f}".format(
+                    str(r.get("profile") or "UNKNOWN"),
+                    str(r.get("action_hint") or "UNKNOWN"),
+                    _safe_int(r.get("explore_trades")),
+                    _safe_float(r.get("explore_net_pips_per_trade")),
+                )
+            )
+    else:
+        txt_lines.append("- Brak danych sweep profili w tym oknie.")
     txt_lines.extend(
         [
             "",
-            "[4] WNIOSEK",
+            "[5] WNIOSEK",
             "- {0}".format(report["recommendation"]),
             "",
             "Pelny raport: {0}".format(out_path),
