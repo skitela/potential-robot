@@ -15,6 +15,13 @@ from zoneinfo import ZoneInfo
 
 UTC = dt.timezone.utc
 
+STRATEGY_PROFILES = {
+    "BASELINE",
+    "CANDLE_ONLY",
+    "RENKO_ONLY",
+    "CANDLE_RENKO_CONFLUENCE",
+}
+
 
 @dataclass(frozen=True)
 class ReplayOutcome:
@@ -183,6 +190,157 @@ def infer_point_and_pip(entry_price: float) -> Tuple[float, float]:
     point = (10.0 ** -decimals) if decimals > 0 else 1.0
     pip = point * 10.0 if decimals in (3, 5) else point
     return float(point), float(pip)
+
+
+def symbol_base(raw: Any) -> str:
+    s = str(raw or "").upper().strip()
+    if not s:
+        return ""
+    if s.endswith(".PRO"):
+        s = s[:-4]
+    return s
+
+
+def safe_float(raw: Any, default: float = 0.0) -> float:
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def extract_choice_adapter_features(topk_json: Any, choice_symbol: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    raw_text = str(topk_json or "").strip()
+    if not raw_text:
+        return None, "TOPK_MISSING"
+    try:
+        payload = json.loads(raw_text)
+    except Exception:
+        return None, "TOPK_INVALID_JSON"
+
+    items: List[Dict[str, Any]] = []
+    if isinstance(payload, list):
+        items = [x for x in payload if isinstance(x, dict)]
+    elif isinstance(payload, dict):
+        maybe = payload.get("topk")
+        if isinstance(maybe, list):
+            items = [x for x in maybe if isinstance(x, dict)]
+    if not items:
+        return None, "TOPK_EMPTY"
+
+    target = symbol_base(choice_symbol)
+    chosen: Optional[Dict[str, Any]] = None
+    for item in items:
+        proposal = item.get("proposal") if isinstance(item.get("proposal"), dict) else {}
+        candidates = {
+            symbol_base(item.get("raw")),
+            symbol_base(item.get("sym")),
+            symbol_base(proposal.get("base_symbol")),
+        }
+        candidates.discard("")
+        if target and target in candidates:
+            chosen = proposal
+            break
+    if chosen is None:
+        return None, "PROFILE_SYMBOL_NOT_FOUND"
+
+    out = {
+        "candle_bias": str(chosen.get("candle_bias") or "NONE").upper(),
+        "candle_score_long": safe_float(chosen.get("candle_score_long"), 0.0),
+        "candle_score_short": safe_float(chosen.get("candle_score_short"), 0.0),
+        "candle_quality_grade": str(chosen.get("candle_quality_grade") or "UNKNOWN").upper(),
+        "candle_reason_code": str(chosen.get("candle_reason_code") or "UNKNOWN").upper(),
+        "renko_bias": str(chosen.get("renko_bias") or "NONE").upper(),
+        "renko_score_long": safe_float(chosen.get("renko_score_long"), 0.0),
+        "renko_score_short": safe_float(chosen.get("renko_score_short"), 0.0),
+        "renko_quality_grade": str(chosen.get("renko_quality_grade") or "UNKNOWN").upper(),
+        "renko_reason_code": str(chosen.get("renko_reason_code") or "UNKNOWN").upper(),
+    }
+    return out, "OK"
+
+
+def _adapter_ok(
+    *,
+    adapter: str,
+    side: str,
+    features: Dict[str, Any],
+    score_threshold: float,
+    require_bias: bool,
+) -> Tuple[bool, str]:
+    prefix = str(adapter).lower()
+    bias = str(features.get(f"{prefix}_bias") or "NONE").upper()
+    if side == "BUY":
+        score = safe_float(features.get(f"{prefix}_score_long"), 0.0)
+        allowed_bias = {"UP"} if require_bias else {"UP", "NONE"}
+    else:
+        score = safe_float(features.get(f"{prefix}_score_short"), 0.0)
+        allowed_bias = {"DOWN"} if require_bias else {"DOWN", "NONE"}
+    if score < float(score_threshold):
+        return False, f"{prefix.upper()}_SCORE_LOW"
+    if bias not in allowed_bias:
+        return False, f"{prefix.upper()}_BIAS_CONFLICT"
+    return True, f"{prefix.upper()}_OK"
+
+
+def passes_strategy_profile(
+    *,
+    profile: str,
+    signal: str,
+    topk_json: Any,
+    choice_symbol: str,
+    score_threshold: float,
+    require_bias: bool,
+) -> Tuple[bool, str]:
+    p = str(profile or "BASELINE").upper().strip()
+    if p not in STRATEGY_PROFILES:
+        return False, f"PROFILE_UNKNOWN:{p}"
+    if p == "BASELINE":
+        return True, "PROFILE_BASELINE"
+
+    side = str(signal or "").upper()
+    if side not in {"BUY", "SELL"}:
+        return False, "PROFILE_SIGNAL_INVALID"
+
+    features, status = extract_choice_adapter_features(topk_json, choice_symbol)
+    if features is None:
+        return False, status
+
+    if p == "CANDLE_ONLY":
+        return _adapter_ok(
+            adapter="candle",
+            side=side,
+            features=features,
+            score_threshold=score_threshold,
+            require_bias=require_bias,
+        )
+    if p == "RENKO_ONLY":
+        return _adapter_ok(
+            adapter="renko",
+            side=side,
+            features=features,
+            score_threshold=score_threshold,
+            require_bias=require_bias,
+        )
+    if p == "CANDLE_RENKO_CONFLUENCE":
+        c_ok, c_reason = _adapter_ok(
+            adapter="candle",
+            side=side,
+            features=features,
+            score_threshold=score_threshold,
+            require_bias=require_bias,
+        )
+        if not c_ok:
+            return False, f"CONFLUENCE_{c_reason}"
+        r_ok, r_reason = _adapter_ok(
+            adapter="renko",
+            side=side,
+            features=features,
+            score_threshold=score_threshold,
+            require_bias=require_bias,
+        )
+        if not r_ok:
+            return False, f"CONFLUENCE_{r_reason}"
+        return True, "CONFLUENCE_OK"
+    return False, "PROFILE_NOT_IMPLEMENTED"
 
 
 def replay_one_trade(
@@ -650,6 +808,23 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--docisnij-threshold-pips-per-trade", type=float, default=-1.5)
     ap.add_argument("--improvement-margin-pips", type=float, default=0.75)
     ap.add_argument("--mt5-path", default="")
+    ap.add_argument(
+        "--strategy-profile",
+        default="BASELINE",
+        choices=sorted(STRATEGY_PROFILES),
+        help="LAB-only profile filter: BASELINE/CANDLE_ONLY/RENKO_ONLY/CANDLE_RENKO_CONFLUENCE",
+    )
+    ap.add_argument(
+        "--profile-score-threshold",
+        type=float,
+        default=0.55,
+        help="Min adapter score (long/short) required by strategy profile filters.",
+    )
+    ap.add_argument(
+        "--profile-require-bias",
+        action="store_true",
+        help="If set, profile filter requires directional bias (UP for BUY, DOWN for SELL).",
+    )
     return ap.parse_args()
 
 
@@ -752,6 +927,7 @@ def main() -> int:
                 spread_points,
                 volume,
                 outcome_pnl_net,
+                topk_json,
                 grp,
                 window_group,
                 window_id
@@ -768,9 +944,12 @@ def main() -> int:
         explore_buckets: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
         strict_reason_counts: Dict[str, int] = defaultdict(int)
         explore_reason_counts: Dict[str, int] = defaultdict(int)
+        profile_reason_counts: Dict[str, int] = defaultdict(int)
         quality = {
             "events_total": 0,
             "events_replayed": 0,
+            "events_profile_passed": 0,
+            "events_profile_filtered_out": 0,
             "events_missing_scope": 0,
             "events_scope_derived_single": 0,
             "events_scope_derived_multi_first": 0,
@@ -808,6 +987,22 @@ def main() -> int:
             if ts is None or entry_price is None or sl is None or tp is None or not symbol or not signal:
                 quality["events_missing_prices"] += 1
                 continue
+
+            profile_ok, profile_reason = passes_strategy_profile(
+                profile=str(args.strategy_profile),
+                signal=signal,
+                topk_json=row["topk_json"],
+                choice_symbol=symbol,
+                score_threshold=float(args.profile_score_threshold),
+                require_bias=bool(args.profile_require_bias),
+            )
+            profile_reason_counts[str(profile_reason)] += 1
+            if not profile_ok:
+                quality["events_profile_filtered_out"] += 1
+                strict_reason_counts[f"PROFILE_FILTER:{profile_reason}"] += 1
+                explore_reason_counts[f"PROFILE_FILTER:{profile_reason}"] += 1
+                continue
+            quality["events_profile_passed"] += 1
 
             outcome = replay_one_trade(
                 conn_bars=conn_b,
@@ -944,6 +1139,9 @@ def main() -> int:
                 "strict": "current_policy_all_scope_checks",
                 "explore": "strict_plus_relax_specific_scope_blocks_only",
                 "explore_relax_reasons": sorted(relax_reasons),
+                "strategy_profile": str(args.strategy_profile).upper(),
+                "profile_score_threshold": float(args.profile_score_threshold),
+                "profile_require_bias": bool(args.profile_require_bias),
             },
             "quality": quality,
             "population": {
@@ -952,6 +1150,7 @@ def main() -> int:
                 "explore_trades_included": explore_trades,
                 "strict_reason_counts": dict(sorted(strict_reason_counts.items(), key=lambda kv: kv[1], reverse=True)),
                 "explore_reason_counts": dict(sorted(explore_reason_counts.items(), key=lambda kv: kv[1], reverse=True)),
+                "profile_reason_counts": dict(sorted(profile_reason_counts.items(), key=lambda kv: kv[1], reverse=True)),
             },
             "summary": {
                 "strict": summary_strict,
@@ -999,6 +1198,13 @@ def main() -> int:
         txt_lines.append("SHADOW_POLICY_DAILY_REPORT")
         txt_lines.append(f"Generated UTC: {report['generated_at_utc']}")
         txt_lines.append(f"Range UTC: {start_iso} -> {end_iso}")
+        txt_lines.append(
+            "Strategy profile: {0} (score_threshold={1}, require_bias={2})".format(
+                str(args.strategy_profile).upper(),
+                float(args.profile_score_threshold),
+                bool(args.profile_require_bias),
+            )
+        )
         txt_lines.append("")
         txt_lines.append("SUMMARY_STRICT")
         for k, v in summary_strict.items():

@@ -54,6 +54,15 @@ Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C
   - `LAB/EVIDENCE/lab_insights/lab_insights_latest.json`
   - `LAB/EVIDENCE/lab_insights/lab_insights_latest.txt`
 
+## Testy strategii pojedynczych (LAB-only)
+- Cel: porownanie `BASELINE` vs `CANDLE_ONLY` vs `RENKO_ONLY` vs `CANDLE_RENKO_CONFLUENCE` bez dotykania runtime.
+- Runner:
+  - `powershell -ExecutionPolicy Bypass -File TOOLS\run_lab_strategy_profile_sweep.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA`
+- Wynik:
+  - `C:\OANDA_MT5_LAB_DATA\reports\profiles\lab_strategy_profile_sweep_*.json`
+- Uwaga:
+  - to jest eksperyment LAB-only (rekomendacje `DOCIŚNIJ/TRZYMAJ/POLUZUJ`), bez automatycznej mutacji `CONFIG/strategy.json`.
+
 ## Registry eksperymentow (MVP)
 - SQLite: `LAB_DATA_ROOT/registry/lab_registry.sqlite`
 - Tabele:
