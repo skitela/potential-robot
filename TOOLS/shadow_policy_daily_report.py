@@ -807,6 +807,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--poluzuj-threshold-pips-per-trade", type=float, default=0.5)
     ap.add_argument("--docisnij-threshold-pips-per-trade", type=float, default=-1.5)
     ap.add_argument("--improvement-margin-pips", type=float, default=0.75)
+    ap.add_argument(
+        "--max-abs-pips-per-trade",
+        type=float,
+        default=10000.0,
+        help="Skip replay rows with absurd gross/net pips magnitude (data-quality guard).",
+    )
     ap.add_argument("--mt5-path", default="")
     ap.add_argument(
         "--strategy-profile",
@@ -950,6 +956,7 @@ def main() -> int:
             "events_replayed": 0,
             "events_profile_passed": 0,
             "events_profile_filtered_out": 0,
+            "events_outlier_pips_skipped": 0,
             "events_missing_scope": 0,
             "events_scope_derived_single": 0,
             "events_scope_derived_multi_first": 0,
@@ -1020,6 +1027,13 @@ def main() -> int:
                 quality["events_no_bars_in_horizon"] += 1
             if outcome.exit_reason == "AMBIGUOUS_WORST_SL":
                 quality["events_ambiguous_worst_sl"] += 1
+            max_abs_pips = abs(float(args.max_abs_pips_per_trade))
+            if max_abs_pips > 0.0:
+                if abs(float(outcome.gross_pips)) > max_abs_pips or abs(float(outcome.net_pips)) > max_abs_pips:
+                    quality["events_outlier_pips_skipped"] += 1
+                    strict_reason_counts["OUTLIER_PIPS_SKIPPED"] += 1
+                    explore_reason_counts["OUTLIER_PIPS_SKIPPED"] += 1
+                    continue
 
             window_id, group_name, scope_origin = derive_scope_if_missing(
                 ts_utc=ts,
@@ -1142,6 +1156,7 @@ def main() -> int:
                 "strategy_profile": str(args.strategy_profile).upper(),
                 "profile_score_threshold": float(args.profile_score_threshold),
                 "profile_require_bias": bool(args.profile_require_bias),
+                "max_abs_pips_per_trade": float(args.max_abs_pips_per_trade),
             },
             "quality": quality,
             "population": {

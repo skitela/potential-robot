@@ -16,6 +16,14 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def file_age_hours(path: Path) -> Optional[float]:
+    try:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        return max(0.0, float((datetime.now(timezone.utc) - mtime).total_seconds() / 3600.0))
+    except Exception:
+        return None
+
+
 def latest_file(path_glob_root: Path, pattern: str) -> Optional[Path]:
     files = [p for p in path_glob_root.glob(pattern) if p.is_file()]
     if not files:
@@ -32,7 +40,9 @@ def safe_read_json(path: Path) -> Dict[str, Any]:
 
 
 def parse_log_kpi(safety_log: Path, *, hours: int) -> Dict[str, Any]:
-    start = datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))
+    # safetybot.log timestamps are local wall clock time without explicit timezone,
+    # so compare using local naive datetimes to avoid UTC skew.
+    start_local = datetime.now() - timedelta(hours=max(1, int(hours)))
     metrics = {
         "window_hours": int(max(1, int(hours))),
         "log_lines_in_window": 0,
@@ -56,10 +66,10 @@ def parse_log_kpi(safety_log: Path, *, hours: int) -> Dict[str, Any]:
         if not m:
             continue
         try:
-            ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            ts_local = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
         except Exception:
             continue
-        if ts < start:
+        if ts_local < start_local:
             continue
         metrics["log_lines_in_window"] += 1
         if "HEARTBEAT_FAILSAFE_ACTIVE" in line:
@@ -77,6 +87,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Collect runtime stability KPI snapshot.")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--hours", type=int, default=24)
+    ap.add_argument("--max-overlay-age-hours", type=float, default=24.0)
     ap.add_argument("--out", default="")
     return ap.parse_args()
 
@@ -87,7 +98,10 @@ def main() -> int:
     evidence = (root / "EVIDENCE").resolve()
     safety_log = (root / "LOGS" / "safetybot.log").resolve()
     strict_overlay_path = latest_file(evidence, "ranking_benchmark_strict_overlay_*.json")
-    strict_overlay = safe_read_json(strict_overlay_path) if strict_overlay_path else {}
+    overlay_age_h = file_age_hours(strict_overlay_path) if strict_overlay_path else None
+    max_overlay_age_h = max(1.0, float(args.max_overlay_age_hours))
+    overlay_fresh = bool(strict_overlay_path) and (overlay_age_h is not None) and (overlay_age_h <= max_overlay_age_h)
+    strict_overlay = safe_read_json(strict_overlay_path) if (strict_overlay_path and overlay_fresh) else {}
     strict_summary = dict(strict_overlay.get("summary") or {})
     strict_split = dict(strict_overlay.get("latency_split_diagnostics") or {})
 
@@ -95,13 +109,13 @@ def main() -> int:
 
     latency_p50 = strict_summary.get("stress_latency_p50_sec", "UNKNOWN")
     latency_p95 = strict_summary.get("stress_latency_p95_sec", "UNKNOWN")
-    timeout_count = strict_summary.get("stress_timeout_count", "UNKNOWN")
-    deadlock_count = strict_summary.get("stress_deadlock_suspect_count", "UNKNOWN")
+    timeout_count = strict_summary.get("stress_timeout_count", None)
+    deadlock_count = strict_summary.get("stress_deadlock_suspect_count", None)
 
-    if timeout_count == "UNKNOWN":
+    if not isinstance(timeout_count, int):
         timeout_count = int(log_metrics.get("order_queue_timeout_count", 0))
-    if deadlock_count == "UNKNOWN":
-        # Runtime proxy when stress-harness value is missing.
+    if not isinstance(deadlock_count, int):
+        # Runtime proxy when stress-harness value is missing or stale.
         deadlock_count = int(log_metrics.get("heartbeat_failsafe_active_count", 0))
 
     report: Dict[str, Any] = {
@@ -110,6 +124,9 @@ def main() -> int:
         "root": str(root),
         "inputs": {
             "strict_overlay_path": str(strict_overlay_path) if strict_overlay_path else "MISSING",
+            "strict_overlay_age_hours": overlay_age_h if overlay_age_h is not None else "UNKNOWN",
+            "strict_overlay_fresh_max_hours": max_overlay_age_h,
+            "strict_overlay_used": bool(overlay_fresh),
             "safety_log_path": str(safety_log),
             "hours": int(max(1, int(args.hours))),
         },
@@ -121,8 +138,15 @@ def main() -> int:
         },
         "latency_split_diagnostics": strict_split if strict_split else "UNKNOWN",
         "log_window_metrics": log_metrics,
+        "notes": [],
         "status": "PASS",
     }
+    if strict_overlay_path and not overlay_fresh:
+        report["notes"].append(
+            "strict overlay omitted from KPI due to stale age; runtime log window metrics used as primary proxy"
+        )
+    elif not strict_overlay_path:
+        report["notes"].append("strict overlay missing; runtime log window metrics used as primary proxy")
 
     if isinstance(timeout_count, int) and timeout_count > 0:
         report["status"] = "WARN"

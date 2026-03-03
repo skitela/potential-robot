@@ -114,6 +114,43 @@ function Get-ComponentProcessIds {
     return @($ids)
 }
 
+function Get-SafetyBotBridgePid {
+    param(
+        [int[]]$Ports = @(5555, 5556)
+    )
+    try {
+        $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { @($Ports) -contains [int]$_.LocalPort })
+        if (@($listeners).Count -eq 0) {
+            return $null
+        }
+        $byPid = @{}
+        foreach ($row in $listeners) {
+            $ownerPid = [int]$row.OwningProcess
+            if (-not $byPid.ContainsKey($ownerPid)) {
+                $byPid[$ownerPid] = New-Object System.Collections.Generic.HashSet[int]
+            }
+            [void]$byPid[$ownerPid].Add([int]$row.LocalPort)
+        }
+        foreach ($entry in $byPid.GetEnumerator()) {
+            $ownerPid = [int]$entry.Key
+            $portSet = $entry.Value
+            $coversAll = $true
+            foreach ($p in $Ports) {
+                if (-not $portSet.Contains([int]$p)) {
+                    $coversAll = $false
+                    break
+                }
+            }
+            if ($coversAll -and (Test-PidRunning -ProcessId $ownerPid)) {
+                return $ownerPid
+            }
+        }
+    } catch {
+        return $null
+    }
+    return $null
+}
+
 function Get-FileAgeSec {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
@@ -410,7 +447,20 @@ function Start-Component {
         [switch]$Dry
     )
     $existing = Get-ComponentProcessIds -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script)
+    if (([string]$Comp.Name -eq "SafetyBot") -and (@($existing).Count -eq 0)) {
+        $bridgePid = Get-SafetyBotBridgePid
+        if ($null -ne $bridgePid) {
+            $existing = @([int]$bridgePid)
+        }
+    }
     if (@($existing).Count -gt 0) {
+        $lockRepairState = "n/a"
+        if ($LockPath -and (-not (Test-Path $LockPath))) {
+            $repairPid = [int]((@($existing | Sort-Object -Descending))[0])
+            if ($repairPid -gt 0) {
+                $lockRepairState = Set-LockPid -LockPath $LockPath -LockPidValue $repairPid -Dry:$Dry
+            }
+        }
         if (@($existing).Count -gt 1) {
             $dedupe = Deduplicate-ComponentInstances -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script) -LockPath $LockPath -Dry:$Dry
             if ($dedupe.status -eq "dedupe_failed") {
@@ -418,17 +468,20 @@ function Start-Component {
                     status = "duplicate_running"
                     pids = @($existing)
                     dedupe = $dedupe
+                    lock_repair = $lockRepairState
                 }
             }
             return @{
                 status = "deduplicated_running"
                 pids = @($dedupe.remaining_pids)
                 dedupe = $dedupe
+                lock_repair = $lockRepairState
             }
         }
         return @{
             status = "already_running"
             pids = @($existing)
+            lock_repair = $lockRepairState
         }
     }
 
@@ -711,6 +764,7 @@ try {
                 $lockExists = if ($lockPath) { Test-Path $lockPath } else { $false }
                 $lockPid = $null
                 $lockPidRunning = $false
+                $runtimeHint = "none"
                 if ($lockPath -and $lockExists) {
                     try {
                         $lockPid = Get-LockPid -LockPath $lockPath
@@ -726,6 +780,14 @@ try {
                         $lockPidRunning = $false
                     }
                 }
+                if (([string]$c.Name -eq "SafetyBot") -and (@($ids).Count -eq 0) -and (-not $lockPidRunning)) {
+                    $bridgePid = Get-SafetyBotBridgePid
+                    if ($null -ne $bridgePid) {
+                        $ids += [int]$bridgePid
+                        $ids = @($ids | Sort-Object -Unique)
+                        $runtimeHint = "bridge_ports_5555_5556"
+                    }
+                }
                 $logPath = Get-ComponentLogPath -RuntimeRoot $runtimeRoot -CompName ([string]$c.Name)
                 $logAgeSec = if ($logPath) { Get-FileAgeSec -Path $logPath } else { $null }
                 $ttl = Get-ComponentLogTtlSec -CompName ([string]$c.Name)
@@ -737,7 +799,7 @@ try {
                 # WMI can be restricted on some hosts; lock+fresh-log is accepted heartbeat fallback.
                 $runningByHeartbeat = $false
                 if ($lockPath) {
-                    $runningByHeartbeat = ([bool]$lockExists -and [bool]$logFresh)
+                    $runningByHeartbeat = [bool]$logFresh
                 } else {
                     $runningByHeartbeat = [bool]$logFresh
                 }
@@ -755,6 +817,7 @@ try {
                     log_path = $logPath
                     log_age_sec = $logAgeSec
                     log_ttl_sec = [int]$ttl
+                    runtime_hint = $runtimeHint
                 }
                 if (-not ([bool]$runningByPid -or [bool]$runningByHeartbeat)) {
                     $hasError = $true
@@ -790,6 +853,12 @@ try {
                         }
                     }
                     $pids += Get-ComponentProcessIds -RuntimeRoot $runtimeRoot -ScriptName ([string]$c.Script)
+                    if (([string]$c.Name -eq "SafetyBot") -and (@($pids).Count -eq 0)) {
+                        $bridgePid = Get-SafetyBotBridgePid
+                        if ($null -ne $bridgePid) {
+                            $pids += [int]$bridgePid
+                        }
+                    }
                     $pids = @($pids | Sort-Object -Unique)
                     if ($pass -eq 1) {
                         $initialPids = @($pids)
