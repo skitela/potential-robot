@@ -194,8 +194,6 @@ def generate_report(root: Path, run_dir: Path, out_path: Path) -> Tuple[Path, Pa
     offline_bundle = run_dir / "offline" / "evidence_bundle.zip"
     offline_bundle_sha = run_dir / "offline" / "evidence_bundle.zip.sha256"
     offline_runlog = run_dir / "offline" / "runlog.jsonl"
-    offline_house = run_dir / "offline" / "housekeeping_report.json"
-
     training_verdict = run_dir / "training" / "verdict.json"
     training_runlog = run_dir / "training" / "runlog.jsonl"
     training_tests = run_dir / "training" / "02_tests_training.txt"

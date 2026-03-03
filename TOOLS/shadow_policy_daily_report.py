@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import math
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass

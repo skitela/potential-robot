@@ -444,7 +444,7 @@ def score_criteria(signals: Dict[str, Any], smoke: Dict[str, Any], prelive: Dict
 
 def compute_weighted_score(criteria: Dict[str, Dict[str, Any]]) -> float:
     total = 0.0
-    for cid, meta in criteria.items():
+    for _cid, meta in criteria.items():
         total += float(meta["score_0_10"]) * float(meta["weight_pct"])
     return round(total / 10.0, 2)
 
@@ -479,7 +479,6 @@ def build_vs_pro_by_category(criteria: Dict[str, Dict[str, Any]]) -> Dict[str, L
 
 
 def build_benchmark(score_gh: float) -> Dict[str, Any]:
-    semi_scores = [x[1] for x in SEMI_PRO_REF]
     pro_scores = [x[1] for x in PRO_REF]
     # Keep parity with the previously accepted benchmark sheet in this workspace.
     semi_avg = 73.70
@@ -600,7 +599,6 @@ def render_markdown(report: Dict[str, Any]) -> str:
     for row in bench["professional"]:
         lines.append(f"| {row['name']} | {row['score_100']:.1f} |")
     lines.append("")
-    st = bench["stats"]
     gp = bench["gap_vs_gh"]
     lines.append("## 6) Pozycja GH V1")
     lines.append(f"- Rank (13 systemow): **{bench['gh_rank_1_to_13']} / 13**")

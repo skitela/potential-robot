@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List
 
 
 RUNTIME_METRICS_RE = re.compile(

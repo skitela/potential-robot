@@ -9,7 +9,6 @@ import platform
 import sqlite3
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 

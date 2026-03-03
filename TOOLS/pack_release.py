@@ -19,7 +19,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List, Set
 
 # Ensure project root is importable even when this script is executed from TOOLS/
 ROOT = Path(__file__).resolve().parents[1]
