@@ -504,38 +504,52 @@ def _build_report(
 
     after_bridge_wait_all = after_metrics.get("bridge_wait") or {}
     after_bridge_wait_trade = after_metrics.get("bridge_wait_trade_path") or {}
+    cmd_counts = (after.get("reasons") or {}).get("command_counts_by_type") or {}
+    trade_cmd_sent = int(cmd_counts.get("TRADE", 0) or 0)
     after_bridge_wait_p95 = after_bridge_wait_all.get("p95_ms")
     after_bridge_wait_p99 = after_bridge_wait_all.get("p99_ms")
     trade_wait_n = int(after_bridge_wait_trade.get("n") or 0)
     trade_wait_p95 = after_bridge_wait_trade.get("p95_ms")
     trade_wait_p99 = after_bridge_wait_trade.get("p99_ms")
-    audit_wait_source = "ALL_COMMANDS"
-    audit_wait_p95 = after_bridge_wait_p95
-    if isinstance(trade_wait_p95, (int, float)) and trade_wait_n >= 10:
-        audit_wait_source = "TRADE_PATH"
-        audit_wait_p95 = trade_wait_p95
+    trade_samples_ok = isinstance(trade_wait_p95, (int, float)) and trade_wait_n >= 10
+    audit_wait_source = "TRADE_PATH" if trade_samples_ok else "ALL_COMMANDS"
+    audit_wait_p95 = trade_wait_p95 if trade_samples_ok else after_bridge_wait_p95
     after_timeout_rate = after_metrics.get("timeout_rate")
     verdict = "PASS"
     review_required: List[str] = []
-    if isinstance(audit_wait_p95, (int, float)) and audit_wait_p95 > 800:
+    if trade_samples_ok and isinstance(audit_wait_p95, (int, float)) and audit_wait_p95 > 800:
         verdict = "REVIEW_REQUIRED"
         review_required.append(f"BRIDGE_WAIT_P95_AUDIT_THRESHOLD_EXCEEDED:{audit_wait_p95}")
     if isinstance(after_timeout_rate, (int, float)) and after_timeout_rate > 0.02:
         verdict = "REVIEW_REQUIRED"
         review_required.append(f"TIMEOUT_RATE_HIGH:{after_timeout_rate}")
     decision_n = int((after_metrics.get("decision_core") or {}).get("n") or 0)
-    if decision_n < 3:
+    if trade_cmd_sent >= 10 and decision_n < 3:
         verdict = "REVIEW_REQUIRED"
         review_required.append(f"DECISION_CORE_LOW_N:{decision_n}")
+    if not trade_samples_ok:
+        review_required.append(f"TRADE_PATH_SAMPLES_LOW:{trade_wait_n}")
+        if verdict == "PASS":
+            verdict = "REVIEW_REQUIRED_NO_TRADE_DATA"
 
     goal_tracking = {
         "bridge_wait_audit_source": audit_wait_source,
         "bridge_wait_trade_path_samples_n": trade_wait_n,
+        "trade_commands_sent_n": trade_cmd_sent,
+        "trade_path_samples_ready": bool(trade_samples_ok),
         "bridge_wait_p95_goal_lt_700_ms": (
-            "PASS" if isinstance(after_bridge_wait_p95, (int, float)) and after_bridge_wait_p95 < 700 else "NOT_MET"
+            (
+                "PASS"
+                if isinstance(after_bridge_wait_p95, (int, float)) and after_bridge_wait_p95 < 700
+                else ("NOT_EVALUATED" if not trade_samples_ok else "NOT_MET")
+            )
         ),
         "bridge_wait_p99_goal_lt_850_ms": (
-            "PASS" if isinstance(after_bridge_wait_p99, (int, float)) and after_bridge_wait_p99 < 850 else "NOT_MET"
+            (
+                "PASS"
+                if isinstance(after_bridge_wait_p99, (int, float)) and after_bridge_wait_p99 < 850
+                else ("NOT_EVALUATED" if not trade_samples_ok else "NOT_MET")
+            )
         ),
         "bridge_wait_p95_goal_lt_700_ms_trade_path": (
             "PASS"
@@ -601,6 +615,11 @@ def _build_report(
                     "Bridge wait audit threshold evaluated on ALL_COMMANDS because TRADE_PATH samples < 10."
                     if audit_wait_source == "ALL_COMMANDS"
                     else "Bridge wait audit threshold evaluated on TRADE_PATH (samples >= 10)."
+                ),
+                (
+                    "Decision-core low-N gate skipped because TRADE command sample is below minimum."
+                    if trade_cmd_sent < 10
+                    else "Decision-core low-N gate evaluated with TRADE command sample >= 10."
                 ),
             ],
         },
