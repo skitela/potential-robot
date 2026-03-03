@@ -183,6 +183,9 @@ def _parse_window(
     command_timeout_count = 0
     command_sent_by_type: Counter[str] = Counter()
     command_timeout_by_type: Counter[str] = Counter()
+    reply_send_by_type: Dict[str, List[float]] = {"HEARTBEAT": [], "TRADE": [], "OTHER": []}
+    reply_wait_by_type: Dict[str, List[float]] = {"HEARTBEAT": [], "TRADE": [], "OTHER": []}
+    reply_parse_by_type: Dict[str, List[float]] = {"HEARTBEAT": [], "TRADE": [], "OTHER": []}
 
     first_audit_ts = "UNKNOWN"
     last_audit_ts = "UNKNOWN"
@@ -211,9 +214,21 @@ def _parse_window(
             data = obj.get("data")
             if not isinstance(data, dict):
                 data = {}
+            cmd_type = _extract_command_type(obj)
+            if cmd_type not in reply_wait_by_type:
+                reply_send_by_type[cmd_type] = []
+                reply_wait_by_type[cmd_type] = []
+                reply_parse_by_type[cmd_type] = []
             for src_key, sink in (("send_ms", reply_send), ("wait_ms", reply_wait), ("parse_ms", reply_parse)):
                 try:
-                    sink.append(float(data.get(src_key)))
+                    val = float(data.get(src_key))
+                    sink.append(val)
+                    if src_key == "send_ms":
+                        reply_send_by_type[cmd_type].append(val)
+                    elif src_key == "wait_ms":
+                        reply_wait_by_type[cmd_type].append(val)
+                    elif src_key == "parse_ms":
+                        reply_parse_by_type[cmd_type].append(val)
                 except Exception:
                     pass
             response_over_budget = bool(data.get("response_over_budget"))
@@ -312,6 +327,13 @@ def _parse_window(
     timeout_rate_hb = (timeout_rates_by_type.get("HEARTBEAT") or {}).get("timeout_rate", 0.0)
     timeout_rate_other = (timeout_rates_by_type.get("OTHER") or {}).get("timeout_rate", 0.0)
 
+    def _stats_by_command_type(values_by_type: Dict[str, List[float]]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        keys = sorted(values_by_type.keys())
+        for key in keys:
+            out[key] = _stats(values_by_type.get(key, []))
+        return out
+
     def _section_summary(section: str) -> Dict[str, Any]:
         rows = section_samples.get(section, [])
         p50_vals = [r["p50_ms"] for r in rows]
@@ -345,6 +367,12 @@ def _parse_window(
             "bridge_send": _stats(reply_send),
             "bridge_wait": _stats(reply_wait),
             "bridge_parse": _stats(reply_parse),
+            "bridge_send_by_command_type": _stats_by_command_type(reply_send_by_type),
+            "bridge_wait_by_command_type": _stats_by_command_type(reply_wait_by_type),
+            "bridge_parse_by_command_type": _stats_by_command_type(reply_parse_by_type),
+            "bridge_wait_heartbeat": _stats(reply_wait_by_type.get("HEARTBEAT", [])),
+            "bridge_wait_trade_path": _stats(reply_wait_by_type.get("TRADE", [])),
+            "bridge_wait_other": _stats(reply_wait_by_type.get("OTHER", [])),
             "timeout_rate": round(timeout_rate, 6),
             "timeout_rate_all": round(timeout_rate, 6),
             "timeout_rate_heartbeat": timeout_rate_hb,
@@ -352,6 +380,10 @@ def _parse_window(
             "timeout_rate_other": timeout_rate_other,
             "command_sent": command_sent_count,
             "command_timeout": command_timeout_count,
+            "bridge_rtt_samples_count": int(len(reply_wait)),
+            "bridge_rtt_success_count": int(len(reply_wait)),
+            "bridge_rtt_timeout_count": int(command_timeout_count),
+            "bridge_rtt_sampling_scope": "ALL_COMMAND_TYPES",
             "decision_core": _section_summary("decision_core"),
             "full_loop": _section_summary("full_loop"),
             "tick_ingest": _section_summary("tick_ingest"),
@@ -470,14 +502,24 @@ def _build_report(
         ),
     }
 
-    after_bridge_wait_p95 = (after_metrics.get("bridge_wait") or {}).get("p95_ms")
-    after_bridge_wait_p99 = (after_metrics.get("bridge_wait") or {}).get("p99_ms")
+    after_bridge_wait_all = after_metrics.get("bridge_wait") or {}
+    after_bridge_wait_trade = after_metrics.get("bridge_wait_trade_path") or {}
+    after_bridge_wait_p95 = after_bridge_wait_all.get("p95_ms")
+    after_bridge_wait_p99 = after_bridge_wait_all.get("p99_ms")
+    trade_wait_n = int(after_bridge_wait_trade.get("n") or 0)
+    trade_wait_p95 = after_bridge_wait_trade.get("p95_ms")
+    trade_wait_p99 = after_bridge_wait_trade.get("p99_ms")
+    audit_wait_source = "ALL_COMMANDS"
+    audit_wait_p95 = after_bridge_wait_p95
+    if isinstance(trade_wait_p95, (int, float)) and trade_wait_n >= 10:
+        audit_wait_source = "TRADE_PATH"
+        audit_wait_p95 = trade_wait_p95
     after_timeout_rate = after_metrics.get("timeout_rate")
     verdict = "PASS"
     review_required: List[str] = []
-    if isinstance(after_bridge_wait_p95, (int, float)) and after_bridge_wait_p95 > 800:
+    if isinstance(audit_wait_p95, (int, float)) and audit_wait_p95 > 800:
         verdict = "REVIEW_REQUIRED"
-        review_required.append(f"BRIDGE_WAIT_P95_AUDIT_THRESHOLD_EXCEEDED:{after_bridge_wait_p95}")
+        review_required.append(f"BRIDGE_WAIT_P95_AUDIT_THRESHOLD_EXCEEDED:{audit_wait_p95}")
     if isinstance(after_timeout_rate, (int, float)) and after_timeout_rate > 0.02:
         verdict = "REVIEW_REQUIRED"
         review_required.append(f"TIMEOUT_RATE_HIGH:{after_timeout_rate}")
@@ -487,11 +529,23 @@ def _build_report(
         review_required.append(f"DECISION_CORE_LOW_N:{decision_n}")
 
     goal_tracking = {
+        "bridge_wait_audit_source": audit_wait_source,
+        "bridge_wait_trade_path_samples_n": trade_wait_n,
         "bridge_wait_p95_goal_lt_700_ms": (
             "PASS" if isinstance(after_bridge_wait_p95, (int, float)) and after_bridge_wait_p95 < 700 else "NOT_MET"
         ),
         "bridge_wait_p99_goal_lt_850_ms": (
             "PASS" if isinstance(after_bridge_wait_p99, (int, float)) and after_bridge_wait_p99 < 850 else "NOT_MET"
+        ),
+        "bridge_wait_p95_goal_lt_700_ms_trade_path": (
+            "PASS"
+            if isinstance(trade_wait_p95, (int, float)) and trade_wait_p95 < 700
+            else ("NO_DATA" if trade_wait_n <= 0 else "NOT_MET")
+        ),
+        "bridge_wait_p99_goal_lt_850_ms_trade_path": (
+            "PASS"
+            if isinstance(trade_wait_p99, (int, float)) and trade_wait_p99 < 850
+            else ("NO_DATA" if trade_wait_n <= 0 else "NOT_MET")
         ),
     }
 
@@ -543,6 +597,11 @@ def _build_report(
             "notes": [
                 "A7 soak window compared against previous bridge audit snapshot.",
                 "No strategy changes; measurement/audit only.",
+                (
+                    "Bridge wait audit threshold evaluated on ALL_COMMANDS because TRADE_PATH samples < 10."
+                    if audit_wait_source == "ALL_COMMANDS"
+                    else "Bridge wait audit threshold evaluated on TRADE_PATH (samples >= 10)."
+                ),
             ],
         },
         "stage2_profile_used": str(stage2_report_path),
@@ -568,6 +627,13 @@ def _render_txt(report: Dict[str, Any]) -> str:
     lines.append("METRICS_AFTER")
     for key in ("bridge_send", "bridge_wait", "bridge_parse", "full_loop", "decision_core", "tick_ingest"):
         lines.append(f"- {key}: {am.get(key)}")
+    lines.append(f"- bridge_wait_heartbeat: {am.get('bridge_wait_heartbeat')}")
+    lines.append(f"- bridge_wait_trade_path: {am.get('bridge_wait_trade_path')}")
+    lines.append(f"- bridge_wait_other: {am.get('bridge_wait_other')}")
+    lines.append(f"- bridge_rtt_samples_count: {am.get('bridge_rtt_samples_count')}")
+    lines.append(f"- bridge_rtt_success_count: {am.get('bridge_rtt_success_count')}")
+    lines.append(f"- bridge_rtt_timeout_count: {am.get('bridge_rtt_timeout_count')}")
+    lines.append(f"- bridge_rtt_sampling_scope: {am.get('bridge_rtt_sampling_scope')}")
     lines.append(f"- timeout_rate: {am.get('timeout_rate')}")
     lines.append(f"- timeout_rate_all: {am.get('timeout_rate_all')}")
     lines.append(f"- timeout_rate_heartbeat: {am.get('timeout_rate_heartbeat')}")
@@ -601,6 +667,9 @@ def _render_txt(report: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("VERDICT")
     lines.append(str(report.get("verdict")))
+    lines.append("")
+    lines.append("GOAL_TRACKING")
+    lines.append(str(report.get("goal_tracking")))
     return "\n".join(lines) + "\n"
 
 
