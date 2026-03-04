@@ -10,6 +10,7 @@ This dataset is advisory/learning-only (no direct execution impact).
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import re
 import sqlite3
@@ -61,6 +62,32 @@ def _normalize_command_type(raw: str, default: str) -> str:
 _ENTRY_SKIP_RE = re.compile(
     r"ENTRY_SKIP(?:_PRE)?\s+symbol=(?P<symbol>\S+)\s+grp=(?P<grp>\S+)\s+mode=(?P<mode>\S+)\s+reason=(?P<reason>[A-Z0-9_]+)"
 )
+_LOG_TS_RE = re.compile(
+    r"(?P<y>\d{4})[.\-](?P<m>\d{2})[.\-](?P<d>\d{2})\s+"
+    r"(?P<h>\d{2}):(?P<mi>\d{2}):(?P<s>\d{2})(?:[.,](?P<ms>\d{1,6}))?"
+)
+
+
+def _extract_ts_from_log_line(line: str) -> str:
+    m = _LOG_TS_RE.search(str(line or ""))
+    if not m:
+        return ""
+    try:
+        micros = str(m.group("ms") or "0").ljust(6, "0")[:6]
+        local_tz = dt.datetime.now().astimezone().tzinfo or timezone.utc
+        parsed = dt.datetime(
+            int(m.group("y")),
+            int(m.group("m")),
+            int(m.group("d")),
+            int(m.group("h")),
+            int(m.group("mi")),
+            int(m.group("s")),
+            int(micros),
+            tzinfo=local_tz,
+        ).astimezone(timezone.utc)
+        return parsed.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return ""
 
 
 def _fallback_no_trade_from_log(root: Path) -> List[Dict[str, Any]]:
@@ -75,7 +102,7 @@ def _fallback_no_trade_from_log(root: Path) -> List[Dict[str, Any]]:
                 continue
             out.append(
                 {
-                    "ts_utc": "",
+                    "ts_utc": _extract_ts_from_log_line(line),
                     "symbol": _symbol_base(m.group("symbol")),
                     "instrument": _symbol_base(m.group("symbol")),
                     "grp": str(m.group("grp") or ""),

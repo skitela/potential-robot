@@ -1,5 +1,6 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
+    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
     [string]$TaskName = "OANDA_MT5_STAGE1_LEARNING_DAILY_USER",
     [string]$StartTime = "22:30",
     [string]$FocusGroup = "FX",
@@ -27,6 +28,7 @@ $argList = @(
     "-ExecutionPolicy", "Bypass",
     "-File", "`"$runner`"",
     "-Root", "`"$Root`"",
+    "-LabDataRoot", "`"$LabDataRoot`"",
     "-FocusGroup", $FocusGroup,
     "-LookbackHours", [string]$LookbackHours,
     "-RetentionDays", [string]$RetentionDays,

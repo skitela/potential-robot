@@ -1,5 +1,6 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
+    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
     [string]$TaskName = "OANDA_MT5_STAGE1_LEARNING_DAILY",
     [string]$StartTime = "22:30",
     [string]$FocusGroup = "FX",
@@ -14,7 +15,7 @@ if (!(Test-Path $scriptPath)) {
     throw "Missing script: $scriptPath"
 }
 
-$arg = "-ExecutionPolicy Bypass -File `"$scriptPath`" -Root `"$Root`" -FocusGroup `"$FocusGroup`" -LookbackHours $LookbackHours -RetentionDays $RetentionDays"
+$arg = "-ExecutionPolicy Bypass -File `"$scriptPath`" -Root `"$Root`" -LabDataRoot `"$LabDataRoot`" -FocusGroup `"$FocusGroup`" -LookbackHours $LookbackHours -RetentionDays $RetentionDays"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
 $trigger = New-ScheduledTaskTrigger -Daily -At $StartTime
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest

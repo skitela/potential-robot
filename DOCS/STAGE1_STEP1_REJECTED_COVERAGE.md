@@ -70,7 +70,7 @@ Cykl robi:
 Rejestracja zadania dziennego (user-level, bez wymuszania admin):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File TOOLS/register_stage1_learning_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -StartTime 22:30
+powershell -ExecutionPolicy Bypass -File TOOLS/register_stage1_learning_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 22:30
 ```
 
 ## Etap 1 / Krok 4 — bramka jakości datasetu
@@ -102,3 +102,28 @@ Dataset Stage-1 (`stage1_learning_*.jsonl`) zapisuje teraz dodatkowo:
 - `source_module`, `label_quality`.
 
 To nadal warstwa audytowo-treningowa (brak ingerencji w execution path).
+
+## Etap 1 / Krok 5 — lekkie etykietowanie kontrfaktyczne (snapshoty LAB)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_counterfactual_from_snapshots.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+```
+
+Wyniki:
+
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_rows_<timestamp>.jsonl`
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_report_<timestamp>.json`
+
+Zakres:
+
+- bierze tylko próbki `NO_TRADE` z najnowszego datasetu Stage-1,
+- używa historycznych świec M1 z curated snapshotów LAB,
+- gdy strona (`LONG/SHORT`) jest nieznana, liczy oba warianty i zapisuje konserwatywny wynik (gorszy PnL),
+- tworzy etykiety robocze:
+  - `SAVED_LOSS`
+  - `MISSED_OPPORTUNITY`
+  - `NEUTRAL_TIMEOUT`
+
+To jest warstwa treningowa offline; nie dotyka execution path.

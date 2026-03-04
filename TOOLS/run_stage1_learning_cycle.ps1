@@ -1,5 +1,6 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
+    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
     [int]$LookbackHours = 24,
     [string]$FocusGroup = "FX",
     [int]$RetentionDays = 14,
@@ -20,7 +21,7 @@ function Invoke-Python {
 }
 
 $startTs = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-Write-Host "STAGE1_LEARNING_CYCLE start_utc=$startTs root=$Root focus=$FocusGroup lookback_h=$LookbackHours"
+Write-Host "STAGE1_LEARNING_CYCLE start_utc=$startTs root=$Root lab_data_root=$LabDataRoot focus=$FocusGroup lookback_h=$LookbackHours"
 
 Invoke-Python @(
     "$Root\TOOLS\rejected_coverage_report.py",
@@ -39,6 +40,14 @@ Invoke-Python @(
     "$Root\TOOLS\build_stage1_learning_dataset.py",
     "--root", $Root,
     "--lookback-hours", "$LookbackHours"
+)
+
+Invoke-Python @(
+    "$Root\TOOLS\stage1_counterfactual_from_snapshots.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot,
+    "--horizon-minutes", "15",
+    "--max-no-trade-samples", "1000"
 )
 
 Invoke-Python @(
@@ -75,6 +84,14 @@ $cleanupPlan = @(
         Patterns = @(
             "stage1_dataset_quality_*.json",
             "stage1_dataset_quality_*.txt"
+        )
+    },
+    @{
+        Dir = (Join-Path $LabDataRoot "reports\stage1")
+        Patterns = @(
+            "stage1_counterfactual_rows_*.jsonl",
+            "stage1_counterfactual_report_*.json",
+            "stage1_counterfactual_report_*.txt"
         )
     }
 )
