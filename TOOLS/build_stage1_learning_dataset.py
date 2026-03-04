@@ -3,6 +3,8 @@
 Build a lightweight stage-1 learning dataset from runtime DB:
 - rejected candidates (NO_TRADE)
 - trade-path decision events (TRADE_PATH)
+
+This dataset is advisory/learning-only (no direct execution impact).
 """
 
 from __future__ import annotations
@@ -34,6 +36,28 @@ def _symbol_base(sym: str) -> str:
     return s
 
 
+def _infer_side(signal: str) -> str:
+    s = str(signal or "").strip().upper()
+    if "BUY" in s or "LONG" in s:
+        return "LONG"
+    if "SELL" in s or "SHORT" in s:
+        return "SHORT"
+    return "UNKNOWN"
+
+
+def _normalize_command_type(raw: str, default: str) -> str:
+    ct = str(raw or "").strip().upper()
+    if not ct:
+        return str(default).upper()
+    if ct in {"HEARTBEAT", "TRADE_PATH", "OTHER"}:
+        return ct
+    if "TRADE" in ct:
+        return "TRADE_PATH"
+    if "HEARTBEAT" in ct:
+        return "HEARTBEAT"
+    return "OTHER"
+
+
 _ENTRY_SKIP_RE = re.compile(
     r"ENTRY_SKIP(?:_PRE)?\s+symbol=(?P<symbol>\S+)\s+grp=(?P<grp>\S+)\s+mode=(?P<mode>\S+)\s+reason=(?P<reason>[A-Z0-9_]+)"
 )
@@ -53,14 +77,23 @@ def _fallback_no_trade_from_log(root: Path) -> List[Dict[str, Any]]:
                 {
                     "ts_utc": "",
                     "symbol": _symbol_base(m.group("symbol")),
+                    "instrument": _symbol_base(m.group("symbol")),
                     "grp": str(m.group("grp") or ""),
                     "mode": str(m.group("mode") or ""),
                     "sample_type": "NO_TRADE",
                     "label": str(m.group("reason") or "UNKNOWN"),
                     "reason_class": "LOG_FALLBACK",
                     "stage": "UNKNOWN",
+                    "decision_stage": "UNKNOWN",
+                    "gate_result": "BLOCK",
+                    "side": "UNKNOWN",
                     "signal": "",
+                    "session_state": "",
                     "regime": "",
+                    "regime_state": "",
+                    "command_type": "OTHER",
+                    "source_module": "RUNTIME_LOG",
+                    "label_quality": "OBSERVED",
                     "window_id": "",
                     "window_phase": "",
                     "context": {"source": "safetybot.log"},
@@ -119,14 +152,23 @@ def _main() -> int:
                     {
                         "ts_utc": str(r["ts_utc"]),
                         "symbol": _symbol_base(str(r["symbol"] or "")),
+                        "instrument": _symbol_base(str(r["symbol"] or "")),
                         "grp": str(r["grp"] or ""),
                         "mode": str(r["mode"] or ""),
                         "sample_type": "NO_TRADE",
                         "label": str(r["reason_code"] or "UNKNOWN"),
                         "reason_class": str(r["reason_class"] or "OTHER"),
                         "stage": str(r["stage"] or ""),
+                        "decision_stage": str(r["stage"] or ""),
+                        "gate_result": "BLOCK",
+                        "side": "UNKNOWN",
                         "signal": str(r["signal"] or ""),
+                        "session_state": str(r["window_phase"] or ""),
                         "regime": str(r["regime"] or ""),
+                        "regime_state": str(r["regime"] or ""),
+                        "command_type": _normalize_command_type(ctx_obj.get("command_type"), "OTHER"),
+                        "source_module": str(ctx_obj.get("source_module") or "RUNTIME_DB"),
+                        "label_quality": "OBSERVED",
                         "window_id": str(r["window_id"] or ""),
                         "window_phase": str(r["window_phase"] or ""),
                         "context": ctx_obj,
@@ -143,14 +185,23 @@ def _main() -> int:
                 {
                     "ts_utc": str(r["ts_utc"]),
                     "symbol": _symbol_base(str(r["choice_A"] or "")),
+                    "instrument": _symbol_base(str(r["choice_A"] or "")),
                     "grp": str(r["grp"] or ""),
                     "mode": str(r["symbol_mode"] or ""),
                     "sample_type": "TRADE_PATH",
                     "label": "TRADE_ATTEMPT",
                     "reason_class": "TRADE_PATH",
                     "stage": "EXECUTION",
+                    "decision_stage": "EXECUTION",
+                    "gate_result": "ALLOW",
+                    "side": _infer_side(str(r["signal"] or "")),
                     "signal": str(r["signal"] or ""),
+                    "session_state": str(r["window_phase"] or ""),
                     "regime": str(r["regime"] or ""),
+                    "regime_state": str(r["regime"] or ""),
+                    "command_type": "TRADE_PATH",
+                    "source_module": "RUNTIME_DB",
+                    "label_quality": "REALIZED" if r["outcome_pnl_net"] is not None else "OBSERVED",
                     "window_id": str(r["window_id"] or ""),
                     "window_phase": str(r["window_phase"] or ""),
                     "context": {
@@ -181,8 +232,15 @@ def _main() -> int:
             symbols = sorted({str(r.get("symbol") or "") for r in rows_out if str(r.get("symbol") or "")})
             no_trade_n = int(sum(1 for r in rows_out if r.get("sample_type") == "NO_TRADE"))
     trade_path_n = int(sum(1 for r in rows_out if r.get("sample_type") == "TRADE_PATH"))
+    reason_class_counts: Dict[str, int] = {}
+    command_type_counts: Dict[str, int] = {}
+    for r in rows_out:
+        rc = str(r.get("reason_class") or "UNKNOWN").upper()
+        ct = _normalize_command_type(str(r.get("command_type") or ""), "OTHER")
+        reason_class_counts[rc] = int(reason_class_counts.get(rc, 0)) + 1
+        command_type_counts[ct] = int(command_type_counts.get(ct, 0)) + 1
     meta = {
-        "schema": "oanda.mt5.stage1_learning_dataset.v1",
+        "schema": "oanda.mt5.stage1_learning_dataset.v2",
         "ts_utc": now_iso,
         "since_utc": since_iso,
         "lookback_hours": int(args.lookback_hours),
@@ -190,6 +248,8 @@ def _main() -> int:
         "rows_no_trade": no_trade_n,
         "rows_trade_path": trade_path_n,
         "symbols": symbols,
+        "reason_class_counts": reason_class_counts,
+        "command_type_counts": command_type_counts,
         "source_db": str(db_path),
         "dataset_path": str(out_jsonl),
     }

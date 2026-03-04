@@ -2,7 +2,11 @@ param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [int]$LookbackHours = 24,
     [string]$FocusGroup = "FX",
-    [int]$RetentionDays = 14
+    [int]$RetentionDays = 14,
+    [int]$MinTotalPerSymbol = 30,
+    [int]$MinNoTradePerSymbol = 10,
+    [int]$MinTradePathPerSymbol = 1,
+    [int]$MinBucketsPerSymbol = 2
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +41,15 @@ Invoke-Python @(
     "--lookback-hours", "$LookbackHours"
 )
 
+Invoke-Python @(
+    "$Root\TOOLS\stage1_dataset_quality.py",
+    "--root", $Root,
+    "--min-total-per-symbol", "$MinTotalPerSymbol",
+    "--min-no-trade-per-symbol", "$MinNoTradePerSymbol",
+    "--min-trade-path-per-symbol", "$MinTradePathPerSymbol",
+    "--min-buckets-per-symbol", "$MinBucketsPerSymbol"
+)
+
 $cutoff = (Get-Date).AddDays(-[Math]::Abs($RetentionDays))
 $removed = 0
 
@@ -55,6 +68,13 @@ $cleanupPlan = @(
         Patterns = @(
             "stage1_learning_*.jsonl",
             "stage1_learning_*.meta.json"
+        )
+    },
+    @{
+        Dir = (Join-Path $Root "EVIDENCE\learning_dataset_quality")
+        Patterns = @(
+            "stage1_dataset_quality_*.json",
+            "stage1_dataset_quality_*.txt"
         )
     }
 )

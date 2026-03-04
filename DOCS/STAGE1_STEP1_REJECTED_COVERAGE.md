@@ -64,4 +64,41 @@ Cykl robi:
 1. raport odrzuceń,
 2. bramkę pokrycia,
 3. budowę datasetu uczenia (NO_TRADE + TRADE_PATH),
-4. retencję starych raportów/datasetów.
+4. bramkę jakości datasetu (wolumen + balans + bucket coverage),
+5. retencję starych raportów/datasetów.
+
+Rejestracja zadania dziennego (user-level, bez wymuszania admin):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File TOOLS/register_stage1_learning_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -StartTime 22:30
+```
+
+## Etap 1 / Krok 4 — bramka jakości datasetu
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_dataset_quality.py --root C:\OANDA_MT5_SYSTEM
+```
+
+Wyniki:
+
+- `EVIDENCE/learning_dataset_quality/stage1_dataset_quality_<timestamp>.json`
+- `EVIDENCE/learning_dataset_quality/stage1_dataset_quality_<timestamp>.txt`
+
+Werdykt:
+
+- `PASS` — dane sa wystarczajaco rownomierne per instrument.
+- `HOLD` — brak balansu NO_TRADE/TRADE_PATH albo za mala liczba bucketow.
+
+## Dataset v2 (uzupelnienie pod nauke)
+
+Dataset Stage-1 (`stage1_learning_*.jsonl`) zapisuje teraz dodatkowo:
+
+- `instrument`, `side`,
+- `gate_result`, `decision_stage`,
+- `session_state`, `regime_state`,
+- `command_type` (rozdzielone HEARTBEAT/TRADE_PATH/OTHER, gdy dostepne),
+- `source_module`, `label_quality`.
+
+To nadal warstwa audytowo-treningowa (brak ingerencji w execution path).
