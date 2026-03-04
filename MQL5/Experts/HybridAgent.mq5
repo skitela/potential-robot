@@ -16,7 +16,7 @@
 input string InpPythonHost = "127.0.0.1";
 input int    InpDataPort   = 5555;
 input int    InpCmdPort    = 5556;
-input uint   InpTimerSec   = 1;     // EventSetTimer uses seconds
+input uint   InpTimerSec   = 1;     // Fallback cadence for EventSetTimer (seconds)
 input uint   InpPythonTimeoutSec = 180;
 input bool   InpEnablePythonTimeoutWatchdog = true;
 input bool   InpAutoRecoverFromTimeout = true;
@@ -36,6 +36,8 @@ input uint   InpP0MicroWindowSize = 32;
 input uint   InpP0TickStaleMs = 1500;
 input uint   InpP0BurstGapMs = 120;
 input uint   InpP0BurstCountThreshold = 8;
+input uint   InpTimerMs    = 200;   // Preferred REQ/REP servicing cadence (milliseconds)
+input uint   InpTelemetryPulseMs = 1000; // Telemetry push cadence while timer runs in ms mode
 
 string G_Symbol = "";
 string G_SymbolUpper = "";
@@ -49,6 +51,8 @@ string G_PolicyLastError = "";
 ulong  G_LastPolicyReloadMs = 0;
 ulong  G_LastPolicyOpenFailLogMs = 0;
 ulong  G_LastTickSendFailLogMs = 0;
+bool   G_UsesMillisecondTimer = false;
+ulong  G_LastTelemetryPulseMs = 0;
 
 int G_MAFastHandle = INVALID_HANDLE;
 int G_ADXHandle = INVALID_HANDLE;
@@ -114,6 +118,29 @@ bool ShouldEmitLogThrottled(ulong &last_ts_ms, uint interval_sec)
     last_ts_ms = now_ms;
     return true;
   }
+  return false;
+}
+
+bool SetupServiceTimer()
+{
+  G_UsesMillisecondTimer = false;
+  uint timer_ms = (uint)MathMax(0, (int)InpTimerMs);
+  if(timer_ms > 0)
+  {
+    if(EventSetMillisecondTimer(timer_ms))
+    {
+      G_UsesMillisecondTimer = true;
+      return true;
+    }
+    Print(
+      "WARN: EventSetMillisecondTimer failed; falling back to EventSetTimer sec=",
+      (int)MathMax(1, (int)InpTimerSec)
+    );
+  }
+
+  if(EventSetTimer((uint)MathMax(1, (int)InpTimerSec)))
+    return true;
+
   return false;
 }
 
@@ -1853,9 +1880,9 @@ int OnInit()
     return INIT_FAILED;
   }
 
-  if(!EventSetTimer(InpTimerSec))
+  if(!SetupServiceTimer())
   {
-    Alert("CRITICAL: EventSetTimer failed.");
+    Alert("CRITICAL: timer setup failed (EventSetMillisecondTimer/EventSetTimer).");
     Zmq_Deinit();
     return INIT_FAILED;
   }
@@ -1879,6 +1906,8 @@ int OnInit()
   Print(
     "HybridAgent ready symbol=", G_SymbolUpper,
     " timer_sec=", InpTimerSec,
+    " timer_ms=", InpTimerMs,
+    " timer_mode=", (G_UsesMillisecondTimer ? "MILLISECOND" : "SECOND"),
     " timeout_sec=", InpPythonTimeoutSec,
     " watchdog=", (InpEnablePythonTimeoutWatchdog ? "ON" : "OFF"),
     " account_pulse_sec=", InpAccountPulseSec,
@@ -1899,6 +1928,7 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
+  ulong now_ms = (ulong)GetTickCount();
   RefreshPolicyRuntime();
 
   // Always service REQ/REP first so HEARTBEAT and TRADE replies stay responsive.
@@ -1906,7 +1936,6 @@ void OnTimer()
 
   if(InpEnablePythonTimeoutWatchdog && InpPythonTimeoutSec > 0)
   {
-    ulong now_ms = (ulong)GetTickCount();
     ulong elapsed_ms = now_ms - G_LastPythonMessageTime;
     if(!G_IsFailSafeActive && elapsed_ms > (InpPythonTimeoutSec * 1000))
     {
@@ -1923,9 +1952,16 @@ void OnTimer()
   }
 
   // Keep snapshot stream alive even in FAIL-SAFE to avoid stale-data lockup on Python side.
-  SendTickData();
-  SendBarData();
-  SendAccountData();
+  // When millisecond timer is enabled, throttle telemetry so command servicing stays fast
+  // without flooding the data channel.
+  uint telemetry_pulse_ms = (uint)MathMax(200, (int)InpTelemetryPulseMs);
+  if(!G_UsesMillisecondTimer || G_LastTelemetryPulseMs == 0 || (now_ms - G_LastTelemetryPulseMs) >= telemetry_pulse_ms)
+  {
+    SendTickData();
+    SendBarData();
+    SendAccountData();
+    G_LastTelemetryPulseMs = now_ms;
+  }
 }
 
 // OnTick keeps micro-metrics incremental and opportunistically services commands.
