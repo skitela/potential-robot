@@ -206,3 +206,50 @@ Ważne:
 - nadal **proposal-only** (`auto_apply=false`),
 - przy zbyt małej liczbie trade w shadow profil odważniejszy jest przycinany do `SREDNI`,
 - brak modyfikacji execution path.
+
+## Etap 1 / Krok 9 — bramka człowieka + shadow deployer plan (bez dotykania runtime)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_shadow_deployer.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --cooldown-minutes 60 --dry-run
+```
+
+Plik akceptacji człowieka (wymagany):
+
+- `C:\OANDA_MT5_LAB_DATA\run\stage1_manual_approval.json`
+- szablon w repo: `LAB/CONFIG/stage1_manual_approval.template.json`
+
+Minimalny format:
+
+```json
+{
+  "schema": "oanda.mt5.stage1_manual_approval.v1",
+  "generated_at_utc": "2026-03-04T20:30:00Z",
+  "approved": true,
+  "ticket": "MANUAL-APPROVAL-001",
+  "instruments": {
+    "EURUSD": "AUTO",
+    "GBPUSD": "BEZPIECZNY"
+  }
+}
+```
+
+Wyniki:
+
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_<timestamp>.json`
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_<timestamp>.txt`
+- latest:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_latest.json`
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_latest.txt`
+- stan cooldown:
+  - `C:\OANDA_MT5_LAB_DATA\run\stage1_shadow_deployer_state.json`
+- audit:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_audit.jsonl`
+
+Ważne:
+
+- bez approval status będzie `SKIP` z powodem `HUMAN_APPROVAL_REQUIRED`,
+- plan jest tylko dla SHADOW (`auto_apply=false`),
+- narzędzie blokuje zakazane klucze ryzyka (`RISK_LOCKED_KEYS`),
+- brak modyfikacji execution path.

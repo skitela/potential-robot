@@ -71,6 +71,14 @@ Invoke-Python @(
 )
 
 Invoke-Python @(
+    "$Root\TOOLS\stage1_shadow_deployer.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot,
+    "--cooldown-minutes", "60",
+    "--dry-run"
+)
+
+Invoke-Python @(
     "$Root\TOOLS\stage1_dataset_quality.py",
     "--root", $Root,
     "--min-total-per-symbol", "$MinTotalPerSymbol",
@@ -117,7 +125,10 @@ $cleanupPlan = @(
             "stage1_profile_pack_*.json",
             "stage1_profile_pack_*.txt",
             "stage1_profile_pack_eval_*.json",
-            "stage1_profile_pack_eval_*.txt"
+            "stage1_profile_pack_eval_*.txt",
+            "stage1_shadow_deployer_*.json",
+            "stage1_shadow_deployer_*.txt",
+            "stage1_shadow_deployer_audit*.jsonl"
         )
     }
 )
