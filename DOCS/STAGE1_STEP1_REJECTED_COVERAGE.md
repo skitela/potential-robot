@@ -339,3 +339,36 @@ Zawartość:
 - lista symboli z `HOLD` i brakującymi metrykami (`total/rejects/trades`),
 - rekomendowane akcje zbierania danych dla każdego symbolu,
 - `OPERATOR_DECISION_REQUIRED` gdy udział symboli `HOLD` jest wysoki.
+
+Decyzja operatora dla etapu przejściowego:
+
+- jeśli po 48h/72h nadal jest `HOLD` przez symbole nieaktywne, uruchamiaj cykl z:
+  - `-CoverageScope active`
+- to zawęża bramkę coverage do symboli aktywnie handlowanych w danym oknie.
+
+## Etap 1 / Krok 14 — Okno decyzji operatora (komunikaty po polsku)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_operator_popup.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+```
+
+Tryb bez okna (np. testowo):
+
+```powershell
+py -3.12 -B TOOLS/stage1_operator_popup.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --no-gui --auto-action WSTRZYMAJ_I_DOZBIERAJ_DANE
+```
+
+Wyniki:
+
+- decyzja operatora:
+  - `C:\OANDA_MT5_LAB_DATA\run\operator_decisions\stage1_operator_decision_latest.json`
+- dziennik decyzji:
+  - `C:\OANDA_MT5_LAB_DATA\run\operator_decisions\stage1_operator_decision_audit.jsonl`
+
+Komunikat w oknie zawiera:
+
+- co sie stalo,
+- jakie sa konsekwencje decyzji,
+- wplyw na ochrone kapitalu i trading.

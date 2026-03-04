@@ -3,6 +3,8 @@ param(
     [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
     [int]$LookbackHours = 24,
     [string]$FocusGroup = "FX",
+    [ValidateSet("strategy", "active")]
+    [string]$CoverageScope = "strategy",
     [int]$RetentionDays = 14,
     [int]$MinTotalPerSymbol = 30,
     [int]$MinNoTradePerSymbol = 10,
@@ -21,7 +23,7 @@ function Invoke-Python {
 }
 
 $startTs = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-Write-Host "STAGE1_LEARNING_CYCLE start_utc=$startTs root=$Root lab_data_root=$LabDataRoot focus=$FocusGroup lookback_h=$LookbackHours"
+Write-Host "STAGE1_LEARNING_CYCLE start_utc=$startTs root=$Root lab_data_root=$LabDataRoot focus=$FocusGroup lookback_h=$LookbackHours coverage_scope=$CoverageScope"
 
 Invoke-Python @(
     "$Root\TOOLS\rejected_coverage_report.py",
@@ -33,6 +35,7 @@ Invoke-Python @(
     "$Root\TOOLS\rejected_coverage_gate.py",
     "--root", $Root,
     "--focus-group", $FocusGroup,
+    "--symbol-scope", $CoverageScope,
     "--lookback-hours", "$LookbackHours"
 )
 

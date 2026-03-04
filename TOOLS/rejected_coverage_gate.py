@@ -111,6 +111,8 @@ def _main() -> int:
     ap.add_argument("--root", default="C:\\OANDA_MT5_SYSTEM")
     ap.add_argument("--lookback-hours", type=int, default=24)
     ap.add_argument("--focus-group", default="ANY")
+    ap.add_argument("--symbol-scope", choices=["strategy", "active"], default="strategy")
+    ap.add_argument("--min-active-symbols", type=int, default=2)
     ap.add_argument("--min-total-per-symbol", type=int, default=30)
     ap.add_argument("--min-rejects-per-symbol", type=int, default=10)
     ap.add_argument("--min-trade-events-per-symbol", type=int, default=1)
@@ -174,7 +176,18 @@ def _main() -> int:
                 rejects[k] += int(v)
 
         observed = set(rejects.keys()) | set(trades.keys())
-        symbols = sorted(set(expected) | observed)
+        scope_requested = str(args.symbol_scope or "strategy").lower()
+        min_active_symbols = max(1, int(args.min_active_symbols))
+        if scope_requested == "active":
+            symbols = sorted(observed)
+            scope_effective = "active"
+            # Bezpieczny fallback: jeżeli aktywnych symboli prawie nie ma, nie luzujemy bramki.
+            if len(symbols) < min_active_symbols:
+                symbols = sorted(set(expected) | observed)
+                scope_effective = "strategy_fallback_low_active"
+        else:
+            symbols = sorted(set(expected) | observed)
+            scope_effective = "strategy"
 
         min_total = max(1, int(args.min_total_per_symbol))
         min_rejects = max(0, int(args.min_rejects_per_symbol))
@@ -229,6 +242,9 @@ def _main() -> int:
                 "symbols_pass": int(sum(1 for x in symbols_rows if x["status"] == "PASS")),
                 "symbols_hold": int(sum(1 for x in symbols_rows if x["status"] != "PASS")),
                 "decision_rejections_table_present": bool(has_rejections),
+                "scope_mode_requested": scope_requested,
+                "scope_mode_effective": scope_effective,
+                "active_symbols_observed_n": len(observed),
             },
             "verdict": {
                 "status": verdict,
@@ -248,6 +264,7 @@ def _main() -> int:
             "REJECTED COVERAGE GATE",
             f"Verdict: {verdict}",
             f"Lookback: {int(args.lookback_hours)}h | Focus group: {focus_group}",
+            f"Scope mode: {scope_effective} (requested={scope_requested}, active_symbols={len(observed)})",
             "Thresholds: total>={0}, rejects>={1}, trades>={2}".format(min_total, min_rejects, min_trades),
             "",
         ]
