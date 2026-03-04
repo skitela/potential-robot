@@ -280,6 +280,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--timeframes", default="M1")
     ap.add_argument("--lookback-days", type=int, default=180)
     ap.add_argument("--overlap-minutes", type=int, default=30)
+    ap.add_argument("--ignore-watermark", action="store_true")
+    ap.add_argument("--backfill-chunk-days", type=int, default=0)
+    ap.add_argument("--backfill-max-chunks", type=int, default=1)
     ap.add_argument("--symbols", default="")
     ap.add_argument("--max-bars-per-symbol", type=int, default=200000)
     ap.add_argument("--out", default="")
@@ -402,80 +405,153 @@ def main() -> int:
             for tf in tfs:
                 tf_mt5 = _tf_to_mt5(tf, mt5)
                 tf_sec = _tf_seconds(tf)
-                wm = get_ingest_watermark(conn_reg, source_type="MT5", symbol=symbol, timeframe=tf)
+                wm = None
+                if not bool(args.ignore_watermark):
+                    wm = get_ingest_watermark(conn_reg, source_type="MT5", symbol=symbol, timeframe=tf)
                 wm_dt = parse_ts_utc(wm)
-                if wm_dt is None:
-                    start_utc = end_utc - dt.timedelta(days=max(1, int(args.lookback_days)))
+                chunk_days = max(0, int(args.backfill_chunk_days))
+                chunk_mode = bool(chunk_days > 0 and wm_dt is None)
+                windows: List[Tuple[dt.datetime, dt.datetime]] = []
+                if chunk_mode:
+                    max_chunks = max(1, int(args.backfill_max_chunks))
+                    for i in range(max_chunks):
+                        win_end = end_utc - dt.timedelta(days=chunk_days * i)
+                        win_start = win_end - dt.timedelta(days=chunk_days)
+                        windows.append((win_start, win_end))
                 else:
-                    start_utc = wm_dt - dt.timedelta(minutes=max(0, int(args.overlap_minutes)))
-                rates = mt5.copy_rates_range(broker_symbol, tf_mt5, start_utc, end_utc)
-                if rates is None:
-                    details.append(
-                        {
-                            "symbol": symbol,
-                            "broker_symbol": broker_symbol,
-                            "symbol_resolution_mode": resolution_mode,
-                            "timeframe": tf,
-                            "status": "FAIL_COPY_RATES",
-                            "last_error": repr(mt5.last_error()),
-                            "start_utc": iso_utc(start_utc),
-                            "end_utc": iso_utc(end_utc),
-                        }
-                    )
-                    continue
-                rows_raw = rates.tolist() if hasattr(rates, "tolist") else list(rates)
-                if len(rows_raw) > int(args.max_bars_per_symbol):
-                    rows_raw = rows_raw[-int(args.max_bars_per_symbol) :]
-                rows: List[Dict[str, Any]] = []
-                for r in rows_raw:
-                    ts = int(r["time"]) if isinstance(r, dict) else int(r[0])
-                    ts_utc = dt.datetime.fromtimestamp(ts, tz=UTC).replace(microsecond=0)
-                    if isinstance(r, dict):
-                        rr = r
+                    if wm_dt is None:
+                        start_utc = end_utc - dt.timedelta(days=max(1, int(args.lookback_days)))
                     else:
-                        rr = {
-                            "open": r[1],
-                            "high": r[2],
-                            "low": r[3],
-                            "close": r[4],
-                            "tick_volume": r[5],
-                            "spread": r[6],
-                            "real_volume": r[7],
-                        }
-                    rows.append(
-                        {
-                            "ts_utc": iso_utc(ts_utc),
-                            "open": float(rr["open"]),
-                            "high": float(rr["high"]),
-                            "low": float(rr["low"]),
-                            "close": float(rr["close"]),
-                            "tick_volume": int(rr.get("tick_volume") or 0),
-                            "spread": int(rr.get("spread") or 0),
-                            "real_volume": int(rr.get("real_volume") or 0),
-                        }
-                    )
-                fetched_total += int(len(rows))
-                gap_events = count_gap_events(rows, expected_interval_sec=tf_sec)
-                gap_events_total += int(gap_events)
-                anomalies = count_bar_anomalies(rows)
-                invalid_ohlc_total += int(anomalies["invalid_ohlc_count"])
-                negative_spread_total += int(anomalies["negative_spread_count"])
-                nonpositive_close_total += int(anomalies["nonpositive_close_count"])
-                inserted = _insert_rates(
-                    conn_data,
-                    symbol=symbol,
-                    broker_symbol=broker_symbol,
-                    timeframe=tf,
-                    rows=rows,
-                    source_terminal=terminal_name,
-                    ingest_run_id=run_id,
-                    ingested_at_utc=iso_utc(dt.datetime.now(tz=UTC)),
-                )
-                dedup = max(0, len(rows) - inserted)
-                inserted_total += int(inserted)
-                dedup_total += int(dedup)
+                        start_utc = wm_dt - dt.timedelta(minutes=max(0, int(args.overlap_minutes)))
+                    windows.append((start_utc, end_utc))
 
-                max_ts = rows[-1]["ts_utc"] if rows else wm
+                rows_fetched_tf = 0
+                rows_inserted_tf = 0
+                rows_dedup_tf = 0
+                gap_events_tf = 0
+                invalid_ohlc_tf = 0
+                negative_spread_tf = 0
+                nonpositive_close_tf = 0
+                max_ts = wm
+                chunks_attempted = 0
+                chunks_with_rows = 0
+                no_progress_chunks = 0
+                oldest_seen_ts: dt.datetime | None = None
+                chunk_errors: List[str] = []
+
+                for (win_start_utc, win_end_utc) in windows:
+                    chunks_attempted += 1
+                    rates = mt5.copy_rates_range(broker_symbol, tf_mt5, win_start_utc, win_end_utc)
+                    if rates is None:
+                        last_err = repr(mt5.last_error())
+                        chunk_errors.append(f"chunk#{chunks_attempted}:{last_err}")
+                        if not chunk_mode:
+                            details.append(
+                                {
+                                    "symbol": symbol,
+                                    "broker_symbol": broker_symbol,
+                                    "symbol_resolution_mode": resolution_mode,
+                                    "timeframe": tf,
+                                    "status": "FAIL_COPY_RATES",
+                                    "last_error": last_err,
+                                    "start_utc": iso_utc(win_start_utc),
+                                    "end_utc": iso_utc(win_end_utc),
+                                }
+                            )
+                        if chunk_mode and len(chunk_errors) >= 2:
+                            break
+                        continue
+
+                    rows_raw = rates.tolist() if hasattr(rates, "tolist") else list(rates)
+                    if len(rows_raw) > int(args.max_bars_per_symbol):
+                        rows_raw = rows_raw[-int(args.max_bars_per_symbol) :]
+                    rows: List[Dict[str, Any]] = []
+                    for r in rows_raw:
+                        ts = int(r["time"]) if isinstance(r, dict) else int(r[0])
+                        ts_utc = dt.datetime.fromtimestamp(ts, tz=UTC).replace(microsecond=0)
+                        if isinstance(r, dict):
+                            rr = r
+                        else:
+                            rr = {
+                                "open": r[1],
+                                "high": r[2],
+                                "low": r[3],
+                                "close": r[4],
+                                "tick_volume": r[5],
+                                "spread": r[6],
+                                "real_volume": r[7],
+                            }
+                        rows.append(
+                            {
+                                "ts_utc": iso_utc(ts_utc),
+                                "open": float(rr["open"]),
+                                "high": float(rr["high"]),
+                                "low": float(rr["low"]),
+                                "close": float(rr["close"]),
+                                "tick_volume": int(rr.get("tick_volume") or 0),
+                                "spread": int(rr.get("spread") or 0),
+                                "real_volume": int(rr.get("real_volume") or 0),
+                            }
+                        )
+
+                    if rows:
+                        chunks_with_rows += 1
+                    rows_fetched_tf += int(len(rows))
+                    fetched_total += int(len(rows))
+                    gap_events = count_gap_events(rows, expected_interval_sec=tf_sec)
+                    gap_events_tf += int(gap_events)
+                    gap_events_total += int(gap_events)
+                    anomalies = count_bar_anomalies(rows)
+                    invalid_ohlc_tf += int(anomalies["invalid_ohlc_count"])
+                    negative_spread_tf += int(anomalies["negative_spread_count"])
+                    nonpositive_close_tf += int(anomalies["nonpositive_close_count"])
+                    invalid_ohlc_total += int(anomalies["invalid_ohlc_count"])
+                    negative_spread_total += int(anomalies["negative_spread_count"])
+                    nonpositive_close_total += int(anomalies["nonpositive_close_count"])
+                    inserted = _insert_rates(
+                        conn_data,
+                        symbol=symbol,
+                        broker_symbol=broker_symbol,
+                        timeframe=tf,
+                        rows=rows,
+                        source_terminal=terminal_name,
+                        ingest_run_id=run_id,
+                        ingested_at_utc=iso_utc(dt.datetime.now(tz=UTC)),
+                    )
+                    dedup = max(0, len(rows) - inserted)
+                    rows_inserted_tf += int(inserted)
+                    rows_dedup_tf += int(dedup)
+                    inserted_total += int(inserted)
+                    dedup_total += int(dedup)
+
+                    if rows:
+                        candidate_max_ts = rows[-1]["ts_utc"]
+                        if not max_ts:
+                            max_ts = candidate_max_ts
+                        else:
+                            current_max_dt = parse_ts_utc(max_ts)
+                            candidate_max_dt = parse_ts_utc(candidate_max_ts)
+                            if candidate_max_dt is not None and (
+                                current_max_dt is None or candidate_max_dt > current_max_dt
+                            ):
+                                max_ts = candidate_max_ts
+                        oldest_chunk_ts = parse_ts_utc(rows[0]["ts_utc"])
+                        progressed_older = (
+                            oldest_seen_ts is None
+                            or (oldest_chunk_ts is not None and oldest_chunk_ts < oldest_seen_ts)
+                        )
+                        if progressed_older and oldest_chunk_ts is not None:
+                            oldest_seen_ts = oldest_chunk_ts
+                            no_progress_chunks = 0
+                        elif chunk_mode:
+                            no_progress_chunks += 1
+                    elif chunk_mode:
+                        no_progress_chunks += 1
+
+                    # Stop when broker history floor has likely been reached.
+                    if chunk_mode and no_progress_chunks >= 2:
+                        break
+
                 if max_ts:
                     upsert_ingest_watermark(
                         conn_reg,
@@ -485,6 +561,25 @@ def main() -> int:
                         last_ts_utc=str(max_ts),
                         updated_at_utc=iso_utc(dt.datetime.now(tz=UTC)),
                     )
+
+                if rows_fetched_tf <= 0 and chunk_errors:
+                    details.append(
+                        {
+                            "symbol": symbol,
+                            "broker_symbol": broker_symbol,
+                            "symbol_resolution_mode": resolution_mode,
+                            "timeframe": tf,
+                            "status": "FAIL_COPY_RATES",
+                            "last_error": chunk_errors[-1],
+                            "start_utc": iso_utc(windows[-1][0]),
+                            "end_utc": iso_utc(windows[0][1]),
+                            "chunk_mode": bool(chunk_mode),
+                            "chunks_attempted": int(chunks_attempted),
+                            "chunks_with_rows": int(chunks_with_rows),
+                        }
+                    )
+                    continue
+
                 details.append(
                     {
                         "symbol": symbol,
@@ -492,16 +587,20 @@ def main() -> int:
                         "symbol_resolution_mode": resolution_mode,
                         "timeframe": tf,
                         "status": "PASS",
-                        "rows_fetched": len(rows),
-                        "rows_inserted": int(inserted),
-                        "rows_deduped": int(dedup),
-                        "start_utc": iso_utc(start_utc),
-                        "end_utc": iso_utc(end_utc),
-                        "gap_events": int(gap_events),
-                        "invalid_ohlc_count": int(anomalies["invalid_ohlc_count"]),
-                        "negative_spread_count": int(anomalies["negative_spread_count"]),
-                        "nonpositive_close_count": int(anomalies["nonpositive_close_count"]),
+                        "rows_fetched": int(rows_fetched_tf),
+                        "rows_inserted": int(rows_inserted_tf),
+                        "rows_deduped": int(rows_dedup_tf),
+                        "start_utc": iso_utc(windows[-1][0]),
+                        "end_utc": iso_utc(windows[0][1]),
+                        "gap_events": int(gap_events_tf),
+                        "invalid_ohlc_count": int(invalid_ohlc_tf),
+                        "negative_spread_count": int(negative_spread_tf),
+                        "nonpositive_close_count": int(nonpositive_close_tf),
                         "watermark_after": max_ts,
+                        "chunk_mode": bool(chunk_mode),
+                        "chunks_attempted": int(chunks_attempted),
+                        "chunks_with_rows": int(chunks_with_rows),
+                        "chunk_errors": chunk_errors[-5:],
                     }
                 )
 
@@ -514,6 +613,9 @@ def main() -> int:
                 "symbols": symbols,
                 "lookback_days": int(args.lookback_days),
                 "overlap_minutes": int(args.overlap_minutes),
+                "ignore_watermark": bool(args.ignore_watermark),
+                "backfill_chunk_days": int(args.backfill_chunk_days),
+                "backfill_max_chunks": int(args.backfill_max_chunks),
                 "max_bars_per_symbol": int(args.max_bars_per_symbol),
             }
         )
@@ -557,6 +659,11 @@ def main() -> int:
                     "nonpositive_close_total": int(nonpositive_close_total),
                     "quality_grade": str(quality_grade),
                 },
+                "backfill": {
+                    "ignore_watermark": bool(args.ignore_watermark),
+                    "backfill_chunk_days": int(args.backfill_chunk_days),
+                    "backfill_max_chunks": int(args.backfill_max_chunks),
+                },
                 "details": details,
             }
         )
@@ -588,6 +695,9 @@ def main() -> int:
                         "quality_grade": str(quality_grade),
                         "symbols": symbols,
                         "timeframes": tfs,
+                        "ignore_watermark": bool(args.ignore_watermark),
+                        "backfill_chunk_days": int(args.backfill_chunk_days),
+                        "backfill_max_chunks": int(args.backfill_max_chunks),
                     },
                     ensure_ascii=False,
                 ),
