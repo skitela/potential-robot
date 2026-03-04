@@ -4224,6 +4224,24 @@ class DecisionEventStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_choice ON decision_events(choice_A);")
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_closed ON decision_events(outcome_closed_ts_utc);")
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_grp_closed ON decision_events(grp, outcome_closed_ts_utc);")
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS decision_rejections (
+                reject_id TEXT PRIMARY KEY,
+                ts_utc TEXT NOT NULL,
+                symbol TEXT,
+                grp TEXT,
+                mode TEXT,
+                reason_code TEXT NOT NULL,
+                reason_class TEXT,
+                stage TEXT,
+                signal TEXT,
+                regime TEXT,
+                context_json TEXT
+            );"""
+        )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_rejections_ts ON decision_rejections(ts_utc);")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_rejections_symbol_ts ON decision_rejections(symbol, ts_utc);")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_rejections_reason_ts ON decision_rejections(reason_code, ts_utc);")
 
     def insert_event(self, row: Dict[str, Any]) -> None:
         cols = [
@@ -4267,6 +4285,24 @@ class DecisionEventStore:
                WHERE event_id=?""",
             (op, oc, osw, ofee, pnl, closed_ts_utc, event_id),
         )
+
+    def insert_rejection(self, row: Dict[str, Any]) -> None:
+        cols = [
+            "reject_id",
+            "ts_utc",
+            "symbol",
+            "grp",
+            "mode",
+            "reason_code",
+            "reason_class",
+            "stage",
+            "signal",
+            "regime",
+            "context_json",
+        ]
+        vals = [row.get(c) for c in cols]
+        q = "INSERT OR REPLACE INTO decision_rejections (" + ",".join(cols) + ") VALUES (" + ",".join(["?"] * len(cols)) + ")"
+        sqlite_exec_retry(self.conn, q, vals)
 
 class M5BarsStore:
     """Lightweight SQLite store for M5 bars (used by Scout evaluator)."""
@@ -6885,6 +6921,7 @@ class StandardStrategy:
         self._spread_entry_sum_day: float = 0.0
         self._spread_entry_count_day: int = 0
         self._renko_eval_cache: Dict[str, Dict[str, Any]] = {}
+        self._skip_capture_ctx: Dict[str, Any] = {}
 
     def _metrics_roll_day(self) -> None:
         day_key = str(pl_day_key(now_utc()))
@@ -6896,11 +6933,85 @@ class StandardStrategy:
         self._spread_entry_sum_day = 0.0
         self._spread_entry_count_day = 0
 
+    def set_skip_capture_context(self, symbol: str, grp: str, mode: str, stage: str = "SCAN") -> None:
+        self._skip_capture_ctx = {
+            "symbol": str(symbol or ""),
+            "grp": str(grp or ""),
+            "mode": str(mode or ""),
+            "stage": str(stage or "SCAN"),
+        }
+
+    def update_skip_capture_context(self, **kwargs: Any) -> None:
+        if not isinstance(self._skip_capture_ctx, dict):
+            self._skip_capture_ctx = {}
+        for k, v in kwargs.items():
+            if v is None:
+                continue
+            self._skip_capture_ctx[str(k)] = v
+
+    def clear_skip_capture_context(self) -> None:
+        self._skip_capture_ctx = {}
+
+    @staticmethod
+    def _classify_skip_reason(reason: str) -> str:
+        r = str(reason or "UNKNOWN").upper()
+        if "SPREAD" in r or "COST" in r or "SCORE" in r:
+            return "COST_QUALITY"
+        if "RISK" in r or "LOSS" in r or "HEAT" in r or "EXPOSURE" in r:
+            return "RISK_GUARD"
+        if "TREND" in r or "NO_SIGNAL" in r or "SIGNAL_" in r:
+            return "SIGNAL_LOGIC"
+        if "DATA" in r or "TICK" in r or "POINT" in r or "M5_" in r:
+            return "DATA_READINESS"
+        if "ROLL" in r or "WINDOW" in r or "PREFLIGHT" in r or "COOLDOWN" in r:
+            return "SESSION_POLICY"
+        if "RUNTIME" in r or "BACKOFF" in r or "UNAVAILABLE" in r:
+            return "RUNTIME_GUARD"
+        return "OTHER"
+
+    def _persist_skip_rejection(self, reason: str) -> None:
+        if getattr(self, "decision_store", None) is None:
+            return
+        ctx = dict(self._skip_capture_ctx or {})
+        symbol = str(ctx.get("symbol") or "")
+        grp = str(ctx.get("grp") or "")
+        mode = str(ctx.get("mode") or "")
+        stage = str(ctx.get("stage") or "SCAN")
+        if not symbol:
+            # Avoid mislabeling global/runtime skips when symbol context is unknown.
+            return
+        reason_code = str(reason or "UNKNOWN").upper()
+        row = {
+            "reject_id": str(uuid.uuid4()),
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "symbol": str(symbol_base(symbol)),
+            "grp": grp.upper() if grp else None,
+            "mode": mode.upper() if mode else None,
+            "reason_code": reason_code,
+            "reason_class": self._classify_skip_reason(reason_code),
+            "stage": stage.upper() if stage else None,
+            "signal": (str(ctx.get("signal")).upper() if ctx.get("signal") else None),
+            "regime": (str(ctx.get("regime")).upper() if ctx.get("regime") else None),
+            "context_json": json.dumps(
+                {
+                    "signal_reason": ctx.get("signal_reason"),
+                    "trend_h4": ctx.get("trend_h4"),
+                    "structure_h4": ctx.get("structure_h4"),
+                },
+                ensure_ascii=False,
+            ),
+        }
+        try:
+            self.decision_store.insert_rejection(row)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
     def _metric_inc_skip(self, reason: str) -> None:
         self._metrics_roll_day()
         key = str(reason or "UNKNOWN")
         self._skip_day[key] = int(self._skip_day.get(key, 0)) + 1
         self._skip_total[key] = int(self._skip_total.get(key, 0)) + 1
+        self._persist_skip_rejection(key)
 
     def _metric_note_entry_signal(self) -> None:
         self._metrics_roll_day()
@@ -7830,6 +7941,7 @@ class StandardStrategy:
         is_paper: bool,
         ind: Optional[Dict[str, Any]] = None,
     ):
+        self.update_skip_capture_context(stage="TRADE_PATH", signal=str(signal or ""))
         # tick na żądanie: spread + cena wykonania
         tick = self.engine.tick(symbol, grp, emergency=False)
         if not tick:
@@ -8658,6 +8770,7 @@ class StandardStrategy:
             gb_until = int(self.db.get_global_backoff_until_ts())
             if gb_until and now_ts < gb_until:
                 reason = self.db.get_global_backoff_reason()
+                self._metric_inc_skip("GLOBAL_BACKOFF")
                 if self._skip_log_allowed(symbol, "GLOBAL_BACKOFF", 30):
                     logging.info(
                         "SKIP_GLOBAL_BACKOFF symbol=%s until_ts=%s reason=%s",
@@ -8669,6 +8782,7 @@ class StandardStrategy:
             if self.db.is_cooldown_active(symbol, now_ts=now_ts):
                 cd_until = self.db.get_cooldown_until_ts(symbol)
                 cd_reason = self.db.get_cooldown_reason(symbol)
+                self._metric_inc_skip("COOLDOWN_ACTIVE")
                 if self._skip_log_allowed(symbol, "COOLDOWN", 30):
                     logging.info(
                         "SKIP_COOLDOWN symbol=%s until_ts=%s reason=%s",
@@ -8729,8 +8843,10 @@ class StandardStrategy:
             self._metric_inc_skip("PRICE_SOFT_MODE")
             return
         if not self.throttle.can_trade():
+            self._metric_inc_skip("THROTTLE_BLOCK")
             return
         if not self.rollover_safe(symbol=symbol):
+            self._metric_inc_skip("ROLLOVER_BLOCK")
             return
 
         try:
@@ -8747,6 +8863,7 @@ class StandardStrategy:
             return
         adx_value = float(ind["adx"])
         trend_h4, _trend_d1, structure_h4 = self.get_trend(symbol, grp)
+        self.update_skip_capture_context(trend_h4=str(trend_h4), structure_h4=str(structure_h4), stage="TREND_CHECK")
         if trend_h4 == "NEUTRAL":
             self._metric_inc_skip("TREND_NEUTRAL")
             if self._skip_log_allowed(symbol, "TREND_NEUTRAL", 60):
@@ -8777,6 +8894,12 @@ class StandardStrategy:
             structure_filter_enabled=bool(getattr(CFG, "structure_filter_enabled", True)),
             mean_reversion_enabled=bool(getattr(CFG, "mean_reversion_enabled", True)),
             mode=mode,
+        )
+        self.update_skip_capture_context(
+            stage="SIGNAL_SELECT",
+            signal=str(signal or ""),
+            signal_reason=str(signal_reason or ""),
+            regime=str(regime or ""),
         )
 
         if signal:
@@ -13892,11 +14015,14 @@ class SafetyBot:
                 cnt += 1
                 continue
             try:
+                self.strategy.set_skip_capture_context(sym, grp, mode, stage="EVALUATE")
                 self.strategy.evaluate_symbol(sym, grp, mode, info, self.is_paper)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                 logging.exception("Exception in evaluate_symbol")
                 traceback.print_exc()
+            finally:
+                self.strategy.clear_skip_capture_context()
             cnt += 1
 
         # Export market snapshot for Scout (no extra MT5 requests; uses cached info/indicators)
