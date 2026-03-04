@@ -5,7 +5,7 @@ import argparse
 import datetime as dt
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 UTC = dt.timezone.utc
 
@@ -107,6 +107,39 @@ def _safe_float(v: Any) -> float:
         return 0.0
 
 
+def _load_pln_point_map(root: Path) -> Tuple[float, Dict[str, float]]:
+    cfg_path = (root / "LAB" / "CONFIG" / "pln_point_estimates.json").resolve()
+    if not cfg_path.exists():
+        return 1.0, {}
+    try:
+        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 1.0, {}
+    default_factor = _safe_float(payload.get("default_pln_per_point"))
+    if default_factor <= 0.0:
+        default_factor = 1.0
+    symbol_map: Dict[str, float] = {}
+    raw_overrides = payload.get("symbol_overrides")
+    if isinstance(raw_overrides, dict):
+        for k, v in raw_overrides.items():
+            key = str(k or "").strip().upper()
+            val = _safe_float(v)
+            if key and val > 0.0:
+                symbol_map[key] = val
+    return default_factor, symbol_map
+
+
+def _points_to_pln(points: float, symbol: str, *, default_factor: float, symbol_map: Dict[str, float]) -> float:
+    factor = float(symbol_map.get(str(symbol or "").upper(), default_factor))
+    if factor <= 0.0:
+        factor = 1.0
+    return float(points) * factor
+
+
+def _fmt_signed_pln(value: float) -> str:
+    return f"{value:+.2f} zł"
+
+
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
@@ -118,6 +151,7 @@ def main() -> int:
     reports_daily = lab_data_root / "reports" / "daily"
     reports_retention = lab_data_root / "reports" / "retention"
     reports_profiles = lab_data_root / "reports" / "profiles"
+    reports_stage1 = lab_data_root / "reports" / "stage1"
     run_status = lab_data_root / "run" / "lab_scheduler_status.json"
     pointer_json = root / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.json"
     pointer_txt = root / "LAB" / "EVIDENCE" / "lab_insights" / "lab_insights_latest.txt"
@@ -155,6 +189,7 @@ def main() -> int:
     latest_daily_pass = latest_payload_prefer_status(reports_daily, status="PASS")
     latest_retention = latest_payload(reports_retention)
     latest_profile_sweep = latest_payload_prefer_status(reports_profiles, status="PASS")
+    latest_cf_summary = latest_payload_prefer_status(reports_stage1, status="PASS")
     status_payload = load_json(run_status) or {}
 
     # Aggregate ingest window.
@@ -225,15 +260,52 @@ def main() -> int:
     latest_profile_status = str((latest_profile_sweep or {}).get("status") or "UNKNOWN").upper()
     latest_profile_winner = str((latest_profile_sweep or {}).get("winner_by_explore_net_pips_per_trade") or "UNKNOWN").upper()
     latest_profile_runs = list((latest_profile_sweep or {}).get("runs") or [])
+    latest_cf_status = str((latest_cf_summary or {}).get("status") or "UNKNOWN").upper()
+    latest_cf_rows_total = _safe_int(((latest_cf_summary or {}).get("summary") or {}).get("rows_total"))
+    cf_by_symbol = list((((latest_cf_summary or {}).get("aggregates") or {}).get("by_symbol") or []))
     scheduler_status = str((status_payload or {}).get("status") or "UNKNOWN").upper()
     scheduler_reason = str((status_payload or {}).get("reason") or "UNKNOWN")
     pairs_ready = _safe_int(latest_daily_summary.get("pairs_ready_for_shadow"))
     pairs_total = _safe_int(latest_daily_summary.get("pairs_total"))
     explore_total_trades_latest = _safe_int(latest_daily_summary.get("explore_total_trades"))
     quality_grade_latest = str(latest_ingest_summary.get("quality_grade", "UNKNOWN")).upper()
+    default_pln_per_point, pln_symbol_map = _load_pln_point_map(root)
+
+    cf_symbol_compact: List[Dict[str, Any]] = []
+    for row in cf_by_symbol:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        pnl_pts = _safe_float(row.get("counterfactual_pnl_points_total"))
+        pnl_pln = _points_to_pln(
+            pnl_pts,
+            symbol,
+            default_factor=default_pln_per_point,
+            symbol_map=pln_symbol_map,
+        )
+        cf_symbol_compact.append(
+            {
+                "symbol": symbol,
+                "samples_n": _safe_int(row.get("samples_n")),
+                "saved_loss_n": _safe_int(row.get("saved_loss_n")),
+                "missed_opportunity_n": _safe_int(row.get("missed_opportunity_n")),
+                "neutral_timeout_n": _safe_int(row.get("neutral_timeout_n")),
+                "counterfactual_pnl_points_total": pnl_pts,
+                "counterfactual_pnl_pln_est_total": float(round(pnl_pln, 2)),
+                "recommendation": str(row.get("recommendation") or "OBSERWUJ_BEZ_ZMIAN"),
+            }
+        )
+    cf_symbol_compact.sort(key=lambda x: abs(_safe_float(x.get("counterfactual_pnl_pln_est_total"))), reverse=True)
+    cf_symbol_compact = cf_symbol_compact[:10]
 
     if pairs_ready > 0 and quality_grade_latest == "OK":
         recommendation = "Masz kandydatow do shadow. Przejrzyj top ranking i rozważ selektywne poluzowanie tylko tam, gdzie wynik jest stabilnie dodatni."
+    elif cf_symbol_compact and any(_safe_float(x.get("counterfactual_pnl_pln_est_total")) > 0 for x in cf_symbol_compact):
+        recommendation = "Czesc instrumentow pokazuje dodatni wynik kontrfaktyczny; testuj luzowanie w SHADOW tylko na tych parach i pod kontrola risk."
+    elif cf_symbol_compact and all(_safe_float(x.get("counterfactual_pnl_pln_est_total")) <= 0 for x in cf_symbol_compact):
+        recommendation = "Kontrfaktyka jest globalnie ujemna; trzymaj lub dociskaj filtry, a nie luzuj ich szeroko."
     elif losing > profitable and daily_pass_runs > 0:
         recommendation = "Wiecej instrumentow ma ujemny wynik netto/trade. Trzymaj obecne ograniczenia lub docisnij filtry dla najslabszych par."
     elif daily_pass_runs > 0 and explore_total_trades_latest > 0:
@@ -270,6 +342,8 @@ def main() -> int:
             "latest_retention_removed_dirs": _safe_int(latest_ret_summary.get("snapshot_dirs_removed")),
             "latest_profile_sweep_status": latest_profile_status,
             "latest_profile_sweep_winner": latest_profile_winner,
+            "latest_counterfactual_summary_status": latest_cf_status,
+            "latest_counterfactual_rows_total": latest_cf_rows_total,
         },
         "window_aggregate": {
             "ingest_runs": ingest_runs,
@@ -311,6 +385,8 @@ def main() -> int:
                 }
                 for r in latest_profile_runs
             ],
+            "counterfactual_by_symbol_compact": cf_symbol_compact,
+            "counterfactual_pln_point_factor_default": float(round(default_pln_per_point, 6)),
         },
         "recommendation": recommendation,
     }
@@ -402,10 +478,30 @@ def main() -> int:
             )
     else:
         txt_lines.append("- Brak danych sweep profili w tym oknie.")
+    txt_lines.append("")
+    txt_lines.append("[5] KONTRFAKTYCZNE WNIOSKI (NO-TRADE -> co by bylo gdyby)")
+    txt_lines.append(
+        "- Ostatni status podsumowania: {0}, probki: {1}".format(
+            report["snapshot"].get("latest_counterfactual_summary_status", "UNKNOWN"),
+            report["snapshot"].get("latest_counterfactual_rows_total", 0),
+        )
+    )
+    cf_rows_txt = list(wa.get("counterfactual_by_symbol_compact") or [])
+    if cf_rows_txt:
+        for r in cf_rows_txt:
+            txt_lines.append(
+                "- {0}: {1} | {2}".format(
+                    str(r.get("symbol") or "UNKNOWN"),
+                    _fmt_signed_pln(_safe_float(r.get("counterfactual_pnl_pln_est_total"))),
+                    str(r.get("recommendation") or "OBSERWUJ_BEZ_ZMIAN"),
+                )
+            )
+    else:
+        txt_lines.append("- Brak danych kontrfaktycznych w tym oknie.")
     txt_lines.extend(
         [
             "",
-            "[5] WNIOSEK",
+            "[6] WNIOSEK",
             "- {0}".format(report["recommendation"]),
             "",
             "Pelny raport: {0}".format(out_path),

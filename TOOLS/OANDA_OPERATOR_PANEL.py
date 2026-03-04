@@ -1176,6 +1176,8 @@ def _build_lab_insights_text(payload: dict) -> str:
             "Brak danych. Kliknij 'AKTUALIZUJ WNIOSKI LAB' i sprawdz ponownie."
         )
     snapshot = payload.get("snapshot", {}) if isinstance(payload.get("snapshot"), dict) else {}
+    wa = payload.get("window_aggregate", {}) if isinstance(payload.get("window_aggregate"), dict) else {}
+    cf_rows = list(wa.get("counterfactual_by_symbol_compact") or [])
     lines = [
         "WNIOSEK Z LABORATORIUM",
         "=" * 72,
@@ -1184,18 +1186,35 @@ def _build_lab_insights_text(payload: dict) -> str:
         "",
         "[1] STAN",
         f"- Scheduler: {snapshot.get('scheduler_status', 'UNKNOWN')} ({snapshot.get('scheduler_reason', 'UNKNOWN')})",
-        f"- Jakosc ingestu: {snapshot.get('ingest_quality_grade', 'UNKNOWN')}",
-        f"- Wiersze pobrane/wstawione: {snapshot.get('ingest_rows_fetched_total', 0)} / {snapshot.get('ingest_rows_inserted_total', 0)}",
+        f"- Jakosc ingestu: {snapshot.get('latest_ingest_quality_grade', 'UNKNOWN')}",
+        f"- Wiersze pobrane/wstawione: {wa.get('rows_fetched_total', 0)} / {wa.get('rows_inserted_total', 0)}",
         "",
         "[2] UCZENIE",
-        f"- Pary gotowe do shadow: {snapshot.get('pairs_ready_for_shadow', 0)} / {snapshot.get('pairs_total', 0)}",
-        f"- Explore trades: {snapshot.get('explore_total_trades', 0)}",
+        f"- Pary gotowe do shadow: {snapshot.get('latest_pairs_ready_for_shadow', 0)} / {snapshot.get('latest_pairs_total', 0)}",
+        f"- Explore trades: {snapshot.get('latest_explore_total_trades', 0)}",
         "",
-        "[3] REKOMENDACJA",
+        "[3] KONTRFAKTYKA (szacunek PLN)",
+    ]
+    if cf_rows:
+        for row in cf_rows[:8]:
+            lines.append(
+                "- {0}: {1:+.2f} zł | {2}".format(
+                    str(row.get("symbol", "UNKNOWN")),
+                    _safe_float(row.get("counterfactual_pnl_pln_est_total")),
+                    str(row.get("recommendation", "OBSERWUJ_BEZ_ZMIAN")),
+                )
+            )
+    else:
+        lines.append("- Brak danych kontrfaktycznych.")
+    lines.extend(
+        [
+            "",
+            "[4] REKOMENDACJA",
         f"- {payload.get('recommendation', 'BRAK')}",
         "",
         f"Pelny raport: {payload.get('report_path', 'UNKNOWN')}",
-    ]
+        ]
+    )
     return "\n".join(lines)
 
 
