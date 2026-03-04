@@ -57,6 +57,13 @@ Invoke-Python @(
 )
 
 Invoke-Python @(
+    "$Root\TOOLS\stage1_profile_pack.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot,
+    "--min-samples", "30"
+)
+
+Invoke-Python @(
     "$Root\TOOLS\stage1_dataset_quality.py",
     "--root", $Root,
     "--min-total-per-symbol", "$MinTotalPerSymbol",
@@ -99,7 +106,9 @@ $cleanupPlan = @(
             "stage1_counterfactual_report_*.json",
             "stage1_counterfactual_report_*.txt",
             "stage1_counterfactual_summary_*.json",
-            "stage1_counterfactual_summary_*.txt"
+            "stage1_counterfactual_summary_*.txt",
+            "stage1_profile_pack_*.json",
+            "stage1_profile_pack_*.txt"
         )
     }
 )

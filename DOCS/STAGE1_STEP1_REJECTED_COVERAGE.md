@@ -149,3 +149,33 @@ Raport zawiera:
 - agregację `SAVED_LOSS / MISSED_OPPORTUNITY / NEUTRAL_TIMEOUT` per instrument,
 - agregację per okno (`window_id|window_phase`),
 - prostą rekomendację operacyjną (docisk/luzowanie/obserwacja) wyłącznie do SHADOW/LAB.
+
+## Etap 1 / Krok 7 — 3 profile na jutro per instrument (proposal-only)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_profile_pack.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --min-samples 30
+```
+
+Wyniki:
+
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_<timestamp>.json`
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_<timestamp>.txt`
+- wskaźnik latest:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_latest.json`
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_latest.txt`
+
+Raport buduje dla każdego instrumentu 3 zestawy:
+
+- `BEZPIECZNY`
+- `SREDNI`
+- `ODWAZNIEJSZY`
+
+Każdy zestaw jest oceniany heurystycznie na bazie danych kontrfaktycznych (Saved Loss / Missed Opportunity / średni PnL punktowy).
+
+Ważne:
+
+- to jest **proposal-only** (`auto_apply=false`),
+- wymagany jest review człowieka,
+- brak modyfikacji execution path.
