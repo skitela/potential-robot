@@ -219,6 +219,16 @@ class CFG:
     bridge_heartbeat_retries: int = 1
     bridge_trade_timeout_ms: int = 1200
     bridge_trade_retries: int = 1
+    # Controlled TRADE-path probe for latency audits (safe mode: invalid symbol -> no order send).
+    bridge_trade_probe_enabled: bool = False
+    bridge_trade_probe_interval_sec: int = 15
+    bridge_trade_probe_max_per_run: int = 120
+    bridge_trade_probe_signal: str = "BUY"
+    bridge_trade_probe_symbol: str = "__TRADE_PROBE_INVALID__"
+    bridge_trade_probe_group: str = "FX"
+    bridge_trade_probe_volume: float = 0.01
+    bridge_trade_probe_deviation_points: int = 10
+    bridge_trade_probe_comment: str = "TRADE_PROBE_SAFE_NO_LIVE"
     run_loop_idle_sleep_sec: float = 0.01
     run_loop_scan_slow_warn_ms: int = 1500
     run_loop_scan_stats_window: int = 120
@@ -14391,11 +14401,30 @@ class SafetyBot:
             30,
             int(getattr(CFG, "zmq_heartbeat_worker_stale_sec", 120)),
         )
+        trade_probe_enabled = bool(getattr(CFG, "bridge_trade_probe_enabled", False))
+        trade_probe_interval_sec = max(5, int(getattr(CFG, "bridge_trade_probe_interval_sec", 15)))
+        trade_probe_max_per_run = max(0, int(getattr(CFG, "bridge_trade_probe_max_per_run", 120)))
+        trade_probe_signal = str(getattr(CFG, "bridge_trade_probe_signal", "BUY") or "BUY").strip().upper()
+        if trade_probe_signal not in {"BUY", "SELL"}:
+            trade_probe_signal = "BUY"
+        trade_probe_symbol = str(
+            getattr(CFG, "bridge_trade_probe_symbol", "__TRADE_PROBE_INVALID__") or "__TRADE_PROBE_INVALID__"
+        ).strip()
+        trade_probe_group = str(getattr(CFG, "bridge_trade_probe_group", "FX") or "FX").strip().upper()
+        trade_probe_volume = float(max(0.0, float(getattr(CFG, "bridge_trade_probe_volume", 0.01) or 0.01)))
+        trade_probe_deviation_points = int(
+            max(1, int(getattr(CFG, "bridge_trade_probe_deviation_points", 10) or 10))
+        )
+        trade_probe_comment = str(
+            getattr(CFG, "bridge_trade_probe_comment", "TRADE_PROBE_SAFE_NO_LIVE") or "TRADE_PROBE_SAFE_NO_LIVE"
+        ).strip()
         last_heartbeat_ts = 0.0
         last_market_data_ts = 0.0
         heartbeat_failures = 0
         heartbeat_fail_safe_active = False
         heartbeat_fail_safe_until = 0.0
+        last_trade_probe_ts = 0.0
+        trade_probe_sent = 0
         loop_id = 0
 
         try:
@@ -14520,6 +14549,67 @@ class SafetyBot:
                             if heartbeat_fail_safe_active:
                                 heartbeat_fail_safe_until = now + float(heartbeat_fail_safe_cooldown)
                     last_heartbeat_ts = now
+
+                # 2b. Controlled TRADE-path probe (disabled by default).
+                # Sends synthetic TRADE command with intentionally invalid symbol.
+                # This provides TRADE samples for bridge latency audits without live order execution.
+                if (
+                    trade_probe_enabled
+                    and (not heartbeat_fail_safe_active)
+                    and (now - last_trade_probe_ts) >= float(trade_probe_interval_sec)
+                ):
+                    if trade_probe_max_per_run <= 0 or int(trade_probe_sent) < int(trade_probe_max_per_run):
+                        probe_reply = self._send_trade_command(
+                            signal=str(trade_probe_signal),
+                            symbol=str(trade_probe_symbol),
+                            volume=float(trade_probe_volume),
+                            sl_price=0.0,
+                            tp_price=0.0,
+                            request_price=0.0,
+                            deviation_points=int(trade_probe_deviation_points),
+                            spread_at_decision_points=None,
+                            spread_unit="points",
+                            spread_provenance="trade_probe",
+                            estimated_entry_cost_components={},
+                            estimated_round_trip_cost={},
+                            cost_feasibility_shadow=None,
+                            net_cost_feasible=None,
+                            cost_gate_policy_mode="DIAGNOSTIC_ONLY",
+                            cost_gate_reason_code="TRADE_PROBE",
+                            magic=int(getattr(CFG, "magic_number", 0) or 0),
+                            comment=str(trade_probe_comment),
+                            group=str(trade_probe_group),
+                            risk_entry_allowed=True,
+                            risk_reason="TRADE_PROBE",
+                            risk_friday=False,
+                            risk_reopen=False,
+                            policy_shadow_mode=True,
+                        )
+                        self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="TRADE")
+                        trade_probe_sent = int(trade_probe_sent) + 1
+                        last_trade_probe_ts = now
+                        if isinstance(probe_reply, dict):
+                            p_status = str(probe_reply.get("status") or "UNKNOWN").upper()
+                            p_ret = ""
+                            try:
+                                p_ret = str((probe_reply.get("details") or {}).get("retcode_str") or "")
+                            except Exception:
+                                p_ret = ""
+                            logging.info(
+                                "TRADE_PROBE_REPLY status=%s retcode_str=%s sent=%s/%s symbol=%s",
+                                p_status,
+                                p_ret or "NONE",
+                                int(trade_probe_sent),
+                                int(trade_probe_max_per_run),
+                                str(trade_probe_symbol),
+                            )
+                        else:
+                            logging.warning(
+                                "TRADE_PROBE_FAIL sent=%s/%s symbol=%s reason=no_reply",
+                                int(trade_probe_sent),
+                                int(trade_probe_max_per_run),
+                                str(trade_probe_symbol),
+                            )
 
                 # 3. Cykliczny skan logiki (wstrzymany, gdy heartbeat fail-safe aktywny)
                 if now - last_scan_ts >= scan_interval:
@@ -14709,6 +14799,39 @@ if __name__ == "__main__":
     CFG.bridge_heartbeat_retries = _cfg_int("bridge_heartbeat_retries", CFG.bridge_heartbeat_retries)
     CFG.bridge_trade_timeout_ms = _cfg_int("bridge_trade_timeout_ms", CFG.bridge_trade_timeout_ms)
     CFG.bridge_trade_retries = _cfg_int("bridge_trade_retries", CFG.bridge_trade_retries)
+    CFG.bridge_trade_probe_enabled = _cfg_bool(
+        "bridge_trade_probe_enabled", CFG.bridge_trade_probe_enabled
+    )
+    CFG.bridge_trade_probe_interval_sec = _cfg_int(
+        "bridge_trade_probe_interval_sec", CFG.bridge_trade_probe_interval_sec
+    )
+    CFG.bridge_trade_probe_max_per_run = _cfg_int(
+        "bridge_trade_probe_max_per_run", CFG.bridge_trade_probe_max_per_run
+    )
+    CFG.bridge_trade_probe_signal = str(
+        strategy_cfg.get("bridge_trade_probe_signal", CFG.bridge_trade_probe_signal)
+        or CFG.bridge_trade_probe_signal
+    ).strip().upper()
+    if CFG.bridge_trade_probe_signal not in {"BUY", "SELL"}:
+        CFG.bridge_trade_probe_signal = "BUY"
+    CFG.bridge_trade_probe_symbol = str(
+        strategy_cfg.get("bridge_trade_probe_symbol", CFG.bridge_trade_probe_symbol)
+        or CFG.bridge_trade_probe_symbol
+    ).strip()
+    CFG.bridge_trade_probe_group = str(
+        strategy_cfg.get("bridge_trade_probe_group", CFG.bridge_trade_probe_group)
+        or CFG.bridge_trade_probe_group
+    ).strip().upper()
+    CFG.bridge_trade_probe_volume = _cfg_float(
+        "bridge_trade_probe_volume", CFG.bridge_trade_probe_volume
+    )
+    CFG.bridge_trade_probe_deviation_points = _cfg_int(
+        "bridge_trade_probe_deviation_points", CFG.bridge_trade_probe_deviation_points
+    )
+    CFG.bridge_trade_probe_comment = str(
+        strategy_cfg.get("bridge_trade_probe_comment", CFG.bridge_trade_probe_comment)
+        or CFG.bridge_trade_probe_comment
+    ).strip()
     CFG.run_loop_idle_sleep_sec = _cfg_float("run_loop_idle_sleep_sec", CFG.run_loop_idle_sleep_sec)
     CFG.run_loop_scan_slow_warn_ms = _cfg_int(
         "run_loop_scan_slow_warn_ms",
