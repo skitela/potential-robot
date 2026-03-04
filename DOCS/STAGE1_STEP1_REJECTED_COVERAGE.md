@@ -318,3 +318,24 @@ Zawartość:
 - werdykt końcowy (`PASS` / `REVIEW_REQUIRED` / `NO-GO`),
 - krytyczne uwagi do promptu i kolejny plan działania,
 - krótkie podsumowanie operatora (max 10 linii).
+
+## Etap 1 / Krok 13 — Plan domknięcia braków coverage
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_coverage_recovery_plan.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-hours 24
+```
+
+Wyniki:
+
+- plan JSON:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_coverage_recovery_latest.json`
+- plan TXT:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_coverage_recovery_latest.txt`
+
+Zawartość:
+
+- lista symboli z `HOLD` i brakującymi metrykami (`total/rejects/trades`),
+- rekomendowane akcje zbierania danych dla każdego symbolu,
+- `OPERATOR_DECISION_REQUIRED` gdy udział symboli `HOLD` jest wysoki.

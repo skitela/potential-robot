@@ -108,6 +108,14 @@ Invoke-Python @(
     "--lookback-hours", "$LookbackHours"
 )
 
+Invoke-Python @(
+    "$Root\TOOLS\stage1_coverage_recovery_plan.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot,
+    "--focus-group", $FocusGroup,
+    "--lookback-hours", "$LookbackHours"
+)
+
 $cutoff = (Get-Date).AddDays(-[Math]::Abs($RetentionDays))
 $removed = 0
 
@@ -156,7 +164,9 @@ $cleanupPlan = @(
             "stage1_shadow_gonogo_*.json",
             "stage1_shadow_gonogo_*.txt",
             "stage1_iteration_audit_*.json",
-            "stage1_iteration_audit_*.txt"
+            "stage1_iteration_audit_*.txt",
+            "stage1_coverage_recovery_*.json",
+            "stage1_coverage_recovery_*.txt"
         )
     }
 )
