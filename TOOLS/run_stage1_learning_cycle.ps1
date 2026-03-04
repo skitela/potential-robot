@@ -100,6 +100,14 @@ Invoke-Python @(
     "--lab-data-root", $LabDataRoot
 )
 
+Invoke-Python @(
+    "$Root\TOOLS\stage1_iteration_audit.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot,
+    "--focus-group", $FocusGroup,
+    "--lookback-hours", "$LookbackHours"
+)
+
 $cutoff = (Get-Date).AddDays(-[Math]::Abs($RetentionDays))
 $removed = 0
 
@@ -146,7 +154,9 @@ $cleanupPlan = @(
             "stage1_shadow_apply_plan_*.txt",
             "stage1_shadow_apply_audit*.jsonl",
             "stage1_shadow_gonogo_*.json",
-            "stage1_shadow_gonogo_*.txt"
+            "stage1_shadow_gonogo_*.txt",
+            "stage1_iteration_audit_*.json",
+            "stage1_iteration_audit_*.txt"
         )
     }
 )

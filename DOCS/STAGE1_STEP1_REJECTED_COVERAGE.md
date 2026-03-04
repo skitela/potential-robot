@@ -296,3 +296,25 @@ Werdykt Go/No-Go:
 - `PASS` — wszystkie checki przeszły,
 - `REVIEW_REQUIRED` — warningi/operator action needed,
 - `NO-GO` — twarde fail (np. jakość datasetu nieprzechodząca).
+
+## Etap 1 / Krok 12 — Raport iteracji A-K (audyt + next-step)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_iteration_audit.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-hours 24
+```
+
+Wyniki:
+
+- raport JSON:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_iteration_audit_latest.json`
+- raport TXT:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_iteration_audit_latest.txt`
+
+Zawartość:
+
+- sekcje `A..K` (zakres zmian, zgodność architektury, RISK_LOCKED, testy, known issues),
+- werdykt końcowy (`PASS` / `REVIEW_REQUIRED` / `NO-GO`),
+- krytyczne uwagi do promptu i kolejny plan działania,
+- krótkie podsumowanie operatora (max 10 linii).
