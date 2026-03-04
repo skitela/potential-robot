@@ -4236,9 +4236,20 @@ class DecisionEventStore:
                 stage TEXT,
                 signal TEXT,
                 regime TEXT,
+                window_id TEXT,
+                window_phase TEXT,
                 context_json TEXT
             );"""
         )
+        # Additive migration for early table versions.
+        try:
+            cols_now = {str(r[1]) for r in self.conn.execute("PRAGMA table_info(decision_rejections)").fetchall()}
+            if "window_id" not in cols_now:
+                self.conn.execute("ALTER TABLE decision_rejections ADD COLUMN window_id TEXT;")
+            if "window_phase" not in cols_now:
+                self.conn.execute("ALTER TABLE decision_rejections ADD COLUMN window_phase TEXT;")
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_rejections_ts ON decision_rejections(ts_utc);")
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_rejections_symbol_ts ON decision_rejections(symbol, ts_utc);")
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_rejections_reason_ts ON decision_rejections(reason_code, ts_utc);")
@@ -4298,6 +4309,8 @@ class DecisionEventStore:
             "stage",
             "signal",
             "regime",
+            "window_id",
+            "window_phase",
             "context_json",
         ]
         vals = [row.get(c) for c in cols]
@@ -6981,6 +6994,9 @@ class StandardStrategy:
             # Avoid mislabeling global/runtime skips when symbol context is unknown.
             return
         reason_code = str(reason or "UNKNOWN").upper()
+        tw = trade_window_ctx(now_utc())
+        window_id = str((tw or {}).get("window_id") or "OFF")
+        window_phase = str((tw or {}).get("phase") or "OFF")
         row = {
             "reject_id": str(uuid.uuid4()),
             "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -6992,6 +7008,8 @@ class StandardStrategy:
             "stage": stage.upper() if stage else None,
             "signal": (str(ctx.get("signal")).upper() if ctx.get("signal") else None),
             "regime": (str(ctx.get("regime")).upper() if ctx.get("regime") else None),
+            "window_id": window_id,
+            "window_phase": window_phase,
             "context_json": json.dumps(
                 {
                     "signal_reason": ctx.get("signal_reason"),

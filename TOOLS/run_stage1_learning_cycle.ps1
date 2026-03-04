@@ -1,0 +1,77 @@
+param(
+    [string]$Root = "C:\OANDA_MT5_SYSTEM",
+    [int]$LookbackHours = 24,
+    [string]$FocusGroup = "FX",
+    [int]$RetentionDays = 14
+)
+
+$ErrorActionPreference = "Stop"
+
+function Invoke-Python {
+    param([string[]]$CommandArgs)
+    & py -3.12 -B @CommandArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python command failed: $($CommandArgs -join ' ')"
+    }
+}
+
+$startTs = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+Write-Host "STAGE1_LEARNING_CYCLE start_utc=$startTs root=$Root focus=$FocusGroup lookback_h=$LookbackHours"
+
+Invoke-Python @(
+    "$Root\TOOLS\rejected_coverage_report.py",
+    "--root", $Root,
+    "--lookback-hours", "$LookbackHours"
+)
+
+Invoke-Python @(
+    "$Root\TOOLS\rejected_coverage_gate.py",
+    "--root", $Root,
+    "--focus-group", $FocusGroup,
+    "--lookback-hours", "$LookbackHours"
+)
+
+Invoke-Python @(
+    "$Root\TOOLS\build_stage1_learning_dataset.py",
+    "--root", $Root,
+    "--lookback-hours", "$LookbackHours"
+)
+
+$cutoff = (Get-Date).AddDays(-[Math]::Abs($RetentionDays))
+$removed = 0
+
+$cleanupPlan = @(
+    @{
+        Dir = (Join-Path $Root "EVIDENCE\learning_coverage")
+        Patterns = @(
+            "rejected_coverage_*.json",
+            "rejected_coverage_*.txt",
+            "rejected_coverage_gate_*.json",
+            "rejected_coverage_gate_*.txt"
+        )
+    },
+    @{
+        Dir = (Join-Path $Root "EVIDENCE\learning_dataset")
+        Patterns = @(
+            "stage1_learning_*.jsonl",
+            "stage1_learning_*.meta.json"
+        )
+    }
+)
+
+foreach ($item in $cleanupPlan) {
+    $dir = [string]$item.Dir
+    if (!(Test-Path $dir)) { continue }
+    foreach ($pat in @($item.Patterns)) {
+        Get-ChildItem -Path $dir -Filter $pat -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $cutoff } |
+            ForEach-Object {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+                $removed++
+            }
+    }
+}
+Write-Host "STAGE1_LEARNING_CYCLE cleanup_removed=$removed retention_days=$RetentionDays"
+
+$endTs = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+Write-Host "STAGE1_LEARNING_CYCLE done_utc=$endTs"
