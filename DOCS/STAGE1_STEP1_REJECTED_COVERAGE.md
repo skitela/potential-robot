@@ -127,3 +127,25 @@ Zakres:
   - `NEUTRAL_TIMEOUT`
 
 To jest warstwa treningowa offline; nie dotyka execution path.
+
+## Etap 1 / Krok 6 — raport Saved Loss vs Missed Opportunity (per instrument/per okno)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_counterfactual_summary.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+```
+
+Wyniki:
+
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_<timestamp>.json`
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_<timestamp>.txt`
+- wskaźnik latest pod panel:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_latest.json`
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_latest.txt`
+
+Raport zawiera:
+
+- agregację `SAVED_LOSS / MISSED_OPPORTUNITY / NEUTRAL_TIMEOUT` per instrument,
+- agregację per okno (`window_id|window_phase`),
+- prostą rekomendację operacyjną (docisk/luzowanie/obserwacja) wyłącznie do SHADOW/LAB.
