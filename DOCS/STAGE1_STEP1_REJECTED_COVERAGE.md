@@ -179,3 +179,30 @@ Ważne:
 - to jest **proposal-only** (`auto_apply=false`),
 - wymagany jest review człowieka,
 - brak modyfikacji execution path.
+
+## Etap 1 / Krok 8 — ocena 3 profili na historii + shadow (ranking per instrument)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_profile_pack_evaluate.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --min-shadow-trades 3
+```
+
+Wyniki:
+
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_<timestamp>.json`
+- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_<timestamp>.txt`
+- wskaźnik latest:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_latest.json`
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_latest.txt`
+
+Ocena łączy:
+
+- bazowy score z pakietu 3 profili (warstwa historyczna Stage-1),
+- metryki shadow per instrument (`net_pips_per_trade`, stabilność, liczba trade).
+
+Ważne:
+
+- nadal **proposal-only** (`auto_apply=false`),
+- przy zbyt małej liczbie trade w shadow profil odważniejszy jest przycinany do `SREDNI`,
+- brak modyfikacji execution path.
