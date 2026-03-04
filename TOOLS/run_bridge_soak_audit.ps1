@@ -1,6 +1,8 @@
 param(
     [int]$DurationSec = 1800,
-    [string]$Root = "C:\OANDA_MT5_SYSTEM"
+    [string]$Root = "C:\OANDA_MT5_SYSTEM",
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "safety_only"
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,13 +36,13 @@ function Test-RuntimeHealthy {
     return $true
 }
 
-Write-Host "RUN_BRIDGE_SOAK_AUDIT start_utc=$utcNow duration_sec=$DurationSec"
-& powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile safety_only | Out-Host
+Write-Host "RUN_BRIDGE_SOAK_AUDIT start_utc=$utcNow duration_sec=$DurationSec profile=$Profile"
+& powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile $Profile | Out-Host
 if (-not (Test-RuntimeHealthy -RuntimeRoot $Root)) {
-    Write-Host "RUN_BRIDGE_SOAK_AUDIT runtime status FAIL -> attempting start safety_only"
-    & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action start -Profile safety_only | Out-Host
+    Write-Host "RUN_BRIDGE_SOAK_AUDIT runtime status FAIL -> attempting start profile=$Profile"
+    & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action start -Profile $Profile | Out-Host
     Start-Sleep -Seconds 3
-    & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile safety_only | Out-Host
+    & powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile $Profile | Out-Host
 }
 if (-not (Test-RuntimeHealthy -RuntimeRoot $Root)) {
     throw "Runtime is not healthy (status FAIL or component not running). Aborting soak to avoid report gaps."
@@ -62,7 +64,7 @@ $marker = [ordered]@{
     schema = "oanda_mt5.bridge_soak_window_start.v1"
     ts_utc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     workspace_root_path = $Root
-    runtime_profile = "safety_only"
+    runtime_profile = $Profile
     markers = [ordered]@{
         audit_trail_jsonl_offset_bytes = [int64]$auditOffset
         safetybot_log_offset_bytes = [int64]$safetyOffset
@@ -95,5 +97,5 @@ if ($latestCompare) {
     }
 }
 
-& powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile safety_only | Out-Host
+& powershell -File (Join-Path $Root "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile $Profile | Out-Host
 Write-Host "RUN_BRIDGE_SOAK_AUDIT done"
