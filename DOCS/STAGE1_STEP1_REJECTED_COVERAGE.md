@@ -253,3 +253,46 @@ Ważne:
 - plan jest tylko dla SHADOW (`auto_apply=false`),
 - narzędzie blokuje zakazane klucze ryzyka (`RISK_LOCKED_KEYS`),
 - brak modyfikacji execution path.
+
+## Etap 1 / Krok 10 — CLI do akceptacji człowieka (bez ręcznej edycji JSON)
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_approve.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --approved true --ticket MANUAL-APPROVAL-001 --instrument-profile EURUSD=AUTO --instrument-profile GBPUSD=BEZPIECZNY
+```
+
+Wyniki:
+
+- `C:\OANDA_MT5_LAB_DATA\run\stage1_manual_approval.json`
+- audit:
+  - `C:\OANDA_MT5_LAB_DATA\run\stage1_manual_approval_audit.jsonl`
+
+Ważne:
+
+- profile dozwolone: `AUTO`, `BEZPIECZNY`, `SREDNI`, `ODWAZNIEJSZY`,
+- błędny profil = `FAIL` i brak zapisu.
+
+## Etap 1 / Krok 11 — apply-ready plan dla SHADOW + bramka Go/No-Go
+
+Uruchom:
+
+```powershell
+py -3.12 -B TOOLS/stage1_shadow_apply_plan.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --dry-run
+py -3.12 -B TOOLS/stage1_shadow_gonogo.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+```
+
+Wyniki:
+
+- apply plan:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_apply_plan_latest.json`
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_apply_plan_latest.txt`
+- go/no-go:
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_gonogo_latest.json`
+  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_gonogo_latest.txt`
+
+Werdykt Go/No-Go:
+
+- `PASS` — wszystkie checki przeszły,
+- `REVIEW_REQUIRED` — warningi/operator action needed,
+- `NO-GO` — twarde fail (np. jakość datasetu nieprzechodząca).

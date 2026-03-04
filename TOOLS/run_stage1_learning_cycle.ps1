@@ -79,12 +79,25 @@ Invoke-Python @(
 )
 
 Invoke-Python @(
+    "$Root\TOOLS\stage1_shadow_apply_plan.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot,
+    "--dry-run"
+)
+
+Invoke-Python @(
     "$Root\TOOLS\stage1_dataset_quality.py",
     "--root", $Root,
     "--min-total-per-symbol", "$MinTotalPerSymbol",
     "--min-no-trade-per-symbol", "$MinNoTradePerSymbol",
     "--min-trade-path-per-symbol", "$MinTradePathPerSymbol",
     "--min-buckets-per-symbol", "$MinBucketsPerSymbol"
+)
+
+Invoke-Python @(
+    "$Root\TOOLS\stage1_shadow_gonogo.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot
 )
 
 $cutoff = (Get-Date).AddDays(-[Math]::Abs($RetentionDays))
@@ -128,7 +141,12 @@ $cleanupPlan = @(
             "stage1_profile_pack_eval_*.txt",
             "stage1_shadow_deployer_*.json",
             "stage1_shadow_deployer_*.txt",
-            "stage1_shadow_deployer_audit*.jsonl"
+            "stage1_shadow_deployer_audit*.jsonl",
+            "stage1_shadow_apply_plan_*.json",
+            "stage1_shadow_apply_plan_*.txt",
+            "stage1_shadow_apply_audit*.jsonl",
+            "stage1_shadow_gonogo_*.json",
+            "stage1_shadow_gonogo_*.txt"
         )
     }
 )

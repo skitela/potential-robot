@@ -138,6 +138,64 @@ class TestStage1ShadowDeployer(unittest.TestCase):
             row = ((st.get("instruments") or {}).get("EURUSD") or {})
             self.assertEqual(str(row.get("active_profile") or ""), "SREDNI")
 
+    def test_rejects_forbidden_risk_keys_in_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "root"
+            lab = Path(td) / "lab"
+            eval_path = lab / "reports" / "stage1" / "stage1_profile_pack_eval_latest.json"
+            pack_path = lab / "reports" / "stage1" / "stage1_profile_pack_latest.json"
+            approval = lab / "run" / "stage1_manual_approval.json"
+            _write_eval(eval_path)
+            _write_pack(pack_path)
+            _write_approval(approval, approved=True)
+            payload = json.loads(approval.read_text(encoding="utf-8"))
+            payload["max_open_positions"] = 3
+            approval.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            cmd = [
+                sys.executable,
+                "TOOLS/stage1_shadow_deployer.py",
+                "--root",
+                str(root),
+                "--lab-data-root",
+                str(lab),
+            ]
+            proc = subprocess.run(cmd, cwd=str(Path(__file__).resolve().parents[1]), capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            latest = lab / "reports" / "stage1" / "stage1_shadow_deployer_latest.json"
+            rep = json.loads(latest.read_text(encoding="utf-8"))
+            self.assertEqual(rep.get("status"), "SKIP")
+            self.assertEqual(rep.get("reason"), "APPROVAL_FORBIDDEN_KEYS")
+
+    def test_rejects_schema_mismatch_in_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "root"
+            lab = Path(td) / "lab"
+            eval_path = lab / "reports" / "stage1" / "stage1_profile_pack_eval_latest.json"
+            pack_path = lab / "reports" / "stage1" / "stage1_profile_pack_latest.json"
+            approval = lab / "run" / "stage1_manual_approval.json"
+            _write_eval(eval_path)
+            _write_pack(pack_path)
+            _write_approval(approval, approved=True)
+            payload = json.loads(approval.read_text(encoding="utf-8"))
+            payload["schema"] = "bad.schema"
+            approval.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            cmd = [
+                sys.executable,
+                "TOOLS/stage1_shadow_deployer.py",
+                "--root",
+                str(root),
+                "--lab-data-root",
+                str(lab),
+            ]
+            proc = subprocess.run(cmd, cwd=str(Path(__file__).resolve().parents[1]), capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            latest = lab / "reports" / "stage1" / "stage1_shadow_deployer_latest.json"
+            rep = json.loads(latest.read_text(encoding="utf-8"))
+            self.assertEqual(rep.get("status"), "SKIP")
+            self.assertEqual(rep.get("reason"), "APPROVAL_SCHEMA_MISMATCH")
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
