@@ -147,6 +147,24 @@ def build_market_sources(*, root: Path, lab_data_root: Path, history_db: Path, r
     return out
 
 
+def fetch_source_max_ts(conn: sqlite3.Connection, *, source: Dict[str, Any]) -> Optional[dt.datetime]:
+    kind = str(source.get("kind") or "").strip().lower()
+    if kind == "mt5_rates":
+        row = conn.execute(
+            """
+            SELECT MAX(ts_utc) AS max_ts
+            FROM mt5_rates
+            WHERE timeframe = ?
+            """,
+            [str(source.get("timeframe") or "M1").upper()],
+        ).fetchone()
+        return parse_ts((row or {}).get("max_ts") if isinstance(row, dict) else (row["max_ts"] if row else None))
+    if kind == "m5_bars":
+        row = conn.execute("SELECT MAX(t_utc) AS max_ts FROM m5_bars").fetchone()
+        return parse_ts((row or {}).get("max_ts") if isinstance(row, dict) else (row["max_ts"] if row else None))
+    return None
+
+
 def iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         raw = line.strip()
@@ -311,6 +329,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--tp-points", type=float, default=150.0)
     ap.add_argument("--sl-points", type=float, default=100.0)
     ap.add_argument("--slippage-points", type=float, default=3.0)
+    ap.add_argument("--max-source-lag-hours", type=float, default=12.0)
     ap.add_argument("--max-no-trade-samples", type=int, default=1000)
     ap.add_argument("--out-jsonl", default="")
     ap.add_argument("--out-report", default="")
@@ -365,10 +384,47 @@ def main() -> int:
             reason = "NO_NO_TRADE_ROWS"
         else:
             opened_sources: List[Tuple[Dict[str, Any], sqlite3.Connection]] = []
+            no_trade_ts = [t for t in (parse_ts(r.get("ts_utc")) for r in no_trade) if t is not None]
+            dataset_min_ts = min(no_trade_ts) if no_trade_ts else None
+            dataset_max_ts = max(no_trade_ts) if no_trade_ts else None
+            freshness_info: List[Dict[str, Any]] = []
+            stale_sources: List[str] = []
+            fresh_sources = 0
+            max_lag_h = float(max(0.0, float(args.max_source_lag_hours)))
             for src in market_sources:
                 c = sqlite3.connect(str(Path(str(src.get("db_path")))))
                 c.row_factory = sqlite3.Row
                 opened_sources.append((src, c))
+                max_ts = fetch_source_max_ts(c, source=src)
+                lag_h = None
+                is_stale = False
+                if dataset_max_ts is not None and max_ts is not None:
+                    lag_h = (dataset_max_ts - max_ts).total_seconds() / 3600.0
+                    is_stale = lag_h > max_lag_h
+                if is_stale:
+                    stale_sources.append(str(src.get("name") or "unknown"))
+                else:
+                    fresh_sources += 1
+                freshness_info.append(
+                    {
+                        "name": str(src.get("name") or ""),
+                        "kind": str(src.get("kind") or ""),
+                        "db_path": str(src.get("db_path") or ""),
+                        "timeframe": str(src.get("timeframe") or ""),
+                        "max_ts_utc": iso_utc(max_ts) if max_ts is not None else "",
+                        "lag_hours_vs_dataset_max": (round(float(lag_h), 3) if lag_h is not None else None),
+                        "is_stale": bool(is_stale),
+                    }
+                )
+
+            if stale_sources:
+                print(
+                    "STAGE1_COUNTERFACTUAL_PRECHECK_ALERT "
+                    f"stale_sources={','.join(stale_sources)} "
+                    f"threshold_h={max_lag_h:.3f} "
+                    f"dataset_max_ts={iso_utc(dataset_max_ts) if dataset_max_ts is not None else 'UNKNOWN'}"
+                )
+
             by_status: Dict[str, int] = {}
             by_source_hits: Dict[str, int] = {}
             no_market_path_by_symbol: Dict[str, int] = {}
@@ -376,112 +432,116 @@ def main() -> int:
             skipped = 0
             total_pnl_points = 0.0
             try:
-                horizon_min = max(1, int(args.horizon_minutes))
-                for row in no_trade:
-                    ts = parse_ts(row.get("ts_utc"))
-                    sym = symbol_base(str(row.get("instrument") or row.get("symbol") or ""))
-                    side = infer_side(row)
-                    if ts is None or not sym:
-                        skipped += 1
-                        st = "SKIP_CONTEXT"
-                        by_status[st] = int(by_status.get(st, 0)) + 1
-                        continue
+                if dataset_max_ts is not None and fresh_sources <= 0:
+                    status = "SKIP"
+                    reason = "STALE_MARKET_DATA"
+                else:
+                    horizon_min = max(1, int(args.horizon_minutes))
+                    for row in no_trade:
+                        ts = parse_ts(row.get("ts_utc"))
+                        sym = symbol_base(str(row.get("instrument") or row.get("symbol") or ""))
+                        side = infer_side(row)
+                        if ts is None or not sym:
+                            skipped += 1
+                            st = "SKIP_CONTEXT"
+                            by_status[st] = int(by_status.get(st, 0)) + 1
+                            continue
 
-                    end_ts = ts + dt.timedelta(minutes=horizon_min)
-                    entry: Optional[Dict[str, Any]] = None
-                    path: List[Dict[str, Any]] = []
-                    selected_source: Optional[Dict[str, Any]] = None
-                    for src, c in opened_sources:
-                        entry, path = fetch_entry_and_path(
-                            c,
-                            source=src,
-                            symbol=sym,
-                            ts_start=iso_utc(ts),
-                            ts_end=iso_utc(end_ts),
-                        )
-                        if entry is not None and path:
-                            selected_source = src
-                            break
-                    if entry is None or not path:
-                        skipped += 1
-                        st = "NO_MARKET_PATH"
-                        by_status[st] = int(by_status.get(st, 0)) + 1
-                        no_market_path_by_symbol[sym] = int(no_market_path_by_symbol.get(sym, 0)) + 1
-                        continue
+                        end_ts = ts + dt.timedelta(minutes=horizon_min)
+                        entry: Optional[Dict[str, Any]] = None
+                        path: List[Dict[str, Any]] = []
+                        selected_source: Optional[Dict[str, Any]] = None
+                        for src, c in opened_sources:
+                            entry, path = fetch_entry_and_path(
+                                c,
+                                source=src,
+                                symbol=sym,
+                                ts_start=iso_utc(ts),
+                                ts_end=iso_utc(end_ts),
+                            )
+                            if entry is not None and path:
+                                selected_source = src
+                                break
+                        if entry is None or not path:
+                            skipped += 1
+                            st = "NO_MARKET_PATH"
+                            by_status[st] = int(by_status.get(st, 0)) + 1
+                            no_market_path_by_symbol[sym] = int(no_market_path_by_symbol.get(sym, 0)) + 1
+                            continue
 
-                    entry_price = float(entry.get("close") or 0.0)
-                    if entry_price <= 0.0:
-                        skipped += 1
-                        st = "INVALID_ENTRY_PRICE"
-                        by_status[st] = int(by_status.get(st, 0)) + 1
-                        continue
+                        entry_price = float(entry.get("close") or 0.0)
+                        if entry_price <= 0.0:
+                            skipped += 1
+                            st = "INVALID_ENTRY_PRICE"
+                            by_status[st] = int(by_status.get(st, 0)) + 1
+                            continue
 
-                    point_size = infer_point_size(entry_price)
-                    spread_points = 0.0
-                    try:
-                        ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
-                        spread_points = float(ctx.get("spread_points") or 0.0)
-                    except Exception:
+                        point_size = infer_point_size(entry_price)
                         spread_points = 0.0
+                        try:
+                            ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
+                            spread_points = float(ctx.get("spread_points") or 0.0)
+                        except Exception:
+                            spread_points = 0.0
 
-                    long_eval = evaluate_counterfactual(
-                        side="LONG",
-                        entry_price=entry_price,
-                        point_size=point_size,
-                        spread_points=spread_points,
-                        slippage_points=float(args.slippage_points),
-                        tp_points=float(args.tp_points),
-                        sl_points=float(args.sl_points),
-                        path_rows=path,
-                    )
-                    short_eval = evaluate_counterfactual(
-                        side="SHORT",
-                        entry_price=entry_price,
-                        point_size=point_size,
-                        spread_points=spread_points,
-                        slippage_points=float(args.slippage_points),
-                        tp_points=float(args.tp_points),
-                        sl_points=float(args.sl_points),
-                        path_rows=path,
-                    )
-                    if side in {"LONG", "SHORT"}:
-                        label, pnl_points = long_eval if side == "LONG" else short_eval
-                        side_effective = side
-                    else:
-                        # Conservative fallback for unknown side: pick worse outcome (lower pnl).
-                        label, pnl_points = (long_eval if float(long_eval[1]) <= float(short_eval[1]) else short_eval)
-                        side_effective = "BOTH_CONSERVATIVE"
-                    evaluated += 1
-                    total_pnl_points += float(pnl_points)
-                    by_status[label] = int(by_status.get(label, 0)) + 1
-                    src_name = str((selected_source or {}).get("name") or "unknown_source")
-                    by_source_hits[src_name] = int(by_source_hits.get(src_name, 0)) + 1
+                        long_eval = evaluate_counterfactual(
+                            side="LONG",
+                            entry_price=entry_price,
+                            point_size=point_size,
+                            spread_points=spread_points,
+                            slippage_points=float(args.slippage_points),
+                            tp_points=float(args.tp_points),
+                            sl_points=float(args.sl_points),
+                            path_rows=path,
+                        )
+                        short_eval = evaluate_counterfactual(
+                            side="SHORT",
+                            entry_price=entry_price,
+                            point_size=point_size,
+                            spread_points=spread_points,
+                            slippage_points=float(args.slippage_points),
+                            tp_points=float(args.tp_points),
+                            sl_points=float(args.sl_points),
+                            path_rows=path,
+                        )
+                        if side in {"LONG", "SHORT"}:
+                            label, pnl_points = long_eval if side == "LONG" else short_eval
+                            side_effective = side
+                        else:
+                            # Conservative fallback for unknown side: pick worse outcome (lower pnl).
+                            label, pnl_points = (long_eval if float(long_eval[1]) <= float(short_eval[1]) else short_eval)
+                            side_effective = "BOTH_CONSERVATIVE"
+                        evaluated += 1
+                        total_pnl_points += float(pnl_points)
+                        by_status[label] = int(by_status.get(label, 0)) + 1
+                        src_name = str((selected_source or {}).get("name") or "unknown_source")
+                        by_source_hits[src_name] = int(by_source_hits.get(src_name, 0)) + 1
 
-                    annotated_rows.append(
-                        {
-                            "ts_utc": str(row.get("ts_utc") or ""),
-                            "symbol": sym,
-                            "side": side_effective,
-                            "side_source": side,
-                            "reason_code": str(row.get("label") or ""),
-                            "reason_class": str(row.get("reason_class") or ""),
-                            "window_id": str(row.get("window_id") or ""),
-                            "window_phase": str(row.get("window_phase") or ""),
-                            "counterfactual_status": label,
-                            "counterfactual_pnl_points": float(round(pnl_points, 5)),
-                            "counterfactual_long_status": str(long_eval[0]),
-                            "counterfactual_long_pnl_points": float(round(long_eval[1], 5)),
-                            "counterfactual_short_status": str(short_eval[0]),
-                            "counterfactual_short_pnl_points": float(round(short_eval[1], 5)),
-                            "entry_ts_utc": str(entry.get("ts_utc") or ""),
-                            "entry_price": float(entry_price),
-                            "point_size": float(point_size),
-                            "path_bars_n": len(path),
-                            "horizon_minutes": int(horizon_min),
-                            "market_source": src_name,
-                            "market_timeframe": str((selected_source or {}).get("timeframe") or ""),
-                        }
-                    )
+                        annotated_rows.append(
+                            {
+                                "ts_utc": str(row.get("ts_utc") or ""),
+                                "symbol": sym,
+                                "side": side_effective,
+                                "side_source": side,
+                                "reason_code": str(row.get("label") or ""),
+                                "reason_class": str(row.get("reason_class") or ""),
+                                "window_id": str(row.get("window_id") or ""),
+                                "window_phase": str(row.get("window_phase") or ""),
+                                "counterfactual_status": label,
+                                "counterfactual_pnl_points": float(round(pnl_points, 5)),
+                                "counterfactual_long_status": str(long_eval[0]),
+                                "counterfactual_long_pnl_points": float(round(long_eval[1], 5)),
+                                "counterfactual_short_status": str(short_eval[0]),
+                                "counterfactual_short_pnl_points": float(round(short_eval[1], 5)),
+                                "entry_ts_utc": str(entry.get("ts_utc") or ""),
+                                "entry_price": float(entry_price),
+                                "point_size": float(point_size),
+                                "path_bars_n": len(path),
+                                "horizon_minutes": int(horizon_min),
+                                "market_source": src_name,
+                                "market_timeframe": str((selected_source or {}).get("timeframe") or ""),
+                            }
+                        )
             finally:
                 for _, c in opened_sources:
                     try:
@@ -489,8 +549,9 @@ def main() -> int:
                     except Exception:
                         pass
 
-            status = "PASS" if evaluated > 0 else "SKIP"
-            reason = "COUNTERFACTUAL_OK" if evaluated > 0 else "COUNTERFACTUAL_NO_EVAL"
+            if reason not in {"STALE_MARKET_DATA"}:
+                status = "PASS" if evaluated > 0 else "SKIP"
+                reason = "COUNTERFACTUAL_OK" if evaluated > 0 else "COUNTERFACTUAL_NO_EVAL"
             details = {
                 "rows_no_trade_seen": len(no_trade),
                 "rows_evaluated": int(evaluated),
@@ -509,6 +570,14 @@ def main() -> int:
                     }
                     for src in market_sources
                 ],
+                "freshness_precheck": {
+                    "dataset_min_ts_utc": (iso_utc(dataset_min_ts) if dataset_min_ts is not None else ""),
+                    "dataset_max_ts_utc": (iso_utc(dataset_max_ts) if dataset_max_ts is not None else ""),
+                    "max_source_lag_hours": max_lag_h,
+                    "fresh_sources": int(fresh_sources),
+                    "stale_sources": stale_sources,
+                    "sources": freshness_info,
+                },
             }
 
     with out_jsonl.open("w", encoding="utf-8") as f:
@@ -534,6 +603,7 @@ def main() -> int:
             "tp_points": float(args.tp_points),
             "sl_points": float(args.sl_points),
             "slippage_points": float(args.slippage_points),
+            "max_source_lag_hours": float(max(0.0, float(args.max_source_lag_hours))),
             "max_no_trade_samples": int(max(1, int(args.max_no_trade_samples))),
         },
     }
@@ -545,6 +615,7 @@ def main() -> int:
         f"Reason: {reason}",
         f"Dataset: {dataset_jsonl}" if dataset_jsonl is not None else "Dataset: NONE",
         f"History DB: {history_db}",
+        f"Max source lag hours: {float(max(0.0, float(args.max_source_lag_hours))):.3f}",
         f"Evaluated: {int((details or {}).get('rows_evaluated', 0))}",
         f"Skipped: {int((details or {}).get('rows_skipped', 0))}",
         f"Output rows: {out_jsonl}",
