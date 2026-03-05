@@ -14692,6 +14692,21 @@ class SafetyBot:
             1,
             int(getattr(CFG, "zmq_scan_suppressed_log_interval_sec", 60)),
         )
+        trade_timeout_budget_ms = int(
+            max(1, getattr(CFG, "bridge_trade_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))
+        )
+        trade_retries_budget = int(max(1, getattr(CFG, "bridge_trade_retries", getattr(CFG, "bridge_default_retries", 1))))
+        heartbeat_timeout_cfg_ms = int(
+            max(1, getattr(CFG, "bridge_heartbeat_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))
+        )
+        heartbeat_timeout_budget_ms = int(
+            max(100, min(heartbeat_timeout_cfg_ms, int(max(150, trade_timeout_budget_ms * 0.75))))
+        )
+        heartbeat_retries_cfg = int(
+            max(1, getattr(CFG, "bridge_heartbeat_retries", getattr(CFG, "bridge_default_retries", 1)))
+        )
+        heartbeat_retries_budget = int(min(heartbeat_retries_cfg, trade_retries_budget))
+        heartbeat_queue_lock_timeout_ms = int(max(1, min(100, getattr(CFG, "bridge_heartbeat_queue_lock_timeout_ms", 25))))
         run_loop_idle_sleep = max(0.001, float(getattr(CFG, "run_loop_idle_sleep_sec", 0.01)))
         scan_slow_warn_ms = max(100, int(getattr(CFG, "run_loop_scan_slow_warn_ms", 1500)))
         heartbeat_worker_stale_sec = max(
@@ -14723,6 +14738,14 @@ class SafetyBot:
         last_trade_probe_ts = 0.0
         trade_probe_sent = 0
         loop_id = 0
+        logging.info(
+            "BRIDGE_BUDGETS trade_timeout_ms=%s trade_retries=%s heartbeat_timeout_ms=%s heartbeat_retries=%s hb_lock_timeout_ms=%s",
+            int(trade_timeout_budget_ms),
+            int(trade_retries_budget),
+            int(heartbeat_timeout_budget_ms),
+            int(heartbeat_retries_budget),
+            int(heartbeat_queue_lock_timeout_ms),
+        )
 
         try:
             while True:
@@ -14775,12 +14798,10 @@ class SafetyBot:
                                     "hb_loop_lag_ms": int(heartbeat_loop_lag_ms),
                                     "hb_market_data_stale_ms": int(market_data_stale_ms),
                                 },
-                                timeout_ms=int(max(1, getattr(CFG, "bridge_heartbeat_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))),
-                                max_retries=int(max(1, getattr(CFG, "bridge_heartbeat_retries", getattr(CFG, "bridge_default_retries", 1)))),
+                                timeout_ms=int(heartbeat_timeout_budget_ms),
+                                max_retries=int(heartbeat_retries_budget),
                                 loop_id=str(int(loop_id)),
-                                queue_lock_timeout_ms=int(
-                                    max(0, getattr(CFG, "bridge_heartbeat_queue_lock_timeout_ms", 25))
-                                ),
+                                queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
                                 reconnect_on_timeout=bool(
                                     getattr(CFG, "bridge_heartbeat_reconnect_on_timeout", False)
                                 ),
