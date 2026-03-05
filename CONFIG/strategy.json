@@ -21,7 +21,7 @@
   "bridge_default_retries": 1,
   "bridge_default_timeout_ms": 1200,
   "bridge_heartbeat_retries": 1,
-  "bridge_heartbeat_timeout_ms": 1100,
+  "bridge_heartbeat_timeout_ms": 800,
   "bridge_trade_probe_comment": "TRADE_PROBE_SAFE_NO_LIVE",
   "bridge_trade_probe_deviation_points": 10,
   "bridge_trade_probe_enabled": false,
@@ -644,5 +644,8 @@
   "zmq_heartbeat_fail_log_interval_sec": 15,
   "zmq_heartbeat_fail_safe_cooldown_sec": 30,
   "zmq_heartbeat_fail_threshold": 4,
-  "zmq_heartbeat_interval_sec": 15
+  "zmq_heartbeat_interval_sec": 15,
+  "bridge_heartbeat_queue_lock_timeout_ms": 25,
+  "bridge_heartbeat_reconnect_on_timeout": false,
+  "bridge_heartbeat_timeout_nonfatal": true
 }

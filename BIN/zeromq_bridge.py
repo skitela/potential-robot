@@ -269,6 +269,8 @@ class ZMQBridge:
         timeout_ms: Optional[int] = None,
         max_retries: Optional[int] = None,
         loop_id: Optional[str] = None,
+        queue_lock_timeout_ms: Optional[int] = None,
+        reconnect_on_timeout: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
         Wysyła komendę do Agenta MQL5 z mechanizmem ponowień i oczekiwaniem na odpowiedź.
@@ -285,9 +287,64 @@ class ZMQBridge:
         effective_timeout_ms = int(max(1, timeout_ms if timeout_ms is not None else self.req_timeout_ms))
         effective_retries = int(max(1, max_retries if max_retries is not None else self.req_retries))
 
+        pre_action = str(command.get("action") or "").strip().upper()
+        pre_command_type = self._command_type(pre_action)
+        pre_timeout_bucket = self._timeout_budget_bucket(effective_timeout_ms)
+        pre_msg_id = str(command.get("msg_id") or str(uuid.uuid4()))
+        pre_loop_id = str(loop_id if loop_id is not None else (command.get("loop_id") or "none"))
+
         queue_wait_t0 = time.perf_counter()
-        self._command_lock.acquire()
+        if queue_lock_timeout_ms is None:
+            acquired = bool(self._command_lock.acquire())
+        else:
+            acquired = bool(
+                self._command_lock.acquire(
+                    timeout=max(0.0, float(max(0, int(queue_lock_timeout_ms))) / 1000.0)
+                )
+            )
         command_queue_wait_ms = int((time.perf_counter() - queue_wait_t0) * 1000.0)
+        if not acquired:
+            diag = {
+                "loop_id": pre_loop_id,
+                "command_id": pre_msg_id,
+                "action": pre_action,
+                "command_type": pre_command_type,
+                "timeout_budget_ms": int(effective_timeout_ms),
+                "timeout_budget_bucket": pre_timeout_bucket,
+                "max_retries": int(effective_retries),
+                "attempts": 0,
+                "bridge_send_ms": 0,
+                "bridge_wait_ms": 0,
+                "bridge_parse_ms": 0,
+                "bridge_total_ms": 0,
+                "bridge_timeout_reason": "QUEUE_LOCK_TIMEOUT",
+                "bridge_timeout_subreason": "LOCK_BUSY",
+                "status": "SKIPPED",
+                "fallback_used": True,
+                "channel": "REQ_REP",
+                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                "command_queue_wait_ms": int(command_queue_wait_ms),
+                "audit_log_lock_wait_max_ms": 0,
+            }
+            self._set_last_command_diag(diag)
+            self._write_audit_log(
+                "COMMAND_SKIPPED",
+                pre_msg_id,
+                {
+                    "phase": "queue_lock_timeout",
+                    "action": pre_action,
+                    "command_type": pre_command_type,
+                    "queue_lock_timeout_ms": (
+                        None if queue_lock_timeout_ms is None else int(max(0, int(queue_lock_timeout_ms)))
+                    ),
+                    "command_queue_wait_ms": int(command_queue_wait_ms),
+                    "bridge_timeout_reason": "QUEUE_LOCK_TIMEOUT",
+                    "bridge_timeout_subreason": "LOCK_BUSY",
+                    "timeout_budget_ms": int(effective_timeout_ms),
+                    "timeout_budget_bucket": pre_timeout_bucket,
+                },
+            )
+            return None
 
         try:
             original_command = dict(command)
@@ -544,7 +601,8 @@ class ZMQBridge:
                             },
                         )
                         max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
-                        self._reconnect_req_socket()
+                        if bool(reconnect_on_timeout):
+                            self._reconnect_req_socket()
 
                 except (TypeError, json.JSONDecodeError) as e:
                     self._write_audit_log("COMMAND_SERIALIZATION_ERROR", msg_id, {"error": str(e)})

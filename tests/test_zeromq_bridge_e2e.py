@@ -108,6 +108,37 @@ class TestZMQBridgeE2E(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(2, bridge.req_socket.send_string.call_count)
 
+    def test_send_command_skips_when_queue_lock_busy(self):
+        bridge = self._build_bridge(retries=1)
+        bridge._command_lock.acquire()
+        try:
+            result = bridge.send_command(
+                {"action": "HEARTBEAT", "msg_id": "hb-lock-busy"},
+                queue_lock_timeout_ms=1,
+            )
+        finally:
+            bridge._command_lock.release()
+
+        self.assertIsNone(result)
+        self.assertEqual(0, bridge.req_socket.send_string.call_count)
+        diag = bridge.get_last_command_diag()
+        self.assertEqual("SKIPPED", diag.get("status"))
+        self.assertEqual("QUEUE_LOCK_TIMEOUT", diag.get("bridge_timeout_reason"))
+
+    def test_send_command_timeout_can_skip_reconnect(self):
+        bridge = self._build_bridge(retries=2)
+        bridge.req_socket.poll.side_effect = [False, False]
+        bridge._reconnect_req_socket = MagicMock()
+
+        result = bridge.send_command(
+            {"action": "HEARTBEAT", "msg_id": "hb-no-reconnect"},
+            reconnect_on_timeout=False,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(2, bridge.req_socket.send_string.call_count)
+        self.assertEqual(0, bridge._reconnect_req_socket.call_count)
+
 
 if __name__ == "__main__":
     unittest.main()

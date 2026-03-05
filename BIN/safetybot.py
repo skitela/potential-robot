@@ -231,6 +231,12 @@ class CFG:
     bridge_default_retries: int = 1
     bridge_heartbeat_timeout_ms: int = 900
     bridge_heartbeat_retries: int = 1
+    # Fast-fail heartbeat lock policy: do not block runtime loop when command channel is busy.
+    bridge_heartbeat_queue_lock_timeout_ms: int = 25
+    # Avoid expensive REQ socket reconnect on heartbeat timeout (trade path keeps default behavior).
+    bridge_heartbeat_reconnect_on_timeout: bool = False
+    # Treat heartbeat timeouts as non-fatal while market-data stream is still alive.
+    bridge_heartbeat_timeout_nonfatal: bool = True
     bridge_trade_timeout_ms: int = 1200
     bridge_trade_retries: int = 1
     # Controlled TRADE-path probe for latency audits (safe mode: invalid symbol -> no order send).
@@ -14717,6 +14723,7 @@ class SafetyBot:
                                 )
                             last_heartbeat_ts = now
                         hb_reply = None
+                        hb_diag: Dict[str, Any] = {}
                         if not heartbeat_suppressed:
                             hb_reply = self.zmq_bridge.send_command(
                                 {
@@ -14728,12 +14735,32 @@ class SafetyBot:
                                 timeout_ms=int(max(1, getattr(CFG, "bridge_heartbeat_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))),
                                 max_retries=int(max(1, getattr(CFG, "bridge_heartbeat_retries", getattr(CFG, "bridge_default_retries", 1)))),
                                 loop_id=str(int(loop_id)),
+                                queue_lock_timeout_ms=int(
+                                    max(0, getattr(CFG, "bridge_heartbeat_queue_lock_timeout_ms", 25))
+                                ),
+                                reconnect_on_timeout=bool(
+                                    getattr(CFG, "bridge_heartbeat_reconnect_on_timeout", False)
+                                ),
                             )
                         if not heartbeat_suppressed:
-                            self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="HEARTBEAT")
+                            hb_diag = self.zmq_bridge.get_last_command_diag()
+                            self._record_bridge_diag(hb_diag, action="HEARTBEAT")
                         hb_hash_ok = False
                         hb_ok = False
+                        hb_skipped_lock = False
+                        hb_timeout_nonfatal = False
                         if not heartbeat_suppressed:
+                            hb_reason = str((hb_diag.get("bridge_timeout_reason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
+                            hb_subreason = str((hb_diag.get("bridge_timeout_subreason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
+                            hb_skipped_lock = bool(hb_reason == "QUEUE_LOCK_TIMEOUT")
+                            hb_timeout_nonfatal = (
+                                bool(getattr(CFG, "bridge_heartbeat_timeout_nonfatal", True))
+                                and hb_reason in ("TIMEOUT_NO_RESPONSE", "SEND_TIMEOUT")
+                                and (
+                                    int(market_data_stale_ms) < 0
+                                    or int(market_data_stale_ms) < int(heartbeat_worker_stale_sec * 1000)
+                                )
+                            )
                             try:
                                 hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
                                 hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
@@ -14748,6 +14775,20 @@ class SafetyBot:
                             )
                         if heartbeat_suppressed:
                             pass
+                        elif hb_skipped_lock:
+                            logging.info(
+                                "HEARTBEAT_SKIP reason=queue_lock_busy queue_wait_ms=%s subreason=%s",
+                                int((hb_diag.get("command_queue_wait_ms") if isinstance(hb_diag, dict) else 0) or 0),
+                                hb_subreason or "LOCK_BUSY",
+                            )
+                        elif hb_timeout_nonfatal:
+                            logging.info(
+                                "HEARTBEAT_SKIP reason=timeout_nonfatal reason=%s subreason=%s wait_ms=%s timeout_budget_ms=%s",
+                                hb_reason or "TIMEOUT_NO_RESPONSE",
+                                hb_subreason or "NO_RESPONSE",
+                                int((hb_diag.get("bridge_wait_ms") if isinstance(hb_diag, dict) else 0) or 0),
+                                int((hb_diag.get("timeout_budget_ms") if isinstance(hb_diag, dict) else 0) or 0),
+                            )
                         elif hb_ok:
                             if heartbeat_fail_safe_active or heartbeat_failures > 0:
                                 logging.warning(
@@ -15045,6 +15086,18 @@ if __name__ == "__main__":
     CFG.bridge_default_retries = _cfg_int("bridge_default_retries", CFG.bridge_default_retries)
     CFG.bridge_heartbeat_timeout_ms = _cfg_int("bridge_heartbeat_timeout_ms", CFG.bridge_heartbeat_timeout_ms)
     CFG.bridge_heartbeat_retries = _cfg_int("bridge_heartbeat_retries", CFG.bridge_heartbeat_retries)
+    CFG.bridge_heartbeat_queue_lock_timeout_ms = _cfg_int(
+        "bridge_heartbeat_queue_lock_timeout_ms",
+        CFG.bridge_heartbeat_queue_lock_timeout_ms,
+    )
+    CFG.bridge_heartbeat_reconnect_on_timeout = _cfg_bool(
+        "bridge_heartbeat_reconnect_on_timeout",
+        CFG.bridge_heartbeat_reconnect_on_timeout,
+    )
+    CFG.bridge_heartbeat_timeout_nonfatal = _cfg_bool(
+        "bridge_heartbeat_timeout_nonfatal",
+        CFG.bridge_heartbeat_timeout_nonfatal,
+    )
     CFG.bridge_trade_timeout_ms = _cfg_int("bridge_trade_timeout_ms", CFG.bridge_trade_timeout_ms)
     CFG.bridge_trade_retries = _cfg_int("bridge_trade_retries", CFG.bridge_trade_retries)
     CFG.bridge_trade_probe_enabled = _cfg_bool(
