@@ -330,6 +330,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--sl-points", type=float, default=100.0)
     ap.add_argument("--slippage-points", type=float, default=3.0)
     ap.add_argument("--max-source-lag-hours", type=float, default=12.0)
+    ap.add_argument("--fail-on-all-stale", action="store_true")
     ap.add_argument("--max-no-trade-samples", type=int, default=1000)
     ap.add_argument("--out-jsonl", default="")
     ap.add_argument("--out-report", default="")
@@ -433,8 +434,17 @@ def main() -> int:
             total_pnl_points = 0.0
             try:
                 if dataset_max_ts is not None and fresh_sources <= 0:
-                    status = "SKIP"
-                    reason = "STALE_MARKET_DATA"
+                    if bool(args.fail_on_all_stale):
+                        status = "FAIL"
+                        reason = "STALE_MARKET_DATA_FATAL"
+                        print(
+                            "STAGE1_COUNTERFACTUAL_PRECHECK_FAIL "
+                            f"all_sources_stale=true threshold_h={max_lag_h:.3f} "
+                            f"dataset_max_ts={iso_utc(dataset_max_ts)}"
+                        )
+                    else:
+                        status = "SKIP"
+                        reason = "STALE_MARKET_DATA"
                 else:
                     horizon_min = max(1, int(args.horizon_minutes))
                     for row in no_trade:
@@ -549,7 +559,7 @@ def main() -> int:
                     except Exception:
                         pass
 
-            if reason not in {"STALE_MARKET_DATA"}:
+            if reason not in {"STALE_MARKET_DATA", "STALE_MARKET_DATA_FATAL"}:
                 status = "PASS" if evaluated > 0 else "SKIP"
                 reason = "COUNTERFACTUAL_OK" if evaluated > 0 else "COUNTERFACTUAL_NO_EVAL"
             details = {
@@ -604,6 +614,7 @@ def main() -> int:
             "sl_points": float(args.sl_points),
             "slippage_points": float(args.slippage_points),
             "max_source_lag_hours": float(max(0.0, float(args.max_source_lag_hours))),
+            "fail_on_all_stale": bool(args.fail_on_all_stale),
             "max_no_trade_samples": int(max(1, int(args.max_no_trade_samples))),
         },
     }
@@ -616,6 +627,7 @@ def main() -> int:
         f"Dataset: {dataset_jsonl}" if dataset_jsonl is not None else "Dataset: NONE",
         f"History DB: {history_db}",
         f"Max source lag hours: {float(max(0.0, float(args.max_source_lag_hours))):.3f}",
+        f"Fail on all stale: {bool(args.fail_on_all_stale)}",
         f"Evaluated: {int((details or {}).get('rows_evaluated', 0))}",
         f"Skipped: {int((details or {}).get('rows_skipped', 0))}",
         f"Output rows: {out_jsonl}",

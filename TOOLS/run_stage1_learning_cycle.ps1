@@ -9,7 +9,8 @@ param(
     [int]$MinTotalPerSymbol = 30,
     [int]$MinNoTradePerSymbol = 10,
     [int]$MinTradePathPerSymbol = 1,
-    [int]$MinBucketsPerSymbol = 2
+    [int]$MinBucketsPerSymbol = 2,
+    [switch]$FailOnAllStaleCounterfactual
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,13 +46,17 @@ Invoke-Python @(
     "--lookback-hours", "$LookbackHours"
 )
 
-Invoke-Python @(
+$counterfactualArgs = @(
     "$Root\TOOLS\stage1_counterfactual_from_snapshots.py",
     "--root", $Root,
     "--lab-data-root", $LabDataRoot,
     "--horizon-minutes", "15",
     "--max-no-trade-samples", "1000"
 )
+if ($FailOnAllStaleCounterfactual.IsPresent) {
+    $counterfactualArgs += "--fail-on-all-stale"
+}
+Invoke-Python $counterfactualArgs
 
 Invoke-Python @(
     "$Root\TOOLS\stage1_counterfactual_summary.py",
