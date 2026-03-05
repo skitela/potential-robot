@@ -6962,6 +6962,9 @@ class StandardStrategy:
         self._renko_eval_cache: Dict[str, Dict[str, Any]] = {}
         self._skip_capture_ctx: Dict[str, Any] = {}
         self.execution_telemetry_hook: Optional[Callable[[Dict[str, Any]], None]] = None
+        # Guard defaults; populated by SafetyBot preflight when available.
+        self._asia_shadow_symbol_gate: Dict[str, bool] = {}
+        self._asia_shadow_symbol_targets: Set[str] = set()
 
     def _append_execution_telemetry(self, payload: Dict[str, Any]) -> None:
         """
@@ -10015,6 +10018,12 @@ class SafetyBot:
         }
         self._asia_shadow_symbol_gate = gate
         self._asia_shadow_symbol_targets = targets
+        try:
+            if hasattr(self, "strategy") and self.strategy is not None:
+                self.strategy._asia_shadow_symbol_gate = dict(gate)
+                self.strategy._asia_shadow_symbol_targets = set(targets)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         try:
             atomic_write_json(self.asia_preflight_path, report)
             logging.info("ASIA_PREFLIGHT_EVIDENCE path=%s symbols=%s", self.asia_preflight_path, int(len(rows)))

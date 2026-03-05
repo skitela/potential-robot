@@ -4,7 +4,7 @@ param(
     [int]$LookbackHours = 24,
     [string]$FocusGroup = "FX",
     [ValidateSet("strategy", "active")]
-    [string]$CoverageScope = "strategy",
+    [string]$CoverageScope = "active",
     [int]$RetentionDays = 14,
     [int]$MinTotalPerSymbol = 30,
     [int]$MinNoTradePerSymbol = 10,
