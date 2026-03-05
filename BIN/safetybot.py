@@ -6935,6 +6935,20 @@ class StandardStrategy:
         self._spread_entry_count_day: int = 0
         self._renko_eval_cache: Dict[str, Dict[str, Any]] = {}
         self._skip_capture_ctx: Dict[str, Any] = {}
+        self.execution_telemetry_hook: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def _append_execution_telemetry(self, payload: Dict[str, Any]) -> None:
+        """
+        Strategy-level telemetry sink.
+        Uses SafetyBot hook when available; otherwise no-op to avoid blocking trade path.
+        """
+        hook = getattr(self, "execution_telemetry_hook", None)
+        if not callable(hook):
+            return
+        try:
+            hook(dict(payload or {}))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _metrics_roll_day(self) -> None:
         day_key = str(pl_day_key(now_utc()))
@@ -9774,6 +9788,7 @@ class SafetyBot:
         )
         self.strategy.decision_store = self.decision_store
         self.strategy.zmq_feature_cache = self._zmq_m5_feature_cache
+        self.strategy.execution_telemetry_hook = self._append_execution_telemetry
         self.resolved_symbols = {}
         # Cache of last known open positions; used by guard polling cadence.
         self._positions_cache: Dict[str, List] = {}
