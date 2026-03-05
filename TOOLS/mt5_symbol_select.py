@@ -67,8 +67,8 @@ def _safe_symbol_info(mt5, symbol: str) -> Dict[str, object]:
     for k in ("name", "visible", "select", "trade_mode", "digits", "spread", "point", "trade_stops_level", "trade_freeze_level"):
         try:
             out[k] = getattr(info, k)
-        except Exception:
-            pass
+        except Exception as exc:
+            _ = exc
     return out
 
 
@@ -115,8 +115,8 @@ def main() -> int:
         print(json.dumps({"status": "FAIL", "out": str(out_path), "error": report["error"]}, ensure_ascii=False))
         try:
             mt5.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            _ = exc
         return 3
 
     all_ok = True
@@ -168,9 +168,8 @@ def main() -> int:
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         mt5.shutdown()
-    except Exception:
-        pass
-
+    except Exception as exc:
+        _ = exc
     print(json.dumps({"status": report["result"], "out": str(out_path), "rows": len(report["rows"])}, ensure_ascii=False))
     return 0 if all_ok else 4
 

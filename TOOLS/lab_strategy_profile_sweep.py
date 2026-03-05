@@ -42,10 +42,8 @@ def write_json(path: Path, payload: Dict[str, Any], *, root: Path, lab_data_root
         try:
             if tmp.exists():
                 tmp.unlink()
-        except Exception:
-            pass
-
-
+        except Exception as exc:
+            _ = exc
 def parse_profiles(raw: str) -> List[str]:
     text = str(raw or "").strip()
     if not text:
@@ -209,9 +207,8 @@ def main() -> int:
                         )
                     )
                     return 0
-            except Exception:
-                pass
-
+            except Exception as exc:
+                _ = exc
     profile_runs: List[Dict[str, Any]] = []
     for profile in profiles:
         profile_out = ensure_write_parent(

@@ -155,9 +155,8 @@ def main() -> int:
             existing = _load_json(approval_path)
             if isinstance(existing, dict):
                 base.update(existing)
-        except Exception:
-            pass
-
+        except Exception as exc:
+            _ = exc
     try:
         approved = _parse_bool(str(args.approved))
     except Exception as exc:

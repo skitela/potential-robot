@@ -23,6 +23,7 @@ import logging
 import uuid
 import threading
 import time
+import queue
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -116,7 +117,20 @@ class ZMQBridge:
     Loguje wszystkie transakcje do pliku audytu.
     """
 
-    def __init__(self, pull_port: int = 5555, req_port: int = 5556, req_timeout_ms: int = 5000, req_retries: int = 3, audit_log_path: Optional[str] = "LOGS/audit_trail.jsonl"):
+    def __init__(
+        self,
+        pull_port: int = 5555,
+        req_port: int = 5556,
+        req_timeout_ms: int = 5000,
+        req_retries: int = 3,
+        audit_log_path: Optional[str] = "LOGS/audit_trail.jsonl",
+        heartbeat_trade_priority_window_ms: int = 300,
+        audit_async: bool = True,
+        audit_queue_maxsize: int = 8192,
+        audit_queue_put_timeout_ms: int = 2,
+        audit_batch_size: int = 64,
+        audit_flush_interval_ms: int = 200,
+    ):
         """
         Inicjalizuje kontekst ZMQ i definiuje porty.
 
@@ -140,12 +154,40 @@ class ZMQBridge:
         self._diag_lock = threading.Lock()
         self._audit_log_file: Optional[Path] = Path(self.audit_log_path) if self.audit_log_path else None
         self._last_command_diag: Dict[str, Any] = {}
+        self._audit_async_enabled = bool(audit_async and self._audit_log_file is not None)
+        self._audit_queue_maxsize = int(max(128, int(audit_queue_maxsize or 8192)))
+        self._audit_queue_put_timeout_s = max(0.0, float(audit_queue_put_timeout_ms or 0) / 1000.0)
+        self._audit_batch_size = int(max(1, int(audit_batch_size or 64)))
+        self._audit_flush_interval_s = max(0.01, float(audit_flush_interval_ms or 200) / 1000.0)
+        self._audit_queue: Optional[queue.Queue[str]] = (
+            queue.Queue(maxsize=self._audit_queue_maxsize) if self._audit_async_enabled else None
+        )
+        self._audit_stop = threading.Event()
+        self._audit_thread: Optional[threading.Thread] = None
+        self._audit_queue_full_count = 0
+        self._heartbeat_trade_priority_window_ms = int(
+            max(0, int(heartbeat_trade_priority_window_ms or 0))
+        )
+        self._trade_priority_lock = threading.Lock()
+        self._trade_waiting_count = 0
+        self._trade_inflight_count = 0
+        self._last_trade_activity_monotonic = 0.0
 
         logging.info(
             f"ZMQBridge zainicjalizowany. Odbiór danych na porcie {pull_port}, komunikacja REQ/REP na porcie {req_port}."
         )
         if self.audit_log_path:
             logging.info(f"Dziennik audytu będzie zapisywany w: {self.audit_log_path}")
+        if self._audit_async_enabled:
+            self._start_audit_worker()
+            logging.info(
+                "AUDIT_LOG_MODE=ASYNC queue_maxsize=%s batch_size=%s flush_interval_ms=%s",
+                int(self._audit_queue_maxsize),
+                int(self._audit_batch_size),
+                int(max(10, int(self._audit_flush_interval_s * 1000.0))),
+            )
+        elif self.audit_log_path:
+            logging.info("AUDIT_LOG_MODE=SYNC")
 
     def _set_last_command_diag(self, diag: Dict[str, Any]) -> None:
         with self._diag_lock:
@@ -154,6 +196,38 @@ class ZMQBridge:
     def get_last_command_diag(self) -> Dict[str, Any]:
         with self._diag_lock:
             return dict(self._last_command_diag)
+
+    def _trade_mark_waiting(self, delta: int) -> None:
+        now_mono = float(time.perf_counter())
+        with self._trade_priority_lock:
+            self._trade_waiting_count = int(max(0, int(self._trade_waiting_count) + int(delta)))
+            self._last_trade_activity_monotonic = now_mono
+
+    def _trade_mark_inflight_start(self) -> None:
+        now_mono = float(time.perf_counter())
+        with self._trade_priority_lock:
+            self._trade_inflight_count = int(max(0, int(self._trade_inflight_count) + 1))
+            self._last_trade_activity_monotonic = now_mono
+
+    def _trade_mark_done(self) -> None:
+        now_mono = float(time.perf_counter())
+        with self._trade_priority_lock:
+            self._trade_inflight_count = int(max(0, int(self._trade_inflight_count) - 1))
+            self._last_trade_activity_monotonic = now_mono
+
+    def _is_trade_priority_active(self, window_ms: int) -> bool:
+        eff_window_ms = int(max(0, int(window_ms)))
+        now_mono = float(time.perf_counter())
+        with self._trade_priority_lock:
+            waiting = int(self._trade_waiting_count)
+            inflight = int(self._trade_inflight_count)
+            last_ts = float(self._last_trade_activity_monotonic or 0.0)
+        if waiting > 0 or inflight > 0:
+            return True
+        if eff_window_ms <= 0 or last_ts <= 0.0:
+            return False
+        elapsed_ms = int(max(0.0, (now_mono - last_ts) * 1000.0))
+        return bool(elapsed_ms <= eff_window_ms)
 
     @staticmethod
     def _command_type(action: Any) -> str:
@@ -191,7 +265,16 @@ class ZMQBridge:
             "message_id": message_id,
             "data": data
         }
-        
+
+        line = json.dumps(log_entry, separators=(",", ":")) + "\n"
+        if self._audit_async_enabled:
+            return self._enqueue_audit_line(line)
+
+        return self._append_audit_lines_sync([line])
+
+    def _append_audit_lines_sync(self, lines: list[str]) -> int:
+        if not self._audit_log_file or not lines:
+            return 0
         lock_wait_ms = 0
         try:
             lock_t0 = time.perf_counter()
@@ -199,10 +282,81 @@ class ZMQBridge:
                 lock_wait_ms = int((time.perf_counter() - lock_t0) * 1000.0)
                 self._audit_log_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(self._audit_log_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(log_entry, separators=(",", ":")) + "\n")
+                    f.writelines(lines)
         except Exception as e:
             logging.error(f"Nie udało się zapisać do dziennika audytu: {e}")
         return int(lock_wait_ms)
+
+    def _enqueue_audit_line(self, line: str) -> int:
+        q = self._audit_queue
+        if q is None:
+            return self._append_audit_lines_sync([line])
+        queue_wait_t0 = time.perf_counter()
+        try:
+            q.put(line, timeout=self._audit_queue_put_timeout_s)
+            return int((time.perf_counter() - queue_wait_t0) * 1000.0)
+        except queue.Full:
+            self._audit_queue_full_count += 1
+            if self._audit_queue_full_count <= 3 or (self._audit_queue_full_count % 100) == 0:
+                logging.warning(
+                    "AUDIT_QUEUE_FULL fallback=SYNC count=%s queue_maxsize=%s",
+                    int(self._audit_queue_full_count),
+                    int(self._audit_queue_maxsize),
+                )
+            # Fallback sync: no audit-data loss, only rare contention spike.
+            sync_wait = self._append_audit_lines_sync([line])
+            queue_wait = int((time.perf_counter() - queue_wait_t0) * 1000.0)
+            return int(max(sync_wait, queue_wait))
+
+    def _start_audit_worker(self) -> None:
+        if not self._audit_async_enabled:
+            return
+        if self._audit_thread is not None:
+            return
+        self._audit_stop.clear()
+        t = threading.Thread(target=self._audit_worker_loop, name="zmq-audit-writer", daemon=True)
+        self._audit_thread = t
+        t.start()
+
+    def _audit_worker_loop(self) -> None:
+        q = self._audit_queue
+        if q is None:
+            return
+        while (not self._audit_stop.is_set()) or (not q.empty()):
+            try:
+                first = q.get(timeout=self._audit_flush_interval_s)
+            except queue.Empty:
+                continue
+            batch: list[str] = [first]
+            while len(batch) < self._audit_batch_size:
+                try:
+                    batch.append(q.get_nowait())
+                except queue.Empty:
+                    break
+            self._append_audit_lines_sync(batch)
+            for _ in batch:
+                try:
+                    q.task_done()
+                except Exception:
+                    break
+
+    def _flush_audit_queue_sync(self) -> None:
+        q = self._audit_queue
+        if q is None:
+            return
+        batch: list[str] = []
+        while True:
+            try:
+                batch.append(q.get_nowait())
+            except queue.Empty:
+                break
+        if batch:
+            self._append_audit_lines_sync(batch)
+            for _ in batch:
+                try:
+                    q.task_done()
+                except Exception:
+                    break
 
     def setup_sockets(self) -> None:
         """
@@ -292,6 +446,52 @@ class ZMQBridge:
         pre_timeout_bucket = self._timeout_budget_bucket(effective_timeout_ms)
         pre_msg_id = str(command.get("msg_id") or str(uuid.uuid4()))
         pre_loop_id = str(loop_id if loop_id is not None else (command.get("loop_id") or "none"))
+        trade_priority_window_ms = int(max(0, self._heartbeat_trade_priority_window_ms))
+        is_trade_command = bool(pre_command_type == "TRADE")
+
+        if is_trade_command:
+            self._trade_mark_waiting(+1)
+        elif pre_command_type == "HEARTBEAT":
+            if self._is_trade_priority_active(trade_priority_window_ms):
+                diag = {
+                    "loop_id": pre_loop_id,
+                    "command_id": pre_msg_id,
+                    "action": pre_action,
+                    "command_type": pre_command_type,
+                    "timeout_budget_ms": int(effective_timeout_ms),
+                    "timeout_budget_bucket": pre_timeout_bucket,
+                    "max_retries": int(effective_retries),
+                    "attempts": 0,
+                    "bridge_send_ms": 0,
+                    "bridge_wait_ms": 0,
+                    "bridge_parse_ms": 0,
+                    "bridge_total_ms": 0,
+                    "bridge_timeout_reason": "QUEUE_LOCK_TIMEOUT",
+                    "bridge_timeout_subreason": "TRADE_PRIORITY_WINDOW",
+                    "status": "SKIPPED",
+                    "fallback_used": True,
+                    "channel": "REQ_REP",
+                    "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                    "command_queue_wait_ms": 0,
+                    "audit_log_lock_wait_max_ms": 0,
+                    "heartbeat_trade_priority_window_ms": int(trade_priority_window_ms),
+                }
+                self._set_last_command_diag(diag)
+                self._write_audit_log(
+                    "COMMAND_SKIPPED",
+                    pre_msg_id,
+                    {
+                        "phase": "trade_priority_window",
+                        "action": pre_action,
+                        "command_type": pre_command_type,
+                        "bridge_timeout_reason": "QUEUE_LOCK_TIMEOUT",
+                        "bridge_timeout_subreason": "TRADE_PRIORITY_WINDOW",
+                        "timeout_budget_ms": int(effective_timeout_ms),
+                        "timeout_budget_bucket": pre_timeout_bucket,
+                        "heartbeat_trade_priority_window_ms": int(trade_priority_window_ms),
+                    },
+                )
+                return None
 
         queue_wait_t0 = time.perf_counter()
         if queue_lock_timeout_ms is None:
@@ -304,6 +504,8 @@ class ZMQBridge:
             )
         command_queue_wait_ms = int((time.perf_counter() - queue_wait_t0) * 1000.0)
         if not acquired:
+            if is_trade_command:
+                self._trade_mark_waiting(-1)
             diag = {
                 "loop_id": pre_loop_id,
                 "command_id": pre_msg_id,
@@ -368,6 +570,11 @@ class ZMQBridge:
             budget_bucket = self._timeout_budget_bucket(effective_timeout_ms)
             hb_loop_lag_ms = 0
             hb_market_data_stale_ms = -1
+            trade_started = False
+            if is_trade_command:
+                self._trade_mark_waiting(-1)
+                self._trade_mark_inflight_start()
+                trade_started = True
             try:
                 hb_loop_lag_ms = int(max(0, int(original_command.get("hb_loop_lag_ms", 0) or 0)))
             except Exception:
@@ -696,6 +903,11 @@ class ZMQBridge:
             self._set_last_command_diag(diag)
             return None
         finally:
+            if is_trade_command:
+                try:
+                    self._trade_mark_done()
+                except Exception as exc:
+                    _ = exc
             self._command_lock.release()
 
     def _reconnect_req_socket(self):
@@ -715,6 +927,11 @@ class ZMQBridge:
         Zamyka gniazda i kontekst ZMQ w sposób bezpieczny.
         """
         logging.info("Zamykanie mostu ZMQ...")
+        if self._audit_async_enabled:
+            self._audit_stop.set()
+            if self._audit_thread and self._audit_thread.is_alive():
+                self._audit_thread.join(timeout=max(0.5, 2.0 * self._audit_flush_interval_s))
+            self._flush_audit_queue_sync()
         if self.pull_socket:
             self.pull_socket.close()
         if self.req_socket:

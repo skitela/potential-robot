@@ -63,8 +63,8 @@ def _load_strategy_scope(root: Path) -> Tuple[List[str], Dict[str, str]]:
                 kb = _symbol_base(str(k))
                 if kb:
                     groups[kb] = str(v or "").upper()
-    except Exception:
-        pass
+    except Exception as exc:
+        _ = exc
     return expected, groups
 
 

@@ -209,9 +209,8 @@ def main() -> int:
             },
         )
         conn_reg.close()
-    except Exception:
-        pass
-
+    except Exception as exc:
+        _ = exc
     print(f"STAGE1_COVERAGE_RECOVERY_DONE status={status} reason={reason} report={out_report}")
     return 0 if status in {"PASS", "WARN"} else 1
 

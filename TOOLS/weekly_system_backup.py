@@ -122,8 +122,8 @@ def _zip_directory(
                     files_added += 1
                     try:
                         bytes_added += int(src.stat().st_size)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _ = exc
                 except Exception as exc:
                     errors.append(f"{src}: {type(exc).__name__}: {exc}")
 

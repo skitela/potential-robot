@@ -543,9 +543,8 @@ def main() -> int:
             },
         )
         conn_reg.close()
-    except Exception:
-        pass
-
+    except Exception as exc:
+        _ = exc
     print(f"STAGE1_ITERATION_AUDIT_DONE status=PASS verdict={gg_verdict or 'REVIEW_REQUIRED'} report={out_report}")
     return 0
 

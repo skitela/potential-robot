@@ -246,9 +246,8 @@ def main() -> int:
             },
         )
         conn_reg.close()
-    except Exception:
-        pass
-
+    except Exception as exc:
+        _ = exc
     print(f"STAGE1_SHADOW_GONOGO_DONE verdict={verdict} status={status} reason={reason} report={out_report}")
     return 0 if verdict in {"PASS", "REVIEW_REQUIRED"} else 1
 

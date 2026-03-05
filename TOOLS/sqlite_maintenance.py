@@ -88,9 +88,8 @@ def run_maintenance(
         if bool(run_optimize):
             try:
                 conn.execute("PRAGMA optimize;")
-            except Exception:
-                pass
-
+            except Exception as exc:
+                _ = exc
         try:
             item["page_count"] = int(conn.execute("PRAGMA page_count;").fetchone()[0])
         except Exception:
@@ -109,10 +108,8 @@ def run_maintenance(
         if conn is not None:
             try:
                 conn.close()
-            except Exception:
-                pass
-
-
+            except Exception as exc:
+                _ = exc
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Runtime-safe SQLite maintenance (WAL checkpoint + optimize).")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))

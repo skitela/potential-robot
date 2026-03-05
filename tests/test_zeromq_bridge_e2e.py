@@ -139,6 +139,21 @@ class TestZMQBridgeE2E(unittest.TestCase):
         self.assertEqual(2, bridge.req_socket.send_string.call_count)
         self.assertEqual(0, bridge._reconnect_req_socket.call_count)
 
+    def test_send_command_heartbeat_yields_to_trade_priority_window(self):
+        bridge = self._build_bridge(retries=1)
+        bridge._trade_mark_waiting(+1)
+        try:
+            result = bridge.send_command({"action": "HEARTBEAT", "msg_id": "hb-priority-yield"})
+        finally:
+            bridge._trade_mark_waiting(-1)
+
+        self.assertIsNone(result)
+        self.assertEqual(0, bridge.req_socket.send_string.call_count)
+        diag = bridge.get_last_command_diag()
+        self.assertEqual("SKIPPED", diag.get("status"))
+        self.assertEqual("QUEUE_LOCK_TIMEOUT", diag.get("bridge_timeout_reason"))
+        self.assertEqual("TRADE_PRIORITY_WINDOW", diag.get("bridge_timeout_subreason"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -279,9 +279,8 @@ def main() -> int:
             },
         )
         conn_reg.close()
-    except Exception:
-        pass
-
+    except Exception as exc:
+        _ = exc
     print(f"STAGE1_COUNTERFACTUAL_SUMMARY_DONE status={status} reason={reason} report={out_report}")
     return 0 if status in {"PASS", "SKIP"} else 1
 

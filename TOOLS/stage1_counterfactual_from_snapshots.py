@@ -556,9 +556,8 @@ def main() -> int:
                 for _, c in opened_sources:
                     try:
                         c.close()
-                    except Exception:
-                        pass
-
+                    except Exception as exc:
+                        _ = exc
             if reason not in {"STALE_MARKET_DATA", "STALE_MARKET_DATA_FATAL"}:
                 status = "PASS" if evaluated > 0 else "SKIP"
                 reason = "COUNTERFACTUAL_OK" if evaluated > 0 else "COUNTERFACTUAL_NO_EVAL"
@@ -659,9 +658,8 @@ def main() -> int:
             },
         )
         conn_reg.close()
-    except Exception:
-        pass
-
+    except Exception as exc:
+        _ = exc
     print(f"STAGE1_COUNTERFACTUAL_DONE status={status} reason={reason} report={out_report}")
     return 0 if status in {"PASS", "SKIP"} else 1
 

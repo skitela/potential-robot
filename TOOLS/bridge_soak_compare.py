@@ -229,8 +229,8 @@ def _parse_window(
                         reply_wait_by_type[cmd_type].append(val)
                     elif src_key == "parse_ms":
                         reply_parse_by_type[cmd_type].append(val)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _ = exc
             response_over_budget = bool(data.get("response_over_budget"))
             if not response_over_budget:
                 state = str(data.get("response_budget_state") or "").upper()
@@ -282,9 +282,8 @@ def _parse_window(
                 section_samples["full_loop"].append(
                     {"p50_ms": scan_p50, "p95_ms": scan_p95, "p99_ms": scan_max}
                 )
-            except Exception:
-                pass
-
+            except Exception as exc:
+                _ = exc
         if RUNTIME_SECTION_RE.search(line):
             kv = _parse_kv_tokens(line)
             for section in ("tick_ingest", "bridge_send", "bridge_wait", "bridge_parse", "decision_core"):

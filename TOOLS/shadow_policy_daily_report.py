@@ -70,15 +70,14 @@ class PipValueResolver:
                 if name.endswith(".PRO"):
                     base = name[:-4]
                     self._symbol_name_map.setdefault(base, name)
-        except Exception:
-            pass
-
+        except Exception as exc:
+            _ = exc
     def close(self) -> None:
         if self.enabled and self._mt5 is not None:
             try:
                 self._mt5.shutdown()
-            except Exception:
-                pass
+            except Exception as exc:
+                _ = exc
         self.enabled = False
 
     def _resolve_symbol_name(self, symbol: str) -> Optional[str]:
@@ -167,10 +166,8 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
         try:
             if tmp.exists():
                 tmp.unlink()
-        except Exception:
-            pass
-
-
+        except Exception as exc:
+            _ = exc
 def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 

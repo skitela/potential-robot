@@ -50,8 +50,8 @@ def _load_expected_symbols(root: Path) -> List[str]:
         if isinstance(raw, list):
             out = sorted({_symbol_base(str(x)) for x in raw if str(x).strip()})
             return [s for s in out if s]
-    except Exception:
-        pass
+    except Exception as exc:
+        _ = exc
     return []
 
 

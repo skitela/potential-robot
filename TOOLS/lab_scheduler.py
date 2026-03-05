@@ -142,10 +142,8 @@ class FileLock:
             try:
                 if self.lock_path.exists():
                     self.lock_path.unlink()
-            except Exception:
-                pass
-
-
+            except Exception as exc:
+                _ = exc
 def write_status(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

@@ -1168,8 +1168,8 @@ def _build_lab_insights_text(payload: dict) -> str:
     if LAB_INSIGHTS_POINTER_TXT.exists():
         try:
             return LAB_INSIGHTS_POINTER_TXT.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            _ = exc
     if not payload:
         return (
             "WNIOSEK Z LABORATORIUM\n"

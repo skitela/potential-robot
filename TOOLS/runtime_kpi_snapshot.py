@@ -42,7 +42,9 @@ def safe_read_json(path: Path) -> Dict[str, Any]:
 def parse_log_kpi(safety_log: Path, *, hours: int) -> Dict[str, Any]:
     # safetybot.log timestamps are local wall clock time without explicit timezone,
     # so compare using local naive datetimes to avoid UTC skew.
-    start_local = datetime.now() - timedelta(hours=max(1, int(hours)))
+    window_h = int(max(1, int(hours)))
+    now_local = datetime.now()
+    start_local = now_local - timedelta(hours=window_h)
     metrics = {
         "window_hours": int(max(1, int(hours))),
         "log_lines_in_window": 0,
@@ -61,6 +63,7 @@ def parse_log_kpi(safety_log: Path, *, hours: int) -> Dict[str, Any]:
         metrics["error"] = f"read_error:{type(exc).__name__}"
         return metrics
 
+    parsed_rows: list[tuple[datetime, str]] = []
     for line in lines:
         m = TS_RE.match(line)
         if not m:
@@ -69,6 +72,16 @@ def parse_log_kpi(safety_log: Path, *, hours: int) -> Dict[str, Any]:
             ts_local = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
         except Exception:
             continue
+        parsed_rows.append((ts_local, line))
+
+    # If log file is fully historical (e.g. offline replay/tests), anchor the
+    # window to the newest log timestamp instead of wall-clock now.
+    if parsed_rows:
+        newest_ts = max(ts for ts, _ in parsed_rows)
+        if newest_ts < start_local:
+            start_local = newest_ts - timedelta(hours=window_h)
+
+    for ts_local, line in parsed_rows:
         if ts_local < start_local:
             continue
         metrics["log_lines_in_window"] += 1

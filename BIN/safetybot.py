@@ -229,6 +229,11 @@ class CFG:
     # Bridge latency budget (safe defaults, configurable in CONFIG/strategy.json).
     bridge_default_timeout_ms: int = 1200
     bridge_default_retries: int = 1
+    bridge_audit_async_enabled: bool = True
+    bridge_audit_queue_maxsize: int = 8192
+    bridge_audit_queue_put_timeout_ms: int = 2
+    bridge_audit_batch_size: int = 64
+    bridge_audit_flush_interval_ms: int = 200
     bridge_heartbeat_timeout_ms: int = 900
     bridge_heartbeat_retries: int = 1
     # Fast-fail heartbeat lock policy: do not block runtime loop when command channel is busy.
@@ -237,6 +242,8 @@ class CFG:
     bridge_heartbeat_reconnect_on_timeout: bool = False
     # Treat heartbeat timeouts as non-fatal while market-data stream is still alive.
     bridge_heartbeat_timeout_nonfatal: bool = True
+    # Heartbeat yields briefly after recent/ongoing trade command.
+    bridge_heartbeat_trade_priority_window_ms: int = 300
     bridge_trade_timeout_ms: int = 1200
     bridge_trade_retries: int = 1
     # Controlled TRADE-path probe for latency audits (safe mode: invalid symbol -> no order send).
@@ -9856,7 +9863,7 @@ class SafetyBot:
 
         # paper trading mode
         self.is_paper = bool(CFG.paper_trading)
-        if self.is_paper:
+        if bool(getattr(self, "is_paper", True)):
             self.paper_start_ts = self.db.get_or_set_paper_start()
         else:
             self.paper_start_ts = 0.0
@@ -9909,7 +9916,9 @@ class SafetyBot:
             evt["risk_level"],
             evt["details"],
         )
-        self._append_jsonl_record(self.execution_telemetry_path, evt)
+        telemetry_path = getattr(self, "execution_telemetry_path", None)
+        if telemetry_path:
+            self._append_jsonl_record(telemetry_path, evt)
 
     def _append_execution_telemetry(self, payload: Dict[str, Any]) -> None:
         rec = dict(payload or {})
@@ -9919,7 +9928,9 @@ class SafetyBot:
         rec.setdefault("method", "event")
         rec.setdefault("sample_size_n", 1)
         rec.setdefault("low_stat_power", True)
-        self._append_jsonl_record(self.execution_telemetry_path, rec)
+        telemetry_path = getattr(self, "execution_telemetry_path", None)
+        if telemetry_path:
+            self._append_jsonl_record(telemetry_path, rec)
 
     def _refresh_asia_preflight_evidence(self) -> None:
         """Build deterministic symbol-preflight artifact for Asia shadow rollout decisions."""
@@ -10148,6 +10159,10 @@ class SafetyBot:
         grp_u = _group_key(group)
         sym_canon = canonical_symbol(symbol)
         module_map = dict(getattr(CFG, "module_live_enabled_map", {}) or {})
+        live_module_states = dict(getattr(self, "_live_module_states", {}) or {})
+        live_module_state_reasons = dict(getattr(self, "_live_module_state_reasons", {}) or {})
+        hard_live_disabled_symbols = set(getattr(self, "_hard_live_disabled_symbols", set()) or set())
+        live_canary_allowed_symbols = set(getattr(self, "_live_canary_allowed_symbols", set()) or set())
         allowed_groups = {
             _group_key(str(g))
             for g in (getattr(CFG, "live_canary_allowed_groups", ()) or ())
@@ -10158,9 +10173,9 @@ class SafetyBot:
             for g in (getattr(CFG, "hard_live_disabled_groups", ()) or ())
             if str(g).strip()
         }
-        state = str(self._live_module_states.get(grp_u, "NORMAL")).upper()
-        reasons = list(self._live_module_state_reasons.get(grp_u, []) or [])
-        if self.is_paper:
+        state = str(live_module_states.get(grp_u, "NORMAL")).upper()
+        reasons = list(live_module_state_reasons.get(grp_u, []) or [])
+        if bool(getattr(self, "is_paper", True)):
             return {
                 "entry_allowed": True,
                 "reason_code": "PAPER_MODE",
@@ -10190,7 +10205,7 @@ class SafetyBot:
                 "module_state_reasons": reasons,
                 "symbol_canonical": sym_canon,
             }
-        if sym_canon in self._hard_live_disabled_symbols:
+        if sym_canon in hard_live_disabled_symbols:
             return {
                 "entry_allowed": False,
                 "reason_code": "HARD_LIVE_DISABLED_SYMBOL",
@@ -10211,7 +10226,7 @@ class SafetyBot:
                 "module_state_reasons": reasons,
                 "symbol_canonical": sym_canon,
             }
-        if self._live_canary_allowed_symbols and sym_canon not in self._live_canary_allowed_symbols:
+        if live_canary_allowed_symbols and sym_canon not in live_canary_allowed_symbols:
             return {
                 "entry_allowed": False,
                 "reason_code": "SYMBOL_NOT_IN_WAVE1",
@@ -11163,6 +11178,12 @@ class SafetyBot:
         )
 
     def resolve_canon_symbol(self, raw_sym: str) -> Optional[str]:
+        if not isinstance(getattr(self, "resolved_symbols", None), dict):
+            self.resolved_symbols = {}
+        if not isinstance(getattr(self, "group_map_resolved", None), dict):
+            self.group_map_resolved = {}
+        if not hasattr(self, "db"):
+            self.db = None
         if raw_sym in self.resolved_symbols:
             return self.resolved_symbols[raw_sym]
         engine = getattr(self, "execution_engine", None)
@@ -11369,6 +11390,8 @@ class SafetyBot:
         key = str(section or "").strip().lower()
         if not key:
             return
+        if not isinstance(getattr(self, "_loop_section_durations_ms", None), dict):
+            self._loop_section_durations_ms = {}
         win = max(
             16,
             int(
@@ -11629,6 +11652,17 @@ class SafetyBot:
         """
         Dispatches orders with synchronous REQ/REP semantics for DEAL opens.
         """
+        if not isinstance(getattr(self, "_live_window_trade_counts", None), dict):
+            self._live_window_trade_counts = {}
+        if not isinstance(getattr(self, "_pending_cache", None), dict):
+            self._pending_cache = {}
+        if not isinstance(getattr(self, "_positions_cache", None), dict):
+            self._positions_cache = {}
+        if not hasattr(self, "live_canary_contract_path"):
+            self.live_canary_contract_path = Path("RUN/live_canary_contract.json")
+        if not hasattr(self, "no_live_drift_path"):
+            self.no_live_drift_path = Path("RUN/no_live_drift.json")
+
         action = request.get("action")
         close_ticket = int(request.get("position") or 0)
         # Agent MQL5 currently supports TRADE opens only.
@@ -15107,6 +15141,30 @@ if __name__ == "__main__":
         "bridge_heartbeat_timeout_nonfatal",
         CFG.bridge_heartbeat_timeout_nonfatal,
     )
+    CFG.bridge_heartbeat_trade_priority_window_ms = _cfg_int(
+        "bridge_heartbeat_trade_priority_window_ms",
+        CFG.bridge_heartbeat_trade_priority_window_ms,
+    )
+    CFG.bridge_audit_async_enabled = _cfg_bool(
+        "bridge_audit_async_enabled",
+        CFG.bridge_audit_async_enabled,
+    )
+    CFG.bridge_audit_queue_maxsize = _cfg_int(
+        "bridge_audit_queue_maxsize",
+        CFG.bridge_audit_queue_maxsize,
+    )
+    CFG.bridge_audit_queue_put_timeout_ms = _cfg_int(
+        "bridge_audit_queue_put_timeout_ms",
+        CFG.bridge_audit_queue_put_timeout_ms,
+    )
+    CFG.bridge_audit_batch_size = _cfg_int(
+        "bridge_audit_batch_size",
+        CFG.bridge_audit_batch_size,
+    )
+    CFG.bridge_audit_flush_interval_ms = _cfg_int(
+        "bridge_audit_flush_interval_ms",
+        CFG.bridge_audit_flush_interval_ms,
+    )
     CFG.bridge_trade_timeout_ms = _cfg_int("bridge_trade_timeout_ms", CFG.bridge_trade_timeout_ms)
     CFG.bridge_trade_retries = _cfg_int("bridge_trade_retries", CFG.bridge_trade_retries)
     CFG.bridge_trade_probe_enabled = _cfg_bool(
@@ -15980,6 +16038,14 @@ if __name__ == "__main__":
     zmq_bridge = ZMQBridge(
         req_timeout_ms=int(max(1, getattr(CFG, "bridge_default_timeout_ms", 1200))),
         req_retries=int(max(1, getattr(CFG, "bridge_default_retries", 1))),
+        heartbeat_trade_priority_window_ms=int(
+            max(0, getattr(CFG, "bridge_heartbeat_trade_priority_window_ms", 300))
+        ),
+        audit_async=bool(getattr(CFG, "bridge_audit_async_enabled", True)),
+        audit_queue_maxsize=int(max(128, getattr(CFG, "bridge_audit_queue_maxsize", 8192))),
+        audit_queue_put_timeout_ms=int(max(0, getattr(CFG, "bridge_audit_queue_put_timeout_ms", 2))),
+        audit_batch_size=int(max(1, getattr(CFG, "bridge_audit_batch_size", 64))),
+        audit_flush_interval_ms=int(max(10, getattr(CFG, "bridge_audit_flush_interval_ms", 200))),
     )
     zmq_bridge.setup_sockets()
 

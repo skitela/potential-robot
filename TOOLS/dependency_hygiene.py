@@ -97,6 +97,9 @@ def parse_imports(root: Path) -> Set[str]:
                 for alias in node.names:
                     imports.add(alias.name.split(".")[0])
             elif isinstance(node, ast.ImportFrom):
+                # Relative imports are local-by-definition; do not classify as third-party.
+                if int(getattr(node, "level", 0) or 0) > 0:
+                    continue
                 if node.module:
                     imports.add(node.module.split(".")[0])
     return imports
@@ -105,6 +108,9 @@ def parse_imports(root: Path) -> Set[str]:
 def parse_local_modules(root: Path) -> Set[str]:
     mods: Set[str] = set()
     for path in iter_python_files(root):
+        rel_parts = path.relative_to(root).parts
+        if rel_parts:
+            mods.add(rel_parts[0])
         stem = path.stem.strip()
         if stem and stem != "__init__":
             mods.add(stem)

@@ -101,10 +101,8 @@ def write_json(path: Path, payload: Dict[str, Any], *, root: Path, lab_data_root
         try:
             if tmp.exists():
                 tmp.unlink()
-        except Exception:
-            pass
-
-
+        except Exception as exc:
+            _ = exc
 def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 

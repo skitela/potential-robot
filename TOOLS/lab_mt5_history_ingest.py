@@ -796,8 +796,8 @@ def main() -> int:
                 },
             )
             conn_reg.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _ = exc
         print(f"LAB_MT5_INGEST_FAIL reason={type(exc).__name__} out={report_path}")
         return 1
     finally:
@@ -805,9 +805,7 @@ def main() -> int:
             import MetaTrader5 as mt5  # type: ignore
 
             mt5.shutdown()
-        except Exception:
-            pass
-
-
+        except Exception as exc:
+            _ = exc
 if __name__ == "__main__":
     raise SystemExit(main())

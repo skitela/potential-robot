@@ -204,9 +204,8 @@ def main() -> int:
         try:
             if os.name == "nt":
                 os.startfile(report_path)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
+        except Exception as exc:
+            _ = exc
     record = {
         "schema": SCHEMA,
         "generated_at_utc": iso_utc(now),
