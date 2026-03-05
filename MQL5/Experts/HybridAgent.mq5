@@ -77,6 +77,11 @@ int    G_MicroBurstCount = 0;
 bool   G_MicroBurstFlag = false;
 bool   G_MicroAskLtBid = false;
 
+// Per-command latency context (single-threaded event loop; used for reply diagnostics).
+long   G_CurrentCmdStartMsc = 0;
+long   G_CurrentOrderSendMs = -1;
+string G_CurrentRequestTsUtc = "";
+
 #define POLICY_GROUP_COUNT 5
 string G_PolicyGroupNames[POLICY_GROUP_COUNT] = {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"};
 bool   G_PolicyEntryAllowed[POLICY_GROUP_COUNT];
@@ -903,7 +908,10 @@ bool SendReplyEnvelope(
   int deviation_requested_points = 0,
   int deviation_effective_points = 0,
   double point_size = 0.0,
-  double tick_size = 0.0
+  double tick_size = 0.0,
+  long command_start_msc = -1,
+  long order_send_ms = -1,
+  string request_ts_utc_echo = ""
 )
 {
   string s_status = ToUpperAscii(status);
@@ -914,6 +922,19 @@ bool SendReplyEnvelope(
   string s_symbol = symbol;
   string s_error = error;
   string s_req_hash = request_hash;
+  long now_msc = (long)GetTickCount();
+  long cmd_start_eff = command_start_msc;
+  if(cmd_start_eff < 0)
+    cmd_start_eff = G_CurrentCmdStartMsc;
+  long order_send_eff = order_send_ms;
+  if(order_send_eff < 0)
+    order_send_eff = G_CurrentOrderSendMs;
+  long agent_process_ms = -1;
+  if(cmd_start_eff > 0 && now_msc >= cmd_start_eff)
+    agent_process_ms = (now_msc - cmd_start_eff);
+  string req_ts_echo = request_ts_utc_echo;
+  if(req_ts_echo == "")
+    req_ts_echo = G_CurrentRequestTsUtc;
 
   string response_hash = BuildResponseHash(
     s_status,
@@ -934,7 +955,9 @@ bool SendReplyEnvelope(
     "{\"status\":\"%s\",\"correlation_id\":\"%s\",\"action\":\"%s\",\"request_hash\":\"%s\","
     + "\"details\":{\"retcode\":%d,\"retcode_str\":\"%s\",\"order\":%I64d,\"deal\":%I64d,\"comment\":\"%s\",\"symbol\":\"%s\","
     + "\"request_price\":%.8f,\"executed_price\":%.8f,\"deviation_requested_points\":%d,\"deviation_effective_points\":%d,"
-    + "\"point_size\":%.8f,\"tick_size\":%.8f},"
+    + "\"point_size\":%.8f,\"tick_size\":%.8f,"
+    + "\"agent_process_ms\":%I64d,\"order_send_ms\":%I64d,\"command_start_msc\":%I64d,\"reply_msc\":%I64d,"
+    + "\"request_ts_utc_echo\":\"%s\"},"
     + "\"error\":\"%s\",\"schema_version\":\"%s\",\"__v\":\"%s\",\"response_hash\":\"%s\","
     + "\"timestamp_utc\":\"%s\",\"timestamp_semantics\":\"UTC\"}";
 
@@ -956,6 +979,11 @@ bool SendReplyEnvelope(
     deviation_effective_points,
     point_size,
     tick_size,
+    agent_process_ms,
+    order_send_eff,
+    cmd_start_eff,
+    now_msc,
+    JsonEscape(req_ts_echo),
     JsonEscape(s_error),
     PROTOCOL_VERSION,
     PROTOCOL_VERSION,
@@ -1611,7 +1639,10 @@ void ExecuteTrade(
     deviation_requested = 1000;
   request.deviation = deviation_requested;
 
-  if(!OrderSend(request, result))
+  ulong order_send_t0 = (ulong)GetTickCount();
+  bool order_send_ok = OrderSend(request, result);
+  G_CurrentOrderSendMs = (long)((ulong)GetTickCount() - order_send_t0);
+  if(!order_send_ok)
   {
     Print(
       "ORDER_SEND_FAIL msg_id=", msg_id,
@@ -1673,6 +1704,9 @@ void ProcessCommands()
   if(!Zmq_ReceiveRequest(command_json))
     return;
 
+  G_CurrentCmdStartMsc = (long)GetTickCount();
+  G_CurrentOrderSendMs = -1;
+  G_CurrentRequestTsUtc = "";
   G_LastPythonMessageTime = (ulong)GetTickCount();
 
   JSONNode json;
@@ -1716,6 +1750,7 @@ void ProcessCommands()
   string contract_v = JsonGetString(root, "__v", "");
   string schema_v = JsonGetString(root, "schema_version", "");
   string request_hash = JsonGetString(root, "request_hash", "");
+  G_CurrentRequestTsUtc = JsonGetString(root, "request_ts_utc", "");
 
   if(contract_v == "")
     Print("WARN: Missing __v in command msg_id=", msg_id);
