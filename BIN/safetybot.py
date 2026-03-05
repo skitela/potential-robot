@@ -114,6 +114,13 @@ try:
     from .drift_guard import DriftGuard, DriftPolicy
     from .incident_guard import IncidentJournal, classify_retcode
     from .oanda_limits_guard import OandaLimitsGuard
+    from .cost_guard_runtime import (
+        CostGuardMetrics,
+        CostGuardThresholds,
+        derive_off_threshold,
+        evaluate_cost_guard_state,
+        update_transition_window,
+    )
     from .config_manager import ConfigManager
     from .risk_manager import RiskManager
     from .zeromq_bridge import ZMQBridge, build_request_hash, build_response_hash
@@ -146,6 +153,13 @@ except Exception:  # pragma: no cover
     from drift_guard import DriftGuard, DriftPolicy
     from incident_guard import IncidentJournal, classify_retcode
     from oanda_limits_guard import OandaLimitsGuard
+    from cost_guard_runtime import (
+        CostGuardMetrics,
+        CostGuardThresholds,
+        derive_off_threshold,
+        evaluate_cost_guard_state,
+        update_transition_window,
+    )
     from config_manager import ConfigManager
     from risk_manager import RiskManager
     from zeromq_bridge import ZMQBridge, build_request_hash, build_response_hash
@@ -767,6 +781,12 @@ class CFG:
     cost_guard_auto_relax_max_error_incidents: int = 4
     cost_guard_auto_relax_relaxed_min_ratio: float = 1.08
     cost_guard_auto_relax_block_on_unknown_quality: bool = False
+    cost_guard_auto_relax_hysteresis_enabled: bool = True
+    cost_guard_auto_relax_hysteresis_total_ratio: float = 0.85
+    cost_guard_auto_relax_hysteresis_wave1_ratio: float = 0.85
+    cost_guard_auto_relax_hysteresis_unknown_ratio: float = 0.85
+    cost_guard_auto_relax_flap_window_minutes: int = 30
+    cost_guard_auto_relax_flap_alert_threshold: int = 4
     cost_guard_auto_relax_status_file_name: str = "cost_guard_auto_relax_status.json"
     # Hard live limits / throttles.
     max_daily_loss_account: float = 0.02
@@ -9669,6 +9689,7 @@ class SafetyBot:
             "metrics": {},
             "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         }
+        self._cost_guard_flap_transition_ts: List[float] = []
         self._live_module_states: Dict[str, str] = {}
         self._live_module_state_reasons: Dict[str, List[str]] = {}
         self._live_window_trade_counts: Dict[str, int] = {}
@@ -10717,28 +10738,65 @@ class SafetyBot:
         max_critical = int(max(0, getattr(CFG, "cost_guard_auto_relax_max_critical_incidents", 0)))
         max_errors = int(max(0, getattr(CFG, "cost_guard_auto_relax_max_error_incidents", 4)))
 
-        active = False
-        reason = "DISABLED_IN_CONFIG"
-        if enabled:
-            checks = {
-                "decision_total_ok": decision_total >= min_total,
-                "decision_wave1_ok": decision_wave1 >= min_wave1,
-                "unknown_blocks_ok": unknown_blocks >= min_unknown,
-                "critical_ok": critical <= max_critical,
-                "errors_ok": err_worse <= max_errors,
-            }
-            active = bool(all(checks.values()))
-            if active:
-                reason = "AUTO_RELAX_ACTIVE_THRESHOLD_MET"
-            else:
-                missing = [k for k, v in checks.items() if not v]
-                reason = ("WAIT_" + "_".join(missing[:3])).upper() if missing else "WAIT_CONDITIONS"
+        hysteresis_enabled = bool(getattr(CFG, "cost_guard_auto_relax_hysteresis_enabled", True))
+        min_total_off = derive_off_threshold(
+            min_total,
+            float(getattr(CFG, "cost_guard_auto_relax_hysteresis_total_ratio", 0.85)),
+        )
+        min_wave1_off = derive_off_threshold(
+            min_wave1,
+            float(getattr(CFG, "cost_guard_auto_relax_hysteresis_wave1_ratio", 0.85)),
+        )
+        min_unknown_off = derive_off_threshold(
+            min_unknown,
+            float(getattr(CFG, "cost_guard_auto_relax_hysteresis_unknown_ratio", 0.85)),
+        )
+
+        prev = dict(self._cost_guard_auto_relax_state or {})
+        prev_active = bool(prev.get("active", False))
+
+        eval_result = evaluate_cost_guard_state(
+            prev_active=prev_active,
+            enabled=enabled,
+            metrics=CostGuardMetrics(
+                decision_total=int(decision_total),
+                decision_wave1=int(decision_wave1),
+                unknown_blocks=int(unknown_blocks),
+                critical_incidents=int(critical),
+                error_or_worse_incidents=int(err_worse),
+            ),
+            thresholds=CostGuardThresholds(
+                min_total_on=int(min_total),
+                min_wave1_on=int(min_wave1),
+                min_unknown_on=int(min_unknown),
+                max_critical=int(max_critical),
+                max_errors=int(max_errors),
+                min_total_off=int(min_total_off),
+                min_wave1_off=int(min_wave1_off),
+                min_unknown_off=int(min_unknown_off),
+            ),
+            hysteresis_enabled=hysteresis_enabled,
+        )
+        active = bool(eval_result.get("active", False))
+        reason = str(eval_result.get("reason") or "UNKNOWN")
+        hysteresis_hold = bool(eval_result.get("hysteresis_hold", False))
 
         effective_block_unknown = base_block_unknown
         effective_min_ratio = base_min_ratio
         if active:
             effective_block_unknown = bool(relaxed_block_unknown)
             effective_min_ratio = float(min(base_min_ratio, relaxed_min_ratio))
+
+        state_changed = bool(prev_active != bool(active))
+        flap_window_min = int(max(5, getattr(CFG, "cost_guard_auto_relax_flap_window_minutes", 30)))
+        flap_alert_threshold = int(max(2, getattr(CFG, "cost_guard_auto_relax_flap_alert_threshold", 4)))
+        self._cost_guard_flap_transition_ts, flap_transition_count = update_transition_window(
+            history_ts=self._cost_guard_flap_transition_ts,
+            now_ts=now_dt.timestamp(),
+            window_sec=int(max(60, flap_window_min * 60)),
+            changed=state_changed,
+        )
+        flap_alert = bool(state_changed and flap_transition_count >= flap_alert_threshold)
 
         payload = {
             "schema_version": "COST_GUARD_RELAX.V1",
@@ -10750,16 +10808,23 @@ class SafetyBot:
             "enabled": bool(enabled),
             "active": bool(active),
             "reason": str(reason),
+            "hysteresis_hold": bool(hysteresis_hold),
             "thresholds": {
                 "min_total_decisions": int(min_total),
                 "min_wave1_decisions": int(min_wave1),
                 "min_unknown_blocks": int(min_unknown),
+                "min_total_decisions_off": int(min_total_off),
+                "min_wave1_decisions_off": int(min_wave1_off),
+                "min_unknown_blocks_off": int(min_unknown_off),
                 "max_critical_incidents": int(max_critical),
                 "max_error_incidents": int(max_errors),
                 "base_min_ratio": float(base_min_ratio),
                 "relaxed_min_ratio": float(relaxed_min_ratio),
                 "base_block_on_unknown": bool(base_block_unknown),
                 "relaxed_block_on_unknown": bool(relaxed_block_unknown),
+                "hysteresis_enabled": bool(hysteresis_enabled),
+                "flap_window_minutes": int(flap_window_min),
+                "flap_alert_threshold": int(flap_alert_threshold),
             },
             "metrics": {
                 "decision_total_window": int(decision_total),
@@ -10767,20 +10832,19 @@ class SafetyBot:
                 "unknown_blocks_wave1_window": int(unknown_blocks),
                 "incident_critical_window": int(critical),
                 "incident_error_or_worse_window": int(err_worse),
+                "flap_transitions_window": int(flap_transition_count),
             },
             "effective": {
                 "cost_gate_block_on_unknown_quality": bool(effective_block_unknown),
                 "cost_gate_min_target_to_cost_ratio": float(effective_min_ratio),
             },
         }
-        prev = dict(self._cost_guard_auto_relax_state or {})
         self._cost_guard_auto_relax_state = payload
         try:
             atomic_write_json(self.cost_guard_auto_relax_path, payload)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
-        prev_active = bool(prev.get("active", False))
         prev_reason = str(prev.get("reason") or "")
         prev_block = bool(prev.get("effective_block_on_unknown_quality", prev.get("effective", {}).get("cost_gate_block_on_unknown_quality", base_block_unknown))) if isinstance(prev, dict) else base_block_unknown
         prev_ratio = float(prev.get("effective_min_ratio", prev.get("effective", {}).get("cost_gate_min_target_to_cost_ratio", base_min_ratio))) if isinstance(prev, dict) else base_min_ratio
@@ -10810,9 +10874,34 @@ class SafetyBot:
                     "incident_critical_window": int(critical),
                     "effective_block_on_unknown_quality": bool(effective_block_unknown),
                     "effective_min_ratio": float(effective_min_ratio),
+                    "hysteresis_hold": bool(hysteresis_hold),
+                    "flap_transitions_window": int(flap_transition_count),
+                    "flap_window_minutes": int(flap_window_min),
                     "method": "cost_guard_auto_relax",
                     "sample_size_n": int(max(1, decision_wave1)),
                     "low_stat_power": bool(int(decision_wave1) < int(min_wave1)),
+                }
+            )
+        if flap_alert:
+            logging.error(
+                "COST_GUARD_AUTO_RELAX_FLAP_ALERT transitions=%s threshold=%s window_min=%s active=%s reason=%s",
+                int(flap_transition_count),
+                int(flap_alert_threshold),
+                int(flap_window_min),
+                int(bool(active)),
+                str(reason),
+            )
+            self._append_execution_telemetry(
+                {
+                    "event_type": "COST_GUARD_AUTO_RELAX_FLAP_ALERT",
+                    "active": bool(active),
+                    "reason_code": str(reason),
+                    "transitions_window": int(flap_transition_count),
+                    "threshold": int(flap_alert_threshold),
+                    "window_minutes": int(flap_window_min),
+                    "method": "cost_guard_auto_relax",
+                    "sample_size_n": int(max(1, flap_transition_count)),
+                    "low_stat_power": False,
                 }
             )
 
@@ -15478,6 +15567,24 @@ if __name__ == "__main__":
     )
     CFG.cost_guard_auto_relax_block_on_unknown_quality = _cfg_bool(
         "cost_guard_auto_relax_block_on_unknown_quality", CFG.cost_guard_auto_relax_block_on_unknown_quality
+    )
+    CFG.cost_guard_auto_relax_hysteresis_enabled = _cfg_bool(
+        "cost_guard_auto_relax_hysteresis_enabled", CFG.cost_guard_auto_relax_hysteresis_enabled
+    )
+    CFG.cost_guard_auto_relax_hysteresis_total_ratio = _cfg_float(
+        "cost_guard_auto_relax_hysteresis_total_ratio", CFG.cost_guard_auto_relax_hysteresis_total_ratio
+    )
+    CFG.cost_guard_auto_relax_hysteresis_wave1_ratio = _cfg_float(
+        "cost_guard_auto_relax_hysteresis_wave1_ratio", CFG.cost_guard_auto_relax_hysteresis_wave1_ratio
+    )
+    CFG.cost_guard_auto_relax_hysteresis_unknown_ratio = _cfg_float(
+        "cost_guard_auto_relax_hysteresis_unknown_ratio", CFG.cost_guard_auto_relax_hysteresis_unknown_ratio
+    )
+    CFG.cost_guard_auto_relax_flap_window_minutes = _cfg_int(
+        "cost_guard_auto_relax_flap_window_minutes", CFG.cost_guard_auto_relax_flap_window_minutes
+    )
+    CFG.cost_guard_auto_relax_flap_alert_threshold = _cfg_int(
+        "cost_guard_auto_relax_flap_alert_threshold", CFG.cost_guard_auto_relax_flap_alert_threshold
     )
     CFG.cost_guard_auto_relax_status_file_name = str(
         strategy_cfg.get("cost_guard_auto_relax_status_file_name", CFG.cost_guard_auto_relax_status_file_name)
