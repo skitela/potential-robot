@@ -5,7 +5,10 @@ param(
     [string]$StartTime = "22:30",
     [string]$FocusGroup = "FX",
     [int]$LookbackHours = 24,
-    [int]$RetentionDays = 14
+    [int]$RetentionDays = 14,
+    [ValidateSet("strategy", "active")]
+    [string]$CoverageScope = "active",
+    [switch]$FailOnAllStaleCounterfactual
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,7 +18,10 @@ if (!(Test-Path $scriptPath)) {
     throw "Missing script: $scriptPath"
 }
 
-$arg = "-ExecutionPolicy Bypass -File `"$scriptPath`" -Root `"$Root`" -LabDataRoot `"$LabDataRoot`" -FocusGroup `"$FocusGroup`" -LookbackHours $LookbackHours -RetentionDays $RetentionDays"
+$arg = "-ExecutionPolicy Bypass -File `"$scriptPath`" -Root `"$Root`" -LabDataRoot `"$LabDataRoot`" -FocusGroup `"$FocusGroup`" -LookbackHours $LookbackHours -RetentionDays $RetentionDays -CoverageScope $CoverageScope"
+if ($FailOnAllStaleCounterfactual.IsPresent) {
+    $arg += " -FailOnAllStaleCounterfactual"
+}
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
 $trigger = New-ScheduledTaskTrigger -Daily -At $StartTime
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest

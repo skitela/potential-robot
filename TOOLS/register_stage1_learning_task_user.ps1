@@ -6,10 +6,13 @@ param(
     [string]$FocusGroup = "FX",
     [int]$LookbackHours = 24,
     [int]$RetentionDays = 14,
+    [ValidateSet("strategy", "active")]
+    [string]$CoverageScope = "active",
     [int]$MinTotalPerSymbol = 30,
     [int]$MinNoTradePerSymbol = 10,
     [int]$MinTradePathPerSymbol = 1,
-    [int]$MinBucketsPerSymbol = 2
+    [int]$MinBucketsPerSymbol = 2,
+    [switch]$FailOnAllStaleCounterfactual
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,11 +35,15 @@ $argList = @(
     "-FocusGroup", $FocusGroup,
     "-LookbackHours", [string]$LookbackHours,
     "-RetentionDays", [string]$RetentionDays,
+    "-CoverageScope", $CoverageScope,
     "-MinTotalPerSymbol", [string]$MinTotalPerSymbol,
     "-MinNoTradePerSymbol", [string]$MinNoTradePerSymbol,
     "-MinTradePathPerSymbol", [string]$MinTradePathPerSymbol,
     "-MinBucketsPerSymbol", [string]$MinBucketsPerSymbol
 )
+if ($FailOnAllStaleCounterfactual.IsPresent) {
+    $argList += "-FailOnAllStaleCounterfactual"
+}
 $arguments = $argList -join " "
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments -WorkingDirectory $Root
