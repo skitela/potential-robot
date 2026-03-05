@@ -76,6 +76,77 @@ def find_latest_stage1_dataset(root: Path) -> Optional[Path]:
     return files[0] if files else None
 
 
+def find_latest_snapshot_db(lab_data_root: Path, name: str) -> Optional[Path]:
+    snapshots_root = (lab_data_root / "snapshots").resolve()
+    if not snapshots_root.exists():
+        return None
+    dirs = sorted((p for p in snapshots_root.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True)
+    for d in dirs:
+        cand = (d / name).resolve()
+        if cand.exists():
+            return cand
+    return None
+
+
+def _db_has_table(db_path: Path, table: str) -> bool:
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+                [table],
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def build_market_sources(*, root: Path, lab_data_root: Path, history_db: Path, requested_timeframe: str) -> List[Dict[str, Any]]:
+    # Priority:
+    # 1) curated mt5_history (M1/M5/etc. in mt5_rates)
+    # 2) latest LAB snapshot m5_bars (M5)
+    # 3) live runtime DB m5_bars (M5)
+    out: List[Dict[str, Any]] = []
+    req_tf = str(requested_timeframe or "M1").upper()
+
+    if history_db.exists() and _db_has_table(history_db, "mt5_rates"):
+        out.append(
+            {
+                "name": "curated_mt5_rates",
+                "kind": "mt5_rates",
+                "db_path": history_db,
+                "timeframe": req_tf,
+            }
+        )
+
+    snap_m5 = find_latest_snapshot_db(lab_data_root, "m5_bars.sqlite")
+    if snap_m5 is not None and _db_has_table(snap_m5, "m5_bars"):
+        out.append(
+            {
+                "name": "snapshot_m5_bars",
+                "kind": "m5_bars",
+                "db_path": snap_m5,
+                "timeframe": "M5",
+            }
+        )
+
+    runtime_m5 = (root / "DB" / "m5_bars.sqlite").resolve()
+    if runtime_m5.exists() and _db_has_table(runtime_m5, "m5_bars"):
+        # Avoid duplicate path if snapshot already points to the same file.
+        if not any(str(s.get("db_path")) == str(runtime_m5) for s in out):
+            out.append(
+                {
+                    "name": "runtime_m5_bars",
+                    "kind": "m5_bars",
+                    "db_path": runtime_m5,
+                    "timeframe": "M5",
+                }
+            )
+    return out
+
+
 def iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         raw = line.strip()
@@ -103,35 +174,65 @@ def load_no_trade_rows(dataset_jsonl: Path, max_rows: int) -> List[Dict[str, Any
 def fetch_entry_and_path(
     conn: sqlite3.Connection,
     *,
+    source: Dict[str, Any],
     symbol: str,
-    timeframe: str,
     ts_start: str,
     ts_end: str,
 ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
-    entry = conn.execute(
-        """
-        SELECT ts_utc, open, high, low, close, spread
-        FROM mt5_rates
-        WHERE symbol = ? AND timeframe = ? AND ts_utc >= ?
-        ORDER BY ts_utc ASC
-        LIMIT 1
-        """,
-        [symbol, timeframe, ts_start],
-    ).fetchone()
+    kind = str(source.get("kind") or "").strip().lower()
+    if kind == "mt5_rates":
+        entry = conn.execute(
+            """
+            SELECT ts_utc, open, high, low, close, spread
+            FROM mt5_rates
+            WHERE symbol = ? AND timeframe = ? AND ts_utc >= ?
+            ORDER BY ts_utc ASC
+            LIMIT 1
+            """,
+            [symbol, str(source.get("timeframe") or "M1").upper(), ts_start],
+        ).fetchone()
 
-    if entry is None:
-        return None, []
+        if entry is None:
+            return None, []
 
-    rows = conn.execute(
-        """
-        SELECT ts_utc, open, high, low, close, spread
-        FROM mt5_rates
-        WHERE symbol = ? AND timeframe = ? AND ts_utc >= ? AND ts_utc <= ?
-        ORDER BY ts_utc ASC
-        """,
-        [symbol, timeframe, str(entry["ts_utc"]), ts_end],
-    ).fetchall()
-    return dict(entry), [dict(r) for r in rows]
+        rows = conn.execute(
+            """
+            SELECT ts_utc, open, high, low, close, spread
+            FROM mt5_rates
+            WHERE symbol = ? AND timeframe = ? AND ts_utc >= ? AND ts_utc <= ?
+            ORDER BY ts_utc ASC
+            """,
+            [symbol, str(source.get("timeframe") or "M1").upper(), str(entry["ts_utc"]), ts_end],
+        ).fetchall()
+        return dict(entry), [dict(r) for r in rows]
+
+    if kind == "m5_bars":
+        entry = conn.execute(
+            """
+            SELECT t_utc AS ts_utc, o AS open, h AS high, l AS low, c AS close, NULL AS spread
+            FROM m5_bars
+            WHERE symbol = ? AND t_utc >= ?
+            ORDER BY t_utc ASC
+            LIMIT 1
+            """,
+            [symbol, ts_start],
+        ).fetchone()
+
+        if entry is None:
+            return None, []
+
+        rows = conn.execute(
+            """
+            SELECT t_utc AS ts_utc, o AS open, h AS high, l AS low, c AS close, NULL AS spread
+            FROM m5_bars
+            WHERE symbol = ? AND t_utc >= ? AND t_utc <= ?
+            ORDER BY t_utc ASC
+            """,
+            [symbol, str(entry["ts_utc"]), ts_end],
+        ).fetchall()
+        return dict(entry), [dict(r) for r in rows]
+
+    return None, []
 
 
 def evaluate_counterfactual(
@@ -247,19 +348,30 @@ def main() -> int:
     reason = "NO_DATASET"
     details: Dict[str, Any] = {}
     annotated_rows: List[Dict[str, Any]] = []
+    market_sources = build_market_sources(
+        root=root,
+        lab_data_root=lab_data_root,
+        history_db=history_db,
+        requested_timeframe=str(args.timeframe).upper(),
+    )
 
     if dataset_jsonl is None or not dataset_jsonl.exists():
         reason = "DATASET_MISSING"
-    elif not history_db.exists():
-        reason = "HISTORY_DB_MISSING"
+    elif not market_sources:
+        reason = "MARKET_SOURCE_MISSING"
     else:
         no_trade = load_no_trade_rows(dataset_jsonl, max_rows=max(1, int(args.max_no_trade_samples)))
         if not no_trade:
             reason = "NO_NO_TRADE_ROWS"
         else:
-            conn = sqlite3.connect(str(history_db))
-            conn.row_factory = sqlite3.Row
+            opened_sources: List[Tuple[Dict[str, Any], sqlite3.Connection]] = []
+            for src in market_sources:
+                c = sqlite3.connect(str(Path(str(src.get("db_path")))))
+                c.row_factory = sqlite3.Row
+                opened_sources.append((src, c))
             by_status: Dict[str, int] = {}
+            by_source_hits: Dict[str, int] = {}
+            no_market_path_by_symbol: Dict[str, int] = {}
             evaluated = 0
             skipped = 0
             total_pnl_points = 0.0
@@ -276,17 +388,25 @@ def main() -> int:
                         continue
 
                     end_ts = ts + dt.timedelta(minutes=horizon_min)
-                    entry, path = fetch_entry_and_path(
-                        conn,
-                        symbol=sym,
-                        timeframe=str(args.timeframe).upper(),
-                        ts_start=iso_utc(ts),
-                        ts_end=iso_utc(end_ts),
-                    )
+                    entry: Optional[Dict[str, Any]] = None
+                    path: List[Dict[str, Any]] = []
+                    selected_source: Optional[Dict[str, Any]] = None
+                    for src, c in opened_sources:
+                        entry, path = fetch_entry_and_path(
+                            c,
+                            source=src,
+                            symbol=sym,
+                            ts_start=iso_utc(ts),
+                            ts_end=iso_utc(end_ts),
+                        )
+                        if entry is not None and path:
+                            selected_source = src
+                            break
                     if entry is None or not path:
                         skipped += 1
                         st = "NO_MARKET_PATH"
                         by_status[st] = int(by_status.get(st, 0)) + 1
+                        no_market_path_by_symbol[sym] = int(no_market_path_by_symbol.get(sym, 0)) + 1
                         continue
 
                     entry_price = float(entry.get("close") or 0.0)
@@ -334,6 +454,8 @@ def main() -> int:
                     evaluated += 1
                     total_pnl_points += float(pnl_points)
                     by_status[label] = int(by_status.get(label, 0)) + 1
+                    src_name = str((selected_source or {}).get("name") or "unknown_source")
+                    by_source_hits[src_name] = int(by_source_hits.get(src_name, 0)) + 1
 
                     annotated_rows.append(
                         {
@@ -356,10 +478,16 @@ def main() -> int:
                             "point_size": float(point_size),
                             "path_bars_n": len(path),
                             "horizon_minutes": int(horizon_min),
+                            "market_source": src_name,
+                            "market_timeframe": str((selected_source or {}).get("timeframe") or ""),
                         }
                     )
             finally:
-                conn.close()
+                for _, c in opened_sources:
+                    try:
+                        c.close()
+                    except Exception:
+                        pass
 
             status = "PASS" if evaluated > 0 else "SKIP"
             reason = "COUNTERFACTUAL_OK" if evaluated > 0 else "COUNTERFACTUAL_NO_EVAL"
@@ -370,6 +498,17 @@ def main() -> int:
                 "status_counts": by_status,
                 "counterfactual_pnl_points_total": float(round(total_pnl_points, 5)),
                 "counterfactual_pnl_points_avg": float(round(total_pnl_points / evaluated, 5)) if evaluated > 0 else 0.0,
+                "market_source_hits": by_source_hits,
+                "no_market_path_by_symbol": no_market_path_by_symbol,
+                "market_sources": [
+                    {
+                        "name": str(src.get("name") or ""),
+                        "kind": str(src.get("kind") or ""),
+                        "db_path": str(src.get("db_path") or ""),
+                        "timeframe": str(src.get("timeframe") or ""),
+                    }
+                    for src in market_sources
+                ],
             }
 
     with out_jsonl.open("w", encoding="utf-8") as f:
