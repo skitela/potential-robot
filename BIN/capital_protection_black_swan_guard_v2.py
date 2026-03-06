@@ -163,12 +163,13 @@ class CapitalProtectionBlackSwanGuardV2:
 
     def evaluate(self, snap: MarketSnapshot) -> GuardDecision:
         self._validate_snapshot(snap)
-        warm = self._is_warm()
-        if not self._frozen_baseline:
+        warm_before = self._is_warm()
+        if (not self._frozen_baseline) or (not warm_before):
             self._update_baselines(snap)
+        warm = self._is_warm()
 
         stress_score, stress_reasons, stress_telemetry = self._compute_stress(snap)
-        crash_hit, crash_reasons = self._detect_crash(snap)
+        crash_hit, crash_reasons = self._detect_crash(snap, warm=warm)
         reasons = list(stress_reasons) + list(crash_reasons)
         telemetry = dict(stress_telemetry)
 
@@ -334,7 +335,7 @@ class CapitalProtectionBlackSwanGuardV2:
         }
         return score, reasons, telemetry
 
-    def _detect_crash(self, snap: MarketSnapshot) -> Tuple[bool, List[str]]:
+    def _detect_crash(self, snap: MarketSnapshot, *, warm: bool) -> Tuple[bool, List[str]]:
         reasons: List[str] = []
         if float(snap.spread_points) >= float(self.cfg.hard_max_spread_points):
             reasons.append("hard_cap:spread")
@@ -346,6 +347,15 @@ class CapitalProtectionBlackSwanGuardV2:
             reasons.append("hard_cap:heartbeat_age")
         if float(snap.tick_gap_ms) >= float(self.cfg.hard_max_tick_gap_ms):
             reasons.append("hard_cap:tick_gap")
+
+        # During warmup, keep only absolute crash conditions that do not depend
+        # on EWMA baselines. This prevents startup false positives.
+        if not bool(warm):
+            if int(snap.reject_count_recent) >= int(self.cfg.crash_reject_count):
+                reasons.append("crash:reject_cluster")
+            if bool(snap.ask_lt_bid_flag):
+                reasons.append("crash:crossed_market")
+            return bool(reasons), reasons
 
         if self._price_jump.value and float(snap.price_jump_points) >= float(self.cfg.crash_move_mult) * float(self._price_jump.value):
             reasons.append("crash:flash_move")

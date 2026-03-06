@@ -204,6 +204,68 @@ class TestCapitalProtectionBlackSwanGuardV2(unittest.TestCase):
         self.assertNotIn("crash:bridge_freeze", b2.reasons)
         self.assertIn("crash:bridge_freeze", b3.reasons)
 
+    def test_soft_crash_rules_are_suppressed_during_warmup(self):
+        guard = CapitalProtectionBlackSwanGuardV2(
+            GuardConfig(
+                warmup_ticks=10,
+                crash_move_mult=2.0,
+                hard_max_spread_points=1000.0,
+                hard_max_tick_gap_ms=100000.0,
+            )
+        )
+        base = MarketSnapshot(
+            ts_monotonic=1.0,
+            symbol="EURUSD",
+            volatility_score=1.0,
+            spread_points=4.0,
+            slippage_points=0.5,
+            liquidity_score=0.9,
+            tick_rate_per_sec=10.0,
+            tick_gap_ms=120.0,
+            price_jump_points=2.0,
+            bridge_wait_ms=20.0,
+            heartbeat_age_ms=100.0,
+            reject_count_recent=0,
+        )
+        guard.evaluate(base)
+        spike = guard.evaluate(MarketSnapshot(**{**base.__dict__, "ts_monotonic": 2.0, "price_jump_points": 10.0}))
+        self.assertFalse(spike.warm)
+        self.assertNotIn("crash:flash_move", spike.reasons)
+        self.assertNotEqual(spike.state, GuardState.HALT)
+
+    def test_warmup_continues_while_halt_is_active(self):
+        guard = CapitalProtectionBlackSwanGuardV2(
+            GuardConfig(
+                warmup_ticks=4,
+                hard_max_spread_points=10.0,
+                hard_max_tick_gap_ms=100000.0,
+                hard_max_bridge_wait_ms=100000.0,
+                hard_max_heartbeat_age_ms=100000.0,
+            )
+        )
+        base = MarketSnapshot(
+            ts_monotonic=1.0,
+            symbol="EURUSD",
+            volatility_score=1.0,
+            spread_points=4.0,
+            slippage_points=0.5,
+            liquidity_score=0.9,
+            tick_rate_per_sec=10.0,
+            tick_gap_ms=120.0,
+            price_jump_points=2.0,
+            bridge_wait_ms=20.0,
+            heartbeat_age_ms=100.0,
+            reject_count_recent=0,
+        )
+        guard.evaluate(base)
+        # hard cap spread -> HALT and frozen baseline
+        guard.evaluate(MarketSnapshot(**{**base.__dict__, "ts_monotonic": 2.0, "spread_points": 20.0}))
+        d3 = guard.evaluate(MarketSnapshot(**{**base.__dict__, "ts_monotonic": 3.0}))
+        d4 = guard.evaluate(MarketSnapshot(**{**base.__dict__, "ts_monotonic": 4.0}))
+        d5 = guard.evaluate(MarketSnapshot(**{**base.__dict__, "ts_monotonic": 5.0}))
+        self.assertFalse(d3.warm)
+        self.assertTrue(d4.warm or d5.warm)
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
