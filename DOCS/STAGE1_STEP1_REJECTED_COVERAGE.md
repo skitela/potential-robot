@@ -70,7 +70,7 @@ Cykl robi:
 Rejestracja zadania dziennego (user-level, bez wymuszania admin):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File TOOLS/register_stage1_learning_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 22:30
+powershell -ExecutionPolicy Bypass -File TOOLS/register_stage1_learning_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT> -StartTime 22:30
 ```
 
 ## Etap 1 / Krok 4 — bramka jakości datasetu
@@ -108,13 +108,13 @@ To nadal warstwa audytowo-treningowa (brak ingerencji w execution path).
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_counterfactual_from_snapshots.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+py -3.12 -B TOOLS/stage1_counterfactual_from_snapshots.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT>
 ```
 
 Wyniki:
 
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_rows_<timestamp>.jsonl`
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_report_<timestamp>.json`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_counterfactual_rows_<timestamp>.jsonl`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_counterfactual_report_<timestamp>.json`
 
 Zakres:
 
@@ -133,16 +133,16 @@ To jest warstwa treningowa offline; nie dotyka execution path.
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_counterfactual_summary.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+py -3.12 -B TOOLS/stage1_counterfactual_summary.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT>
 ```
 
 Wyniki:
 
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_<timestamp>.json`
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_<timestamp>.txt`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_counterfactual_summary_<timestamp>.json`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_counterfactual_summary_<timestamp>.txt`
 - wskaźnik latest pod panel:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_latest.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_counterfactual_summary_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_counterfactual_summary_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_counterfactual_summary_latest.txt`
 
 Raport zawiera:
 
@@ -155,16 +155,16 @@ Raport zawiera:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_profile_pack.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --min-samples 30
+py -3.12 -B TOOLS/stage1_profile_pack.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --min-samples 30
 ```
 
 Wyniki:
 
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_<timestamp>.json`
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_<timestamp>.txt`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_<timestamp>.json`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_<timestamp>.txt`
 - wskaźnik latest:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_latest.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_latest.txt`
 
 Raport buduje dla każdego instrumentu 3 zestawy:
 
@@ -185,16 +185,16 @@ Ważne:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_profile_pack_evaluate.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --min-shadow-trades 3
+py -3.12 -B TOOLS/stage1_profile_pack_evaluate.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --min-shadow-trades 3
 ```
 
 Wyniki:
 
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_<timestamp>.json`
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_<timestamp>.txt`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_eval_<timestamp>.json`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_eval_<timestamp>.txt`
 - wskaźnik latest:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_latest.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_profile_pack_eval_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_eval_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_profile_pack_eval_latest.txt`
 
 Ocena łączy:
 
@@ -212,12 +212,12 @@ Ważne:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_shadow_deployer.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --cooldown-minutes 60 --dry-run
+py -3.12 -B TOOLS/stage1_shadow_deployer.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --cooldown-minutes 60 --dry-run
 ```
 
 Plik akceptacji człowieka (wymagany):
 
-- `C:\OANDA_MT5_LAB_DATA\run\stage1_manual_approval.json`
+- `<LAB_DATA_ROOT>\run\stage1_manual_approval.json`
 - szablon w repo: `LAB/CONFIG/stage1_manual_approval.template.json`
 
 Minimalny format:
@@ -237,15 +237,15 @@ Minimalny format:
 
 Wyniki:
 
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_<timestamp>.json`
-- `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_<timestamp>.txt`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_deployer_<timestamp>.json`
+- `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_deployer_<timestamp>.txt`
 - latest:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_latest.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_deployer_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_deployer_latest.txt`
 - stan cooldown:
-  - `C:\OANDA_MT5_LAB_DATA\run\stage1_shadow_deployer_state.json`
+  - `<LAB_DATA_ROOT>\run\stage1_shadow_deployer_state.json`
 - audit:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_deployer_audit.jsonl`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_deployer_audit.jsonl`
 
 Ważne:
 
@@ -259,14 +259,14 @@ Ważne:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_approve.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --approved true --ticket MANUAL-APPROVAL-001 --instrument-profile EURUSD=AUTO --instrument-profile GBPUSD=BEZPIECZNY
+py -3.12 -B TOOLS/stage1_approve.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --approved true --ticket MANUAL-APPROVAL-001 --instrument-profile EURUSD=AUTO --instrument-profile GBPUSD=BEZPIECZNY
 ```
 
 Wyniki:
 
-- `C:\OANDA_MT5_LAB_DATA\run\stage1_manual_approval.json`
+- `<LAB_DATA_ROOT>\run\stage1_manual_approval.json`
 - audit:
-  - `C:\OANDA_MT5_LAB_DATA\run\stage1_manual_approval_audit.jsonl`
+  - `<LAB_DATA_ROOT>\run\stage1_manual_approval_audit.jsonl`
 
 Ważne:
 
@@ -278,18 +278,18 @@ Ważne:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_shadow_apply_plan.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --dry-run
-py -3.12 -B TOOLS/stage1_shadow_gonogo.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+py -3.12 -B TOOLS/stage1_shadow_apply_plan.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --dry-run
+py -3.12 -B TOOLS/stage1_shadow_gonogo.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT>
 ```
 
 Wyniki:
 
 - apply plan:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_apply_plan_latest.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_apply_plan_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_apply_plan_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_apply_plan_latest.txt`
 - go/no-go:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_gonogo_latest.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_shadow_gonogo_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_gonogo_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_shadow_gonogo_latest.txt`
 
 Werdykt Go/No-Go:
 
@@ -302,15 +302,15 @@ Werdykt Go/No-Go:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_iteration_audit.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-hours 24
+py -3.12 -B TOOLS/stage1_iteration_audit.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --focus-group FX --lookback-hours 24
 ```
 
 Wyniki:
 
 - raport JSON:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_iteration_audit_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_iteration_audit_latest.json`
 - raport TXT:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_iteration_audit_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_iteration_audit_latest.txt`
 
 Zawartość:
 
@@ -324,15 +324,15 @@ Zawartość:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_coverage_recovery_plan.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-hours 24
+py -3.12 -B TOOLS/stage1_coverage_recovery_plan.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --focus-group FX --lookback-hours 24
 ```
 
 Wyniki:
 
 - plan JSON:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_coverage_recovery_latest.json`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_coverage_recovery_latest.json`
 - plan TXT:
-  - `C:\OANDA_MT5_LAB_DATA\reports\stage1\stage1_coverage_recovery_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\stage1\stage1_coverage_recovery_latest.txt`
 
 Zawartość:
 
@@ -351,21 +351,21 @@ Decyzja operatora dla etapu przejściowego:
 Uruchom:
 
 ```powershell
-py -3.12 -B TOOLS/stage1_operator_popup.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA
+py -3.12 -B TOOLS/stage1_operator_popup.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT>
 ```
 
 Tryb bez okna (np. testowo):
 
 ```powershell
-py -3.12 -B TOOLS/stage1_operator_popup.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --no-gui --auto-action WSTRZYMAJ_I_DOZBIERAJ_DANE
+py -3.12 -B TOOLS/stage1_operator_popup.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --no-gui --auto-action WSTRZYMAJ_I_DOZBIERAJ_DANE
 ```
 
 Wyniki:
 
 - decyzja operatora:
-  - `C:\OANDA_MT5_LAB_DATA\run\operator_decisions\stage1_operator_decision_latest.json`
+  - `<LAB_DATA_ROOT>\run\operator_decisions\stage1_operator_decision_latest.json`
 - dziennik decyzji:
-  - `C:\OANDA_MT5_LAB_DATA\run\operator_decisions\stage1_operator_decision_audit.jsonl`
+  - `<LAB_DATA_ROOT>\run\operator_decisions\stage1_operator_decision_audit.jsonl`
 
 Komunikat w oknie zawiera:
 

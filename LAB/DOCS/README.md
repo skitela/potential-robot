@@ -16,9 +16,9 @@ Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C
 
 ## Start (manual, FX)
 1. Jednorazowy run:
-   - `python -B TOOLS/lab_daily_pipeline.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --lookback-days 180 --daily-guard`
+   - `python -B TOOLS/lab_daily_pipeline.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --focus-group FX --lookback-days 180 --daily-guard`
 2. Odczyt:
-   - szczegoly: `C:\OANDA_MT5_LAB_DATA\reports\daily\lab_daily_report_*.json`
+   - szczegoly: `<LAB_DATA_ROOT>\reports\daily\lab_daily_report_*.json`
    - wskaznik dla operatora: `LAB/EVIDENCE/daily/lab_daily_report_latest.json`
 
 ## Snapshot-read policy
@@ -31,10 +31,10 @@ Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C
 - Skrypt: `TOOLS/lab_mt5_history_ingest.py`
 - Zrodlo: lokalny terminal MT5 (OANDA TMS), bez zewnetrznych API.
 - Start manual:
-  - `py -3.12 -B TOOLS/lab_mt5_history_ingest.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --timeframes M1 --lookback-days 180`
+  - `py -3.12 -B TOOLS/lab_mt5_history_ingest.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --focus-group FX --timeframes M1 --lookback-days 180`
 - Wyniki:
-  - curated DB: `C:\OANDA_MT5_LAB_DATA\data_curated\mt5_history.sqlite`
-  - raport: `C:\OANDA_MT5_LAB_DATA\reports\ingest\lab_mt5_ingest_*.json`
+  - curated DB: `<LAB_DATA_ROOT>\data_curated\mt5_history.sqlite`
+  - raport: `<LAB_DATA_ROOT>\reports\ingest\lab_mt5_ingest_*.json`
   - pointer operatora: `LAB/EVIDENCE/ingest/lab_mt5_ingest_latest.json`
 
 ## Scheduler (bezpieczny)
@@ -43,13 +43,13 @@ Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C
 - Zabezpieczenia: lock, skip przy `ACTIVE` oknie (domyslnie), resource governor, timeout, low-priority.
 - Runbook: `LAB/DOCS/RUNBOOK_LAB_SCHEDULER.md`
 - Rejestracja zadania dziennego:
-  - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 03:30`
-  - fallback bez admin: `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -StartTime 03:30`
+  - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT> -StartTime 03:30`
+  - fallback bez admin: `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_scheduler_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT> -StartTime 03:30`
 
 ## Wnioski LAB (digest)
 - Generator: `TOOLS/lab_insights_digest.py`
 - Harmonogram co 3h:
-  - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_insights_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA`
+  - `powershell -ExecutionPolicy Bypass -File TOOLS\register_lab_insights_task.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT>`
 - Wyniki:
   - `LAB/EVIDENCE/lab_insights/lab_insights_latest.json`
   - `LAB/EVIDENCE/lab_insights/lab_insights_latest.txt`
@@ -57,9 +57,9 @@ Ciezsze artefakty i dane LAB domyslnie trafiaja poza repo do `LAB_DATA_ROOT` (`C
 ## Testy strategii pojedynczych (LAB-only)
 - Cel: porownanie `BASELINE` vs `CANDLE_ONLY` vs `RENKO_ONLY` vs `CANDLE_RENKO_CONFLUENCE` bez dotykania runtime.
 - Runner:
-  - `powershell -ExecutionPolicy Bypass -File TOOLS\run_lab_strategy_profile_sweep.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA`
+  - `powershell -ExecutionPolicy Bypass -File TOOLS\run_lab_strategy_profile_sweep.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT>`
 - Wynik:
-  - `C:\OANDA_MT5_LAB_DATA\reports\profiles\lab_strategy_profile_sweep_*.json`
+  - `<LAB_DATA_ROOT>\reports\profiles\lab_strategy_profile_sweep_*.json`
 - Uwaga:
   - to jest eksperyment LAB-only (rekomendacje `DOCIŚNIJ/TRZYMAJ/POLUZUJ`), bez automatycznej mutacji `CONFIG/strategy.json`.
 

@@ -5,13 +5,13 @@ Cel: każdej nocy uruchamiać ten sam zestaw testów i mieć jeden raport końco
 ## Komendy
 
 - rejestracja zadania nocnego (bez blokowania handlu):
-  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\register_nightly_testbook_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -DailyTime "03:50" -IdleThresholdSec 900 -LatencyDurationMin 20`
+  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\register_nightly_testbook_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT> -DailyTime "03:50" -IdleThresholdSec 900 -LatencyDurationMin 20`
 - `rozpocznij testy` (kolejka/plan):
-  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\run_nightly_testbook.ps1 -Action "start-tests" -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA`
+  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\run_nightly_testbook.ps1 -Action "start-tests" -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT>`
 - `przeprowadź testy` (realne wykonanie):
-  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\run_nightly_testbook.ps1 -Action "run-tests" -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -RequireIdle -RequireOutsideActive`
+  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\run_nightly_testbook.ps1 -Action "run-tests" -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT> -RequireIdle -RequireOutsideActive`
 - status ostatniego uruchomienia:
-  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\run_nightly_testbook.ps1 -Action "status" -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA`
+  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\run_nightly_testbook.ps1 -Action "status" -Root C:\OANDA_MT5_SYSTEM -LabDataRoot <LAB_DATA_ROOT>`
 
 ## Co uruchamia testbook
 
@@ -25,16 +25,16 @@ Cel: każdej nocy uruchamiać ten sam zestaw testów i mieć jeden raport końco
 ## Gdzie są raporty
 
 - raport każdej nocy:
-  - `C:\OANDA_MT5_LAB_DATA\reports\nightly_tests\<run_id>\nightly_testbook_<stamp>.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\nightly_tests\<run_id>\nightly_testbook_<stamp>.txt`
+  - `<LAB_DATA_ROOT>\reports\nightly_tests\<run_id>\nightly_testbook_<stamp>.json`
+  - `<LAB_DATA_ROOT>\reports\nightly_tests\<run_id>\nightly_testbook_<stamp>.txt`
 - skrót do ostatniego:
-  - `C:\OANDA_MT5_LAB_DATA\reports\nightly_tests\nightly_testbook_latest.json`
-  - `C:\OANDA_MT5_LAB_DATA\reports\nightly_tests\nightly_testbook_latest.txt`
+  - `<LAB_DATA_ROOT>\reports\nightly_tests\nightly_testbook_latest.json`
+  - `<LAB_DATA_ROOT>\reports\nightly_tests\nightly_testbook_latest.txt`
 - logi kroków:
-  - `C:\OANDA_MT5_LAB_DATA\reports\nightly_tests\<run_id>\logs\`
+  - `<LAB_DATA_ROOT>\reports\nightly_tests\<run_id>\logs\`
 - rejestr kolejek/wykonań:
-  - `C:\OANDA_MT5_LAB_DATA\run\nightly_testbook_queue.json`
-  - `C:\OANDA_MT5_LAB_DATA\run\nightly_testbook_registry.jsonl`
+  - `<LAB_DATA_ROOT>\run\nightly_testbook_queue.json`
+  - `<LAB_DATA_ROOT>\run\nightly_testbook_registry.jsonl`
 
 ## Interpretacja statusów
 

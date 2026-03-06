@@ -7,11 +7,11 @@
 
 ## Co backupuje narzedzie
 - Folder systemu: `C:\OANDA_MT5_SYSTEM` -> `oanda_mt5_system.zip`
-- Folder LAB: `C:\OANDA_MT5_LAB_DATA` -> `oanda_mt5_lab_data.zip` (jesli istnieje)
+- Folder LAB: `<LAB_DATA_ROOT>` -> `oanda_mt5_lab_data.zip` (jesli istnieje)
 - Domyslnie **bez** kopiowania `TOKEN/BotKey.env` do archiwum.
 
 Backupy zapisuja sie domyslnie do:
-- `C:\OANDA_MT5_BACKUPS\weekly_backup_<UTC_STAMP>\...`
+- `<BACKUP_ROOT>\weekly_backup_<UTC_STAMP>\...`
 
 Raporty:
 - `EVIDENCE/backups/weekly_backup_<UTC_STAMP>.json`
@@ -23,8 +23,8 @@ Raporty:
 ```powershell
 powershell -ExecutionPolicy Bypass -File TOOLS\run_weekly_backup.ps1 `
   -Root C:\OANDA_MT5_SYSTEM `
-  -LabDataRoot C:\OANDA_MT5_LAB_DATA `
-  -BackupRoot C:\OANDA_MT5_BACKUPS `
+  -LabDataRoot <LAB_DATA_ROOT> `
+  -BackupRoot <BACKUP_ROOT> `
   -PreferredWeekday sunday `
   -MaxDaysWithoutBackup 7
 ```
@@ -38,8 +38,8 @@ powershell -ExecutionPolicy Bypass -File TOOLS\run_weekly_backup.ps1 -Force
 ```powershell
 powershell -ExecutionPolicy Bypass -File TOOLS\register_weekly_backup_task_user.ps1 `
   -Root C:\OANDA_MT5_SYSTEM `
-  -LabDataRoot C:\OANDA_MT5_LAB_DATA `
-  -BackupRoot C:\OANDA_MT5_BACKUPS `
+  -LabDataRoot <LAB_DATA_ROOT> `
+  -BackupRoot <BACKUP_ROOT> `
   -TaskName OANDA_MT5_WEEKLY_BACKUP `
   -StartTime 03:30 `
   -PreferredWeekday sunday `

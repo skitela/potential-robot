@@ -9,15 +9,15 @@ Automatyczny i legalny pobor historii z lokalnego terminala MT5 (OANDA TMS) do L
 
 ## Wyjscie
 - Curated DB:
-  - `C:\OANDA_MT5_LAB_DATA\data_curated\mt5_history.sqlite`
+  - `<LAB_DATA_ROOT>\data_curated\mt5_history.sqlite`
 - Raporty ingestu:
-  - `C:\OANDA_MT5_LAB_DATA\reports\ingest\lab_mt5_ingest_*.json`
+  - `<LAB_DATA_ROOT>\reports\ingest\lab_mt5_ingest_*.json`
 - Pointer operatora:
   - `LAB/EVIDENCE/ingest/lab_mt5_ingest_latest.json`
 
 ## Uruchomienie (manual)
 ```powershell
-py -3.12 -B TOOLS/lab_mt5_history_ingest.py --root C:\OANDA_MT5_SYSTEM --lab-data-root C:\OANDA_MT5_LAB_DATA --focus-group FX --timeframes M1 --lookback-days 180
+py -3.12 -B TOOLS/lab_mt5_history_ingest.py --root C:\OANDA_MT5_SYSTEM --lab-data-root <LAB_DATA_ROOT> --focus-group FX --timeframes M1 --lookback-days 180
 ```
 
 ## Inkrementalnosc

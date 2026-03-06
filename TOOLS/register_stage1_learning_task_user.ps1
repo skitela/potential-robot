@@ -1,6 +1,6 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
-    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
+    [string]$LabDataRoot = "C:\OANDA_MT5_SYSTEM\LAB_DATA",
     [string]$TaskName = "OANDA_MT5_STAGE1_LEARNING_DAILY_USER",
     [string]$StartTime = "22:30",
     [string]$FocusGroup = "FX",

@@ -1,6 +1,6 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
-    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
+    [string]$LabDataRoot = "C:\OANDA_MT5_SYSTEM\LAB_DATA",
     [int]$KeepDays = 2
 )
 

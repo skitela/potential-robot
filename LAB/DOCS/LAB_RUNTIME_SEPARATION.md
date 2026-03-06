@@ -2,7 +2,7 @@
 
 ## Model separacji
 - Kod LAB: w repo `C:\OANDA_MT5_SYSTEM\LAB` i `C:\OANDA_MT5_SYSTEM\TOOLS`.
-- Dane/artefakty LAB: poza repo, domyslnie `C:\OANDA_MT5_LAB_DATA`.
+- Dane/artefakty LAB: poza repo, domyslnie `<LAB_DATA_ROOT>`.
 - Runtime execution path pozostaje w `BIN/MQL5/RUN/LOGS/DB/META/CONFIG`.
 
 ## Read paths LAB
@@ -14,11 +14,11 @@
 
 ## Write paths LAB (dozwolone)
 - `LAB/*` (lekkie pointers/docs/evidence)
-- `C:\OANDA_MT5_LAB_DATA\data_curated\*`
-- `C:\OANDA_MT5_LAB_DATA\reports\*`
-- `C:\OANDA_MT5_LAB_DATA\snapshots\*`
-- `C:\OANDA_MT5_LAB_DATA\registry\*`
-- `C:\OANDA_MT5_LAB_DATA\run\*`
+- `<LAB_DATA_ROOT>\data_curated\*`
+- `<LAB_DATA_ROOT>\reports\*`
+- `<LAB_DATA_ROOT>\snapshots\*`
+- `<LAB_DATA_ROOT>\registry\*`
+- `<LAB_DATA_ROOT>\run\*`
 
 ## Write paths zakazane (runtime)
 - `BIN/*`

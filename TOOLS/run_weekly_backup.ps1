@@ -1,7 +1,7 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
-    [string]$LabDataRoot = "C:\OANDA_MT5_LAB_DATA",
-    [string]$BackupRoot = "C:\OANDA_MT5_BACKUPS",
+    [string]$LabDataRoot = "C:\OANDA_MT5_SYSTEM\LAB_DATA",
+    [string]$BackupRoot = "C:\OANDA_MT5_SYSTEM\BACKUPS",
     [ValidateSet("monday","tuesday","wednesday","thursday","friday","saturday","sunday")]
     [string]$PreferredWeekday = "sunday",
     [int]$MaxDaysWithoutBackup = 7,

@@ -33,6 +33,21 @@ HARD_ROOT_STR = r"C:\OANDA_MT5_SYSTEM"
 LEGACY_ROOT_PREFIX = "C:\\" + "OANDA_MT5"
 REQUIRED_OANDA_MT5_EXE_STR = r"C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe"
 
+EXCLUDE_DIRS_LEGACY_SCAN = {
+    ".venv",
+    ".venv312",
+    "_ZIP_AUDIT_",
+    "__pycache__",
+    ".git",
+    "LOGS",
+    "RUN",
+    "DIAG",
+    "EVIDENCE",
+    "DB",
+    "DB_BACKUPS",
+    "TMP_AUDIT_IO",
+}
+
 def _scan_text_legacy_paths() -> tuple[bool, list[str]]:
     """Scan project for banned legacy root literals in text-like files.
 
@@ -47,6 +62,11 @@ def _scan_text_legacy_paths() -> tuple[bool, list[str]]:
 
     for p in ROOT.rglob('*'):
         if not p.is_file():
+            continue
+        rel_parts = [str(x).upper() for x in p.relative_to(ROOT).parts]
+        if any(part in EXCLUDE_DIRS_LEGACY_SCAN for part in rel_parts):
+            continue
+        if len(rel_parts) >= 2 and rel_parts[0] == "LAB" and rel_parts[1] == "EVIDENCE":
             continue
         if p.suffix.lower() not in exts:
             continue

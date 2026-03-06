@@ -88,7 +88,7 @@ def latest_payload_prefer_status(root: Path, status: str = "PASS") -> Dict[str, 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Generate human-readable LAB insights digest for operator panel.")
     ap.add_argument("--root", default=r"C:\OANDA_MT5_SYSTEM")
-    ap.add_argument("--lab-data-root", default=r"C:\OANDA_MT5_LAB_DATA")
+    ap.add_argument("--lab-data-root", default=r"C:\OANDA_MT5_SYSTEM\LAB_DATA")
     ap.add_argument("--out", default="")
     return ap.parse_args()
 
