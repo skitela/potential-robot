@@ -30,9 +30,11 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from . import common_guards as cg
     from . import common_contract as cc
+    from .unified_learning_pack import read_unified_runtime_advice
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
+    from unified_learning_pack import read_unified_runtime_advice
 
 import subprocess
 import re
@@ -1218,7 +1220,15 @@ def write_verdict(meta_dir: Path, metrics: Dict[str, Any], verdict: str) -> None
     guard_obj_limits(obj)
     atomic_write_json(meta_dir / "verdict.json", obj)
 
-def write_advice(meta_dir: Path, verdict: str, metrics: Dict[str, Any], research: Dict[str, Any], ranks: List[Dict[str, Any]]) -> None:
+def write_advice(
+    meta_dir: Path,
+    verdict: str,
+    metrics: Dict[str, Any],
+    research: Dict[str, Any],
+    ranks: List[Dict[str, Any]],
+    *,
+    source_label: str = "shadowb",
+) -> None:
     now = _now_utc().replace(microsecond=0)
     pref = ""
     try:
@@ -1237,7 +1247,7 @@ def write_advice(meta_dir: Path, verdict: str, metrics: Dict[str, Any], research
         "light": str(verdict).upper(),
         "notes": [
             "mode=tiebreak",
-            "source=shadowb",
+            f"source={str(source_label or 'shadowb')}",
             "basis=pnl_es_mdd",
         ],
         "research": {
@@ -1283,9 +1293,11 @@ def run_once(root: Path) -> int:
     # Fetch research (best-effort)
     research = fetch_rss_signals()
 
-    # Prefer offline Learner output if available & fresh.
-    # This shifts heavy DB/statistics out of the SCUD runtime loop.
-    offline = read_learner_advice(meta)
+    # Prefer unified learning pack if available & fresh, then offline learner.
+    # This keeps a single advisory bus for paper/shadow without touching hot-path.
+    offline = read_unified_runtime_advice(meta)
+    if offline is None:
+        offline = read_learner_advice(meta)
     if offline is not None:
         metrics = offline.get('metrics') or {}
         qa_light = str(offline.get('qa_light') or "").strip().upper()
@@ -1293,13 +1305,14 @@ def run_once(root: Path) -> int:
             metrics["qa_light"] = qa_light
         verdict = compute_verdict(metrics)
         ranks = offline.get('ranks') or []
+        source_label = str(offline.get("source") or "offline_learner")
 
         _update_cached_stats(ranks=ranks, verdict=verdict, metrics_n=int(metrics.get("n") or 0))
 
         # Write outputs driven by offline learner + online research
         write_research(meta, research)
         write_verdict(meta, metrics, verdict)
-        write_advice(meta, verdict, metrics, research, ranks)
+        write_advice(meta, verdict, metrics, research, ranks, source_label=source_label)
 
         # Process on-demand tie-break request (RUN) — best-effort, never blocks
         try:
@@ -1312,9 +1325,9 @@ def run_once(root: Path) -> int:
                 preferred, _conf, _notes = choose_preferred_from_ranks(pair, ranks)
                 allow_tb = (str(verdict).upper() == 'GREEN' and int(metrics.get('n') or 0) >= MIN_SAMPLE_N)
                 if allow_tb and preferred and preferred in set(pair):
-                    reasons = ["green_gate", "n_ok", "src=offline"]
+                    reasons = ["green_gate", "n_ok", f"src={source_label}"]
                     write_tiebreak_response(dirs["RUN"], rid=req["rid"], tb=1, pref=preferred, reasons=reasons)
-                    logging.info(f"TIEBREAK_RESP | rid={req['rid']} pref={preferred} tb=1 src=offline")
+                    logging.info(f"TIEBREAK_RESP | rid={req['rid']} pref={preferred} tb=1 src={source_label}")
                 else:
                     if str(verdict).upper() != 'GREEN':
                         reasons = ["not_green"]
@@ -1327,7 +1340,7 @@ def run_once(root: Path) -> int:
             cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
             logging.warning(f"TIEBREAK_ERR {type(e).__name__}")
 
-        logging.info(f"RUN_ONCE | src=offline_learner verdict={verdict} n={metrics.get('n')}")
+        logging.info(f"RUN_ONCE | src={source_label} verdict={verdict} n={metrics.get('n')}")
         return 0
 
     # Read closed events -> Shadow-B append (from SafetyBot DB)

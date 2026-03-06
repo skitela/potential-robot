@@ -28,8 +28,10 @@ sys.dont_write_bytecode = True
 
 try:
     from .runtime_root import get_runtime_root
+    from .unified_learning_pack import build_unified_learning_pack
 except Exception:  # pragma: no cover
     from runtime_root import get_runtime_root
+    from unified_learning_pack import build_unified_learning_pack
 
 from typing import Any, Dict, List, Optional, Tuple
 try:
@@ -1590,6 +1592,14 @@ def run_once(root: Path) -> int:
 
     atomic_write_json(meta_dir / "learner_advice.json", meta_advice)
     atomic_write_json(logs_dir / "learner_offline_report.json", report)
+
+    # Refresh a single, lightweight learning bus consumed by SCUD/runtime.
+    # Best-effort only: no learner failure on aggregation problems.
+    try:
+        _out, _payload = build_unified_learning_pack(root, out_path=(meta_dir / "unified_learning_advice.json"))
+        _ = (_out, _payload)
+    except Exception as e:
+        cg.tlog(None, "WARN", "LEARN_EXC", "unified_learning_pack_failed", e)
 
     # research-only report (no META/RUN). Always safe to skip on failure.
     try:
