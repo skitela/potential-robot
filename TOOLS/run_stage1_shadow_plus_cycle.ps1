@@ -13,6 +13,10 @@ param(
     [int]$ShadowLookbackDays = 14,
     [int]$ShadowHorizonMinutes = 60,
     [int]$ReadinessHours = 24,
+    [switch]$RequireIdle,
+    [int]$IdleThresholdSec = 900,
+    [switch]$RequireOutsideActive,
+    [switch]$Force,
     [switch]$DisableAutoApprove,
     [string]$ApprovalTicket = "",
     [string]$ApprovalComment = "Shadow+ auto approval (shadow-only, no live mutation).",
@@ -22,6 +26,50 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-WindowPhase {
+    param([string]$RuntimeRoot)
+    $logPath = Join-Path $RuntimeRoot "LOGS\safetybot.log"
+    if (-not (Test-Path -LiteralPath $logPath)) {
+        return "UNKNOWN"
+    }
+    $lines = Get-Content -LiteralPath $logPath -Tail 3000 -ErrorAction SilentlyContinue
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $ln = [string]$lines[$i]
+        if ($ln -match "WINDOW_PHASE\s+phase=([A-Z_]+)\s+window=([A-Z0-9_]+|NONE)") {
+            return [string]$Matches[1]
+        }
+    }
+    return "UNKNOWN"
+}
+
+function Get-IdleSecondsBestEffort {
+    try {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class OandaIdleProbe {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LASTINPUTINFO {
+        public uint cbSize;
+        public uint dwTime;
+    }
+    [DllImport("user32.dll")]
+    public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+    public static uint GetIdleMilliseconds() {
+        LASTINPUTINFO lii = new LASTINPUTINFO();
+        lii.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+        if (!GetLastInputInfo(ref lii)) { return 0; }
+        return (uint)Environment.TickCount - lii.dwTime;
+    }
+}
+"@ -ErrorAction SilentlyContinue | Out-Null
+        $idleMs = [uint32][OandaIdleProbe]::GetIdleMilliseconds()
+        return [int][Math]::Floor([double]$idleMs / 1000.0)
+    } catch {
+        return -1
+    }
+}
 
 function Invoke-Python {
     param([string[]]$CommandArgs)
@@ -44,6 +92,20 @@ function Copy-Latest {
 $startUtc = (Get-Date).ToUniversalTime()
 $stamp = $startUtc.ToString("yyyyMMddTHHmmssZ")
 Write-Host "STAGE1_SHADOW_PLUS start_utc=$($startUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')) root=$Root lab_data_root=$LabDataRoot"
+
+$idleSec = Get-IdleSecondsBestEffort
+$phase = Get-WindowPhase -RuntimeRoot $Root
+$needIdle = $RequireIdle.IsPresent -and (-not $Force.IsPresent)
+$needOutside = $RequireOutsideActive.IsPresent -and (-not $Force.IsPresent)
+
+if ($needIdle -and $idleSec -ge 0 -and $idleSec -lt [Math]::Max(10, [int]$IdleThresholdSec)) {
+    Write-Host "STAGE1_SHADOW_PLUS skip reason=OPERATOR_ACTIVE idle_sec=$idleSec threshold_sec=$IdleThresholdSec"
+    exit 0
+}
+if ($needOutside -and ([string]$phase).ToUpperInvariant() -eq "ACTIVE") {
+    Write-Host "STAGE1_SHADOW_PLUS skip reason=ACTIVE_WINDOW phase=$phase"
+    exit 0
+}
 
 if (-not $DisableAutoApprove.IsPresent) {
     $ticket = $ApprovalTicket

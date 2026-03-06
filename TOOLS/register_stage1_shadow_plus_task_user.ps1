@@ -9,6 +9,7 @@ param(
     [string]$CoverageScope = "active",
     [int]$LookbackHours = 24,
     [int]$ShadowLookbackDays = 14,
+    [int]$IdleThresholdSec = 900,
     [switch]$DisableAutoApprove,
     [switch]$ShadowDryRun
 )
@@ -25,6 +26,7 @@ if (-not (Test-Path -LiteralPath $runner)) {
 }
 
 $argList = @(
+    "-WindowStyle", "Hidden",
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", "`"$runner`"",
@@ -33,7 +35,10 @@ $argList = @(
     "-FocusGroup", $FocusGroup,
     "-CoverageScope", $CoverageScope,
     "-LookbackHours", [string]$LookbackHours,
-    "-ShadowLookbackDays", [string]$ShadowLookbackDays
+    "-ShadowLookbackDays", [string]$ShadowLookbackDays,
+    "-RequireIdle",
+    "-IdleThresholdSec", [string]$IdleThresholdSec,
+    "-RequireOutsideActive"
 )
 if ($DisableAutoApprove.IsPresent) {
     $argList += "-DisableAutoApprove"
