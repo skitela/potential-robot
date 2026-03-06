@@ -89,6 +89,18 @@ function Copy-Latest {
     }
 }
 
+function Read-JsonFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+    try {
+        return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
 $startUtc = (Get-Date).ToUniversalTime()
 $stamp = $startUtc.ToString("yyyyMMddTHHmmssZ")
 Write-Host "STAGE1_SHADOW_PLUS start_utc=$($startUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')) root=$Root lab_data_root=$LabDataRoot"
@@ -143,6 +155,31 @@ if ($FailOnAllStaleCounterfactual.IsPresent) {
 
 & "$Root\TOOLS\run_stage1_learning_cycle.ps1" @learningArgs
 
+$stage1Dir = Join-Path $LabDataRoot "reports\stage1"
+New-Item -ItemType Directory -Force -Path $stage1Dir | Out-Null
+$progressJson = Join-Path $stage1Dir "shadow_plus_progression_$stamp.json"
+Invoke-Python @(
+    "$Root\TOOLS\shadow_plus_progression.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot,
+    "--out-report", $progressJson
+)
+Copy-Latest -SourcePath $progressJson -LatestPath (Join-Path $stage1Dir "shadow_plus_progression_latest.json")
+
+$progress = Read-JsonFile -Path (Join-Path $stage1Dir "shadow_plus_progression_latest.json")
+$ff = $null
+if ($null -ne $progress) {
+    $ff = $progress.feature_flags
+}
+$enableExtended = $false
+$enableAdvisory = $false
+$enableSoftGuard = $false
+if ($null -ne $ff) {
+    try { $enableExtended = [bool]$ff.enable_extended_shadow_profiles } catch { $enableExtended = $false }
+    try { $enableAdvisory = [bool]$ff.enable_live_advisory_pack } catch { $enableAdvisory = $false }
+    try { $enableSoftGuard = [bool]$ff.enable_soft_guard_candidate_pack } catch { $enableSoftGuard = $false }
+}
+
 $shadowDir = Join-Path $LabDataRoot "reports\shadow_policy"
 New-Item -ItemType Directory -Force -Path $shadowDir | Out-Null
 $shadowJson = Join-Path $shadowDir "shadow_policy_baseline_$stamp.json"
@@ -161,6 +198,30 @@ Copy-Latest -SourcePath $shadowJson -LatestPath (Join-Path $shadowDir "shadow_po
 Copy-Latest -SourcePath ($shadowJson -replace "\.json$", ".txt") -LatestPath (Join-Path $shadowDir "shadow_policy_baseline_latest.txt")
 Copy-Latest -SourcePath ($shadowJson -replace "\.json$", "_operator.txt") -LatestPath (Join-Path $shadowDir "shadow_policy_baseline_latest_operator.txt")
 
+$extendedProfileOutputs = @()
+if ($enableExtended) {
+    $profiles = @("CANDLE_ONLY", "RENKO_ONLY", "CANDLE_RENKO_CONFLUENCE")
+    foreach ($p in $profiles) {
+        $pLower = $p.ToLowerInvariant()
+        $pJson = Join-Path $shadowDir ("shadow_policy_" + $pLower + "_" + $stamp + ".json")
+        $pState = Join-Path $LabDataRoot ("run\\shadow_policy_daily_state_" + $pLower + ".json")
+        Invoke-Python @(
+            "$Root\TOOLS\shadow_policy_daily_report.py",
+            "--root", $Root,
+            "--lookback-days", "$ShadowLookbackDays",
+            "--horizon-minutes", "$ShadowHorizonMinutes",
+            "--strategy-profile", $p,
+            "--daily-guard",
+            "--state-file", $pState,
+            "--out", $pJson
+        )
+        Copy-Latest -SourcePath $pJson -LatestPath (Join-Path $shadowDir ("shadow_policy_" + $pLower + "_latest.json"))
+        Copy-Latest -SourcePath ($pJson -replace "\.json$", ".txt") -LatestPath (Join-Path $shadowDir ("shadow_policy_" + $pLower + "_latest.txt"))
+        Copy-Latest -SourcePath ($pJson -replace "\.json$", "_operator.txt") -LatestPath (Join-Path $shadowDir ("shadow_policy_" + $pLower + "_latest_operator.txt"))
+        $extendedProfileOutputs += (Join-Path $shadowDir ("shadow_policy_" + $pLower + "_latest.json"))
+    }
+}
+
 $readinessJson = Join-Path $shadowDir "shadow_signal_readiness_$stamp.json"
 Invoke-Python @(
     "$Root\TOOLS\shadow_signal_readiness.py",
@@ -169,6 +230,32 @@ Invoke-Python @(
     "--out", $readinessJson
 )
 Copy-Latest -SourcePath $readinessJson -LatestPath (Join-Path $shadowDir "shadow_signal_readiness_latest.json")
+
+$advisoryLatest = ""
+if ($enableAdvisory) {
+    $advisoryJson = Join-Path $stage1Dir "shadow_live_advisory_$stamp.json"
+    Invoke-Python @(
+        "$Root\TOOLS\shadow_live_advisory_pack.py",
+        "--root", $Root,
+        "--lab-data-root", $LabDataRoot,
+        "--out-report", $advisoryJson
+    )
+    $advisoryLatest = (Join-Path $stage1Dir "shadow_live_advisory_latest.json")
+    Copy-Latest -SourcePath $advisoryJson -LatestPath $advisoryLatest
+}
+
+$softGuardLatest = ""
+if ($enableSoftGuard) {
+    $softGuardJson = Join-Path $stage1Dir "shadow_soft_guard_candidate_$stamp.json"
+    Invoke-Python @(
+        "$Root\TOOLS\shadow_soft_guard_candidate.py",
+        "--root", $Root,
+        "--lab-data-root", $LabDataRoot,
+        "--out-report", $softGuardJson
+    )
+    $softGuardLatest = (Join-Path $stage1Dir "shadow_soft_guard_candidate_latest.json")
+    Copy-Latest -SourcePath $softGuardJson -LatestPath $softGuardLatest
+}
 
 $popupArgs = @(
     "$Root\TOOLS\stage1_operator_popup.py",
@@ -180,8 +267,6 @@ if (-not $UseGuiDecision.IsPresent) {
 }
 Invoke-Python $popupArgs
 
-$stage1Dir = Join-Path $LabDataRoot "reports\stage1"
-New-Item -ItemType Directory -Force -Path $stage1Dir | Out-Null
 $summaryPath = Join-Path $stage1Dir "stage1_shadow_plus_cycle_$stamp.json"
 $summaryLatest = Join-Path $stage1Dir "stage1_shadow_plus_cycle_latest.json"
 
@@ -195,11 +280,24 @@ $summary = [ordered]@{
     coverage_scope = $CoverageScope
     lookback_hours = [int]$LookbackHours
     focus_group = $FocusGroup
+    progression = [ordered]@{
+        stage = if ($null -ne $progress -and $null -ne $progress.progress) { [string]$progress.progress.stage } else { "UNKNOWN" }
+        stable_streak_days = if ($null -ne $progress -and $null -ne $progress.progress) { [int]$progress.progress.stable_streak_days } else { 0 }
+        feature_flags = [ordered]@{
+            enable_extended_shadow_profiles = [bool]$enableExtended
+            enable_live_advisory_pack = [bool]$enableAdvisory
+            enable_soft_guard_candidate_pack = [bool]$enableSoftGuard
+        }
+    }
     outputs = [ordered]@{
         stage1_gonogo = (Join-Path $stage1Dir "stage1_shadow_gonogo_latest.json")
         stage1_iteration_audit = (Join-Path $stage1Dir "stage1_iteration_audit_latest.json")
+        shadow_plus_progression = (Join-Path $stage1Dir "shadow_plus_progression_latest.json")
         shadow_policy_baseline = (Join-Path $shadowDir "shadow_policy_baseline_latest.json")
+        shadow_policy_extended = $extendedProfileOutputs
         shadow_signal_readiness = (Join-Path $shadowDir "shadow_signal_readiness_latest.json")
+        shadow_live_advisory = $advisoryLatest
+        shadow_soft_guard_candidate = $softGuardLatest
         operator_decision = (Join-Path $LabDataRoot "run\operator_decisions\stage1_operator_decision_latest.json")
     }
     status = "PASS"
