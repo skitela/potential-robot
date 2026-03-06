@@ -78,6 +78,7 @@ class GuardConfig:
     crash_tick_gap_mult: float = 4.0
     crash_reject_count: int = 3
     liquidity_floor_score: float = 0.20
+    liquidity_floor_streak_required: int = 3
     min_tick_rate_fraction: float = 0.30
 
     hard_max_spread_points: float = 40.0
@@ -156,6 +157,7 @@ class CapitalProtectionBlackSwanGuardV2:
         self._last_transition_ts = 0.0
         self._stable_tick_counter = 0
         self._frozen_baseline = False
+        self._liquidity_floor_streak = 0
 
     def evaluate(self, snap: MarketSnapshot) -> GuardDecision:
         self._validate_snapshot(snap)
@@ -355,7 +357,12 @@ class CapitalProtectionBlackSwanGuardV2:
             reasons.append("crash:tick_gap_spike")
         if int(snap.reject_count_recent) >= int(self.cfg.crash_reject_count):
             reasons.append("crash:reject_cluster")
-        if float(snap.liquidity_score) <= float(self.cfg.liquidity_floor_score):
+        if float(snap.liquidity_score) < float(self.cfg.liquidity_floor_score):
+            self._liquidity_floor_streak += 1
+        else:
+            self._liquidity_floor_streak = 0
+        req_streak = max(1, int(self.cfg.liquidity_floor_streak_required))
+        if self._liquidity_floor_streak >= req_streak:
             reasons.append("crash:liquidity_floor")
         if self._tick_rate.value and float(snap.tick_rate_per_sec) <= float(self.cfg.min_tick_rate_fraction) * float(self._tick_rate.value):
             reasons.append("crash:tick_rate_collapse")

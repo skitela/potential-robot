@@ -138,6 +138,39 @@ class TestCapitalProtectionBlackSwanGuardV2(unittest.TestCase):
         decision = guard.evaluate(snap)
         self.assertIn(decision.state, {GuardState.CAUTION, GuardState.CLOSE_ONLY})
 
+    def test_liquidity_floor_requires_streak(self):
+        guard = CapitalProtectionBlackSwanGuardV2(
+            GuardConfig(
+                warmup_ticks=1,
+                liquidity_floor_score=0.20,
+                liquidity_floor_streak_required=3,
+            )
+        )
+        warm = MarketSnapshot(
+            ts_monotonic=1.0,
+            symbol="EURUSD",
+            volatility_score=1.0,
+            spread_points=4.0,
+            slippage_points=0.5,
+            liquidity_score=0.9,
+            tick_rate_per_sec=10.0,
+            tick_gap_ms=120.0,
+            price_jump_points=2.0,
+            bridge_wait_ms=20.0,
+            heartbeat_age_ms=100.0,
+            reject_count_recent=0,
+        )
+        guard.evaluate(warm)
+
+        low_liq = MarketSnapshot(**{**warm.__dict__, "ts_monotonic": 2.0, "liquidity_score": 0.19})
+        d1 = guard.evaluate(low_liq)
+        d2 = guard.evaluate(MarketSnapshot(**{**low_liq.__dict__, "ts_monotonic": 3.0}))
+        d3 = guard.evaluate(MarketSnapshot(**{**low_liq.__dict__, "ts_monotonic": 4.0}))
+
+        self.assertNotIn("crash:liquidity_floor", d1.reasons)
+        self.assertNotIn("crash:liquidity_floor", d2.reasons)
+        self.assertIn("crash:liquidity_floor", d3.reasons)
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

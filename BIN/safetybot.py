@@ -870,6 +870,9 @@ class CFG:
     black_swan_v2_hard_max_bridge_wait_ms: float = 300.0
     black_swan_v2_hard_max_heartbeat_age_ms: float = 2500.0
     black_swan_v2_hard_max_tick_gap_ms: float = 2000.0
+    black_swan_v2_liquidity_floor_score: float = 0.15
+    black_swan_v2_liquidity_floor_streak_required: int = 3
+    black_swan_v2_min_tick_rate_fraction: float = 0.30
     black_swan_v2_required_stable_ticks_for_recovery: int = 8
     black_swan_v2_halt_cooldown_sec: int = 300
     black_swan_v2_close_only_cooldown_sec: int = 180
@@ -16794,6 +16797,18 @@ if __name__ == "__main__":
     CFG.black_swan_v2_hard_max_tick_gap_ms = float(
         config.risk.get("black_swan_v2_hard_max_tick_gap_ms", CFG.black_swan_v2_hard_max_tick_gap_ms)
     )
+    CFG.black_swan_v2_liquidity_floor_score = float(
+        config.risk.get("black_swan_v2_liquidity_floor_score", CFG.black_swan_v2_liquidity_floor_score)
+    )
+    CFG.black_swan_v2_liquidity_floor_streak_required = int(
+        config.risk.get(
+            "black_swan_v2_liquidity_floor_streak_required",
+            CFG.black_swan_v2_liquidity_floor_streak_required,
+        )
+    )
+    CFG.black_swan_v2_min_tick_rate_fraction = float(
+        config.risk.get("black_swan_v2_min_tick_rate_fraction", CFG.black_swan_v2_min_tick_rate_fraction)
+    )
     CFG.black_swan_v2_required_stable_ticks_for_recovery = int(
         config.risk.get(
             "black_swan_v2_required_stable_ticks_for_recovery",
@@ -16849,6 +16864,9 @@ if __name__ == "__main__":
                 max(heartbeat_age_floor_ms, CFG.black_swan_v2_hard_max_heartbeat_age_ms)
             ),
             hard_max_tick_gap_ms=float(max(200.0, CFG.black_swan_v2_hard_max_tick_gap_ms)),
+            liquidity_floor_score=float(min(0.50, max(0.01, CFG.black_swan_v2_liquidity_floor_score))),
+            liquidity_floor_streak_required=int(max(1, CFG.black_swan_v2_liquidity_floor_streak_required)),
+            min_tick_rate_fraction=float(min(1.0, max(0.05, CFG.black_swan_v2_min_tick_rate_fraction))),
             required_stable_ticks_for_recovery=int(max(1, CFG.black_swan_v2_required_stable_ticks_for_recovery)),
             halt_cooldown_sec=int(max(1, CFG.black_swan_v2_halt_cooldown_sec)),
             close_only_cooldown_sec=int(max(1, CFG.black_swan_v2_close_only_cooldown_sec)),
