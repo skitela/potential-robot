@@ -59,6 +59,44 @@ def _normalize_command_type(raw: str, default: str) -> str:
     return "OTHER"
 
 
+def _infer_strategy_family(
+    *,
+    mode: str,
+    signal: str,
+    signal_reason: str,
+    reason_code: str,
+    reason_class: str,
+    context: Dict[str, Any],
+) -> str:
+    tokens = " ".join(
+        [
+            str(mode or ""),
+            str(signal or ""),
+            str(signal_reason or ""),
+            str(reason_code or ""),
+            str(reason_class or ""),
+            str((context or {}).get("signal_reason") or ""),
+            str((context or {}).get("trend_h4") or ""),
+            str((context or {}).get("structure_h4") or ""),
+        ]
+    ).upper()
+    has_renko = "RENKO" in tokens
+    has_candle = "CANDLE" in tokens or "JAPANESE" in tokens
+    if has_renko and has_candle:
+        return "CANDLE_RENKO_CONFLUENCE"
+    if has_renko:
+        return "RENKO_ONLY"
+    if has_candle:
+        return "CANDLE_ONLY"
+    if "RANGE" in tokens or "PULLBACK" in tokens:
+        return "RANGE_PULLBACK"
+    if "TREND" in tokens or "ADX" in tokens or "CONTINUATION" in tokens or "BREAK" in tokens:
+        return "TREND_CONTINUATION"
+    if str(mode or "").strip().upper() in {"ECO", "WARM"}:
+        return "CORE_RUNTIME"
+    return "UNKNOWN"
+
+
 _ENTRY_SKIP_RE = re.compile(
     r"ENTRY_SKIP(?:_PRE)?\s+symbol=(?P<symbol>\S+)\s+grp=(?P<grp>\S+)\s+mode=(?P<mode>\S+)\s+reason=(?P<reason>[A-Z0-9_]+)"
 )
@@ -194,6 +232,14 @@ def _main() -> int:
                         "regime": str(r["regime"] or ""),
                         "regime_state": str(r["regime"] or ""),
                         "command_type": _normalize_command_type(ctx_obj.get("command_type"), "OTHER"),
+                        "strategy_family": _infer_strategy_family(
+                            mode=str(r["mode"] or ""),
+                            signal=str(r["signal"] or ""),
+                            signal_reason=str(ctx_obj.get("signal_reason") or ""),
+                            reason_code=str(r["reason_code"] or ""),
+                            reason_class=str(r["reason_class"] or ""),
+                            context=ctx_obj,
+                        ),
                         "source_module": str(ctx_obj.get("source_module") or "RUNTIME_DB"),
                         "label_quality": "OBSERVED",
                         "window_id": str(r["window_id"] or ""),
@@ -227,6 +273,16 @@ def _main() -> int:
                     "regime": str(r["regime"] or ""),
                     "regime_state": str(r["regime"] or ""),
                     "command_type": "TRADE_PATH",
+                    "strategy_family": _infer_strategy_family(
+                        mode=str(r["symbol_mode"] or ""),
+                        signal=str(r["signal"] or ""),
+                        signal_reason=str(r["signal_reason"] or ""),
+                        reason_code="TRADE_ATTEMPT",
+                        reason_class="TRADE_PATH",
+                        context={
+                            "signal_reason": str(r["signal_reason"] or ""),
+                        },
+                    ),
                     "source_module": "RUNTIME_DB",
                     "label_quality": "REALIZED" if r["outcome_pnl_net"] is not None else "OBSERVED",
                     "window_id": str(r["window_id"] or ""),
@@ -261,11 +317,14 @@ def _main() -> int:
     trade_path_n = int(sum(1 for r in rows_out if r.get("sample_type") == "TRADE_PATH"))
     reason_class_counts: Dict[str, int] = {}
     command_type_counts: Dict[str, int] = {}
+    strategy_family_counts: Dict[str, int] = {}
     for r in rows_out:
         rc = str(r.get("reason_class") or "UNKNOWN").upper()
         ct = _normalize_command_type(str(r.get("command_type") or ""), "OTHER")
+        sf = str(r.get("strategy_family") or "UNKNOWN").upper()
         reason_class_counts[rc] = int(reason_class_counts.get(rc, 0)) + 1
         command_type_counts[ct] = int(command_type_counts.get(ct, 0)) + 1
+        strategy_family_counts[sf] = int(strategy_family_counts.get(sf, 0)) + 1
     meta = {
         "schema": "oanda.mt5.stage1_learning_dataset.v2",
         "ts_utc": now_iso,
@@ -277,6 +336,7 @@ def _main() -> int:
         "symbols": symbols,
         "reason_class_counts": reason_class_counts,
         "command_type_counts": command_type_counts,
+        "strategy_family_counts": strategy_family_counts,
         "source_db": str(db_path),
         "dataset_path": str(out_jsonl),
     }

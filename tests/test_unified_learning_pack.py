@@ -167,6 +167,16 @@ class TestUnifiedLearningPack(unittest.TestCase):
                                 "recommendation": "TRZYMAJ",
                             }
                         ],
+                        "by_symbol_window_family": [
+                            {
+                                "symbol": "EURUSD",
+                                "window": "FX_AM|ACTIVE",
+                                "strategy_family": "TREND_CONTINUATION",
+                                "samples_n": 30,
+                                "counterfactual_pnl_points_avg": 4.5,
+                                "recommendation": "TRZYMAJ",
+                            }
+                        ],
                     },
                 },
             )
@@ -197,6 +207,10 @@ class TestUnifiedLearningPack(unittest.TestCase):
             instruments = payload.get("instruments") or {}
             self.assertEqual(str((instruments.get("EURUSD") or {}).get("advisory_bias")), "PROMOTE")
             self.assertEqual(str((instruments.get("GBPUSD") or {}).get("advisory_bias")), "SUPPRESS")
+            eur = instruments.get("EURUSD") or {}
+            fam = eur.get("strategy_family_advisory") or []
+            self.assertEqual(len(fam), 1)
+            self.assertEqual(str(fam[0].get("strategy_family") or ""), "TREND_CONTINUATION")
 
             read_back = ul.read_unified_runtime_advice(meta)
             self.assertIsInstance(read_back, dict)

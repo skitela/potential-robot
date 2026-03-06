@@ -648,6 +648,7 @@ def main() -> int:
                             {
                                 "ts_utc": str(row.get("ts_utc") or ""),
                                 "symbol": sym,
+                                "strategy_family": str(row.get("strategy_family") or "UNKNOWN"),
                                 "side": side_effective,
                                 "side_source": side,
                                 "reason_code": str(row.get("label") or ""),

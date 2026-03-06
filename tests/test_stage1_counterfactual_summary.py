@@ -13,6 +13,7 @@ def _write_rows(path: Path) -> None:
             "symbol": "EURUSD",
             "window_id": "FX_AM",
             "window_phase": "ACTIVE",
+            "strategy_family": "TREND_CONTINUATION",
             "counterfactual_status": "SAVED_LOSS",
             "counterfactual_pnl_points": -20.0,
         },
@@ -20,6 +21,7 @@ def _write_rows(path: Path) -> None:
             "symbol": "EURUSD",
             "window_id": "FX_AM",
             "window_phase": "ACTIVE",
+            "strategy_family": "TREND_CONTINUATION",
             "counterfactual_status": "MISSED_OPPORTUNITY",
             "counterfactual_pnl_points": 12.0,
         },
@@ -27,6 +29,7 @@ def _write_rows(path: Path) -> None:
             "symbol": "GBPUSD",
             "window_id": "FX_PM",
             "window_phase": "ACTIVE",
+            "strategy_family": "RANGE_PULLBACK",
             "counterfactual_status": "MISSED_OPPORTUNITY",
             "counterfactual_pnl_points": 15.0,
         },
@@ -34,6 +37,7 @@ def _write_rows(path: Path) -> None:
             "symbol": "GBPUSD",
             "window_id": "FX_PM",
             "window_phase": "ACTIVE",
+            "strategy_family": "RANGE_PULLBACK",
             "counterfactual_status": "NEUTRAL_TIMEOUT",
             "counterfactual_pnl_points": -2.0,
         },
@@ -73,12 +77,18 @@ class TestStage1CounterfactualSummary(unittest.TestCase):
             rep = json.loads(reports[-1].read_text(encoding="utf-8"))
             self.assertEqual(rep.get("status"), "PASS")
             self.assertEqual(int((rep.get("summary") or {}).get("rows_total") or 0), 4)
+            self.assertEqual(int((rep.get("summary") or {}).get("strategy_families_n") or 0), 2)
 
             by_symbol = rep.get("aggregates", {}).get("by_symbol", [])
             eur = [x for x in by_symbol if str(x.get("symbol")) == "EURUSD"]
             self.assertEqual(len(eur), 1)
             self.assertEqual(int(eur[0].get("saved_loss_n") or 0), 1)
             self.assertEqual(int(eur[0].get("missed_opportunity_n") or 0), 1)
+
+            by_symbol_window_family = rep.get("aggregates", {}).get("by_symbol_window_family", [])
+            eur_family = [x for x in by_symbol_window_family if str(x.get("symbol")) == "EURUSD"]
+            self.assertEqual(len(eur_family), 1)
+            self.assertEqual(str(eur_family[0].get("strategy_family") or ""), "TREND_CONTINUATION")
 
             latest = stage1_dir / "stage1_counterfactual_summary_latest.json"
             self.assertTrue(latest.exists())

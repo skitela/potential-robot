@@ -42,7 +42,31 @@ def _write_cf_summary(path: Path) -> None:
                     "counterfactual_pnl_points_total": 24.0,
                     "counterfactual_pnl_points_avg": 2.0,
                 },
-            ]
+            ],
+            "by_symbol_window_family": [
+                {
+                    "symbol": "EURUSD",
+                    "window": "FX_AM|ACTIVE",
+                    "strategy_family": "TREND_CONTINUATION",
+                    "samples_n": 25,
+                    "saved_loss_n": 15,
+                    "missed_opportunity_n": 3,
+                    "neutral_timeout_n": 7,
+                    "counterfactual_pnl_points_total": -40.0,
+                    "counterfactual_pnl_points_avg": -1.6,
+                },
+                {
+                    "symbol": "GBPUSD",
+                    "window": "FX_PM|ACTIVE",
+                    "strategy_family": "RANGE_PULLBACK",
+                    "samples_n": 12,
+                    "saved_loss_n": 2,
+                    "missed_opportunity_n": 7,
+                    "neutral_timeout_n": 3,
+                    "counterfactual_pnl_points_total": 24.0,
+                    "counterfactual_pnl_points_avg": 2.0,
+                },
+            ],
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +163,13 @@ class TestStage1ProfilePack(unittest.TestCase):
             gbp_thr = gbp_bal.get("thresholds") or {}
             self.assertGreater(float(gbp_thr.get("spread_cap_points") or 0.0), 24.0)
             self.assertLess(float(gbp_thr.get("signal_score_threshold") or 999.0), 64.0)
+
+            family_rows = rep.get("profiles_by_symbol_window_family", [])
+            self.assertEqual(len(family_rows), 2)
+            eur_family = [x for x in family_rows if str(x.get("symbol")) == "EURUSD"]
+            self.assertEqual(len(eur_family), 1)
+            self.assertEqual(str(eur_family[0].get("window") or ""), "FX_AM|ACTIVE")
+            self.assertEqual(str(eur_family[0].get("strategy_family") or ""), "TREND_CONTINUATION")
 
             latest = lab / "reports" / "stage1" / "stage1_profile_pack_latest.json"
             self.assertTrue(latest.exists())

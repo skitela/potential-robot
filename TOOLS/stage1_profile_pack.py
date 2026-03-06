@@ -393,6 +393,20 @@ def _render_txt(report: Dict[str, Any]) -> str:
                 ((item.get("recommendation_for_tomorrow") or {}).get("recommended_profile") or "UNKNOWN"),
             )
         )
+    if report.get("profiles_by_symbol_window_family"):
+        lines.append("")
+        lines.append("PER_SYMBOL_WINDOW_FAMILY")
+        for item in report.get("profiles_by_symbol_window_family", [])[:40]:
+            lines.append(
+                "- {0} | {1} | {2}: N={3} avg_pts={4:.3f} rec={5}".format(
+                    item.get("symbol"),
+                    item.get("window"),
+                    item.get("strategy_family"),
+                    safe_int(item.get("samples_n")),
+                    safe_float(item.get("counterfactual_pnl_points_avg")),
+                    ((item.get("recommendation_for_tomorrow") or {}).get("recommended_profile") or "UNKNOWN"),
+                )
+            )
     lines.append("")
     lines.append("UWAGA: proposal only / auto_apply=false")
     return "\n".join(lines) + "\n"
@@ -441,6 +455,7 @@ def main() -> int:
     status = "SKIP"
     reason = "COUNTERFACTUAL_SUMMARY_MISSING"
     profiles_by_symbol: List[Dict[str, Any]] = []
+    profiles_by_symbol_window_family: List[Dict[str, Any]] = []
     cf_hash = ""
     runtime_advice = _load_runtime_advice(runtime_advice_path)
     runtime_global = runtime_advice.get("global") if isinstance(runtime_advice.get("global"), dict) else {}
@@ -448,6 +463,7 @@ def main() -> int:
     if summary_path is not None and summary_path.exists():
         payload = load_json(summary_path)
         by_symbol = (((payload.get("aggregates") or {}).get("by_symbol")) or [])
+        by_symbol_window_family = (((payload.get("aggregates") or {}).get("by_symbol_window_family")) or [])
         if isinstance(by_symbol, list) and by_symbol:
             strategy = load_json(strategy_path) if strategy_path.exists() else {}
             for row in by_symbol:
@@ -463,6 +479,21 @@ def main() -> int:
                 )
                 if str(entry.get("symbol") or "").strip():
                     profiles_by_symbol.append(entry)
+            if isinstance(by_symbol_window_family, list):
+                for row in by_symbol_window_family:
+                    if not isinstance(row, dict):
+                        continue
+                    entry = _build_for_symbol(
+                        row,
+                        strategy,
+                        min_samples=max(1, int(args.min_samples)),
+                        allow_aggressive_when_samples_low=bool(args.allow_aggressive_when_samples_low),
+                        runtime_global=runtime_global,
+                        runtime_symbol=(runtime_instruments.get(symbol_base(row.get("symbol"))) if isinstance(runtime_instruments, dict) else {}),
+                    )
+                    entry["window"] = _safe_text(row.get("window")).upper()
+                    entry["strategy_family"] = _safe_text(row.get("strategy_family")).upper() or "UNKNOWN"
+                    profiles_by_symbol_window_family.append(entry)
             if profiles_by_symbol:
                 status = "PASS"
                 reason = "PROFILE_PACK_READY"
@@ -490,6 +521,7 @@ def main() -> int:
         "runtime_advice_source": str(runtime_advice_path) if runtime_advice else "",
         "min_samples": int(max(1, int(args.min_samples))),
         "profiles_by_symbol": profiles_by_symbol,
+        "profiles_by_symbol_window_family": profiles_by_symbol_window_family,
         "notes": [
             "Autonomous apply disabled: proposal only.",
             "Human review required before any runtime change.",

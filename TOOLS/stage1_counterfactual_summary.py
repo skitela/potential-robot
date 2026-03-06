@@ -61,7 +61,11 @@ def _recommend(saved_loss_n: int, missed_opp_n: int, net_pnl_points: float) -> s
 def _collect_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     by_symbol: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"saved": 0, "missed": 0, "neutral": 0, "pnl": 0.0, "n": 0})
     by_window: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"saved": 0, "missed": 0, "neutral": 0, "pnl": 0.0, "n": 0})
+    by_strategy_family: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"saved": 0, "missed": 0, "neutral": 0, "pnl": 0.0, "n": 0})
     by_symbol_window: Dict[Tuple[str, str], Dict[str, Any]] = defaultdict(
+        lambda: {"saved": 0, "missed": 0, "neutral": 0, "pnl": 0.0, "n": 0}
+    )
+    by_symbol_window_family: Dict[Tuple[str, str, str], Dict[str, Any]] = defaultdict(
         lambda: {"saved": 0, "missed": 0, "neutral": 0, "pnl": 0.0, "n": 0}
     )
 
@@ -70,12 +74,19 @@ def _collect_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         wid = str(row.get("window_id") or "UNKNOWN").upper()
         wph = str(row.get("window_phase") or "UNKNOWN").upper()
         win = f"{wid}|{wph}"
+        fam = str(row.get("strategy_family") or "UNKNOWN").upper()
         st = str(row.get("counterfactual_status") or "UNKNOWN").upper()
         pnl = float(row.get("counterfactual_pnl_points") or 0.0)
 
         if not sym:
             continue
-        for bucket in (by_symbol[sym], by_window[win], by_symbol_window[(sym, win)]):
+        for bucket in (
+            by_symbol[sym],
+            by_window[win],
+            by_strategy_family[fam],
+            by_symbol_window[(sym, win)],
+            by_symbol_window_family[(sym, win, fam)],
+        ):
             bucket["n"] += 1
             bucket["pnl"] = float(bucket["pnl"]) + pnl
             if st == "SAVED_LOSS":
@@ -121,6 +132,24 @@ def _collect_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             }
         )
 
+    family_rows: List[Dict[str, Any]] = []
+    for fam in sorted(by_strategy_family.keys()):
+        b = by_strategy_family[fam]
+        n = int(b["n"])
+        pnl = float(b["pnl"])
+        family_rows.append(
+            {
+                "strategy_family": fam,
+                "samples_n": n,
+                "saved_loss_n": int(b["saved"]),
+                "missed_opportunity_n": int(b["missed"]),
+                "neutral_timeout_n": int(b["neutral"]),
+                "counterfactual_pnl_points_total": float(round(pnl, 5)),
+                "counterfactual_pnl_points_avg": float(round(pnl / n, 5)) if n > 0 else 0.0,
+                "recommendation": _recommend(int(b["saved"]), int(b["missed"]), pnl),
+            }
+        )
+
     symbol_window_rows: List[Dict[str, Any]] = []
     for key in sorted(by_symbol_window.keys()):
         sym, win = key
@@ -141,10 +170,33 @@ def _collect_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             }
         )
 
+    symbol_window_family_rows: List[Dict[str, Any]] = []
+    for key in sorted(by_symbol_window_family.keys()):
+        sym, win, fam = key
+        b = by_symbol_window_family[key]
+        n = int(b["n"])
+        pnl = float(b["pnl"])
+        symbol_window_family_rows.append(
+            {
+                "symbol": sym,
+                "window": win,
+                "strategy_family": fam,
+                "samples_n": n,
+                "saved_loss_n": int(b["saved"]),
+                "missed_opportunity_n": int(b["missed"]),
+                "neutral_timeout_n": int(b["neutral"]),
+                "counterfactual_pnl_points_total": float(round(pnl, 5)),
+                "counterfactual_pnl_points_avg": float(round(pnl / n, 5)) if n > 0 else 0.0,
+                "recommendation": _recommend(int(b["saved"]), int(b["missed"]), pnl),
+            }
+        )
+
     return {
         "by_symbol": symbol_rows,
         "by_window": window_rows,
+        "by_strategy_family": family_rows,
         "by_symbol_window": symbol_window_rows,
+        "by_symbol_window_family": symbol_window_family_rows,
     }
 
 
@@ -177,7 +229,7 @@ def main() -> int:
     status = "SKIP"
     reason = "ROWS_FILE_MISSING"
     rows: List[Dict[str, Any]] = []
-    summary: Dict[str, Any] = {"by_symbol": [], "by_window": [], "by_symbol_window": []}
+    summary: Dict[str, Any] = {"by_symbol": [], "by_window": [], "by_strategy_family": [], "by_symbol_window": [], "by_symbol_window_family": []}
     if rows_jsonl is not None and rows_jsonl.exists():
         rows = list(iter_jsonl(rows_jsonl))
         if rows:
@@ -201,6 +253,8 @@ def main() -> int:
             "rows_total": int(len(rows)),
             "symbols_n": int(len(summary["by_symbol"])),
             "windows_n": int(len(summary["by_window"])),
+            "strategy_families_n": int(len(summary["by_strategy_family"])),
+            "symbol_window_families_n": int(len(summary["by_symbol_window_family"])),
         },
         "aggregates": summary,
     }
@@ -231,6 +285,19 @@ def main() -> int:
         lines.append(
             "- {0}: saved={1} missed={2} neutral={3} pnl_pts={4:.2f} rec={5}".format(
                 item["symbol"],
+                item["saved_loss_n"],
+                item["missed_opportunity_n"],
+                item["neutral_timeout_n"],
+                float(item["counterfactual_pnl_points_total"]),
+                item["recommendation"],
+            )
+        )
+    lines.append("")
+    lines.append("PER_STRATEGY_FAMILY")
+    for item in report["aggregates"]["by_strategy_family"]:
+        lines.append(
+            "- {0}: saved={1} missed={2} neutral={3} pnl_pts={4:.2f} rec={5}".format(
+                item["strategy_family"],
                 item["saved_loss_n"],
                 item["missed_opportunity_n"],
                 item["neutral_timeout_n"],

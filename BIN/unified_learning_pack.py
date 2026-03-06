@@ -162,10 +162,15 @@ def _extract_stage1_eval_map(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any
     return out
 
 
-def _extract_counterfactual_maps(payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+def _extract_counterfactual_maps(
+    payload: Dict[str, Any],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]]:
     agg = payload.get("aggregates") if isinstance(payload.get("aggregates"), dict) else {}
     by_symbol_rows = agg.get("by_symbol") if isinstance(agg.get("by_symbol"), list) else []
     by_symbol_window_rows = agg.get("by_symbol_window") if isinstance(agg.get("by_symbol_window"), list) else []
+    by_symbol_window_family_rows = (
+        agg.get("by_symbol_window_family") if isinstance(agg.get("by_symbol_window_family"), list) else []
+    )
 
     by_symbol: Dict[str, Dict[str, Any]] = {}
     for row in by_symbol_rows:
@@ -199,7 +204,24 @@ def _extract_counterfactual_maps(payload: Dict[str, Any]) -> Tuple[Dict[str, Dic
                 "recommendation": str(row.get("recommendation") or ""),
             }
         )
-    return by_symbol, by_symbol_window
+
+    by_symbol_window_family: Dict[str, List[Dict[str, Any]]] = {}
+    for row in by_symbol_window_family_rows:
+        if not isinstance(row, dict):
+            continue
+        sym = _symbol_base(row.get("symbol"))
+        if not sym:
+            continue
+        by_symbol_window_family.setdefault(sym, []).append(
+            {
+                "window": str(row.get("window") or ""),
+                "strategy_family": str(row.get("strategy_family") or "UNKNOWN"),
+                "samples_n": _safe_int(row.get("samples_n")),
+                "avg_points": _safe_float(row.get("counterfactual_pnl_points_avg")),
+                "recommendation": str(row.get("recommendation") or ""),
+            }
+        )
+    return by_symbol, by_symbol_window, by_symbol_window_family
 
 
 def _extract_stage1_apply_map(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -259,6 +281,7 @@ def _consensus_row(
     stage1_eval: Optional[Dict[str, Any]],
     counterfactual: Optional[Dict[str, Any]],
     counterfactual_windows: List[Dict[str, Any]],
+    counterfactual_window_families: List[Dict[str, Any]],
     stage1_apply: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     score = 0.0
@@ -309,6 +332,7 @@ def _consensus_row(
         advisory_bias = "SUPPRESS"
 
     details["window_advisory"] = list(counterfactual_windows or [])
+    details["strategy_family_advisory"] = list(counterfactual_window_families or [])
     details["consensus_score"] = round(float(score), 6)
     details["advisory_bias"] = advisory_bias
     details["symbol"] = str(symbol)
@@ -416,7 +440,7 @@ def build_unified_learning_payload(root: Path, *, lab_data_root: Optional[Path] 
     learner_ranks = _rank_map(learner.get("ranks") if isinstance(learner.get("ranks"), list) else [])
     scout_ranks = _rank_map(scout.get("ranks") if isinstance(scout.get("ranks"), list) else [])
     stage1_eval_map = _extract_stage1_eval_map(stage1_eval)
-    counterfactual_map, counterfactual_window_map = _extract_counterfactual_maps(cf_summary)
+    counterfactual_map, counterfactual_window_map, counterfactual_window_family_map = _extract_counterfactual_maps(cf_summary)
     stage1_apply_map = _extract_stage1_apply_map(stage1_apply)
     scoped_symbols = _extract_strategy_scope(strategy, stage1_apply_map)
 
@@ -435,6 +459,7 @@ def build_unified_learning_payload(root: Path, *, lab_data_root: Optional[Path] 
             stage1_eval=stage1_eval_map.get(sym),
             counterfactual=counterfactual_map.get(sym),
             counterfactual_windows=counterfactual_window_map.get(sym, []),
+            counterfactual_window_families=counterfactual_window_family_map.get(sym, []),
             stage1_apply=stage1_apply_map.get(sym),
         )
         instrument_rows.append(row)
@@ -444,6 +469,7 @@ def build_unified_learning_payload(root: Path, *, lab_data_root: Optional[Path] 
             _safe_float(item.get("consensus_score")),
             _safe_int((((item.get("learner_rank") or {}).get("n")) or 0)),
             -len(item.get("window_advisory") or []),
+            -len(item.get("strategy_family_advisory") or []),
             str(item.get("symbol") or ""),
         ),
         reverse=True,

@@ -26,6 +26,7 @@ def _write_stage1_dataset(path: Path) -> None:
             "reason_class": "COST_QUALITY",
             "window_id": "FX_AM",
             "window_phase": "ACTIVE",
+            "strategy_family": "TREND_CONTINUATION",
             "side": "LONG",
             "signal": "BUY",
             "context": {"spread_points": 10.0},
@@ -39,6 +40,7 @@ def _write_stage1_dataset(path: Path) -> None:
             "reason_class": "SIGNAL_LOGIC",
             "window_id": "FX_AM",
             "window_phase": "ACTIVE",
+            "strategy_family": "RANGE_PULLBACK",
             "side": "SHORT",
             "signal": "SELL",
             "context": {"spread_points": 10.0},
@@ -52,6 +54,7 @@ def _write_stage1_dataset(path: Path) -> None:
             "reason_class": "SIGNAL_LOGIC",
             "window_id": "FX_AM",
             "window_phase": "ACTIVE",
+            "strategy_family": "UNKNOWN",
             "side": "UNKNOWN",
             "signal": "",
             "context": {},
@@ -232,6 +235,8 @@ class TestStage1CounterfactualFromSnapshots(unittest.TestCase):
             self.assertEqual(len(cf_rows), 2)
             statuses = {str(r.get("counterfactual_status")) for r in cf_rows}
             self.assertTrue("MISSED_OPPORTUNITY" in statuses or "SAVED_LOSS" in statuses)
+            families = {str(r.get("strategy_family") or "") for r in cf_rows}
+            self.assertIn("TREND_CONTINUATION", families)
 
 
 if __name__ == "__main__":
