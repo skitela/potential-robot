@@ -292,6 +292,12 @@ class CFG:
     hybrid_snapshot_bar_max_age_sec: int = 900
     # If False, stale BAR stream alone does not hard-block new entries while tick stream is fresh.
     hybrid_snapshot_block_on_bar_only: bool = True
+    # Startup grace for snapshot stream warmup (prevents false startup blocks).
+    hybrid_snapshot_startup_grace_sec: int = 120
+    # Log cadence for snapshot-health warnings.
+    hybrid_snapshot_health_log_interval_sec: int = 60
+    # Log cadence for strict-snapshot missing messages (per symbol base).
+    hybrid_snapshot_missing_log_interval_sec: int = 300
     # Snapshot freshness windows for symbol/account metadata channels.
     hybrid_symbol_snapshot_max_age_sec: int = 300
     hybrid_symbol_static_snapshot_max_age_sec: int = 86400
@@ -5687,6 +5693,8 @@ class ExecutionEngine:
         self._symbol_info_static_cache: Dict[str, Dict[str, Any]] = {}
         self._zmq_account_cache: Dict[str, Any] = {}
         self._account_info_static_cache: Dict[str, Any] = {}
+        self._snapshot_missing_symbol_log_ts: Dict[str, float] = {}
+        self._snapshot_missing_account_log_ts: float = 0.0
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
         self._sltp_ts: List[float] = []
@@ -5904,7 +5912,13 @@ class ExecutionEngine:
         if self._snapshot_only_mode():
             info = self._symbol_info_from_snapshot(symbol)
             if info is None:
-                logging.info("SYMBOL_INFO_STRICT_SNAPSHOT_MISSING symbol=%s", symbol)
+                now_ts = float(time.time())
+                log_every_sec = max(30, int(getattr(CFG, "hybrid_snapshot_missing_log_interval_sec", 300)))
+                base_key = symbol_base(str(symbol)).upper()
+                last_ts = float(self._snapshot_missing_symbol_log_ts.get(base_key, 0.0) or 0.0)
+                if (now_ts - last_ts) >= float(log_every_sec):
+                    self._snapshot_missing_symbol_log_ts[base_key] = now_ts
+                    logging.debug("SYMBOL_INFO_STRICT_SNAPSHOT_MISSING symbol=%s", symbol)
             return info
 
         now = time.time()
@@ -6028,7 +6042,11 @@ class ExecutionEngine:
         if self._snapshot_only_mode():
             acc = self._account_info_from_snapshot()
             if acc is None:
-                logging.info("ACCOUNT_INFO_STRICT_SNAPSHOT_MISSING")
+                now_ts = float(time.time())
+                log_every_sec = max(30, int(getattr(CFG, "hybrid_snapshot_missing_log_interval_sec", 300)))
+                if (now_ts - float(self._snapshot_missing_account_log_ts or 0.0)) >= float(log_every_sec):
+                    self._snapshot_missing_account_log_ts = now_ts
+                    logging.info("ACCOUNT_INFO_STRICT_SNAPSHOT_MISSING")
             return acc
         if mt5 is None:
             return None
@@ -9952,6 +9970,8 @@ class SafetyBot:
         self._live_guard_snapshot: Dict[str, Any] = {}
         self.manual_kill_switch_path = self.runtime_root / str(getattr(CFG, "manual_kill_switch_file", "RUN/kill_switch.flag"))
         self._last_manual_kill_log_ts = 0.0
+        self._startup_ts: float = float(time.time())
+        self._last_snapshot_health_log_ts: float = 0.0
         self.stage1_live_config_enabled = bool(getattr(CFG, "stage1_live_config_enabled", True))
         self.stage1_live_config_path = self.runtime_root / str(
             getattr(CFG, "stage1_live_config_file", "LAB/RUN/live_config_stage1_apply.json")
@@ -11774,6 +11794,11 @@ class SafetyBot:
         """
         out: List[Tuple[str, str, str]] = []
         for raw in CFG.symbols_to_trade:
+            raw_norm = str(raw or "").strip().upper()
+            grp_hint = str(CFG.symbol_group_map.get(raw_norm, "UNKNOWN") or "UNKNOWN").upper()
+            if bool(getattr(CFG, "fx_only_mode", True)) and grp_hint not in {"UNKNOWN", "FX"}:
+                logging.info(f"UNIVERSE_SKIP_FX_ONLY_PRE raw={raw} group_hint={grp_hint}")
+                continue
             sym = self.resolve_canon_symbol(raw)
             if not sym:
                 logging.warning(f"Nie znaleziono symbolu w MT5: {raw}")
@@ -13794,29 +13819,47 @@ class SafetyBot:
             int(tick_max_age),
             int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)),
         )
+        startup_grace_sec = max(0, int(getattr(CFG, "hybrid_snapshot_startup_grace_sec", 120)))
         now_ts = float(time.time())
+        uptime_sec = max(0.0, float(now_ts - float(getattr(self, "_startup_ts", now_ts))))
+        startup_grace_active = bool(uptime_sec < float(startup_grace_sec))
         stale_tick = 0
         stale_bar = 0
+        seen_tick = 0
+        seen_bar = 0
         total = 0
         for sym in symbols:
             base = symbol_base(sym)
             total += 1
             t_tick = float(self._zmq_last_tick_ts.get(base, 0.0) or 0.0)
             t_bar = float(self._zmq_last_bar_ts.get(base, 0.0) or 0.0)
-            if (now_ts - t_tick) > float(tick_max_age):
-                stale_tick += 1
-            if (now_ts - t_bar) > float(bar_max_age):
-                stale_bar += 1
-        critical = bool(total > 0 and (stale_tick == total or stale_bar == total))
+            if t_tick > 0.0:
+                seen_tick += 1
+                if (now_ts - t_tick) > float(tick_max_age):
+                    stale_tick += 1
+            if t_bar > 0.0:
+                seen_bar += 1
+                if (now_ts - t_bar) > float(bar_max_age):
+                    stale_bar += 1
+        tick_critical = bool((seen_tick == 0 and total > 0) or (seen_tick > 0 and stale_tick == seen_tick))
+        bar_critical = bool((seen_bar == 0 and total > 0) or (seen_bar > 0 and stale_bar == seen_bar))
+        critical_raw = bool(total > 0 and (tick_critical or bar_critical))
         if total > 0 and not bool(getattr(CFG, "hybrid_snapshot_block_on_bar_only", True)):
             # In relaxed mode, block only when tick stream is stale for all tracked symbols.
-            critical = bool(stale_tick == total)
+            critical_raw = bool(tick_critical)
+        critical = bool(critical_raw and (not startup_grace_active))
         return {
             "max_age_sec": int(tick_max_age),
             "bar_max_age_sec": int(bar_max_age),
+            "startup_grace_sec": int(startup_grace_sec),
+            "startup_grace_active": bool(startup_grace_active),
+            "uptime_sec": int(uptime_sec),
             "symbols_total": int(total),
+            "seen_tick": int(seen_tick),
+            "seen_bar": int(seen_bar),
             "stale_tick": int(stale_tick),
             "stale_bar": int(stale_bar),
+            "critical_raw": bool(critical_raw),
             "critical": bool(critical),
         }
 
@@ -14281,16 +14324,35 @@ class SafetyBot:
         snapshot_health = self._hybrid_snapshot_health([sym for (_raw, sym, _grp) in self.universe])
         black_swan_block_new_entries = bool(getattr(self, "_black_swan_block_new_entries", False))
         snapshot_block_new_entries = bool(snapshot_health.get("critical")) or bool(black_swan_block_new_entries)
+        now_ts = float(time.time())
+        snapshot_log_interval = max(5, int(getattr(CFG, "hybrid_snapshot_health_log_interval_sec", 60)))
+        snapshot_log_due = bool((now_ts - float(getattr(self, "_last_snapshot_health_log_ts", 0.0))) >= float(snapshot_log_interval))
+        if bool(snapshot_health.get("critical_raw")) and bool(snapshot_health.get("startup_grace_active")) and snapshot_log_due:
+            self._last_snapshot_health_log_ts = now_ts
+            logging.info(
+                "SNAPSHOT_HEALTH_WARMUP_GRACE stale_tick=%s/%s stale_bar=%s/%s total=%s uptime_sec=%s grace_sec=%s => NO_BLOCK_YET",
+                int(snapshot_health.get("stale_tick", 0)),
+                int(snapshot_health.get("seen_tick", 0)),
+                int(snapshot_health.get("stale_bar", 0)),
+                int(snapshot_health.get("seen_bar", 0)),
+                int(snapshot_health.get("symbols_total", 0)),
+                int(snapshot_health.get("uptime_sec", 0)),
+                int(snapshot_health.get("startup_grace_sec", 0)),
+            )
         if snapshot_block_new_entries:
             global_mode = "ECO"
-            if bool(snapshot_health.get("critical")):
+            if bool(snapshot_health.get("critical")) and snapshot_log_due:
+                self._last_snapshot_health_log_ts = now_ts
                 logging.warning(
-                    "SNAPSHOT_HEALTH_DEGRADED stale_tick=%s stale_bar=%s total=%s tick_max_age_sec=%s bar_max_age_sec=%s => NO_NEW_ENTRIES",
+                    "SNAPSHOT_HEALTH_DEGRADED stale_tick=%s/%s stale_bar=%s/%s total=%s tick_max_age_sec=%s bar_max_age_sec=%s uptime_sec=%s => NO_NEW_ENTRIES",
                     int(snapshot_health.get("stale_tick", 0)),
+                    int(snapshot_health.get("seen_tick", 0)),
                     int(snapshot_health.get("stale_bar", 0)),
+                    int(snapshot_health.get("seen_bar", 0)),
                     int(snapshot_health.get("symbols_total", 0)),
                     int(snapshot_health.get("max_age_sec", 0)),
                     int(snapshot_health.get("bar_max_age_sec", 0)),
+                    int(snapshot_health.get("uptime_sec", 0)),
                 )
             if black_swan_block_new_entries:
                 logging.warning(
@@ -16038,6 +16100,18 @@ if __name__ == "__main__":
     CFG.hybrid_snapshot_block_on_bar_only = _cfg_bool(
         "hybrid_snapshot_block_on_bar_only",
         CFG.hybrid_snapshot_block_on_bar_only,
+    )
+    CFG.hybrid_snapshot_startup_grace_sec = _cfg_int(
+        "hybrid_snapshot_startup_grace_sec",
+        CFG.hybrid_snapshot_startup_grace_sec,
+    )
+    CFG.hybrid_snapshot_health_log_interval_sec = _cfg_int(
+        "hybrid_snapshot_health_log_interval_sec",
+        CFG.hybrid_snapshot_health_log_interval_sec,
+    )
+    CFG.hybrid_snapshot_missing_log_interval_sec = _cfg_int(
+        "hybrid_snapshot_missing_log_interval_sec",
+        CFG.hybrid_snapshot_missing_log_interval_sec,
     )
     CFG.hybrid_symbol_snapshot_max_age_sec = _cfg_int(
         "hybrid_symbol_snapshot_max_age_sec",
