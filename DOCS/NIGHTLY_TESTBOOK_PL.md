@@ -4,6 +4,8 @@ Cel: każdej nocy uruchamiać ten sam zestaw testów i mieć jeden raport końco
 
 ## Komendy
 
+- rejestracja zadania nocnego (bez blokowania handlu):
+  - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\register_nightly_testbook_task_user.ps1 -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA -DailyTime "03:50" -IdleThresholdSec 900 -LatencyDurationMin 20`
 - `rozpocznij testy` (kolejka/plan):
   - `powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\run_nightly_testbook.ps1 -Action "start-tests" -Root C:\OANDA_MT5_SYSTEM -LabDataRoot C:\OANDA_MT5_LAB_DATA`
 - `przeprowadź testy` (realne wykonanie):
@@ -39,3 +41,10 @@ Cel: każdej nocy uruchamiać ten sam zestaw testów i mieć jeden raport końco
 - `PASS` — wszystkie kroki przeszły.
 - `PARTIAL_FAIL` — część kroków nie przeszła; raport nadal jest kompletny.
 - `NO_DATA` (w raporcie Black Swan) — brak linii `BLACK_SWAN_V2` w oknie czasu.
+
+## Dlaczego nie blokuje handlu
+
+Zadanie nocne działa z guardami:
+- `-RequireOutsideActive` — gdy okno tradingowe jest aktywne, krok latency/diagnostyki jest pomijany.
+- `-RequireIdle` — gdy operator pracuje na komputerze, testbook nie wchodzi w cięższe kroki.
+- `MultipleInstances=IgnoreNew` w harmonogramie — nie nakłada kolejnych uruchomień na już trwające.
