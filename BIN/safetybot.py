@@ -545,6 +545,13 @@ class CFG:
     policy_runtime_file_name: str = "policy_runtime.json"
     policy_runtime_emit_common_file: bool = True
     policy_runtime_common_subdir: str = "OANDA_MT5_SYSTEM"
+    # Stage-1 live profile adapter (control-plane only, no hot-path blocking).
+    stage1_live_config_enabled: bool = True
+    stage1_live_config_file: str = "LAB/RUN/live_config_stage1_apply.json"
+    stage1_live_reload_interval_sec: int = 15
+    stage1_live_status_file: str = "RUN/stage1_live_loader_status.json"
+    stage1_live_audit_file: str = "RUN/stage1_live_loader_audit.jsonl"
+    stage1_live_audit_enabled: bool = True
 
     # dzienny podział budżetu PRICE między grupy (z możliwością pożyczania)
     group_price_shares = {"FX": 0.45, "METAL": 0.25, "INDEX": 0.30, "CRYPTO": 0.00, "EQUITY": 0.00}
@@ -1510,6 +1517,160 @@ def _symbol_key(symbol: Optional[str]) -> str:
         return str(s).split(".", 1)[0].upper()
 
 
+_STAGE1_ALLOWED_THRESHOLD_KEYS = {
+    "spread_cap_points",
+    "max_spread_points",
+    "signal_score_threshold",
+    "max_latency_ms",
+    "min_tradeability_score",
+    "min_setup_quality_score",
+    "min_liquidity_score",
+}
+
+_STAGE1_THRESHOLD_INPUT_ALIASES: Dict[str, str] = {
+    "spread_cap_points": "spread_cap_points",
+    "max_spread_points": "spread_cap_points",
+    "signal_score_threshold": "signal_score_threshold",
+    "max_latency_ms": "max_latency_ms",
+    "min_tradeability_score": "min_tradeability_score",
+    "min_setup_quality_score": "min_setup_quality_score",
+    "min_liquidity_score": "min_liquidity_score",
+}
+
+_STAGE1_OVERRIDE_KEY_ALIASES: Dict[str, str] = {
+    "spread_cap_points": "spread_cap_points",
+    "max_spread_points": "spread_cap_points",
+    "fx_spread_cap_points": "spread_cap_points",
+    "metal_spread_cap_points": "spread_cap_points",
+    "signal_score_threshold": "signal_score_threshold",
+    "fx_signal_score_threshold": "signal_score_threshold",
+    "metal_signal_score_threshold": "signal_score_threshold",
+    "max_latency_ms": "max_latency_ms",
+    "bridge_trade_timeout_ms": "max_latency_ms",
+    "min_tradeability_score": "min_tradeability_score",
+    "min_setup_quality_score": "min_setup_quality_score",
+    "min_liquidity_score": "min_liquidity_score",
+}
+
+_STAGE1_LIVE_LOCK = threading.Lock()
+_STAGE1_LIVE_OVERRIDES: Dict[str, Dict[str, float]] = {}
+_STAGE1_LIVE_META: Dict[str, Any] = {}
+
+
+def _normalize_stage1_signal_threshold(raw: Any) -> float:
+    val = float(raw)
+    if 0.0 <= val <= 1.0:
+        val = float(val * 100.0)
+    return float(max(0.0, min(100.0, val)))
+
+
+def _clamp_stage1_threshold(key: str, value: float) -> float:
+    if key == "spread_cap_points":
+        return float(max(0.1, min(400.0, value)))
+    if key == "signal_score_threshold":
+        return float(max(0.0, min(100.0, value)))
+    if key == "max_latency_ms":
+        return float(max(10.0, min(5000.0, value)))
+    if key in {"min_tradeability_score", "min_setup_quality_score", "min_liquidity_score"}:
+        return float(max(0.0, min(1.0, value)))
+    return float(value)
+
+
+def _parse_stage1_live_config_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Any]]:
+    schema = str(payload.get("schema_version") or "").strip()
+    if schema != "live_config_v3":
+        raise ValueError(f"STAGE1_SCHEMA_MISMATCH:{schema or 'EMPTY'}")
+    instruments = payload.get("instruments")
+    if not isinstance(instruments, dict):
+        raise ValueError("STAGE1_INSTRUMENTS_MISSING")
+
+    overrides: Dict[str, Dict[str, float]] = {}
+    skipped_symbols: List[str] = []
+    for raw_symbol, block in instruments.items():
+        if not isinstance(block, dict):
+            continue
+        sym = _symbol_key(str(raw_symbol))
+        if not sym:
+            continue
+        thresholds = block.get("thresholds")
+        if not isinstance(thresholds, dict):
+            skipped_symbols.append(sym)
+            continue
+        out: Dict[str, float] = {}
+        for raw_key, raw_val in thresholds.items():
+            k = str(raw_key or "").strip()
+            if k not in _STAGE1_ALLOWED_THRESHOLD_KEYS:
+                continue
+            k_eff = _STAGE1_THRESHOLD_INPUT_ALIASES.get(k, k)
+            try:
+                num = float(raw_val)
+            except Exception:
+                continue
+            if k_eff == "signal_score_threshold":
+                num = _normalize_stage1_signal_threshold(num)
+            out[k_eff] = _clamp_stage1_threshold(k_eff, num)
+        if not out:
+            skipped_symbols.append(sym)
+            continue
+        overrides[sym] = out
+
+    meta = {
+        "schema_version": schema,
+        "deployment_id": str(payload.get("deployment_id") or ""),
+        "generated_at": str(payload.get("generated_at") or ""),
+        "source_proposal_id": str(payload.get("source_proposal_id") or ""),
+        "source_proposal_hash": str(payload.get("source_proposal_hash") or ""),
+        "config_hash": str(payload.get("config_hash") or ""),
+        "instrument_count": int(len(instruments)),
+        "loaded_symbols": int(len(overrides)),
+        "skipped_symbols": skipped_symbols,
+    }
+    return overrides, meta
+
+
+def _set_stage1_live_overrides(overrides: Dict[str, Dict[str, float]], meta: Dict[str, Any]) -> None:
+    clean: Dict[str, Dict[str, float]] = {}
+    for raw_symbol, row in (overrides or {}).items():
+        sym = _symbol_key(raw_symbol)
+        if not sym or not isinstance(row, dict):
+            continue
+        r: Dict[str, float] = {}
+        for k, v in row.items():
+            if k in _STAGE1_ALLOWED_THRESHOLD_KEYS:
+                try:
+                    r[k] = float(v)
+                except Exception:
+                    continue
+        if r:
+            clean[sym] = r
+    with _STAGE1_LIVE_LOCK:
+        _STAGE1_LIVE_OVERRIDES.clear()
+        _STAGE1_LIVE_OVERRIDES.update(clean)
+        _STAGE1_LIVE_META.clear()
+        _STAGE1_LIVE_META.update(dict(meta or {}))
+        _STAGE1_LIVE_META["applied_at_utc"] = now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _get_stage1_override_value(symbol: Optional[str], key: str) -> Optional[float]:
+    sym = _symbol_key(symbol)
+    if not sym:
+        return None
+    alias = _STAGE1_OVERRIDE_KEY_ALIASES.get(str(key or "").strip())
+    if not alias:
+        return None
+    with _STAGE1_LIVE_LOCK:
+        row = _STAGE1_LIVE_OVERRIDES.get(sym)
+        if not isinstance(row, dict):
+            return None
+        value = row.get(alias)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def _is_crypto_major_symbol(symbol: Optional[str]) -> bool:
     s = _symbol_key(symbol)
     return bool(s in {"BTCUSD", "ETHUSD"})
@@ -1517,6 +1678,9 @@ def _is_crypto_major_symbol(symbol: Optional[str]) -> bool:
 
 def _cfg_group_value(group: Optional[str], key: str, default: Any, symbol: Optional[str] = None) -> Any:
     try:
+        override = _get_stage1_override_value(symbol, key)
+        if override is not None:
+            return override
         s = _symbol_key(symbol)
         if s:
             per_symbol = getattr(CFG, "per_symbol", {}) or {}
@@ -1986,10 +2150,12 @@ def fx_spread_cap_points(symbol: str, grp: Optional[str] = "FX") -> float:
         return default_cap
 
 
-def fx_score_threshold_for_mode(mode: str) -> int:
-    base_thr = int(max(0, int(getattr(CFG, "fx_signal_score_threshold", 74) or 74)))
+def fx_score_threshold_for_mode(mode: str, symbol: Optional[str] = None) -> int:
+    base_default = int(max(0, int(getattr(CFG, "fx_signal_score_threshold", 74) or 74)))
+    base_thr = int(max(0, _cfg_group_int("FX", "fx_signal_score_threshold", base_default, symbol=symbol)))
     if bool(getattr(CFG, "fx_signal_score_hot_relaxed_enabled", True)) and str(mode).upper() == "HOT":
-        hot_thr = int(max(0, int(getattr(CFG, "fx_signal_score_hot_relaxed_threshold", 68) or 68)))
+        hot_default = int(max(0, int(getattr(CFG, "fx_signal_score_hot_relaxed_threshold", 68) or 68)))
+        hot_thr = int(max(0, _cfg_group_int("FX", "fx_signal_score_hot_relaxed_threshold", hot_default, symbol=symbol)))
         return int(min(base_thr, hot_thr))
     return int(base_thr)
 
@@ -2244,10 +2410,12 @@ def metal_spread_cap_points(symbol: str, grp: Optional[str] = "METAL") -> float:
         return default_cap
 
 
-def metal_score_threshold_for_mode(mode: str) -> int:
-    base_thr = int(max(0, int(getattr(CFG, "metal_signal_score_threshold", 76) or 76)))
+def metal_score_threshold_for_mode(mode: str, symbol: Optional[str] = None) -> int:
+    base_default = int(max(0, int(getattr(CFG, "metal_signal_score_threshold", 76) or 76)))
+    base_thr = int(max(0, _cfg_group_int("METAL", "metal_signal_score_threshold", base_default, symbol=symbol)))
     if bool(getattr(CFG, "metal_signal_score_hot_relaxed_enabled", True)) and str(mode).upper() == "HOT":
-        hot_thr = int(max(0, int(getattr(CFG, "metal_signal_score_hot_relaxed_threshold", 70) or 70)))
+        hot_default = int(max(0, int(getattr(CFG, "metal_signal_score_hot_relaxed_threshold", 70) or 70)))
+        hot_thr = int(max(0, _cfg_group_int("METAL", "metal_signal_score_hot_relaxed_threshold", hot_default, symbol=symbol)))
         return int(min(base_thr, hot_thr))
     return int(base_thr)
 
@@ -9106,7 +9274,7 @@ class StandardStrategy:
                         spread_p80=spread_p80,
                         execution_error_recent=exec_err_recent,
                     )
-                    min_score = int(fx_score_threshold_for_mode(mode))
+                    min_score = int(fx_score_threshold_for_mode(mode, symbol=symbol))
                     entry_score = self._apply_candle_advisory_score(
                         signal=signal,
                         base_score=int(fx_score),
@@ -9195,7 +9363,7 @@ class StandardStrategy:
                         spread_p80=spread_p80,
                         execution_error_recent=exec_err_recent,
                     )
-                    min_score = int(metal_score_threshold_for_mode(mode))
+                    min_score = int(metal_score_threshold_for_mode(mode, symbol=symbol))
                     entry_score = self._apply_candle_advisory_score(
                         signal=signal,
                         base_score=int(metal_score),
@@ -9761,6 +9929,29 @@ class SafetyBot:
         self._live_guard_snapshot: Dict[str, Any] = {}
         self.manual_kill_switch_path = self.runtime_root / str(getattr(CFG, "manual_kill_switch_file", "RUN/kill_switch.flag"))
         self._last_manual_kill_log_ts = 0.0
+        self.stage1_live_config_enabled = bool(getattr(CFG, "stage1_live_config_enabled", True))
+        self.stage1_live_config_path = self.runtime_root / str(
+            getattr(CFG, "stage1_live_config_file", "LAB/RUN/live_config_stage1_apply.json")
+        )
+        self.stage1_live_reload_interval_sec = max(
+            2, int(getattr(CFG, "stage1_live_reload_interval_sec", 15))
+        )
+        self.stage1_live_status_path = self.runtime_root / str(
+            getattr(CFG, "stage1_live_status_file", "RUN/stage1_live_loader_status.json")
+        )
+        self.stage1_live_audit_path = self.runtime_root / str(
+            getattr(CFG, "stage1_live_audit_file", "RUN/stage1_live_loader_audit.jsonl")
+        )
+        self.stage1_live_audit_enabled = bool(getattr(CFG, "stage1_live_audit_enabled", True))
+        self._stage1_live_last_check_ts: float = 0.0
+        self._stage1_live_last_seen_mtime_ns: int = -1
+        self._stage1_live_last_mtime_ns: int = -1
+        self._stage1_live_last_failed_mtime_ns: int = -1
+        self._stage1_live_last_error: str = ""
+        self._stage1_live_last_loaded_symbols: int = 0
+        self._stage1_live_last_ok_utc: str = ""
+        self._stage1_live_last_status: str = "INIT"
+        self._stage1_live_last_status_reason: str = "NOT_CHECKED"
         self._metrics_day_key = str(pl_day_key(now_utc()))
         self._metrics_eco_scans_day = 0
         self._metrics_warn_scans_day = 0
@@ -9805,6 +9996,8 @@ class SafetyBot:
         # --- logging (local only; required for OFFLINE traceability) ---
         setup_logging(self.runtime_root)
         logging.getLogger("SafetyBot").info("Start (offline-first guards enabled).")
+        # Control-plane adapter: load stage1 live config once at startup.
+        self._reload_stage1_live_config(force=True)
 
         # --- KEY drive (identified by volume label; not by drive letter) ---
         self.key_drive = get_usb_path(self.cfg.usb_drive_label)
@@ -9979,6 +10172,177 @@ class SafetyBot:
         telemetry_path = getattr(self, "execution_telemetry_path", None)
         if telemetry_path:
             self._append_jsonl_record(telemetry_path, rec)
+
+    def _stage1_live_meta_snapshot(self) -> Tuple[int, Dict[str, Any]]:
+        with _STAGE1_LIVE_LOCK:
+            loaded = int(len(_STAGE1_LIVE_OVERRIDES))
+            meta = dict(_STAGE1_LIVE_META)
+        return loaded, meta
+
+    def _emit_stage1_live_loader_event(
+        self,
+        *,
+        level: str,
+        status: str,
+        reason: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        lvl = str(level or "INFO").strip().upper()
+        st = str(status or "UNKNOWN").strip().upper() or "UNKNOWN"
+        rs = str(reason or "NONE").strip().upper() or "NONE"
+        loaded_symbols, meta = self._stage1_live_meta_snapshot()
+        evt = {
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "event_type": "STAGE1_LIVE_LOADER",
+            "status": st,
+            "reason": rs,
+            "enabled": bool(self.stage1_live_config_enabled),
+            "config_path": str(self.stage1_live_config_path),
+            "loaded_symbols": int(loaded_symbols),
+            "last_loaded_symbols": int(self._stage1_live_last_loaded_symbols),
+            "last_ok_utc": str(self._stage1_live_last_ok_utc or ""),
+            "last_error": str(self._stage1_live_last_error or ""),
+            "meta": meta,
+            "details": dict(details or {}),
+        }
+        msg = (
+            "STAGE1_LOADER status=%s reason=%s loaded_symbols=%s config=%s details=%s"
+            % (st, rs, int(loaded_symbols), str(self.stage1_live_config_path), evt["details"])
+        )
+        if lvl == "ERROR":
+            logging.error(msg)
+        elif lvl == "WARNING":
+            logging.warning(msg)
+        else:
+            logging.info(msg)
+        if bool(self.stage1_live_audit_enabled):
+            self._append_jsonl_record(self.stage1_live_audit_path, evt)
+
+    def _write_stage1_live_loader_status(self, status: str, reason: str) -> None:
+        loaded_symbols, meta = self._stage1_live_meta_snapshot()
+        payload = {
+            "schema_version": "stage1_live_loader_status_v1",
+            "ts_utc": now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp_semantics": "UTC",
+            "status": str(status or "UNKNOWN").strip().upper() or "UNKNOWN",
+            "reason": str(reason or "NONE").strip().upper() or "NONE",
+            "enabled": bool(self.stage1_live_config_enabled),
+            "config_path": str(self.stage1_live_config_path),
+            "reload_interval_sec": int(self.stage1_live_reload_interval_sec),
+            "last_check_ts_epoch": float(self._stage1_live_last_check_ts or 0.0),
+            "last_seen_mtime_ns": int(self._stage1_live_last_seen_mtime_ns),
+            "last_loaded_mtime_ns": int(self._stage1_live_last_mtime_ns),
+            "last_failed_mtime_ns": int(self._stage1_live_last_failed_mtime_ns),
+            "last_ok_utc": str(self._stage1_live_last_ok_utc or ""),
+            "last_error": str(self._stage1_live_last_error or ""),
+            "last_loaded_symbols": int(self._stage1_live_last_loaded_symbols),
+            "active_override_symbols": int(loaded_symbols),
+            "meta": meta,
+        }
+        try:
+            atomic_write_json(self.stage1_live_status_path, payload)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _reload_stage1_live_config(self, *, force: bool = False) -> None:
+        now_ts = float(time.time())
+        if not bool(self.stage1_live_config_enabled):
+            if self._stage1_live_last_status != "DISABLED":
+                self._stage1_live_last_status = "DISABLED"
+                self._stage1_live_last_status_reason = "CONFIG_DISABLED"
+                self._emit_stage1_live_loader_event(
+                    level="INFO",
+                    status="DISABLED",
+                    reason="CONFIG_DISABLED",
+                )
+                self._write_stage1_live_loader_status("DISABLED", "CONFIG_DISABLED")
+            return
+        if (not force) and ((now_ts - float(self._stage1_live_last_check_ts or 0.0)) < float(self.stage1_live_reload_interval_sec)):
+            return
+        self._stage1_live_last_check_ts = now_ts
+
+        try:
+            st = self.stage1_live_config_path.stat()
+            mtime_ns = int(st.st_mtime_ns)
+        except FileNotFoundError:
+            if self._stage1_live_last_status != "MISSING":
+                self._stage1_live_last_status = "MISSING"
+                self._stage1_live_last_status_reason = "CONFIG_FILE_MISSING"
+                self._emit_stage1_live_loader_event(
+                    level="WARNING",
+                    status="MISSING",
+                    reason="CONFIG_FILE_MISSING",
+                    details={"fallback_mode": "KEEP_LAST_GOOD"},
+                )
+                self._write_stage1_live_loader_status("MISSING", "CONFIG_FILE_MISSING")
+            return
+        except Exception as e:
+            reason = f"STAT_ERROR:{type(e).__name__}"
+            self._stage1_live_last_error = reason
+            if self._stage1_live_last_status_reason != reason:
+                self._stage1_live_last_status = "ERROR"
+                self._stage1_live_last_status_reason = reason
+                self._emit_stage1_live_loader_event(
+                    level="ERROR",
+                    status="ERROR",
+                    reason=reason,
+                    details={"fallback_mode": "KEEP_LAST_GOOD"},
+                )
+                self._write_stage1_live_loader_status("ERROR", reason)
+            return
+
+        self._stage1_live_last_seen_mtime_ns = int(mtime_ns)
+        if (not force) and int(mtime_ns) == int(self._stage1_live_last_mtime_ns):
+            return
+        if (not force) and int(mtime_ns) == int(self._stage1_live_last_failed_mtime_ns):
+            return
+
+        parse_t0 = time.perf_counter()
+        try:
+            raw = self.stage1_live_config_path.read_text(encoding="utf-8", errors="strict")
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("STAGE1_JSON_NOT_OBJECT")
+            overrides, meta = _parse_stage1_live_config_payload(payload)
+            _set_stage1_live_overrides(overrides, meta)
+            self._stage1_live_last_mtime_ns = int(mtime_ns)
+            self._stage1_live_last_failed_mtime_ns = -1
+            self._stage1_live_last_loaded_symbols = int(len(overrides))
+            self._stage1_live_last_error = ""
+            self._stage1_live_last_ok_utc = now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            self._stage1_live_last_status = "OK"
+            self._stage1_live_last_status_reason = "CONFIG_APPLIED"
+            self._emit_stage1_live_loader_event(
+                level="INFO",
+                status="OK",
+                reason="CONFIG_APPLIED",
+                details={
+                    "mtime_ns": int(mtime_ns),
+                    "parse_ms": int((time.perf_counter() - parse_t0) * 1000.0),
+                    "loaded_symbols": int(len(overrides)),
+                    "deployment_id": str(meta.get("deployment_id") or ""),
+                    "config_hash": str(meta.get("config_hash") or ""),
+                },
+            )
+            self._write_stage1_live_loader_status("OK", "CONFIG_APPLIED")
+        except Exception as e:
+            self._stage1_live_last_failed_mtime_ns = int(mtime_ns)
+            self._stage1_live_last_error = f"{type(e).__name__}:{e}"
+            reason = f"PARSE_ERROR:{type(e).__name__}"
+            self._stage1_live_last_status = "ERROR"
+            self._stage1_live_last_status_reason = reason
+            self._emit_stage1_live_loader_event(
+                level="ERROR",
+                status="ERROR",
+                reason=reason,
+                details={
+                    "mtime_ns": int(mtime_ns),
+                    "error": str(e),
+                    "fallback_mode": "KEEP_LAST_GOOD",
+                },
+            )
+            self._write_stage1_live_loader_status("ERROR", reason)
 
     def _refresh_asia_preflight_evidence(self) -> None:
         """Build deterministic symbol-preflight artifact for Asia shadow rollout decisions."""
@@ -15213,12 +15577,18 @@ class SafetyBot:
                                 )
                     last_scan_ts = now
 
-                # 4. Sprawdzenie Kill-Switch
+                # 4. Stage1 live profile adapter (control-plane cadence, no blocking waits).
+                try:
+                    self._reload_stage1_live_config(force=False)
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+                # 5. Sprawdzenie Kill-Switch
                 if self.manual_kill_switch_path.exists():
                     logging.info("BOT STOP | Wykryto plik kill_switch.")
                     break
 
-                # 5. Krótki odpoczynek dla CPU, jeśli nie było danych
+                # 6. Krótki odpoczynek dla CPU, jeśli nie było danych
                 if not market_data:
                     time.sleep(float(run_loop_idle_sleep))
 
@@ -15627,6 +15997,27 @@ if __name__ == "__main__":
         strategy_cfg.get("policy_runtime_common_subdir", CFG.policy_runtime_common_subdir)
         or CFG.policy_runtime_common_subdir
     )
+    CFG.stage1_live_config_enabled = _cfg_bool(
+        "stage1_live_config_enabled", CFG.stage1_live_config_enabled
+    )
+    CFG.stage1_live_reload_interval_sec = _cfg_int(
+        "stage1_live_reload_interval_sec", CFG.stage1_live_reload_interval_sec
+    )
+    CFG.stage1_live_audit_enabled = _cfg_bool(
+        "stage1_live_audit_enabled", CFG.stage1_live_audit_enabled
+    )
+    CFG.stage1_live_config_file = str(
+        strategy_cfg.get("stage1_live_config_file", CFG.stage1_live_config_file)
+        or CFG.stage1_live_config_file
+    ).strip()
+    CFG.stage1_live_status_file = str(
+        strategy_cfg.get("stage1_live_status_file", CFG.stage1_live_status_file)
+        or CFG.stage1_live_status_file
+    ).strip()
+    CFG.stage1_live_audit_file = str(
+        strategy_cfg.get("stage1_live_audit_file", CFG.stage1_live_audit_file)
+        or CFG.stage1_live_audit_file
+    ).strip()
     CFG.friday_risk_enabled = _cfg_bool("friday_risk_enabled", CFG.friday_risk_enabled)
     CFG.friday_risk_ny_start_hm = _cfg_hm("friday_risk_ny_start_hm", CFG.friday_risk_ny_start_hm)
     CFG.friday_risk_ny_end_hm = _cfg_hm("friday_risk_ny_end_hm", CFG.friday_risk_ny_end_hm)
