@@ -16659,12 +16659,17 @@ if __name__ == "__main__":
             precaution_fraction=float(CFG.black_swan_precaution_fraction),
         )
     )
+    heartbeat_interval_ms = float(max(1, getattr(CFG, "zmq_heartbeat_interval_sec", 15))) * 1000.0
+    # Guard against false HALT: heartbeat age cap must be larger than heartbeat cadence.
+    heartbeat_age_floor_ms = max(5000.0, heartbeat_interval_ms * 3.0)
     black_swan_guard_v2 = CapitalProtectionBlackSwanGuardV2(
         BlackSwanGuardConfigV2(
             hard_max_spread_points=float(max(1.0, CFG.black_swan_v2_hard_max_spread_points)),
             hard_max_slippage_points=float(max(1.0, CFG.black_swan_v2_hard_max_slippage_points)),
             hard_max_bridge_wait_ms=float(max(50.0, CFG.black_swan_v2_hard_max_bridge_wait_ms)),
-            hard_max_heartbeat_age_ms=float(max(200.0, CFG.black_swan_v2_hard_max_heartbeat_age_ms)),
+            hard_max_heartbeat_age_ms=float(
+                max(heartbeat_age_floor_ms, CFG.black_swan_v2_hard_max_heartbeat_age_ms)
+            ),
             hard_max_tick_gap_ms=float(max(200.0, CFG.black_swan_v2_hard_max_tick_gap_ms)),
             required_stable_ticks_for_recovery=int(max(1, CFG.black_swan_v2_required_stable_ticks_for_recovery)),
             halt_cooldown_sec=int(max(1, CFG.black_swan_v2_halt_cooldown_sec)),
