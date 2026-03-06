@@ -147,6 +147,12 @@ Invoke-Python @(
     "--lookback-hours", "$LookbackHours"
 )
 
+Invoke-Python @(
+    "$Root\TOOLS\unified_learning_pack.py",
+    "--root", $Root,
+    "--lab-data-root", $LabDataRoot
+)
+
 $cutoff = (Get-Date).AddDays(-[Math]::Abs($RetentionDays))
 $removed = 0
 
@@ -197,7 +203,9 @@ $cleanupPlan = @(
             "stage1_iteration_audit_*.json",
             "stage1_iteration_audit_*.txt",
             "stage1_coverage_recovery_*.json",
-            "stage1_coverage_recovery_*.txt"
+            "stage1_coverage_recovery_*.txt",
+            "unified_learning_source_feedback_*.json",
+            "unified_learning_source_feedback_*.txt"
         )
     }
 )

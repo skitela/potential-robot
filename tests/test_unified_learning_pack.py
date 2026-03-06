@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import sqlite3
 import shutil
 import tempfile
 import unittest
@@ -11,6 +12,96 @@ from BIN import unified_learning_pack as ul
 def _write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_decision_events_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        """
+        CREATE TABLE decision_events (
+            choice_A TEXT,
+            window_id TEXT,
+            window_phase TEXT,
+            strategy_family TEXT,
+            outcome_pnl_net REAL,
+            topk_json TEXT,
+            is_paper INT,
+            outcome_closed_ts_utc TEXT,
+            ts_utc TEXT
+        );
+        """
+    )
+    learning_topk = json.dumps(
+        [
+            {
+                "raw": "EURUSD",
+                "sym": "EURUSD",
+                "proposal": {
+                    "unified_learning_score_delta": 3,
+                },
+                "unified_rank_adjustment": {
+                    "pct_bonus": 0.05,
+                },
+            }
+        ],
+        ensure_ascii=False,
+    )
+    core_topk = json.dumps(
+        [
+            {
+                "raw": "EURUSD",
+                "sym": "EURUSD",
+                "proposal": {
+                    "unified_learning_score_delta": 0,
+                },
+                "unified_rank_adjustment": {
+                    "pct_bonus": 0.0,
+                },
+            }
+        ],
+        ensure_ascii=False,
+    )
+    rows = []
+    for idx in range(6):
+        rows.append(
+            (
+                "EURUSD",
+                "FX_AM",
+                "ACTIVE",
+                "TREND_CONTINUATION",
+                12.0 + idx,
+                learning_topk,
+                1,
+                f"2026-03-06T20:0{idx}:00Z",
+                f"2026-03-06T19:0{idx}:00Z",
+            )
+        )
+    for idx in range(6):
+        rows.append(
+            (
+                "EURUSD",
+                "FX_AM",
+                "ACTIVE",
+                "TREND_CONTINUATION",
+                -6.0 - idx,
+                core_topk,
+                1,
+                f"2026-03-05T20:1{idx}:00Z",
+                f"2026-03-05T19:1{idx}:00Z",
+            )
+        )
+    conn.executemany(
+        """
+        INSERT INTO decision_events (
+            choice_A, window_id, window_phase, strategy_family,
+            outcome_pnl_net, topk_json, is_paper, outcome_closed_ts_utc, ts_utc
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
 
 
 class TestUnifiedLearningPack(unittest.TestCase):
@@ -88,6 +179,7 @@ class TestUnifiedLearningPack(unittest.TestCase):
                     },
                 },
             )
+            _write_decision_events_db(root / "DB" / "decision_events.sqlite")
 
             stage1 = lab / "reports" / "stage1"
             _write_json(
@@ -211,6 +303,13 @@ class TestUnifiedLearningPack(unittest.TestCase):
             fam = eur.get("strategy_family_advisory") or []
             self.assertEqual(len(fam), 1)
             self.assertEqual(str(fam[0].get("strategy_family") or ""), "TREND_CONTINUATION")
+            source_feedback = payload.get("source_feedback") or {}
+            global_feedback = source_feedback.get("global") or {}
+            self.assertEqual(str(global_feedback.get("leader") or ""), "LEARNING")
+            self.assertGreater(float(global_feedback.get("learning_weight") or 1.0), 1.0)
+            eur_feedback = (eur.get("source_feedback") or {})
+            self.assertEqual(str(eur_feedback.get("leader") or ""), "LEARNING")
+            self.assertGreater(float(eur_feedback.get("learning_weight") or 1.0), 1.0)
 
             read_back = ul.read_unified_runtime_advice(meta)
             self.assertIsInstance(read_back, dict)

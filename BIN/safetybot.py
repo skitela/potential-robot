@@ -889,6 +889,10 @@ class CFG:
     unified_learning_runtime_paper_only: bool = True
     unified_learning_runtime_min_samples: int = 20
     unified_learning_runtime_max_abs_score_delta: int = 6
+    unified_learning_rank_enabled: bool = True
+    unified_learning_rank_paper_only: bool = True
+    unified_learning_rank_min_samples: int = 20
+    unified_learning_rank_max_bonus_pct: float = 0.08
 
     # Legacy/backward compatibility names (deprecated; do not use for sizing)
     max_risk_cap_acct: float = 0.0
@@ -4216,6 +4220,17 @@ def resolve_unified_learning_family_adjustment(
     score = 0.0
     reasons: List[str] = []
 
+    def _feedback_payload_weight(payload_obj: Any) -> Tuple[float, str]:
+        if not isinstance(payload_obj, dict):
+            return 1.0, "INSUFFICIENT_DATA"
+        leader = str(payload_obj.get("leader") or "INSUFFICIENT_DATA").strip().upper() or "INSUFFICIENT_DATA"
+        try:
+            weight_raw = float(payload_obj.get("learning_weight"))
+        except Exception:
+            weight_raw = 1.0
+        weight = float(max(0.75, min(1.25, weight_raw)))
+        return weight, leader
+
     if bias == "PROMOTE":
         score += 0.30
         reasons.append("symbol_promote")
@@ -4280,9 +4295,164 @@ def resolve_unified_learning_family_adjustment(
     if isinstance(matched_family, dict):
         _apply_row(matched_family, weight=0.75, label="family")
 
+    global_feedback = None
+    try:
+        global_feedback = (((unified.get("raw") or {}).get("global") or {}).get("source_feedback"))
+    except Exception:
+        global_feedback = None
+    symbol_feedback = item.get("source_feedback") if isinstance(item.get("source_feedback"), dict) else None
+    window_feedback = matched_window.get("source_feedback") if isinstance(matched_window, dict) and isinstance(matched_window.get("source_feedback"), dict) else None
+    family_feedback = matched_family.get("source_feedback") if isinstance(matched_family, dict) and isinstance(matched_family.get("source_feedback"), dict) else None
+
+    feedback_weights: List[float] = []
+    feedback_leaders: List[str] = []
+    for feedback_obj in (global_feedback, symbol_feedback, window_feedback, family_feedback):
+        weight_val, leader_val = _feedback_payload_weight(feedback_obj)
+        if weight_val > 0.0:
+            feedback_weights.append(weight_val)
+        if leader_val and leader_val != "INSUFFICIENT_DATA":
+            feedback_leaders.append(leader_val)
+    effective_weight = float(sum(feedback_weights) / len(feedback_weights)) if feedback_weights else 1.0
+    feedback_leader = feedback_leaders[0] if feedback_leaders else "INSUFFICIENT_DATA"
+    score *= effective_weight
+    if abs(effective_weight - 1.0) >= 0.03:
+        reasons.append(f"feedback_weight:{effective_weight:.3f}")
+
     score = max(-1.0, min(1.0, float(score)))
     out["score_delta"] = int(max(-max_abs_delta, min(max_abs_delta, int(round(score * float(max_abs_delta))))))
     out["reasons"] = reasons
+    out["feedback_weight"] = round(effective_weight, 6)
+    out["feedback_leader"] = feedback_leader
+    return out
+
+
+def resolve_unified_learning_rank_adjustment(
+    *,
+    unified: Optional[Dict[str, Any]],
+    symbol: str,
+    window_id: str,
+    window_phase: str,
+    min_samples: int,
+    max_bonus_pct: float,
+) -> Dict[str, Any]:
+    out = {
+        "pct_bonus": 0.0,
+        "prio_multiplier": 1.0,
+        "advisory_bias": "NEUTRAL",
+        "window": "",
+        "reasons": [],
+        "matched_window_samples": 0,
+        "feedback_weight": 1.0,
+        "feedback_leader": "INSUFFICIENT_DATA",
+    }
+    if not isinstance(unified, dict):
+        return out
+    instruments = unified.get("instruments")
+    if not isinstance(instruments, dict):
+        return out
+    sym = symbol_base(symbol)
+    item = instruments.get(sym)
+    if not isinstance(item, dict):
+        return out
+
+    target_window = f"{str(window_id or '').upper()}|{str(window_phase or '').upper()}".strip("|")
+    out["window"] = target_window
+    bias = str(item.get("advisory_bias") or "NEUTRAL").strip().upper()
+    out["advisory_bias"] = bias
+    try:
+        consensus = float(item.get("consensus_score"))
+    except Exception:
+        consensus = 0.0
+    min_samples = max(1, int(min_samples))
+    max_bonus_pct = float(max(0.0, min(float(max_bonus_pct), 0.20)))
+
+    matched_window = None
+    for row_obj in (item.get("window_advisory") or []):
+        if not isinstance(row_obj, dict):
+            continue
+        if str(row_obj.get("window") or "").strip().upper() != target_window:
+            continue
+        samples_n = int(row_obj.get("samples_n") or 0)
+        if samples_n < min_samples:
+            continue
+        matched_window = row_obj
+        out["matched_window_samples"] = samples_n
+        break
+
+    score = 0.0
+    reasons: List[str] = []
+    if bias == "PROMOTE":
+        score += 0.32
+        reasons.append("symbol_promote")
+    elif bias == "SUPPRESS":
+        score -= 0.40
+        reasons.append("symbol_suppress")
+
+    score += float(max(-0.25, min(0.25, consensus * 0.55)))
+    if abs(consensus) >= 0.05:
+        reasons.append(f"consensus:{consensus:.3f}")
+
+    if isinstance(matched_window, dict):
+        rec = str(matched_window.get("recommendation") or "").strip().upper()
+        try:
+            avg = float(matched_window.get("avg_points"))
+        except Exception:
+            try:
+                avg = float(matched_window.get("counterfactual_pnl_points_avg"))
+            except Exception:
+                avg = 0.0
+        if rec == "DOCISKAJ_FILTRY":
+            score -= 0.30
+        elif rec == "ROZWAZ_LUZOWANIE_W_SHADOW":
+            score += 0.26
+        elif rec == "TRZYMAJ":
+            score += float(max(-0.08, min(0.08, avg / 50.0)))
+        if avg > 10.0:
+            score += 0.04
+        elif avg < -10.0:
+            score -= 0.04
+        reasons.append(f"window:{rec or 'NONE'}")
+
+    def _feedback_payload_weight(payload_obj: Any) -> Tuple[float, str]:
+        if not isinstance(payload_obj, dict):
+            return 1.0, "INSUFFICIENT_DATA"
+        leader = str(payload_obj.get("leader") or "INSUFFICIENT_DATA").strip().upper() or "INSUFFICIENT_DATA"
+        try:
+            weight_raw = float(payload_obj.get("learning_weight"))
+        except Exception:
+            weight_raw = 1.0
+        weight = float(max(0.75, min(1.25, weight_raw)))
+        return weight, leader
+
+    global_feedback = None
+    try:
+        global_feedback = (((unified.get("raw") or {}).get("global") or {}).get("source_feedback"))
+    except Exception:
+        global_feedback = None
+    symbol_feedback = item.get("source_feedback") if isinstance(item.get("source_feedback"), dict) else None
+    window_feedback = matched_window.get("source_feedback") if isinstance(matched_window, dict) and isinstance(matched_window.get("source_feedback"), dict) else None
+
+    feedback_weights: List[float] = []
+    feedback_leaders: List[str] = []
+    for feedback_obj in (global_feedback, symbol_feedback, window_feedback):
+        weight_val, leader_val = _feedback_payload_weight(feedback_obj)
+        if weight_val > 0.0:
+            feedback_weights.append(weight_val)
+        if leader_val and leader_val != "INSUFFICIENT_DATA":
+            feedback_leaders.append(leader_val)
+    effective_weight = float(sum(feedback_weights) / len(feedback_weights)) if feedback_weights else 1.0
+    feedback_leader = feedback_leaders[0] if feedback_leaders else "INSUFFICIENT_DATA"
+    score *= effective_weight
+    if abs(effective_weight - 1.0) >= 0.03:
+        reasons.append(f"feedback_weight:{effective_weight:.3f}")
+
+    score = max(-1.0, min(1.0, float(score)))
+    pct_bonus = float(max(-max_bonus_pct, min(max_bonus_pct, score * max_bonus_pct)))
+    out["pct_bonus"] = round(pct_bonus, 6)
+    out["prio_multiplier"] = round(1.0 + pct_bonus, 6)
+    out["reasons"] = reasons
+    out["feedback_weight"] = round(effective_weight, 6)
+    out["feedback_leader"] = feedback_leader
     return out
 
 def apply_scout_tiebreak(candidates: List[Tuple[float, str, str, str]],
@@ -7958,7 +8128,7 @@ class StandardStrategy:
             return int(base_score), adj
         adjusted = int(max(0, min(100, int(base_score) + int(delta))))
         logging.info(
-            "UNIFIED_LEARNING_SCORE symbol=%s window=%s family=%s base=%s delta=%s adjusted=%s bias=%s reasons=%s",
+            "UNIFIED_LEARNING_SCORE symbol=%s window=%s family=%s base=%s delta=%s adjusted=%s bias=%s feedback_weight=%.3f leader=%s reasons=%s",
             str(symbol_base(symbol)),
             str(adj.get("window") or "UNKNOWN"),
             str(strategy_family or "UNKNOWN"),
@@ -7966,6 +8136,8 @@ class StandardStrategy:
             int(delta),
             int(adjusted),
             str(adj.get("advisory_bias") or "NEUTRAL"),
+            float(adj.get("feedback_weight") or 1.0),
+            str(adj.get("feedback_leader") or "UNKNOWN"),
             ",".join([str(x) for x in (adj.get("reasons") or [])]) or "NONE",
         )
         return adjusted, adj
@@ -9873,6 +10045,8 @@ class StandardStrategy:
                     'strategy_family': str(strategy_family),
                     'unified_learning_score_delta': int((unified_learning_adj or {}).get("score_delta") or 0),
                     'unified_learning_advisory_bias': str((unified_learning_adj or {}).get("advisory_bias") or "NEUTRAL"),
+                    'unified_learning_feedback_weight': float((unified_learning_adj or {}).get("feedback_weight") or 1.0),
+                    'unified_learning_feedback_leader': str((unified_learning_adj or {}).get("feedback_leader") or "INSUFFICIENT_DATA"),
                     'unified_learning_reasons': list((unified_learning_adj or {}).get("reasons") or []),
                     'entry_score': int(entry_score) if entry_score is not None else None,
                     'entry_min_score': int(entry_min_score) if entry_min_score is not None else None,
@@ -14672,6 +14846,7 @@ class SafetyBot:
                 )
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
+        unified_rank_map: Dict[str, Dict[str, Any]] = {}
         policy_shadow = bool(getattr(CFG, "policy_shadow_mode_enabled", True))
         use_windows_v2_hard = bool(getattr(CFG, "policy_windows_v2_enabled", True)) and (not policy_shadow)
         use_risk_windows_hard = bool(getattr(CFG, "policy_risk_windows_enabled", True)) and (not policy_shadow)
@@ -14986,6 +15161,36 @@ class SafetyBot:
             prio = float(time_weight) * float(score_factor) * float(group_factor)
             if sym in open_syms:
                 prio += 5.0
+            rank_adj: Dict[str, Any] = {}
+            if bool(getattr(CFG, "unified_learning_rank_enabled", True)):
+                rank_adj = resolve_unified_learning_rank_adjustment(
+                    unified=unified_learning if isinstance(unified_learning, dict) else None,
+                    symbol=sym,
+                    window_id=str(tw_window_id or ""),
+                    window_phase=str(tw_phase or ""),
+                    min_samples=int(getattr(CFG, "unified_learning_rank_min_samples", 20)),
+                    max_bonus_pct=float(getattr(CFG, "unified_learning_rank_max_bonus_pct", 0.08)),
+                )
+                if bool(getattr(CFG, "unified_learning_rank_paper_only", True)) and (not bool(self.is_paper)):
+                    rank_adj = {}
+                rank_mult = float(rank_adj.get("prio_multiplier") or 1.0) if isinstance(rank_adj, dict) else 1.0
+                if rank_mult <= 0.0:
+                    rank_mult = 1.0
+                prio = float(prio) * float(rank_mult)
+                if rank_adj:
+                    unified_rank_map[str(symbol_base(sym))] = dict(rank_adj)
+                    pct_bonus = float(rank_adj.get("pct_bonus") or 0.0)
+                    if abs(pct_bonus) >= 0.001:
+                        logging.info(
+                            "UNIFIED_LEARNING_RANK symbol=%s window=%s base_prio=%.6f pct_bonus=%.4f adjusted_prio=%.6f leader=%s reasons=%s",
+                            str(symbol_base(sym)),
+                            str(rank_adj.get("window") or "UNKNOWN"),
+                            float((float(time_weight) * float(score_factor) * float(group_factor)) + (5.0 if sym in open_syms else 0.0)),
+                            float(pct_bonus),
+                            float(prio),
+                            str(rank_adj.get("feedback_leader") or "UNKNOWN"),
+                            ",".join([str(x) for x in (rank_adj.get("reasons") or [])]) or "NONE",
+                        )
             candidates.append((prio, raw, sym, grp))
 
         candidates.sort(reverse=True, key=lambda x: x[0])
@@ -15094,6 +15299,7 @@ class SafetyBot:
                 for (p, r, s, g) in src:
                     gk = _group_key(g)
                     rs = group_risk.get(gk) or group_market_risk_state(gk)
+                    rank_adj = unified_rank_map.get(str(symbol_base(s))) if isinstance(unified_rank_map, dict) else None
                     out.append(
                         {
                             "prio": float(p),
@@ -15104,6 +15310,7 @@ class SafetyBot:
                             "risk_reason": str(rs.get("reason", "NONE")),
                             "risk_friday": bool(rs.get("friday_risk", False)),
                             "risk_reopen": bool(rs.get("reopen_guard", False)),
+                            "unified_rank_adjustment": (dict(rank_adj) if isinstance(rank_adj, dict) else None),
                         }
                     )
                 return out
@@ -15154,6 +15361,7 @@ class SafetyBot:
                 "snapshot_block_new_entries": bool(snapshot_block_new_entries),
                 "learner_qa_light": str(learner_qa_light),
                 "unified_learning": unified_learning,
+                "unified_learning_rank_map": dict(unified_rank_map),
                 "topk_base": _topk_rows(base_topk),
                 "topk_final": _topk_rows(final_topk),
                 "proposals": {},
@@ -16653,6 +16861,18 @@ if __name__ == "__main__":
     )
     CFG.unified_learning_runtime_max_abs_score_delta = _cfg_int(
         "unified_learning_runtime_max_abs_score_delta", CFG.unified_learning_runtime_max_abs_score_delta
+    )
+    CFG.unified_learning_rank_enabled = _cfg_bool(
+        "unified_learning_rank_enabled", CFG.unified_learning_rank_enabled
+    )
+    CFG.unified_learning_rank_paper_only = _cfg_bool(
+        "unified_learning_rank_paper_only", CFG.unified_learning_rank_paper_only
+    )
+    CFG.unified_learning_rank_min_samples = _cfg_int(
+        "unified_learning_rank_min_samples", CFG.unified_learning_rank_min_samples
+    )
+    CFG.unified_learning_rank_max_bonus_pct = _cfg_float(
+        "unified_learning_rank_max_bonus_pct", CFG.unified_learning_rank_max_bonus_pct
     )
     CFG.canary_rollout_enabled = _cfg_bool("canary_rollout_enabled", CFG.canary_rollout_enabled)
     CFG.canary_max_symbols_per_iter = _cfg_int("canary_max_symbols_per_iter", CFG.canary_max_symbols_per_iter)
