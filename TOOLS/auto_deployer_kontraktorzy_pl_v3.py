@@ -449,7 +449,7 @@ class LocalSQLiteAuditHealthProvider:
                     try:
                         agg.waits_ms.append(float(data.get("wait_ms")))
                     except Exception:
-                        pass
+                        continue
 
         payload = {"heartbeat": heartbeat, "trade_by_symbol": trade_by_symbol}
         self._cache = {cache_key: payload}
