@@ -109,6 +109,13 @@ try:
         build_renko_bricks,
     )
     from .black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
+    from .capital_protection_black_swan_guard_v2 import (
+        CapitalProtectionBlackSwanGuardV2,
+        GuardAction as BlackSwanGuardActionV2,
+        GuardConfig as BlackSwanGuardConfigV2,
+        GuardDecision as BlackSwanGuardDecisionV2,
+        MarketSnapshot as BlackSwanMarketSnapshotV2,
+    )
     from .self_heal_guard import SelfHealGuard, SelfHealPolicy
     from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
     from .drift_guard import DriftGuard, DriftPolicy
@@ -148,6 +155,13 @@ except Exception:  # pragma: no cover
         build_renko_bricks,
     )
     from black_swan_guard import BlackSwanGuard, BlackSwanPolicy, BlackSwanSignal
+    from capital_protection_black_swan_guard_v2 import (
+        CapitalProtectionBlackSwanGuardV2,
+        GuardAction as BlackSwanGuardActionV2,
+        GuardConfig as BlackSwanGuardConfigV2,
+        GuardDecision as BlackSwanGuardDecisionV2,
+        MarketSnapshot as BlackSwanMarketSnapshotV2,
+    )
     from self_heal_guard import SelfHealGuard, SelfHealPolicy
     from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
     from drift_guard import DriftGuard, DriftPolicy
@@ -834,6 +848,18 @@ class CFG:
     black_swan_min_vol_samples: int = 1
     kill_switch_on_black_swan_stress: bool = True
     kill_switch_black_swan_multiplier: float = 1.0
+    # Black Swan v2 advisory guard (no direct execution ownership).
+    black_swan_v2_enabled: bool = True
+    black_swan_v2_hard_max_spread_points: float = 40.0
+    black_swan_v2_hard_max_slippage_points: float = 25.0
+    black_swan_v2_hard_max_bridge_wait_ms: float = 300.0
+    black_swan_v2_hard_max_heartbeat_age_ms: float = 2500.0
+    black_swan_v2_hard_max_tick_gap_ms: float = 2000.0
+    black_swan_v2_required_stable_ticks_for_recovery: int = 8
+    black_swan_v2_halt_cooldown_sec: int = 300
+    black_swan_v2_close_only_cooldown_sec: int = 180
+    black_swan_v2_defensive_cooldown_sec: int = 90
+    black_swan_v2_caution_cooldown_sec: int = 30
     manual_kill_switch_file: str = "RUN/kill_switch.flag"
 
     # Learner QA gate (P1): anti-overfit traffic-light from learner_offline.
@@ -9655,7 +9681,21 @@ def ensure_db_ready(db_dir: Path, backups_dir: Path, release_id: str, log: loggi
         raise SystemExit(3)
 
 class SafetyBot:
-    def __init__(self, config, db, gov, risk_manager, limits, black_swan_guard, self_heal_guard, canary_guard, drift_guard, incident_journal, zmq_bridge):
+    def __init__(
+        self,
+        config,
+        db,
+        gov,
+        risk_manager,
+        limits,
+        black_swan_guard,
+        self_heal_guard,
+        canary_guard,
+        drift_guard,
+        incident_journal,
+        zmq_bridge,
+        black_swan_guard_v2=None,
+    ):
         self.cfg = CFG
         self.config = config
         self.db = db
@@ -9663,11 +9703,19 @@ class SafetyBot:
         self.risk_manager = risk_manager
         self.limits = limits
         self.black_swan_guard = black_swan_guard
+        self.black_swan_guard_v2 = black_swan_guard_v2
         self.self_heal_guard = self_heal_guard
         self.canary_guard = canary_guard
         self.drift_guard = drift_guard
         self.incident_journal = incident_journal
         self.zmq_bridge = zmq_bridge
+        self._black_swan_v2_last_decision: Optional[BlackSwanGuardDecisionV2] = None
+        self._black_swan_block_new_entries: bool = False
+        self._black_swan_v2_reason: str = "NONE"
+        self._black_swan_v2_state: str = "NORMAL"
+        self._black_swan_v2_action: str = "ALLOW"
+        self._last_heartbeat_ok_ts: float = 0.0
+        self._last_trade_slippage_points: float = 0.0
 
         # --- runtime root (V6.2 hard-root) ---
         self.run_mode = get_run_mode()
@@ -12042,6 +12090,14 @@ class SafetyBot:
             risk_reason = str(risk_state.get("reason", "NONE"))
             risk_friday = bool(risk_state.get("friday_risk", False))
             risk_reopen = bool(risk_state.get("reopen_guard", False))
+            if bool(getattr(self, "_black_swan_block_new_entries", False)):
+                risk_entry_allowed = False
+                v2_reason = str(getattr(self, "_black_swan_v2_reason", "BLACK_SWAN_GUARD") or "BLACK_SWAN_GUARD").strip().upper()
+                if v2_reason == "NONE":
+                    v2_reason = "BLACK_SWAN_GUARD"
+                risk_reason = f"BLACK_SWAN_{v2_reason}"
+                risk_friday = bool(risk_friday)
+                risk_reopen = bool(risk_reopen)
             if (not risk_entry_allowed) and str(risk_reason).upper() == "NONE" and (not risk_friday) and (not risk_reopen):
                 logging.warning(
                     "RISK_STATE_INCONSISTENT symbol=%s group=%s entry_allowed=0 reason=NONE friday=0 reopen=0 forcing_entry_allowed=1",
@@ -12859,6 +12915,91 @@ class SafetyBot:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return vols, spreads
 
+    def _build_black_swan_v2_snapshot(
+        self,
+        vols: Dict[str, float],
+        spreads: Dict[str, float],
+    ) -> BlackSwanMarketSnapshotV2:
+        now_wall = float(time.time())
+        now_mono = float(time.perf_counter())
+
+        vol_values = [float(v) for v in (vols or {}).values() if np.isfinite(float(v))]
+        spread_values = [float(v) for v in (spreads or {}).values() if np.isfinite(float(v))]
+        vol_score = float(np.mean(vol_values)) if vol_values else float(self.black_swan_guard.baseline.mean_volatility)
+        spread_points = float(np.mean(spread_values)) if spread_values else float(self.black_swan_guard.baseline.mean_spread)
+        if spread_points < 0.0:
+            spread_points = 0.0
+
+        bridge_wait_arr = list((self._loop_section_durations_ms.get("bridge_wait") or []))
+        bridge_wait_ms = float(self._percentile_int(bridge_wait_arr, 0.95)) if bridge_wait_arr else 0.0
+
+        heartbeat_age_ms = 0.0
+        if float(self._last_heartbeat_ok_ts) > 0.0:
+            heartbeat_age_ms = max(0.0, (now_wall - float(self._last_heartbeat_ok_ts)) * 1000.0)
+
+        micro_rows = list((self._micro_tick_state or {}).values())
+        tick_gap_ms = 0.0
+        price_jump_points = 0.0
+        tick_rate_per_sec = 0.0
+        stale_tick_flag = False
+        burst_flag = False
+        ask_lt_bid_flag = False
+        if micro_rows:
+            tick_gaps = [
+                float(r.get("tick_gap_sec"))
+                for r in micro_rows
+                if r.get("tick_gap_sec") is not None and np.isfinite(float(r.get("tick_gap_sec")))
+            ]
+            tick_gap_ms = (max(tick_gaps) * 1000.0) if tick_gaps else 0.0
+            jumps = [
+                float(r.get("price_jump_points"))
+                for r in micro_rows
+                if r.get("price_jump_points") is not None and np.isfinite(float(r.get("price_jump_points")))
+            ]
+            price_jump_points = max(jumps) if jumps else 0.0
+            rates = [
+                float(r.get("tick_rate_1s"))
+                for r in micro_rows
+                if r.get("tick_rate_1s") is not None and np.isfinite(float(r.get("tick_rate_1s")))
+            ]
+            tick_rate_per_sec = float(np.mean(rates)) if rates else 0.0
+            stale_tick_flag = any(bool(r.get("stale_tick_flag", False)) for r in micro_rows)
+            burst_flag = any(bool(r.get("burst_flag", False)) for r in micro_rows)
+            ask_lt_bid_flag = any(bool(r.get("ask_lt_bid", False)) for r in micro_rows)
+
+        reject_ratio = float((self._live_guard_snapshot or {}).get("reject_ratio", 0.0) or 0.0)
+        reject_samples = int((self._live_guard_snapshot or {}).get("reject_samples", 0) or 0)
+        if reject_ratio < 0.0:
+            reject_ratio = 0.0
+        reject_count_recent = int(round(reject_ratio * float(max(1, reject_samples))))
+
+        spread_baseline = float(self.black_swan_guard.baseline.mean_spread or 0.0)
+        spread_ratio = (spread_points / spread_baseline) if spread_baseline > 0.0 else 1.0
+        liquidity_score = 1.0 / (1.0 + max(0.0, spread_ratio - 1.0))
+        if stale_tick_flag:
+            liquidity_score = min(liquidity_score, 0.20)
+        liquidity_score = max(0.0, min(1.0, float(liquidity_score)))
+
+        slippage_points = max(0.0, float(self._last_trade_slippage_points or 0.0))
+
+        return BlackSwanMarketSnapshotV2(
+            ts_monotonic=now_mono,
+            symbol="__GLOBAL__",
+            volatility_score=vol_score,
+            spread_points=float(spread_points),
+            slippage_points=slippage_points,
+            liquidity_score=liquidity_score,
+            tick_rate_per_sec=float(max(0.0, tick_rate_per_sec)),
+            tick_gap_ms=float(max(0.0, tick_gap_ms)),
+            price_jump_points=float(max(0.0, price_jump_points)),
+            bridge_wait_ms=float(max(0.0, bridge_wait_ms)),
+            heartbeat_age_ms=float(max(0.0, heartbeat_age_ms)),
+            reject_count_recent=int(max(0, reject_count_recent)),
+            stale_tick_flag=bool(stale_tick_flag),
+            burst_flag=bool(burst_flag),
+            ask_lt_bid_flag=bool(ask_lt_bid_flag),
+        )
+
     def _evaluate_black_swan(self):
         vols, spreads = self._collect_black_swan_inputs()
         min_vol = max(0, int(getattr(CFG, "black_swan_min_vol_samples", 1)))
@@ -12879,16 +13020,78 @@ class SafetyBot:
                 f"precaution={int(signal.precaution)} n_vol={len(vols)} n_spread={len(spreads)} "
                 f"reason={','.join(signal.reasons)}"
             )
-            return signal
+            base_signal = signal
+        else:
+            base_signal = self.black_swan_guard.evaluate(vols, spreads)
+            logging.info(
+                f"BLACK_SWAN stress={base_signal.stress_index:.3f} thr={base_signal.threshold:.3f} "
+                f"prec_thr={base_signal.precaution_threshold:.3f} black_swan={int(base_signal.black_swan)} "
+                f"precaution={int(base_signal.precaution)} n_vol={len(vols)} n_spread={len(spreads)} "
+                f"reason={','.join(base_signal.reasons)}"
+            )
 
-        signal = self.black_swan_guard.evaluate(vols, spreads)
-        logging.info(
-            f"BLACK_SWAN stress={signal.stress_index:.3f} thr={signal.threshold:.3f} "
-            f"prec_thr={signal.precaution_threshold:.3f} black_swan={int(signal.black_swan)} "
-            f"precaution={int(signal.precaution)} n_vol={len(vols)} n_spread={len(spreads)} "
-            f"reason={','.join(signal.reasons)}"
+        self._black_swan_v2_last_decision = None
+        self._black_swan_block_new_entries = False
+        self._black_swan_v2_reason = "NONE"
+        self._black_swan_v2_state = "NORMAL"
+        self._black_swan_v2_action = "ALLOW"
+
+        v2_enabled = bool(getattr(CFG, "black_swan_v2_enabled", True))
+        if not v2_enabled or self.black_swan_guard_v2 is None:
+            return base_signal
+
+        try:
+            snap = self._build_black_swan_v2_snapshot(vols, spreads)
+            v2 = self.black_swan_guard_v2.evaluate(snap)
+            self._black_swan_v2_last_decision = v2
+            self._black_swan_v2_state = str(v2.state.value)
+            self._black_swan_v2_action = str(v2.action.value)
+            self._black_swan_v2_reason = str(v2.dominant_reason or "NONE")
+            self._black_swan_block_new_entries = bool(
+                v2.action in (
+                    BlackSwanGuardActionV2.BLOCK_NEW_TRADES,
+                    BlackSwanGuardActionV2.CLOSE_ONLY,
+                    BlackSwanGuardActionV2.FORCE_FLAT,
+                )
+            )
+            logging.info(
+                "BLACK_SWAN_V2 state=%s action=%s trigger=%s stress=%.3f cooldown_s=%.1f reason=%s warm=%s block_new=%s",
+                str(v2.state.value),
+                str(v2.action.value),
+                str(v2.trigger.value),
+                float(v2.stress_score),
+                float(v2.cooldown_remaining_sec),
+                str(v2.dominant_reason),
+                int(bool(v2.warm)),
+                int(bool(self._black_swan_block_new_entries)),
+            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return base_signal
+
+        # v2 guard is advisory-only in runtime path; it can block new entries but
+        # does not autonomously escalate to force-flat execution.
+        merged_black_swan = bool(base_signal.black_swan)
+        merged_precaution = bool(
+            base_signal.precaution
+            or self._black_swan_v2_state in {"CAUTION", "DEFENSIVE", "CLOSE_ONLY"}
         )
-        return signal
+        merged_reasons = tuple(
+            dict.fromkeys(
+                list(base_signal.reasons)
+                + [f"V2_STATE_{self._black_swan_v2_state}", f"V2_ACTION_{self._black_swan_v2_action}"]
+                + [str(self._black_swan_v2_reason)]
+            ).keys()
+        )
+        merged_stress = float(max(float(base_signal.stress_index), float(getattr(v2, "stress_score", 0.0))))
+        return BlackSwanSignal(
+            stress_index=merged_stress,
+            threshold=float(base_signal.threshold),
+            precaution_threshold=float(base_signal.precaution_threshold),
+            precaution=bool(merged_precaution),
+            black_swan=bool(merged_black_swan),
+            reasons=merged_reasons,
+        )
 
     def _evaluate_self_heal(self):
         now_ts = int(time.time())
@@ -13628,17 +13831,26 @@ class SafetyBot:
             return
 
         snapshot_health = self._hybrid_snapshot_health([sym for (_raw, sym, _grp) in self.universe])
-        snapshot_block_new_entries = bool(snapshot_health.get("critical"))
+        black_swan_block_new_entries = bool(getattr(self, "_black_swan_block_new_entries", False))
+        snapshot_block_new_entries = bool(snapshot_health.get("critical")) or bool(black_swan_block_new_entries)
         if snapshot_block_new_entries:
             global_mode = "ECO"
-            logging.warning(
-                "SNAPSHOT_HEALTH_DEGRADED stale_tick=%s stale_bar=%s total=%s tick_max_age_sec=%s bar_max_age_sec=%s => NO_NEW_ENTRIES",
-                int(snapshot_health.get("stale_tick", 0)),
-                int(snapshot_health.get("stale_bar", 0)),
-                int(snapshot_health.get("symbols_total", 0)),
-                int(snapshot_health.get("max_age_sec", 0)),
-                int(snapshot_health.get("bar_max_age_sec", 0)),
-            )
+            if bool(snapshot_health.get("critical")):
+                logging.warning(
+                    "SNAPSHOT_HEALTH_DEGRADED stale_tick=%s stale_bar=%s total=%s tick_max_age_sec=%s bar_max_age_sec=%s => NO_NEW_ENTRIES",
+                    int(snapshot_health.get("stale_tick", 0)),
+                    int(snapshot_health.get("stale_bar", 0)),
+                    int(snapshot_health.get("symbols_total", 0)),
+                    int(snapshot_health.get("max_age_sec", 0)),
+                    int(snapshot_health.get("bar_max_age_sec", 0)),
+                )
+            if black_swan_block_new_entries:
+                logging.warning(
+                    "BLACK_SWAN_BLOCK_NEW_ENTRIES state=%s action=%s reason=%s",
+                    str(getattr(self, "_black_swan_v2_state", "UNKNOWN")),
+                    str(getattr(self, "_black_swan_v2_action", "UNKNOWN")),
+                    str(getattr(self, "_black_swan_v2_reason", "NONE")),
+                )
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
         policy_shadow = bool(getattr(CFG, "policy_shadow_mode_enabled", True))
@@ -14104,6 +14316,10 @@ class SafetyBot:
                 "black_swan_flag": bool(black_swan_signal.black_swan),
                 "black_swan_precaution": bool(black_swan_signal.precaution),
                 "black_swan_reasons": list(black_swan_signal.reasons),
+                "black_swan_v2_state": str(getattr(self, "_black_swan_v2_state", "NORMAL")),
+                "black_swan_v2_action": str(getattr(self, "_black_swan_v2_action", "ALLOW")),
+                "black_swan_v2_reason": str(getattr(self, "_black_swan_v2_reason", "NONE")),
+                "black_swan_v2_block_new_entries": bool(getattr(self, "_black_swan_block_new_entries", False)),
                 "self_heal_active": bool(self_heal_signal.active),
                 "self_heal_reasons": list(self_heal_signal.reasons),
                 "self_heal_loss_streak": int(self_heal_signal.loss_streak),
@@ -14437,6 +14653,8 @@ class SafetyBot:
         try:
             dev_req = int(details_obj.get("deviation_requested_points", 0) or 0)
             dev_eff = int(details_obj.get("deviation_effective_points", 0) or 0)
+            if dev_eff >= 0:
+                self._last_trade_slippage_points = float(dev_eff)
             expected_dev = int(command["payload"].get("deviation_points") or 0)
             if dev_req > 0 and expected_dev > 0 and dev_req != expected_dev:
                 self._emit_unit_diagnostic(
@@ -14860,6 +15078,7 @@ class SafetyBot:
                                     int(heartbeat_failures),
                                 )
                                 self._loop_heartbeat_recoveries = int(self._loop_heartbeat_recoveries) + 1
+                            self._last_heartbeat_ok_ts = float(now)
                             heartbeat_failures = 0
                             heartbeat_fail_safe_active = False
                             heartbeat_fail_safe_until = 0.0
@@ -15990,6 +16209,40 @@ if __name__ == "__main__":
     CFG.kill_switch_black_swan_multiplier = float(
         config.risk.get("kill_switch_black_swan_multiplier", CFG.kill_switch_black_swan_multiplier)
     )
+    CFG.black_swan_v2_enabled = bool(config.risk.get("black_swan_v2_enabled", CFG.black_swan_v2_enabled))
+    CFG.black_swan_v2_hard_max_spread_points = float(
+        config.risk.get("black_swan_v2_hard_max_spread_points", CFG.black_swan_v2_hard_max_spread_points)
+    )
+    CFG.black_swan_v2_hard_max_slippage_points = float(
+        config.risk.get("black_swan_v2_hard_max_slippage_points", CFG.black_swan_v2_hard_max_slippage_points)
+    )
+    CFG.black_swan_v2_hard_max_bridge_wait_ms = float(
+        config.risk.get("black_swan_v2_hard_max_bridge_wait_ms", CFG.black_swan_v2_hard_max_bridge_wait_ms)
+    )
+    CFG.black_swan_v2_hard_max_heartbeat_age_ms = float(
+        config.risk.get("black_swan_v2_hard_max_heartbeat_age_ms", CFG.black_swan_v2_hard_max_heartbeat_age_ms)
+    )
+    CFG.black_swan_v2_hard_max_tick_gap_ms = float(
+        config.risk.get("black_swan_v2_hard_max_tick_gap_ms", CFG.black_swan_v2_hard_max_tick_gap_ms)
+    )
+    CFG.black_swan_v2_required_stable_ticks_for_recovery = int(
+        config.risk.get(
+            "black_swan_v2_required_stable_ticks_for_recovery",
+            CFG.black_swan_v2_required_stable_ticks_for_recovery,
+        )
+    )
+    CFG.black_swan_v2_halt_cooldown_sec = int(
+        config.risk.get("black_swan_v2_halt_cooldown_sec", CFG.black_swan_v2_halt_cooldown_sec)
+    )
+    CFG.black_swan_v2_close_only_cooldown_sec = int(
+        config.risk.get("black_swan_v2_close_only_cooldown_sec", CFG.black_swan_v2_close_only_cooldown_sec)
+    )
+    CFG.black_swan_v2_defensive_cooldown_sec = int(
+        config.risk.get("black_swan_v2_defensive_cooldown_sec", CFG.black_swan_v2_defensive_cooldown_sec)
+    )
+    CFG.black_swan_v2_caution_cooldown_sec = int(
+        config.risk.get("black_swan_v2_caution_cooldown_sec", CFG.black_swan_v2_caution_cooldown_sec)
+    )
     CFG.oanda_price_warning_per_day = int(config.limits.get("house_price_warn_per_day", CFG.oanda_price_warning_per_day))
     CFG.oanda_price_cutoff_per_day = int(config.limits.get("house_price_hard_stop_per_day", CFG.oanda_price_cutoff_per_day))
     CFG.oanda_market_orders_per_sec = int(config.limits.get("house_orders_per_sec", CFG.oanda_market_orders_per_sec))
@@ -16013,6 +16266,20 @@ if __name__ == "__main__":
         BlackSwanPolicy(
             black_swan_threshold=float(CFG.black_swan_threshold),
             precaution_fraction=float(CFG.black_swan_precaution_fraction),
+        )
+    )
+    black_swan_guard_v2 = CapitalProtectionBlackSwanGuardV2(
+        BlackSwanGuardConfigV2(
+            hard_max_spread_points=float(max(1.0, CFG.black_swan_v2_hard_max_spread_points)),
+            hard_max_slippage_points=float(max(1.0, CFG.black_swan_v2_hard_max_slippage_points)),
+            hard_max_bridge_wait_ms=float(max(50.0, CFG.black_swan_v2_hard_max_bridge_wait_ms)),
+            hard_max_heartbeat_age_ms=float(max(200.0, CFG.black_swan_v2_hard_max_heartbeat_age_ms)),
+            hard_max_tick_gap_ms=float(max(200.0, CFG.black_swan_v2_hard_max_tick_gap_ms)),
+            required_stable_ticks_for_recovery=int(max(1, CFG.black_swan_v2_required_stable_ticks_for_recovery)),
+            halt_cooldown_sec=int(max(1, CFG.black_swan_v2_halt_cooldown_sec)),
+            close_only_cooldown_sec=int(max(1, CFG.black_swan_v2_close_only_cooldown_sec)),
+            defensive_cooldown_sec=int(max(1, CFG.black_swan_v2_defensive_cooldown_sec)),
+            caution_cooldown_sec=int(max(1, CFG.black_swan_v2_caution_cooldown_sec)),
         )
     )
     
@@ -16082,6 +16349,7 @@ if __name__ == "__main__":
         drift_guard=drift_guard,
         incident_journal=incident_journal,
         zmq_bridge=zmq_bridge,
+        black_swan_guard_v2=black_swan_guard_v2,
     )
     try:
         bot.run()
