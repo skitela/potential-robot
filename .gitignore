@@ -43,6 +43,7 @@ EVIDENCE/*
 # LAB generated outputs
 LAB/EVIDENCE/*
 LAB/RUN/*
+LAB_DATA/*
 
 # Large reference docs (keep curated text elsewhere)
 DOCS/OANDA/
