@@ -50,6 +50,24 @@ def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_runtime_advice(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        obj = load_json(path)
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _safe_text(v: Any) -> str:
+    return str(v or "").strip()
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(float(lo), min(float(hi), float(v)))
+
+
 def _find_latest_summary(stage1_reports_dir: Path) -> Optional[Path]:
     files = sorted(
         stage1_reports_dir.glob("stage1_counterfactual_summary_*.json"),
@@ -126,12 +144,139 @@ def _profile_payload(
     }
 
 
+def _apply_runtime_learning_overlay(
+    profile_payload: Dict[str, Any],
+    *,
+    runtime_global: Dict[str, Any],
+    runtime_symbol: Dict[str, Any],
+    samples_n: int,
+    saved_ratio: float,
+    missed_ratio: float,
+) -> None:
+    thresholds = profile_payload.get("thresholds") if isinstance(profile_payload.get("thresholds"), dict) else {}
+    if not thresholds:
+        return
+
+    profile_name = _safe_text(profile_payload.get("profile_name")).upper()
+    bias = _safe_text(runtime_symbol.get("advisory_bias")).upper() or "NEUTRAL"
+    global_qa = _safe_text(runtime_global.get("qa_light")).upper() or "UNKNOWN"
+    consensus = safe_float(runtime_symbol.get("consensus_score"))
+    runtime_cf = runtime_symbol.get("counterfactual") if isinstance(runtime_symbol.get("counterfactual"), dict) else {}
+    runtime_cf_recommendation = _safe_text(runtime_cf.get("recommendation")).upper()
+    runtime_cf_samples = safe_int(runtime_cf.get("samples_n"))
+
+    spread_mult = 1.0
+    latency_mult = 1.0
+    signal_delta = 0.0
+    tradeability_delta = 0.0
+    setup_delta = 0.0
+    reasons: List[str] = []
+
+    # Runtime advisory bias from unified learning pack.
+    if bias == "SUPPRESS":
+        spread_mult *= 0.94
+        latency_mult *= 0.95
+        signal_delta += 1.5
+        tradeability_delta += 0.02
+        setup_delta += 0.02
+        reasons.append("runtime_bias_suppress")
+    elif bias == "PROMOTE" and global_qa in {"GREEN", "YELLOW"}:
+        spread_mult *= 1.04
+        latency_mult *= 1.03
+        signal_delta -= 1.0
+        tradeability_delta -= 0.015
+        setup_delta -= 0.015
+        reasons.append("runtime_bias_promote")
+
+    # Consensus score from runtime+LAB aggregation.
+    if consensus <= -0.30:
+        spread_mult *= 0.96
+        latency_mult *= 0.97
+        signal_delta += 1.0
+        tradeability_delta += 0.01
+        setup_delta += 0.01
+        reasons.append("consensus_negative")
+    elif consensus >= 0.22 and global_qa in {"GREEN", "YELLOW"}:
+        spread_mult *= 1.03
+        latency_mult *= 1.02
+        signal_delta -= 0.5
+        tradeability_delta -= 0.01
+        setup_delta -= 0.01
+        reasons.append("consensus_positive")
+
+    # LAB counterfactual recommendation keeps the final word conservative.
+    if runtime_cf_recommendation == "DOCISKAJ_FILTRY" and runtime_cf_samples >= 50:
+        spread_mult *= 0.95
+        latency_mult *= 0.96
+        signal_delta += 1.0
+        tradeability_delta += 0.015
+        setup_delta += 0.015
+        reasons.append("lab_counterfactual_tighten")
+    elif runtime_cf_recommendation == "ROZWAZ_LUZOWANIE_W_SHADOW" and runtime_cf_samples >= 50 and global_qa in {"GREEN", "YELLOW"}:
+        spread_mult *= 1.03
+        latency_mult *= 1.02
+        signal_delta -= 0.5
+        tradeability_delta -= 0.01
+        setup_delta -= 0.01
+        reasons.append("lab_counterfactual_relax")
+
+    # Extra caution on thin samples or saved-loss dominance.
+    if samples_n < 30 or saved_ratio > (missed_ratio + 0.10):
+        spread_mult *= 0.97
+        latency_mult *= 0.98
+        signal_delta += 0.5
+        tradeability_delta += 0.01
+        setup_delta += 0.01
+        reasons.append("sample_or_savedloss_caution")
+
+    if not reasons:
+        profile_payload["adaptive_overlay"] = {
+            "enabled": False,
+            "reasons": [],
+        }
+        return
+
+    base_spread = safe_float(thresholds.get("spread_cap_points"))
+    base_signal = safe_float(thresholds.get("signal_score_threshold"))
+    base_latency = safe_float(thresholds.get("max_latency_ms"))
+    base_tradeability = safe_float(thresholds.get("min_tradeability_score"))
+    base_setup = safe_float(thresholds.get("min_setup_quality_score"))
+
+    # Conservative bounded autonomy: profile family remains intact.
+    spread_lo = base_spread * 0.85
+    spread_hi = base_spread * 1.12
+    latency_lo = base_latency * 0.88
+    latency_hi = base_latency * 1.10
+    signal_lo = base_signal - 4.0
+    signal_hi = base_signal + 6.0
+    min_score_lo = 0.40 if profile_name == "ODWAZNIEJSZY" else 0.48
+    min_score_hi = 0.78 if profile_name == "BEZPIECZNY" else 0.72
+
+    thresholds["spread_cap_points"] = round(_clamp(base_spread * spread_mult, spread_lo, spread_hi), 3)
+    thresholds["max_latency_ms"] = round(_clamp(base_latency * latency_mult, latency_lo, latency_hi), 3)
+    thresholds["signal_score_threshold"] = round(_clamp(base_signal + signal_delta, signal_lo, signal_hi), 3)
+    thresholds["min_tradeability_score"] = round(_clamp(base_tradeability + tradeability_delta, min_score_lo, min_score_hi), 4)
+    thresholds["min_setup_quality_score"] = round(_clamp(base_setup + setup_delta, min_score_lo, min_score_hi), 4)
+
+    profile_payload["adaptive_overlay"] = {
+        "enabled": True,
+        "global_qa_light": global_qa,
+        "advisory_bias": bias,
+        "consensus_score": round(consensus, 6),
+        "runtime_counterfactual_recommendation": runtime_cf_recommendation,
+        "runtime_counterfactual_samples_n": int(runtime_cf_samples),
+        "reasons": reasons,
+    }
+
+
 def _build_for_symbol(
     symbol_row: Dict[str, Any],
     strategy: Dict[str, Any],
     *,
     min_samples: int,
     allow_aggressive_when_samples_low: bool,
+    runtime_global: Optional[Dict[str, Any]] = None,
+    runtime_symbol: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     symbol = symbol_base(symbol_row.get("symbol"))
     samples_n = safe_int(symbol_row.get("samples_n"))
@@ -180,6 +325,19 @@ def _build_for_symbol(
             missed_ratio=missed_ratio,
         ),
     }
+
+    runtime_global = runtime_global if isinstance(runtime_global, dict) else {}
+    runtime_symbol = runtime_symbol if isinstance(runtime_symbol, dict) else {}
+    if runtime_symbol:
+        for profile_payload in profiles.values():
+            _apply_runtime_learning_overlay(
+                profile_payload,
+                runtime_global=runtime_global,
+                runtime_symbol=runtime_symbol,
+                samples_n=samples_n,
+                saved_ratio=saved_ratio,
+                missed_ratio=missed_ratio,
+            )
 
     if samples_n < min_samples and not allow_aggressive_when_samples_low:
         profiles["odwazniejszy"]["eligibility"] = {
@@ -246,6 +404,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--lab-data-root", default="")
     ap.add_argument("--counterfactual-summary", default="")
     ap.add_argument("--strategy-path", default="")
+    ap.add_argument("--runtime-advice-path", default="")
     ap.add_argument("--min-samples", type=int, default=30)
     ap.add_argument("--allow-aggressive-when-samples-low", action="store_true")
     ap.add_argument("--out-report", default="")
@@ -267,6 +426,11 @@ def main() -> int:
         else _find_latest_summary(stage1_reports)
     )
     strategy_path = Path(args.strategy_path).resolve() if str(args.strategy_path).strip() else (root / "CONFIG" / "strategy.json").resolve()
+    runtime_advice_path = (
+        Path(args.runtime_advice_path).resolve()
+        if str(args.runtime_advice_path).strip()
+        else (root / "META" / "unified_learning_advice.json").resolve()
+    )
     out_report = (
         Path(args.out_report).resolve()
         if str(args.out_report).strip()
@@ -278,6 +442,9 @@ def main() -> int:
     reason = "COUNTERFACTUAL_SUMMARY_MISSING"
     profiles_by_symbol: List[Dict[str, Any]] = []
     cf_hash = ""
+    runtime_advice = _load_runtime_advice(runtime_advice_path)
+    runtime_global = runtime_advice.get("global") if isinstance(runtime_advice.get("global"), dict) else {}
+    runtime_instruments = runtime_advice.get("instruments") if isinstance(runtime_advice.get("instruments"), dict) else {}
     if summary_path is not None and summary_path.exists():
         payload = load_json(summary_path)
         by_symbol = (((payload.get("aggregates") or {}).get("by_symbol")) or [])
@@ -291,6 +458,8 @@ def main() -> int:
                     strategy,
                     min_samples=max(1, int(args.min_samples)),
                     allow_aggressive_when_samples_low=bool(args.allow_aggressive_when_samples_low),
+                    runtime_global=runtime_global,
+                    runtime_symbol=(runtime_instruments.get(symbol_base(row.get("symbol"))) if isinstance(runtime_instruments, dict) else {}),
                 )
                 if str(entry.get("symbol") or "").strip():
                     profiles_by_symbol.append(entry)
@@ -318,12 +487,14 @@ def main() -> int:
         "counterfactual_summary_source": str(summary_path) if summary_path is not None else "",
         "counterfactual_summary_hash": cf_hash,
         "strategy_source": str(strategy_path),
+        "runtime_advice_source": str(runtime_advice_path) if runtime_advice else "",
         "min_samples": int(max(1, int(args.min_samples))),
         "profiles_by_symbol": profiles_by_symbol,
         "notes": [
             "Autonomous apply disabled: proposal only.",
             "Human review required before any runtime change.",
             "No runtime execution path mutation.",
+            "Thresholds may be softly adapted from runtime+LAB evidence within bounded limits.",
         ],
     }
 

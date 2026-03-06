@@ -49,6 +49,35 @@ def _write_cf_summary(path: Path) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _write_runtime_advice(path: Path) -> None:
+    payload = {
+        "schema": "oanda_mt5.unified_learning_advice.v1",
+        "global": {
+            "qa_light": "YELLOW",
+        },
+        "instruments": {
+            "EURUSD": {
+                "advisory_bias": "SUPPRESS",
+                "consensus_score": -0.42,
+                "counterfactual": {
+                    "recommendation": "DOCISKAJ_FILTRY",
+                    "samples_n": 120,
+                },
+            },
+            "GBPUSD": {
+                "advisory_bias": "PROMOTE",
+                "consensus_score": 0.31,
+                "counterfactual": {
+                    "recommendation": "ROZWAZ_LUZOWANIE_W_SHADOW",
+                    "samples_n": 80,
+                },
+            },
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 class TestStage1ProfilePack(unittest.TestCase):
     def test_builds_three_profiles_per_symbol(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -56,8 +85,10 @@ class TestStage1ProfilePack(unittest.TestCase):
             lab = Path(td) / "lab"
             summary = lab / "reports" / "stage1" / "stage1_counterfactual_summary_test.json"
             strategy = root / "CONFIG" / "strategy.json"
+            runtime_advice = root / "META" / "unified_learning_advice.json"
             _write_cf_summary(summary)
             _write_strategy(strategy)
+            _write_runtime_advice(runtime_advice)
 
             cmd = [
                 sys.executable,
@@ -70,6 +101,8 @@ class TestStage1ProfilePack(unittest.TestCase):
                 str(summary),
                 "--strategy-path",
                 str(strategy),
+                "--runtime-advice-path",
+                str(runtime_advice),
                 "--min-samples",
                 "30",
             ]
@@ -91,12 +124,21 @@ class TestStage1ProfilePack(unittest.TestCase):
             self.assertIn("sredni", eur_profiles)
             self.assertIn("odwazniejszy", eur_profiles)
             self.assertTrue((eur[0].get("recommendation_for_tomorrow") or {}).get("human_decision_required"))
+            eur_bal = eur_profiles["sredni"]
+            eur_thr = eur_bal.get("thresholds") or {}
+            self.assertLess(float(eur_thr.get("spread_cap_points") or 0.0), 24.0)
+            self.assertGreater(float(eur_thr.get("signal_score_threshold") or 0.0), 64.0)
+            self.assertTrue((eur_bal.get("adaptive_overlay") or {}).get("enabled"))
 
             gbp = [x for x in rows if str(x.get("symbol")) == "GBPUSD"]
             self.assertEqual(len(gbp), 1)
             aggr = ((gbp[0].get("profiles") or {}).get("odwazniejszy") or {})
             elig = aggr.get("eligibility") or {}
             self.assertEqual(str(elig.get("status") or ""), "HOLD_LOW_SAMPLES")
+            gbp_bal = ((gbp[0].get("profiles") or {}).get("sredni") or {})
+            gbp_thr = gbp_bal.get("thresholds") or {}
+            self.assertGreater(float(gbp_thr.get("spread_cap_points") or 0.0), 24.0)
+            self.assertLess(float(gbp_thr.get("signal_score_threshold") or 999.0), 64.0)
 
             latest = lab / "reports" / "stage1" / "stage1_profile_pack_latest.json"
             self.assertTrue(latest.exists())
