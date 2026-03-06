@@ -294,7 +294,9 @@ class CFG:
     hybrid_snapshot_block_on_bar_only: bool = True
     # Snapshot freshness windows for symbol/account metadata channels.
     hybrid_symbol_snapshot_max_age_sec: int = 300
+    hybrid_symbol_static_snapshot_max_age_sec: int = 86400
     hybrid_account_snapshot_max_age_sec: int = 30
+    hybrid_account_static_snapshot_max_age_sec: int = 300
     # Legacy pull cadence values still referenced in strategy hot/warm/eco path.
     # Keep explicit defaults aligned with CONFIG/scheduler.json.
     m5_pull_sec_hot: int = 60
@@ -5682,7 +5684,9 @@ class ExecutionEngine:
         self._sym_info_cache: Dict[str, Tuple[float, object]] = {}
         self._zmq_tick_cache: Dict[str, Dict[str, Any]] = {}
         self._zmq_symbol_info_cache: Dict[str, Dict[str, Any]] = {}
+        self._symbol_info_static_cache: Dict[str, Dict[str, Any]] = {}
         self._zmq_account_cache: Dict[str, Any] = {}
+        self._account_info_static_cache: Dict[str, Any] = {}
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
         self._sltp_ts: List[float] = []
@@ -5832,15 +5836,26 @@ class ExecutionEngine:
 
     def _symbol_info_from_snapshot(self, symbol: str) -> Optional[object]:
         cache = self._zmq_symbol_info_cache if isinstance(self._zmq_symbol_info_cache, dict) else {}
+        static_cache = self._symbol_info_static_cache if isinstance(self._symbol_info_static_cache, dict) else {}
         base = symbol_base(symbol)
-        rec = cache.get(base) or cache.get(str(symbol).upper())
+        rec = (
+            cache.get(base)
+            or cache.get(str(symbol).upper())
+            or static_cache.get(base)
+            or static_cache.get(str(symbol).upper())
+        )
         if not isinstance(rec, dict):
             return None
         try:
             age_s = max(0.0, time.time() - float(rec.get("recv_ts") or 0.0))
             max_age = max(5, int(getattr(CFG, "hybrid_symbol_snapshot_max_age_sec", 300)))
-            if age_s > float(max_age):
-                return None
+            static_max_age = max(max_age, int(getattr(CFG, "hybrid_symbol_static_snapshot_max_age_sec", 86400)))
+            if bool(rec.get("seed_static", False)):
+                if age_s > float(static_max_age):
+                    return None
+            else:
+                if age_s > float(max_age):
+                    return None
             return SimpleNamespace(
                 symbol=str(symbol).upper(),
                 point=float(rec.get("point", 0.0) or 0.0),
@@ -5860,13 +5875,21 @@ class ExecutionEngine:
 
     def _account_info_from_snapshot(self) -> Optional[object]:
         rec = self._zmq_account_cache if isinstance(self._zmq_account_cache, dict) else {}
+        static_rec = self._account_info_static_cache if isinstance(self._account_info_static_cache, dict) else {}
+        if not rec:
+            rec = static_rec
         if not rec:
             return None
         try:
             age_s = max(0.0, time.time() - float(rec.get("recv_ts") or 0.0))
             max_age = max(5, int(getattr(CFG, "hybrid_account_snapshot_max_age_sec", 30)))
-            if age_s > float(max_age):
-                return None
+            static_max_age = max(max_age, int(getattr(CFG, "hybrid_account_static_snapshot_max_age_sec", 300)))
+            if bool(rec.get("seed_static", False)):
+                if age_s > float(static_max_age):
+                    return None
+            else:
+                if age_s > float(max_age):
+                    return None
             return SimpleNamespace(
                 balance=float(rec.get("balance", 0.0) or 0.0),
                 equity=float(rec.get("equity", 0.0) or 0.0),
@@ -10091,6 +10114,8 @@ class SafetyBot:
         if not self.universe:
             logging.critical('Universe puste. SafetyBot kończy pracę.')
             raise SystemExit(1)
+        self._seed_symbol_info_static_cache()
+        self._seed_account_snapshot_cache()
         self._refresh_asia_preflight_evidence()
 
         # SafetyBot reads Scout outputs ONLY from local runtime (not from USB).
@@ -10112,6 +10137,65 @@ class SafetyBot:
         _tw_init = trade_window_ctx(now_utc())
         self._refresh_no_live_drift_check(tw_ctx=_tw_init)
         self._refresh_cost_guard_auto_relax_state(tw_ctx=_tw_init)
+
+    def _seed_symbol_info_static_cache(self) -> None:
+        if mt5 is None:
+            return
+        seeded = 0
+        now_ts = float(time.time())
+        cache = self.execution_engine._symbol_info_static_cache
+        for (_raw, canon, _grp) in (self.universe or []):
+            if not canon:
+                continue
+            try:
+                info = mt5.symbol_info(canon)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                info = None
+            if info is None:
+                continue
+            base = symbol_base(canon)
+            rec = {
+                "recv_ts": float(now_ts),
+                "seed_static": True,
+                "point": float(getattr(info, "point", 0.0) or 0.0),
+                "digits": int(getattr(info, "digits", 0) or 0),
+                "spread": float(getattr(info, "spread", 0.0) or 0.0),
+                "trade_tick_size": float(getattr(info, "trade_tick_size", 0.0) or 0.0),
+                "trade_tick_value": float(getattr(info, "trade_tick_value", 0.0) or 0.0),
+                "volume_min": float(getattr(info, "volume_min", 0.0) or 0.0),
+                "volume_max": float(getattr(info, "volume_max", 0.0) or 0.0),
+                "volume_step": float(getattr(info, "volume_step", 0.0) or 0.0),
+                "trade_stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+                "trade_freeze_level": int(getattr(info, "trade_freeze_level", 0) or 0),
+            }
+            cache[str(base)] = dict(rec)
+            cache[str(canon).upper()] = dict(rec)
+            seeded += 1
+        if seeded > 0:
+            logging.info("SYMBOL_INFO_STATIC_CACHE_SEEDED count=%s", int(seeded))
+
+    def _seed_account_snapshot_cache(self) -> None:
+        if mt5 is None:
+            return
+        try:
+            info = mt5.account_info()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            info = None
+        if info is None:
+            return
+        rec = {
+            "recv_ts": float(time.time()),
+            "seed_static": True,
+            "balance": float(getattr(info, "balance", 0.0) or 0.0),
+            "equity": float(getattr(info, "equity", 0.0) or 0.0),
+            "margin_free": float(getattr(info, "margin_free", 0.0) or 0.0),
+            "margin_level": float(getattr(info, "margin_level", 0.0) or 0.0),
+        }
+        self.execution_engine._account_info_static_cache.clear()
+        self.execution_engine._account_info_static_cache.update(rec)
+        logging.info("ACCOUNT_INFO_STATIC_CACHE_SEEDED")
 
     def _append_jsonl_record(self, path: Path, payload: Dict[str, Any]) -> None:
         io_t0 = time.perf_counter()
@@ -15102,6 +15186,18 @@ class SafetyBot:
                         "margin_level": float(data.get("margin_level", 0.0) or 0.0),
                     }
                 )
+                if isinstance(self.execution_engine._account_info_static_cache, dict):
+                    self.execution_engine._account_info_static_cache.clear()
+                    self.execution_engine._account_info_static_cache.update(
+                        {
+                            "recv_ts": now_ts,
+                            "seed_static": False,
+                            "balance": float(data.get("balance", 0.0) or 0.0),
+                            "equity": float(data.get("equity", 0.0) or 0.0),
+                            "margin_free": float(data.get("margin_free", 0.0) or 0.0),
+                            "margin_level": float(data.get("margin_level", 0.0) or 0.0),
+                        }
+                    )
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             return
@@ -15947,9 +16043,17 @@ if __name__ == "__main__":
         "hybrid_symbol_snapshot_max_age_sec",
         CFG.hybrid_symbol_snapshot_max_age_sec,
     )
+    CFG.hybrid_symbol_static_snapshot_max_age_sec = _cfg_int(
+        "hybrid_symbol_static_snapshot_max_age_sec",
+        CFG.hybrid_symbol_static_snapshot_max_age_sec,
+    )
     CFG.hybrid_account_snapshot_max_age_sec = _cfg_int(
         "hybrid_account_snapshot_max_age_sec",
         CFG.hybrid_account_snapshot_max_age_sec,
+    )
+    CFG.hybrid_account_static_snapshot_max_age_sec = _cfg_int(
+        "hybrid_account_static_snapshot_max_age_sec",
+        CFG.hybrid_account_static_snapshot_max_age_sec,
     )
     CFG.time_anchor_max_backward_sec = _cfg_int("time_anchor_max_backward_sec", CFG.time_anchor_max_backward_sec)
     CFG.eco_threshold_pct = _cfg_float("eco_threshold_pct", CFG.eco_threshold_pct)
