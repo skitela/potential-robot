@@ -149,6 +149,8 @@ def _apply_runtime_learning_overlay(
     *,
     runtime_global: Dict[str, Any],
     runtime_symbol: Dict[str, Any],
+    window: str = "",
+    strategy_family: str = "",
     samples_n: int,
     saved_ratio: float,
     missed_ratio: float,
@@ -164,6 +166,28 @@ def _apply_runtime_learning_overlay(
     runtime_cf = runtime_symbol.get("counterfactual") if isinstance(runtime_symbol.get("counterfactual"), dict) else {}
     runtime_cf_recommendation = _safe_text(runtime_cf.get("recommendation")).upper()
     runtime_cf_samples = safe_int(runtime_cf.get("samples_n"))
+    target_window = _safe_text(window).upper()
+    target_family = _safe_text(strategy_family).upper()
+
+    matched_window = None
+    for row in (runtime_symbol.get("window_advisory") or []):
+        if not isinstance(row, dict):
+            continue
+        if _safe_text(row.get("window")).upper() != target_window:
+            continue
+        matched_window = row
+        break
+
+    matched_family = None
+    for row in (runtime_symbol.get("strategy_family_advisory") or []):
+        if not isinstance(row, dict):
+            continue
+        if _safe_text(row.get("window")).upper() != target_window:
+            continue
+        if _safe_text(row.get("strategy_family")).upper() != target_family:
+            continue
+        matched_family = row
+        break
 
     spread_mult = 1.0
     latency_mult = 1.0
@@ -220,6 +244,42 @@ def _apply_runtime_learning_overlay(
         setup_delta -= 0.01
         reasons.append("lab_counterfactual_relax")
 
+    matched_window_samples = safe_int((matched_window or {}).get("samples_n"))
+    matched_window_rec = _safe_text((matched_window or {}).get("recommendation")).upper()
+    if matched_window_samples >= 25:
+        if matched_window_rec == "DOCISKAJ_FILTRY":
+            spread_mult *= 0.97
+            latency_mult *= 0.98
+            signal_delta += 0.75
+            tradeability_delta += 0.01
+            setup_delta += 0.01
+            reasons.append("window_counterfactual_tighten")
+        elif matched_window_rec == "ROZWAZ_LUZOWANIE_W_SHADOW" and global_qa in {"GREEN", "YELLOW"}:
+            spread_mult *= 1.02
+            latency_mult *= 1.01
+            signal_delta -= 0.5
+            tradeability_delta -= 0.01
+            setup_delta -= 0.01
+            reasons.append("window_counterfactual_relax")
+
+    matched_family_samples = safe_int((matched_family or {}).get("samples_n"))
+    matched_family_rec = _safe_text((matched_family or {}).get("recommendation")).upper()
+    if matched_family_samples >= 20:
+        if matched_family_rec == "DOCISKAJ_FILTRY":
+            spread_mult *= 0.96
+            latency_mult *= 0.97
+            signal_delta += 1.0
+            tradeability_delta += 0.015
+            setup_delta += 0.015
+            reasons.append("family_counterfactual_tighten")
+        elif matched_family_rec == "ROZWAZ_LUZOWANIE_W_SHADOW" and global_qa in {"GREEN", "YELLOW"}:
+            spread_mult *= 1.03
+            latency_mult *= 1.02
+            signal_delta -= 0.75
+            tradeability_delta -= 0.01
+            setup_delta -= 0.01
+            reasons.append("family_counterfactual_relax")
+
     # Extra caution on thin samples or saved-loss dominance.
     if samples_n < 30 or saved_ratio > (missed_ratio + 0.10):
         spread_mult *= 0.97
@@ -243,12 +303,35 @@ def _apply_runtime_learning_overlay(
     base_setup = safe_float(thresholds.get("min_setup_quality_score"))
 
     # Conservative bounded autonomy: profile family remains intact.
-    spread_lo = base_spread * 0.85
-    spread_hi = base_spread * 1.12
-    latency_lo = base_latency * 0.88
-    latency_hi = base_latency * 1.10
-    signal_lo = base_signal - 4.0
-    signal_hi = base_signal + 6.0
+    # Window/family-specific evidence may slightly widen the safe bounds because
+    # it is more granular than the per-symbol aggregate.
+    spread_lo_mult = 0.85
+    spread_hi_mult = 1.12
+    latency_lo_mult = 0.88
+    latency_hi_mult = 1.10
+    signal_lo_delta = -4.0
+    signal_hi_delta = +6.0
+
+    specificity_tighten = matched_window_rec == "DOCISKAJ_FILTRY" or matched_family_rec == "DOCISKAJ_FILTRY"
+    specificity_relax = (
+        global_qa in {"GREEN", "YELLOW"}
+        and (matched_window_rec == "ROZWAZ_LUZOWANIE_W_SHADOW" or matched_family_rec == "ROZWAZ_LUZOWANIE_W_SHADOW")
+    )
+    if specificity_tighten:
+        spread_lo_mult = 0.82 if matched_family_samples >= 20 else 0.84
+        latency_lo_mult = 0.85 if matched_family_samples >= 20 else 0.87
+        signal_hi_delta = +7.0 if matched_family_samples >= 20 else +6.5
+    elif specificity_relax:
+        spread_hi_mult = 1.15 if matched_family_samples >= 20 else 1.13
+        latency_hi_mult = 1.13 if matched_family_samples >= 20 else 1.11
+        signal_lo_delta = -5.0 if matched_family_samples >= 20 else -4.5
+
+    spread_lo = base_spread * spread_lo_mult
+    spread_hi = base_spread * spread_hi_mult
+    latency_lo = base_latency * latency_lo_mult
+    latency_hi = base_latency * latency_hi_mult
+    signal_lo = base_signal + signal_lo_delta
+    signal_hi = base_signal + signal_hi_delta
     min_score_lo = 0.40 if profile_name == "ODWAZNIEJSZY" else 0.48
     min_score_hi = 0.78 if profile_name == "BEZPIECZNY" else 0.72
 
@@ -265,6 +348,12 @@ def _apply_runtime_learning_overlay(
         "consensus_score": round(consensus, 6),
         "runtime_counterfactual_recommendation": runtime_cf_recommendation,
         "runtime_counterfactual_samples_n": int(runtime_cf_samples),
+        "matched_window": target_window,
+        "matched_window_samples_n": int(matched_window_samples),
+        "matched_window_recommendation": matched_window_rec,
+        "matched_strategy_family": target_family,
+        "matched_strategy_family_samples_n": int(matched_family_samples),
+        "matched_strategy_family_recommendation": matched_family_rec,
         "reasons": reasons,
     }
 
@@ -277,6 +366,8 @@ def _build_for_symbol(
     allow_aggressive_when_samples_low: bool,
     runtime_global: Optional[Dict[str, Any]] = None,
     runtime_symbol: Optional[Dict[str, Any]] = None,
+    window: str = "",
+    strategy_family: str = "",
 ) -> Dict[str, Any]:
     symbol = symbol_base(symbol_row.get("symbol"))
     samples_n = safe_int(symbol_row.get("samples_n"))
@@ -334,6 +425,8 @@ def _build_for_symbol(
                 profile_payload,
                 runtime_global=runtime_global,
                 runtime_symbol=runtime_symbol,
+                window=window,
+                strategy_family=strategy_family,
                 samples_n=samples_n,
                 saved_ratio=saved_ratio,
                 missed_ratio=missed_ratio,
@@ -490,6 +583,8 @@ def main() -> int:
                         allow_aggressive_when_samples_low=bool(args.allow_aggressive_when_samples_low),
                         runtime_global=runtime_global,
                         runtime_symbol=(runtime_instruments.get(symbol_base(row.get("symbol"))) if isinstance(runtime_instruments, dict) else {}),
+                        window=_safe_text(row.get("window")).upper(),
+                        strategy_family=_safe_text(row.get("strategy_family")).upper(),
                     )
                     entry["window"] = _safe_text(row.get("window")).upper()
                     entry["strategy_family"] = _safe_text(row.get("strategy_family")).upper() or "UNKNOWN"

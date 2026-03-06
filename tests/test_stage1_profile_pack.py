@@ -87,6 +87,21 @@ def _write_runtime_advice(path: Path) -> None:
                     "recommendation": "DOCISKAJ_FILTRY",
                     "samples_n": 120,
                 },
+                "window_advisory": [
+                    {
+                        "window": "FX_AM|ACTIVE",
+                        "samples_n": 70,
+                        "recommendation": "DOCISKAJ_FILTRY",
+                    }
+                ],
+                "strategy_family_advisory": [
+                    {
+                        "window": "FX_AM|ACTIVE",
+                        "strategy_family": "TREND_CONTINUATION",
+                        "samples_n": 55,
+                        "recommendation": "DOCISKAJ_FILTRY",
+                    }
+                ],
             },
             "GBPUSD": {
                 "advisory_bias": "PROMOTE",
@@ -95,6 +110,21 @@ def _write_runtime_advice(path: Path) -> None:
                     "recommendation": "ROZWAZ_LUZOWANIE_W_SHADOW",
                     "samples_n": 80,
                 },
+                "window_advisory": [
+                    {
+                        "window": "FX_PM|ACTIVE",
+                        "samples_n": 60,
+                        "recommendation": "ROZWAZ_LUZOWANIE_W_SHADOW",
+                    }
+                ],
+                "strategy_family_advisory": [
+                    {
+                        "window": "FX_PM|ACTIVE",
+                        "strategy_family": "RANGE_PULLBACK",
+                        "samples_n": 44,
+                        "recommendation": "ROZWAZ_LUZOWANIE_W_SHADOW",
+                    }
+                ],
             },
         },
     }
@@ -170,6 +200,19 @@ class TestStage1ProfilePack(unittest.TestCase):
             self.assertEqual(len(eur_family), 1)
             self.assertEqual(str(eur_family[0].get("window") or ""), "FX_AM|ACTIVE")
             self.assertEqual(str(eur_family[0].get("strategy_family") or ""), "TREND_CONTINUATION")
+            eur_family_bal = ((eur_family[0].get("profiles") or {}).get("sredni") or {})
+            eur_family_thr = eur_family_bal.get("thresholds") or {}
+            eur_family_overlay = eur_family_bal.get("adaptive_overlay") or {}
+            self.assertLess(float(eur_family_thr.get("spread_cap_points") or 0.0), float(eur_thr.get("spread_cap_points") or 999.0))
+            self.assertIn("family_counterfactual_tighten", list(eur_family_overlay.get("reasons") or []))
+
+            gbp_family = [x for x in family_rows if str(x.get("symbol")) == "GBPUSD"]
+            self.assertEqual(len(gbp_family), 1)
+            gbp_family_bal = ((gbp_family[0].get("profiles") or {}).get("sredni") or {})
+            gbp_family_thr = gbp_family_bal.get("thresholds") or {}
+            gbp_family_overlay = gbp_family_bal.get("adaptive_overlay") or {}
+            self.assertGreater(float(gbp_family_thr.get("spread_cap_points") or 0.0), float(gbp_thr.get("spread_cap_points") or 0.0))
+            self.assertIn("family_counterfactual_relax", list(gbp_family_overlay.get("reasons") or []))
 
             latest = lab / "reports" / "stage1" / "stage1_profile_pack_latest.json"
             self.assertTrue(latest.exists())
