@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Stage-1 SHADOW go/no-go gate.")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--lab-data-root", default="")
+    ap.add_argument(
+        "--dataset-quality-hold-mode",
+        choices=["fail", "warn"],
+        default="fail",
+        help="How to treat dataset_quality verdict HOLD.",
+    )
     ap.add_argument("--out-report", default="")
     return ap.parse_args()
 
@@ -102,6 +108,11 @@ def main() -> int:
         verdict = _verdict_status(q)
         if verdict == "PASS":
             _add_check(checks, "dataset_quality", CHECK_PASS, "PASS", str(q_path))
+        elif verdict == "HOLD":
+            if str(args.dataset_quality_hold_mode).lower() == "warn":
+                _add_check(checks, "dataset_quality", CHECK_WARN, "HOLD_DATASET_QUALITY", str(q_path))
+            else:
+                _add_check(checks, "dataset_quality", CHECK_FAIL, "VERDICT_HOLD", str(q_path))
         else:
             _add_check(checks, "dataset_quality", CHECK_FAIL, f"VERDICT_{verdict or 'UNKNOWN'}", str(q_path))
         try:

@@ -3,7 +3,7 @@ param(
     [string]$TaskName = "OANDA_MT5_RUNTIME_WATCHDOG_USER",
     [int]$IntervalMinutes = 1,
     [int]$RestartCooldownSec = 180,
-    [string]$Profile = "full"
+    [string]$Profile = "safety_only"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +24,7 @@ $repeat = New-TimeSpan -Minutes $interval
 $duration = New-TimeSpan -Days 3650
 
 $arguments = @(
+    "-WindowStyle", "Hidden",
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", "`"$runner`"",

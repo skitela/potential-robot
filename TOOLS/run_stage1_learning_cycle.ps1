@@ -10,6 +10,10 @@ param(
     [int]$MinNoTradePerSymbol = 10,
     [int]$MinTradePathPerSymbol = 1,
     [int]$MinBucketsPerSymbol = 2,
+    [ValidateSet("fail", "warn")]
+    [string]$GoNoGoDatasetQualityHoldMode = "fail",
+    [bool]$ShadowDryRun = $true,
+    [switch]$SoftFailGoNoGo,
     [switch]$FailOnAllStaleCounterfactual
 )
 
@@ -78,20 +82,26 @@ Invoke-Python @(
     "--min-shadow-trades", "3"
 )
 
-Invoke-Python @(
+$shadowDeployerArgs = @(
     "$Root\TOOLS\stage1_shadow_deployer.py",
     "--root", $Root,
     "--lab-data-root", $LabDataRoot,
-    "--cooldown-minutes", "60",
-    "--dry-run"
+    "--cooldown-minutes", "60"
 )
+if ($ShadowDryRun) {
+    $shadowDeployerArgs += "--dry-run"
+}
+Invoke-Python $shadowDeployerArgs
 
-Invoke-Python @(
+$shadowApplyArgs = @(
     "$Root\TOOLS\stage1_shadow_apply_plan.py",
     "--root", $Root,
-    "--lab-data-root", $LabDataRoot,
-    "--dry-run"
+    "--lab-data-root", $LabDataRoot
 )
+if ($ShadowDryRun) {
+    $shadowApplyArgs += "--dry-run"
+}
+Invoke-Python $shadowApplyArgs
 
 Invoke-Python @(
     "$Root\TOOLS\stage1_dataset_quality.py",
@@ -102,11 +112,21 @@ Invoke-Python @(
     "--min-buckets-per-symbol", "$MinBucketsPerSymbol"
 )
 
-Invoke-Python @(
+$gonogoArgs = @(
     "$Root\TOOLS\stage1_shadow_gonogo.py",
     "--root", $Root,
-    "--lab-data-root", $LabDataRoot
+    "--lab-data-root", $LabDataRoot,
+    "--dataset-quality-hold-mode", $GoNoGoDatasetQualityHoldMode
 )
+if ($SoftFailGoNoGo.IsPresent) {
+    & py -3.12 -B @gonogoArgs
+    $goNoGoRc = [int]$LASTEXITCODE
+    if ($goNoGoRc -ne 0) {
+        Write-Warning "STAGE1_SHADOW_GONOGO returned rc=$goNoGoRc (soft-fail enabled, cycle continues)."
+    }
+} else {
+    Invoke-Python $gonogoArgs
+}
 
 Invoke-Python @(
     "$Root\TOOLS\stage1_iteration_audit.py",

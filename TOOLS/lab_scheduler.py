@@ -120,9 +120,20 @@ def read_mem_available_mb() -> Optional[float]:
 
 
 class FileLock:
-    def __init__(self, lock_path: Path) -> None:
+    def __init__(self, lock_path: Path, *, stale_after_sec: int = 0) -> None:
         self.lock_path = lock_path
         self.fd: Optional[int] = None
+        self.stale_after_sec = max(0, int(stale_after_sec))
+
+    def _is_stale(self) -> bool:
+        if self.stale_after_sec <= 0:
+            return False
+        try:
+            mtime = self.lock_path.stat().st_mtime
+            age = max(0.0, time.time() - float(mtime))
+            return age >= float(self.stale_after_sec)
+        except Exception:
+            return False
 
     def acquire(self) -> bool:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +142,14 @@ class FileLock:
             os.write(self.fd, str(os.getpid()).encode("ascii", errors="ignore"))
             return True
         except FileExistsError:
+            if self._is_stale():
+                try:
+                    self.lock_path.unlink()
+                    self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.write(self.fd, str(os.getpid()).encode("ascii", errors="ignore"))
+                    return True
+                except Exception:
+                    return False
             return False
 
     def release(self) -> None:
@@ -189,6 +208,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--skip-snapshot-retention", action="store_true")
     ap.add_argument("--max-cpu-pct", type=float, default=85.0)
     ap.add_argument("--min-mem-mb", type=float, default=1024.0)
+    ap.add_argument("--lock-stale-minutes", type=int, default=240)
     ap.add_argument("--allow-active-window", action="store_true")
     ap.add_argument("--force", action="store_true")
     return ap.parse_args()
@@ -202,7 +222,8 @@ def main() -> int:
     run_root.mkdir(parents=True, exist_ok=True)
     registry_path = (lab_data_root / "registry" / "lab_registry.sqlite").resolve()
 
-    lock = FileLock(run_root / "lab_scheduler.lock")
+    stale_after_sec = max(0, int(args.lock_stale_minutes)) * 60
+    lock = FileLock(run_root / "lab_scheduler.lock", stale_after_sec=stale_after_sec)
     status_path = run_root / "lab_scheduler_status.json"
     stamp = dt.datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
     started = dt.datetime.now(tz=UTC)
