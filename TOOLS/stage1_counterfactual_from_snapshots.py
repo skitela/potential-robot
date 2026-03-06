@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import datetime as dt
 import json
 import sqlite3
@@ -189,6 +190,117 @@ def load_no_trade_rows(dataset_jsonl: Path, max_rows: int) -> List[Dict[str, Any
     return out
 
 
+def _row_bucket_key(row: Dict[str, Any]) -> Tuple[str, str]:
+    sym = symbol_base(str(row.get("instrument") or row.get("symbol") or ""))
+    wid = str(row.get("window_id") or "UNKNOWN").strip().upper() or "UNKNOWN"
+    wph = str(row.get("window_phase") or "UNKNOWN").strip().upper() or "UNKNOWN"
+    return sym, f"{wid}|{wph}"
+
+
+def _row_ts_sort_key(row: Dict[str, Any]) -> Tuple[int, str]:
+    ts = parse_ts(row.get("ts_utc"))
+    if ts is None:
+        return (0, "")
+    return (1, iso_utc(ts))
+
+
+def select_no_trade_rows_stratified(
+    dataset_jsonl: Path,
+    *,
+    max_rows: int,
+    min_per_symbol_window: int = 25,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    rows_all: List[Dict[str, Any]] = []
+    by_bucket: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    selected: List[Dict[str, Any]] = []
+    selected_by_symbol: Dict[str, int] = defaultdict(int)
+    selected_by_bucket: Dict[str, int] = defaultdict(int)
+
+    for row in iter_jsonl(dataset_jsonl):
+        if str(row.get("sample_type") or "").upper() != "NO_TRADE":
+            continue
+        sym, bucket = _row_bucket_key(row)
+        if not sym:
+            continue
+        rows_all.append(row)
+        by_bucket[(sym, bucket)].append(row)
+
+    total_available = len(rows_all)
+    hard_cap = max(1, int(max_rows))
+    if total_available <= hard_cap:
+        for row in rows_all:
+            sym, bucket = _row_bucket_key(row)
+            selected_by_symbol[sym] += 1
+            selected_by_bucket[f"{sym}|{bucket}"] += 1
+        return rows_all, {
+            "mode": "all_rows",
+            "rows_available_total": int(total_available),
+            "rows_selected_total": int(total_available),
+            "symbols_n": int(len({sym for sym, _ in by_bucket.keys()})),
+            "symbol_windows_n": int(len(by_bucket)),
+            "min_per_symbol_window": int(max(1, int(min_per_symbol_window))),
+            "selected_by_symbol": {k: int(v) for k, v in sorted(selected_by_symbol.items())},
+            "selected_by_symbol_window": {k: int(v) for k, v in sorted(selected_by_bucket.items())},
+        }
+
+    bucket_order = sorted(
+        by_bucket.keys(),
+        key=lambda key: (
+            -len(by_bucket[key]),
+            key[0],
+            key[1],
+        ),
+    )
+    per_bucket_floor = max(1, int(min_per_symbol_window))
+
+    for key in bucket_order:
+        rows = sorted(by_bucket[key], key=_row_ts_sort_key, reverse=True)
+        take_n = min(len(rows), per_bucket_floor)
+        for row in rows[:take_n]:
+            selected.append(row)
+            selected_by_symbol[key[0]] += 1
+            selected_by_bucket[f"{key[0]}|{key[1]}"] += 1
+            if len(selected) >= hard_cap:
+                break
+        if len(selected) >= hard_cap:
+            break
+
+    if len(selected) < hard_cap:
+        remaining_rows_by_bucket: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for key in bucket_order:
+            rows = sorted(by_bucket[key], key=_row_ts_sort_key, reverse=True)
+            already = min(len(rows), selected_by_bucket.get(f"{key[0]}|{key[1]}", 0))
+            remaining_rows_by_bucket[key] = rows[already:]
+
+        while len(selected) < hard_cap:
+            any_added = False
+            for key in bucket_order:
+                rem = remaining_rows_by_bucket.get(key) or []
+                if not rem:
+                    continue
+                row = rem.pop(0)
+                selected.append(row)
+                selected_by_symbol[key[0]] += 1
+                selected_by_bucket[f"{key[0]}|{key[1]}"] += 1
+                any_added = True
+                if len(selected) >= hard_cap:
+                    break
+            if not any_added:
+                break
+
+    selected = sorted(selected, key=_row_ts_sort_key, reverse=True)
+    return selected, {
+        "mode": "symbol_window_stratified_recent",
+        "rows_available_total": int(total_available),
+        "rows_selected_total": int(len(selected)),
+        "symbols_n": int(len({sym for sym, _ in by_bucket.keys()})),
+        "symbol_windows_n": int(len(by_bucket)),
+        "min_per_symbol_window": int(per_bucket_floor),
+        "selected_by_symbol": {k: int(v) for k, v in sorted(selected_by_symbol.items())},
+        "selected_by_symbol_window": {k: int(v) for k, v in sorted(selected_by_bucket.items())},
+    }
+
+
 def fetch_entry_and_path(
     conn: sqlite3.Connection,
     *,
@@ -331,7 +443,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--slippage-points", type=float, default=3.0)
     ap.add_argument("--max-source-lag-hours", type=float, default=12.0)
     ap.add_argument("--fail-on-all-stale", action="store_true")
-    ap.add_argument("--max-no-trade-samples", type=int, default=1000)
+    ap.add_argument("--max-no-trade-samples", type=int, default=10000)
+    ap.add_argument("--min-no-trade-per-symbol-window", type=int, default=25)
     ap.add_argument("--out-jsonl", default="")
     ap.add_argument("--out-report", default="")
     return ap.parse_args()
@@ -380,7 +493,11 @@ def main() -> int:
     elif not market_sources:
         reason = "MARKET_SOURCE_MISSING"
     else:
-        no_trade = load_no_trade_rows(dataset_jsonl, max_rows=max(1, int(args.max_no_trade_samples)))
+        no_trade, sampling_info = select_no_trade_rows_stratified(
+            dataset_jsonl,
+            max_rows=max(1, int(args.max_no_trade_samples)),
+            min_per_symbol_window=max(1, int(args.min_no_trade_per_symbol_window)),
+        )
         if not no_trade:
             reason = "NO_NO_TRADE_ROWS"
         else:
@@ -562,6 +679,7 @@ def main() -> int:
                 status = "PASS" if evaluated > 0 else "SKIP"
                 reason = "COUNTERFACTUAL_OK" if evaluated > 0 else "COUNTERFACTUAL_NO_EVAL"
             details = {
+                "sampling": sampling_info,
                 "rows_no_trade_seen": len(no_trade),
                 "rows_evaluated": int(evaluated),
                 "rows_skipped": int(skipped),
@@ -615,6 +733,7 @@ def main() -> int:
             "max_source_lag_hours": float(max(0.0, float(args.max_source_lag_hours))),
             "fail_on_all_stale": bool(args.fail_on_all_stale),
             "max_no_trade_samples": int(max(1, int(args.max_no_trade_samples))),
+            "min_no_trade_per_symbol_window": int(max(1, int(args.min_no_trade_per_symbol_window))),
         },
     }
     out_report.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

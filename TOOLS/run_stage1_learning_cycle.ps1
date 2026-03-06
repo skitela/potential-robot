@@ -10,6 +10,8 @@ param(
     [int]$MinNoTradePerSymbol = 10,
     [int]$MinTradePathPerSymbol = 1,
     [int]$MinBucketsPerSymbol = 2,
+    [int]$MaxNoTradeSamples = 10000,
+    [int]$MinNoTradePerSymbolWindow = 25,
     [ValidateSet("fail", "warn")]
     [string]$GoNoGoDatasetQualityHoldMode = "fail",
     [bool]$ShadowDryRun = $true,
@@ -55,7 +57,8 @@ $counterfactualArgs = @(
     "--root", $Root,
     "--lab-data-root", $LabDataRoot,
     "--horizon-minutes", "15",
-    "--max-no-trade-samples", "1000"
+    "--max-no-trade-samples", "$MaxNoTradeSamples",
+    "--min-no-trade-per-symbol-window", "$MinNoTradePerSymbolWindow"
 )
 if ($FailOnAllStaleCounterfactual.IsPresent) {
     $counterfactualArgs += "--fail-on-all-stale"

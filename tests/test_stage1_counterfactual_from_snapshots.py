@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from TOOLS.stage1_counterfactual_from_snapshots import select_no_trade_rows_stratified
+
 
 def _write_stage1_dataset(path: Path) -> None:
     now = dt.datetime.now(tz=dt.timezone.utc).replace(microsecond=0)
@@ -128,6 +130,54 @@ def _create_history_db(path: Path) -> None:
 
 
 class TestStage1CounterfactualFromSnapshots(unittest.TestCase):
+    def test_stratified_selection_keeps_symbol_window_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            ds = Path(td) / "stage1_learning_test.jsonl"
+            rows = []
+            now = dt.datetime.now(tz=dt.timezone.utc).replace(microsecond=0)
+            for idx in range(6):
+                rows.append(
+                    {
+                        "ts_utc": (now - dt.timedelta(minutes=idx)).isoformat().replace("+00:00", "Z"),
+                        "symbol": "EURUSD",
+                        "instrument": "EURUSD",
+                        "sample_type": "NO_TRADE",
+                        "label": "NO_SIGNAL",
+                        "reason_class": "SIGNAL_LOGIC",
+                        "window_id": "FX_AM",
+                        "window_phase": "ACTIVE",
+                    }
+                )
+            for idx in range(6, 12):
+                rows.append(
+                    {
+                        "ts_utc": (now - dt.timedelta(minutes=idx)).isoformat().replace("+00:00", "Z"),
+                        "symbol": "USDJPY",
+                        "instrument": "USDJPY",
+                        "sample_type": "NO_TRADE",
+                        "label": "NO_SIGNAL",
+                        "reason_class": "SIGNAL_LOGIC",
+                        "window_id": "ASIA",
+                        "window_phase": "ACTIVE",
+                    }
+                )
+            ds.parent.mkdir(parents=True, exist_ok=True)
+            with ds.open("w", encoding="utf-8") as f:
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+            selected, sampling = select_no_trade_rows_stratified(
+                ds,
+                max_rows=4,
+                min_per_symbol_window=2,
+            )
+
+            self.assertEqual(len(selected), 4)
+            self.assertEqual(sampling.get("mode"), "symbol_window_stratified_recent")
+            by_bucket = sampling.get("selected_by_symbol_window") or {}
+            self.assertEqual(int(by_bucket.get("EURUSD|FX_AM|ACTIVE") or 0), 2)
+            self.assertEqual(int(by_bucket.get("USDJPY|ASIA|ACTIVE") or 0), 2)
+
     def test_counterfactual_labels_from_history(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "root"
@@ -172,6 +222,9 @@ class TestStage1CounterfactualFromSnapshots(unittest.TestCase):
             self.assertEqual(int(details.get("rows_no_trade_seen") or 0), 3)
             self.assertEqual(int(details.get("rows_evaluated") or 0), 2)
             self.assertGreaterEqual(int(details.get("rows_skipped") or 0), 1)
+            self.assertIn("sampling", details)
+            sampling = details.get("sampling") if isinstance(details.get("sampling"), dict) else {}
+            self.assertEqual(int(sampling.get("rows_selected_total") or 0), 3)
 
             rows_files = sorted((lab_root / "reports" / "stage1").glob("stage1_counterfactual_rows_*.jsonl"))
             self.assertTrue(rows_files, "Brak pliku z rzędami counterfactual")
