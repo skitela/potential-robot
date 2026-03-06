@@ -18,7 +18,7 @@ Cel: każdej nocy uruchamiać ten sam zestaw testów i mieć jeden raport końco
 3. `stage1_shadow_plus_cycle` — pełny cykl shadow+ (dry-run)
 4. `runtime_latency_audit` — audyt latencji runtime
 5. `black_swan_v2_runtime_report_24h` — raport 24h Black Swan v2 z logów runtime
-6. `active_checklist_snapshot` — snapshot aktywności systemu i MT5
+6. `runtime_kpi_snapshot` — szybki snapshot KPI runtime (24h)
 
 ## Gdzie są raporty
 

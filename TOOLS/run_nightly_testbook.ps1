@@ -85,7 +85,7 @@ function Invoke-Step {
     param(
         [string]$Name,
         [string]$Exe,
-        [string[]]$Args,
+        [string[]]$CmdArgs,
         [string]$LogPath
     )
     $stepStart = Get-Date
@@ -93,10 +93,38 @@ function Invoke-Step {
     $status = "PASS"
     $exitCode = 0
     $errorText = ""
+    $stdOut = ($LogPath + ".stdout")
+    $stdErr = ($LogPath + ".stderr")
 
     try {
-        & $Exe @Args *>&1 | Tee-Object -FilePath $LogPath
-        $exitCode = [int]$LASTEXITCODE
+        if (Test-Path -LiteralPath $stdOut) { Remove-Item -LiteralPath $stdOut -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $stdErr) { Remove-Item -LiteralPath $stdErr -Force -ErrorAction SilentlyContinue }
+
+        $proc = Start-Process `
+            -FilePath $Exe `
+            -ArgumentList $CmdArgs `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdOut `
+            -RedirectStandardError $stdErr
+
+        $exitCode = [int]$proc.ExitCode
+        $buf = New-Object System.Collections.Generic.List[string]
+        if (Test-Path -LiteralPath $stdOut) {
+            foreach ($ln in (Get-Content -LiteralPath $stdOut -ErrorAction SilentlyContinue)) { $buf.Add([string]$ln) }
+        }
+        if (Test-Path -LiteralPath $stdErr) {
+            $errLines = Get-Content -LiteralPath $stdErr -ErrorAction SilentlyContinue
+            if (@($errLines).Count -gt 0) {
+                if ($buf.Count -gt 0) { $buf.Add("--- STDERR ---") }
+                foreach ($ln in $errLines) { $buf.Add([string]$ln) }
+            }
+        }
+        Set-Content -LiteralPath $LogPath -Encoding UTF8 -Value $buf
+        if (Test-Path -LiteralPath $stdOut) { Remove-Item -LiteralPath $stdOut -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $stdErr) { Remove-Item -LiteralPath $stdErr -Force -ErrorAction SilentlyContinue }
+
         if ($exitCode -ne 0) {
             throw "Step failed with rc=$exitCode"
         }
@@ -117,7 +145,7 @@ function Invoke-Step {
         started_at_utc = $stepStartIso
         finished_at_utc = $stepEnd.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         duration_sec = $durationSec
-        command = ($Exe + " " + ($Args -join " "))
+        command = ($Exe + " " + ($CmdArgs -join " "))
         log_path = $LogPath
         error = $errorText
     }
@@ -235,7 +263,7 @@ function Add-Step {
 }
 
 $compileReport = Join-Path $runDir ("compile_report_" + $runStamp + ".json")
-$step1 = Invoke-Step -Name "compile_smoke" -Exe "py" -Args @(
+$step1 = Invoke-Step -Name "compile_smoke" -Exe "py" -CmdArgs @(
     "-3.12",
     "-B",
     (Join-Path $Root "TOOLS\smoke_compile_v6_2.py"),
@@ -245,7 +273,7 @@ $step1 = Invoke-Step -Name "compile_smoke" -Exe "py" -Args @(
 Add-Step -StepResult $step1
 $summary.outputs["compile_report"] = $compileReport
 
-$step2 = Invoke-Step -Name "unit_tests_core_plus_black_swan" -Exe "py" -Args @(
+$step2 = Invoke-Step -Name "unit_tests_core_plus_black_swan" -Exe "py" -CmdArgs @(
     "-3.12",
     "-m",
     "unittest",
@@ -276,7 +304,7 @@ if ($RequireOutsideActive.IsPresent) {
 if ($Force.IsPresent) {
     $shadowArgs += "-Force"
 }
-$step3 = Invoke-Step -Name "stage1_shadow_plus_cycle" -Exe "powershell" -Args $shadowArgs -LogPath (Join-Path $logsDir "03_stage1_shadow_plus.log")
+$step3 = Invoke-Step -Name "stage1_shadow_plus_cycle" -Exe "powershell" -CmdArgs $shadowArgs -LogPath (Join-Path $logsDir "03_stage1_shadow_plus.log")
 Add-Step -StepResult $step3
 $summary.outputs["stage1_shadow_plus_latest"] = (Join-Path $LabDataRoot "reports\stage1\stage1_shadow_plus_cycle_latest.json")
 
@@ -296,12 +324,12 @@ if ($RequireOutsideActive.IsPresent) {
 if ($Force.IsPresent) {
     $latArgs += "-Force"
 }
-$step4 = Invoke-Step -Name "runtime_latency_audit" -Exe "powershell" -Args $latArgs -LogPath (Join-Path $logsDir "04_runtime_latency_audit.log")
+$step4 = Invoke-Step -Name "runtime_latency_audit" -Exe "powershell" -CmdArgs $latArgs -LogPath (Join-Path $logsDir "04_runtime_latency_audit.log")
 Add-Step -StepResult $step4
 $summary.outputs["latency_latest_dir"] = (Join-Path $Root "EVIDENCE\runtime_latency")
 
 $bsReport = Join-Path $runDir ("black_swan_v2_runtime_" + $runStamp + ".json")
-$step5 = Invoke-Step -Name "black_swan_v2_runtime_report_24h" -Exe "py" -Args @(
+$step5 = Invoke-Step -Name "black_swan_v2_runtime_report_24h" -Exe "py" -CmdArgs @(
     "-3.12",
     "-B",
     (Join-Path $Root "TOOLS\black_swan_v2_runtime_report.py"),
@@ -312,14 +340,17 @@ $step5 = Invoke-Step -Name "black_swan_v2_runtime_report_24h" -Exe "py" -Args @(
 Add-Step -StepResult $step5
 $summary.outputs["black_swan_v2_report"] = $bsReport
 
-$step6 = Invoke-Step -Name "active_checklist_snapshot" -Exe "powershell" -Args @(
-    "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $Root "TOOLS\auto_active_checklist.ps1"),
-    "-Root", $Root,
-    "-Mode", "single"
-) -LogPath (Join-Path $logsDir "06_active_checklist.log")
+$runtimeKpiOut = Join-Path $runDir ("runtime_kpi_snapshot_" + $runStamp + ".json")
+$step6 = Invoke-Step -Name "runtime_kpi_snapshot" -Exe "py" -CmdArgs @(
+    "-3.12",
+    "-B",
+    (Join-Path $Root "TOOLS\runtime_kpi_snapshot.py"),
+    "--root", $Root,
+    "--hours", "24",
+    "--out", $runtimeKpiOut
+) -LogPath (Join-Path $logsDir "06_runtime_kpi_snapshot.log")
 Add-Step -StepResult $step6
-$summary.outputs["active_checklist_latest"] = (Join-Path $Root "EVIDENCE\active_checklist\active_checklist_latest.json")
+$summary.outputs["runtime_kpi_snapshot"] = $runtimeKpiOut
 
 $failed = @($summary.steps | Where-Object { $_.status -eq "FAIL" }).Count
 $summary.status = if ($failed -eq 0) { "PASS" } else { "PARTIAL_FAIL" }
