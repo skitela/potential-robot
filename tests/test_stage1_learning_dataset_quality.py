@@ -28,6 +28,7 @@ def _create_db(path: Path) -> None:
                 reason_class TEXT,
                 stage TEXT,
                 signal TEXT,
+                strategy_family TEXT,
                 regime TEXT,
                 window_id TEXT,
                 window_phase TEXT,
@@ -44,6 +45,7 @@ def _create_db(path: Path) -> None:
                 symbol_mode TEXT,
                 signal TEXT,
                 signal_reason TEXT,
+                strategy_family TEXT,
                 regime TEXT,
                 window_id TEXT,
                 window_phase TEXT,
@@ -57,8 +59,8 @@ def _create_db(path: Path) -> None:
         conn.execute(
             """
             INSERT INTO decision_rejections(
-                ts_utc,symbol,grp,mode,reason_code,reason_class,stage,signal,regime,window_id,window_phase,context_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ts_utc,symbol,grp,mode,reason_code,reason_class,stage,signal,strategy_family,regime,window_id,window_phase,context_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 t1,
@@ -69,6 +71,7 @@ def _create_db(path: Path) -> None:
                 "COST_QUALITY",
                 "ENTRY",
                 "BUY",
+                "RENKO_ONLY",
                 "TREND",
                 "FX_AM",
                 "ACTIVE",
@@ -78,8 +81,8 @@ def _create_db(path: Path) -> None:
         conn.execute(
             """
             INSERT INTO decision_rejections(
-                ts_utc,symbol,grp,mode,reason_code,reason_class,stage,signal,regime,window_id,window_phase,context_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ts_utc,symbol,grp,mode,reason_code,reason_class,stage,signal,strategy_family,regime,window_id,window_phase,context_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 t2,
@@ -90,6 +93,7 @@ def _create_db(path: Path) -> None:
                 "SIGNAL_LOGIC",
                 "ENTRY",
                 "SELL",
+                "CANDLE_ONLY",
                 "RANGE",
                 "FX_AM",
                 "ACTIVE",
@@ -99,9 +103,9 @@ def _create_db(path: Path) -> None:
         conn.execute(
             """
             INSERT INTO decision_events(
-                ts_utc,choice_A,grp,symbol_mode,signal,signal_reason,regime,window_id,window_phase,
+                ts_utc,choice_A,grp,symbol_mode,signal,signal_reason,strategy_family,regime,window_id,window_phase,
                 entry_score,entry_min_score,spread_points,outcome_pnl_net
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 t3,
@@ -110,6 +114,7 @@ def _create_db(path: Path) -> None:
                 "NORMAL",
                 "BUY",
                 "SCORE_OK",
+                "TREND_CONTINUATION",
                 "TREND",
                 "FX_AM",
                 "ACTIVE",
@@ -122,9 +127,9 @@ def _create_db(path: Path) -> None:
         conn.execute(
             """
             INSERT INTO decision_events(
-                ts_utc,choice_A,grp,symbol_mode,signal,signal_reason,regime,window_id,window_phase,
+                ts_utc,choice_A,grp,symbol_mode,signal,signal_reason,strategy_family,regime,window_id,window_phase,
                 entry_score,entry_min_score,spread_points,outcome_pnl_net
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 t4,
@@ -133,6 +138,7 @@ def _create_db(path: Path) -> None:
                 "NORMAL",
                 "SELL",
                 "SCORE_OK",
+                "RANGE_PULLBACK",
                 "RANGE",
                 "FX_AM",
                 "ACTIVE",
@@ -185,6 +191,9 @@ class TestStage1DatasetQuality(unittest.TestCase):
             no_trade = [x for x in rows if str(x.get("sample_type")) == "NO_TRADE"]
             self.assertGreaterEqual(len(no_trade), 2)
             self.assertTrue(any(str(x.get("command_type")) == "HEARTBEAT" for x in no_trade))
+            families = {str(x.get("strategy_family") or "") for x in rows}
+            self.assertIn("RENKO_ONLY", families)
+            self.assertIn("RANGE_PULLBACK", families)
 
             quality_cmd = [
                 sys.executable,

@@ -196,16 +196,25 @@ def _main() -> int:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
+        cols_now = {
+            str(r["name"] if isinstance(r, sqlite3.Row) else r[1])
+            for r in conn.execute("PRAGMA table_info(decision_events)").fetchall()
+        }
+        rej_cols_now: set[str] = set()
         has_rejections = bool(
             conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='decision_rejections' LIMIT 1").fetchone()
         )
         if has_rejections:
-            for r in conn.execute(
-                """SELECT ts_utc,symbol,grp,mode,reason_code,reason_class,stage,signal,regime,window_id,window_phase,context_json
-                   FROM decision_rejections
-                   WHERE ts_utc >= ?""",
-                (since_iso,),
-            ).fetchall():
+            rej_cols_now = {
+                str(r["name"] if isinstance(r, sqlite3.Row) else r[1])
+                for r in conn.execute("PRAGMA table_info(decision_rejections)").fetchall()
+            }
+            rej_select = (
+                "SELECT ts_utc,symbol,grp,mode,reason_code,reason_class,stage,signal,"
+                + ("strategy_family," if "strategy_family" in rej_cols_now else "")
+                + "regime,window_id,window_phase,context_json FROM decision_rejections WHERE ts_utc >= ?"
+            )
+            for r in conn.execute(rej_select, (since_iso,)).fetchall():
                 ctx_obj: Dict[str, Any] = {}
                 try:
                     ctx_obj = json.loads(str(r["context_json"] or "{}"))
@@ -213,6 +222,7 @@ def _main() -> int:
                         ctx_obj = {}
                 except Exception:
                     ctx_obj = {}
+                strategy_family = str(r["strategy_family"] or "") if "strategy_family" in rej_cols_now else ""
                 rows_out.append(
                     {
                         "ts_utc": str(r["ts_utc"]),
@@ -232,7 +242,8 @@ def _main() -> int:
                         "regime": str(r["regime"] or ""),
                         "regime_state": str(r["regime"] or ""),
                         "command_type": _normalize_command_type(ctx_obj.get("command_type"), "OTHER"),
-                        "strategy_family": _infer_strategy_family(
+                        "strategy_family": strategy_family
+                        or _infer_strategy_family(
                             mode=str(r["mode"] or ""),
                             signal=str(r["signal"] or ""),
                             signal_reason=str(ctx_obj.get("signal_reason") or ""),
@@ -248,12 +259,13 @@ def _main() -> int:
                     }
                 )
 
-        for r in conn.execute(
-            """SELECT ts_utc,choice_A,grp,symbol_mode,signal,signal_reason,regime,window_id,window_phase,entry_score,entry_min_score,spread_points,outcome_pnl_net
-               FROM decision_events
-               WHERE ts_utc >= ?""",
-            (since_iso,),
-        ).fetchall():
+        event_select = (
+            "SELECT ts_utc,choice_A,grp,symbol_mode,signal,signal_reason,"
+            + ("strategy_family," if "strategy_family" in cols_now else "")
+            + "regime,window_id,window_phase,entry_score,entry_min_score,spread_points,outcome_pnl_net FROM decision_events WHERE ts_utc >= ?"
+        )
+        for r in conn.execute(event_select, (since_iso,)).fetchall():
+            strategy_family = str(r["strategy_family"] or "") if "strategy_family" in cols_now else ""
             rows_out.append(
                 {
                     "ts_utc": str(r["ts_utc"]),
@@ -273,7 +285,8 @@ def _main() -> int:
                     "regime": str(r["regime"] or ""),
                     "regime_state": str(r["regime"] or ""),
                     "command_type": "TRADE_PATH",
-                    "strategy_family": _infer_strategy_family(
+                    "strategy_family": strategy_family
+                    or _infer_strategy_family(
                         mode=str(r["symbol_mode"] or ""),
                         signal=str(r["signal"] or ""),
                         signal_reason=str(r["signal_reason"] or ""),

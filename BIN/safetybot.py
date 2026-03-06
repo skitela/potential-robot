@@ -2412,6 +2412,64 @@ def score_fx_entry_signal(
     return score_clamped, parts
 
 
+def infer_runtime_strategy_family(
+    *,
+    mode: str,
+    signal: str,
+    signal_reason: str,
+    candle_ctx: Optional[Dict[str, Any]] = None,
+    renko_ctx: Optional[Dict[str, Any]] = None,
+) -> str:
+    sig_reason = str(signal_reason or "").upper()
+    if "RENKO" in sig_reason and ("CANDLE" in sig_reason or "JAPANESE" in sig_reason):
+        return "CANDLE_RENKO_CONFLUENCE"
+    if "RENKO" in sig_reason:
+        return "RENKO_ONLY"
+    if "CANDLE" in sig_reason or "JAPANESE" in sig_reason:
+        return "CANDLE_ONLY"
+
+    candle_ctx = candle_ctx if isinstance(candle_ctx, dict) else {}
+    renko_ctx = renko_ctx if isinstance(renko_ctx, dict) else {}
+    candle_mode = str(candle_ctx.get("mode") or "").upper()
+    candle_bias = str(candle_ctx.get("candle_bias") or "").upper()
+    candle_reason = str(candle_ctx.get("reason_code") or "").upper()
+    renko_mode = str(renko_ctx.get("mode") or "").upper()
+    renko_bias = str(renko_ctx.get("renko_bias") or "").upper()
+    renko_reason = str(renko_ctx.get("reason_code") or "").upper()
+    candle_score = max(
+        float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
+        float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
+    )
+    renko_score = max(
+        float(renko_ctx.get("renko_score_long", 0.0) or 0.0),
+        float(renko_ctx.get("renko_score_short", 0.0) or 0.0),
+    )
+
+    candle_active = bool(
+        candle_mode == "ADVISORY_SCORE"
+        and (candle_bias not in {"", "NONE"} or candle_reason not in {"", "NONE"} or candle_score > 0.0)
+    )
+    renko_active = bool(
+        renko_mode == "ADVISORY_SCORE"
+        and (renko_bias not in {"", "NONE"} or renko_reason not in {"", "NONE"} or renko_score > 0.0)
+    )
+    if candle_active and renko_active:
+        return "CANDLE_RENKO_CONFLUENCE"
+    if renko_active:
+        return "RENKO_ONLY"
+    if candle_active:
+        return "CANDLE_ONLY"
+
+    tokens = " ".join([str(mode or ""), str(signal or ""), sig_reason]).upper()
+    if "RANGE" in tokens or "PULLBACK" in tokens:
+        return "RANGE_PULLBACK"
+    if "TREND" in tokens or "ADX" in tokens or "CONTINUATION" in tokens or "BREAK" in tokens:
+        return "TREND_CONTINUATION"
+    if str(mode or "").upper() in {"HOT", "WARM", "ECO"}:
+        return "CORE_RUNTIME"
+    return "UNKNOWN"
+
+
 def metal_spread_cap_points(symbol: str, grp: Optional[str] = "METAL") -> float:
     """Per-symbol hard spread cap in points for METAL scoring gate."""
     default_cap = float(max(1.0, float(getattr(CFG, "metal_spread_cap_points_default", 120.0) or 120.0)))
@@ -4428,6 +4486,7 @@ class DecisionEventStore:
                 score_factor REAL,
                 group_factor REAL,
                 signal_reason TEXT,
+                strategy_family TEXT,
                 regime TEXT,
                 adx REAL,
                 atr_points REAL,
@@ -4459,6 +4518,12 @@ class DecisionEventStore:
                 policy_overlap_arbitration_enabled INT
             );"""
         )
+        try:
+            event_cols_now = {str(r[1]) for r in self.conn.execute("PRAGMA table_info(decision_events)").fetchall()}
+            if "strategy_family" not in event_cols_now:
+                self.conn.execute("ALTER TABLE decision_events ADD COLUMN strategy_family TEXT;")
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_ts ON decision_events(ts_utc);")
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_choice ON decision_events(choice_A);")
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_events_closed ON decision_events(outcome_closed_ts_utc);")
@@ -4474,6 +4539,7 @@ class DecisionEventStore:
                 reason_class TEXT,
                 stage TEXT,
                 signal TEXT,
+                strategy_family TEXT,
                 regime TEXT,
                 window_id TEXT,
                 window_phase TEXT,
@@ -4487,6 +4553,8 @@ class DecisionEventStore:
                 self.conn.execute("ALTER TABLE decision_rejections ADD COLUMN window_id TEXT;")
             if "window_phase" not in cols_now:
                 self.conn.execute("ALTER TABLE decision_rejections ADD COLUMN window_phase TEXT;")
+            if "strategy_family" not in cols_now:
+                self.conn.execute("ALTER TABLE decision_rejections ADD COLUMN strategy_family TEXT;")
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_decision_rejections_ts ON decision_rejections(ts_utc);")
@@ -4502,7 +4570,7 @@ class DecisionEventStore:
             # v3 (scalp-learning context)
             "grp","window_id","window_phase","window_group","global_mode","symbol_mode",
             "prio","time_weight","score_factor","group_factor",
-            "signal_reason","regime","adx","atr_points","spread_p80","spread_cap_points",
+            "signal_reason","strategy_family","regime","adx","atr_points","spread_p80","spread_cap_points",
             "entry_score","entry_min_score",
             "risk_entry_allowed","risk_reason","risk_friday","risk_reopen",
             "eco_active","black_swan_flag","black_swan_precaution","self_heal_active","canary_active","drift_active",
@@ -4547,6 +4615,7 @@ class DecisionEventStore:
             "reason_class",
             "stage",
             "signal",
+            "strategy_family",
             "regime",
             "window_id",
             "window_phase",
@@ -7283,6 +7352,14 @@ class StandardStrategy:
             # Avoid mislabeling global/runtime skips when symbol context is unknown.
             return
         reason_code = str(reason or "UNKNOWN").upper()
+        strategy_family = str(
+            ctx.get("strategy_family")
+            or infer_runtime_strategy_family(
+                mode=mode,
+                signal=str(ctx.get("signal") or ""),
+                signal_reason=str(ctx.get("signal_reason") or ""),
+            )
+        ).upper()
         tw = trade_window_ctx(now_utc())
         window_id = str((tw or {}).get("window_id") or "OFF")
         window_phase = str((tw or {}).get("phase") or "OFF")
@@ -7296,12 +7373,14 @@ class StandardStrategy:
             "reason_class": self._classify_skip_reason(reason_code),
             "stage": stage.upper() if stage else None,
             "signal": (str(ctx.get("signal")).upper() if ctx.get("signal") else None),
+            "strategy_family": strategy_family,
             "regime": (str(ctx.get("regime")).upper() if ctx.get("regime") else None),
             "window_id": window_id,
             "window_phase": window_phase,
             "context_json": json.dumps(
                 {
                     "signal_reason": ctx.get("signal_reason"),
+                    "strategy_family": strategy_family,
                     "trend_h4": ctx.get("trend_h4"),
                     "structure_h4": ctx.get("structure_h4"),
                 },
@@ -8617,6 +8696,7 @@ class StandardStrategy:
         # Proposal for chosen symbol (stored by evaluate_symbol)
         prop_choice = proposals_src.get(base_choice) if isinstance(proposals_src, dict) else None
         signal_reason = str(prop_choice.get("signal_reason")) if isinstance(prop_choice, dict) and prop_choice.get("signal_reason") is not None else None
+        strategy_family = str(prop_choice.get("strategy_family")) if isinstance(prop_choice, dict) and prop_choice.get("strategy_family") is not None else None
         regime = str(prop_choice.get("regime")) if isinstance(prop_choice, dict) and prop_choice.get("regime") is not None else None
         entry_score = int(prop_choice.get("entry_score")) if isinstance(prop_choice, dict) and prop_choice.get("entry_score") is not None else None
         entry_min_score = int(prop_choice.get("entry_min_score")) if isinstance(prop_choice, dict) and prop_choice.get("entry_min_score") is not None else None
@@ -8719,6 +8799,7 @@ class StandardStrategy:
                 "score_factor": float(score_factor),
                 "group_factor": float(group_factor),
                 "signal_reason": signal_reason,
+                "strategy_family": strategy_family,
                 "regime": regime,
                 "adx": (float(ind.get("adx")) if isinstance(ind, dict) and ind.get("adx") is not None else None),
                 "atr_points": (
@@ -8952,6 +9033,7 @@ class StandardStrategy:
                         "score_factor": float(score_factor),
                         "group_factor": float(group_factor),
                         "signal_reason": signal_reason,
+                        "strategy_family": strategy_family,
                         "regime": regime,
                         "adx": (float(ind.get("adx")) if isinstance(ind, dict) and ind.get("adx") is not None else None),
                         "atr_points": (
@@ -9032,6 +9114,7 @@ class StandardStrategy:
                     "score_factor": float(score_factor),
                     "group_factor": float(group_factor),
                     "signal_reason": signal_reason,
+                    "strategy_family": strategy_family,
                     "regime": regime,
                     "adx": (float(ind.get("adx")) if isinstance(ind, dict) and ind.get("adx") is not None else None),
                     "atr_points": (
@@ -9241,6 +9324,14 @@ class StandardStrategy:
                 self._scan_meta.setdefault("renko_context", {})[symbol_base(symbol)] = dict(renko_ctx)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            strategy_family = infer_runtime_strategy_family(
+                mode=mode,
+                signal=signal,
+                signal_reason=signal_reason,
+                candle_ctx=candle_ctx,
+                renko_ctx=renko_ctx,
+            )
+            self.update_skip_capture_context(strategy_family=strategy_family)
             if bool(getattr(CFG, "candle_adapter_emit_event", True)):
                 c_patterns = ",".join([str(x) for x in (candle_ctx.get("candle_patterns") or [])]) or "NONE"
                 logging.info(
@@ -9575,6 +9666,7 @@ class StandardStrategy:
                     'spread_cap_points': float(entry_spread_cap_points) if entry_spread_cap_points is not None else None,
                     'regime': str(regime),
                     'signal_reason': str(signal_reason),
+                    'strategy_family': str(strategy_family),
                     'entry_score': int(entry_score) if entry_score is not None else None,
                     'entry_min_score': int(entry_min_score) if entry_min_score is not None else None,
                     'candle_adapter_mode': str(candle_ctx.get("mode") or "SHADOW_ONLY"),
@@ -9733,6 +9825,7 @@ def _migrate_decision_events_schema_v3(cur: sqlite3.Cursor, log: logging.Logger)
         ("score_factor", "REAL"),
         ("group_factor", "REAL"),
         ("signal_reason", "TEXT"),
+        ("strategy_family", "TEXT"),
         ("regime", "TEXT"),
         ("adx", "REAL"),
         ("atr_points", "REAL"),
