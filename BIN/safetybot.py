@@ -885,6 +885,10 @@ class CFG:
     learner_qa_gate_enabled: bool = True
     learner_qa_red_to_eco: bool = True
     learner_qa_yellow_symbol_cap: int = 1
+    unified_learning_runtime_enabled: bool = True
+    unified_learning_runtime_paper_only: bool = True
+    unified_learning_runtime_min_samples: int = 20
+    unified_learning_runtime_max_abs_score_delta: int = 6
 
     # Legacy/backward compatibility names (deprecated; do not use for sizing)
     max_risk_cap_acct: float = 0.0
@@ -4140,6 +4144,146 @@ def load_scout_advice(meta_dir: Path) -> Optional[Dict[str, Any]]:
         cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         logging.warning("SCOUT IGNORED | loader exception")
         return None
+
+
+def load_unified_learning_advice(meta_dir: Path) -> Optional[Dict[str, Any]]:
+    try:
+        path = Path(meta_dir) / "unified_learning_advice.json"
+        data = _safe_read_json(path)
+        if not data:
+            return None
+        ts = _parse_iso_utc(str(data.get("generated_at_utc") or data.get("ts_utc") or ""))
+        ttl = int(data.get("ttl_sec") or 0)
+        instruments = data.get("instruments")
+        if ts is None or ttl <= 0 or not isinstance(instruments, dict):
+            return None
+        wall_now_utc = dt.datetime.now(tz=UTC)
+        age = (wall_now_utc - ts).total_seconds()
+        if age < -5.0:
+            return None
+        age = max(0.0, float(age))
+        if age > float(ttl):
+            return None
+        return {
+            "ts_utc": ts,
+            "age_sec": float(age),
+            "ttl_sec": int(ttl),
+            "runtime_light": data.get("runtime_light") if isinstance(data.get("runtime_light"), dict) else {},
+            "instruments": instruments,
+            "raw": data,
+        }
+    except Exception as e:
+        cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        return None
+
+
+def resolve_unified_learning_family_adjustment(
+    *,
+    unified: Optional[Dict[str, Any]],
+    symbol: str,
+    window_id: str,
+    window_phase: str,
+    strategy_family: str,
+    min_samples: int,
+    max_abs_delta: int,
+) -> Dict[str, Any]:
+    out = {
+        "score_delta": 0,
+        "advisory_bias": "NEUTRAL",
+        "window": "",
+        "strategy_family": str(strategy_family or "").upper(),
+        "reasons": [],
+        "matched_window_samples": 0,
+        "matched_family_samples": 0,
+    }
+    if not isinstance(unified, dict):
+        return out
+    instruments = unified.get("instruments")
+    if not isinstance(instruments, dict):
+        return out
+    sym = symbol_base(symbol)
+    item = instruments.get(sym)
+    if not isinstance(item, dict):
+        return out
+
+    bias = str(item.get("advisory_bias") or "NEUTRAL").strip().upper()
+    out["advisory_bias"] = bias
+    target_window = f"{str(window_id or '').upper()}|{str(window_phase or '').upper()}".strip("|")
+    out["window"] = target_window
+    target_family = str(strategy_family or "").strip().upper()
+    min_samples = max(1, int(min_samples))
+    max_abs_delta = max(0, int(max_abs_delta))
+    score = 0.0
+    reasons: List[str] = []
+
+    if bias == "PROMOTE":
+        score += 0.30
+        reasons.append("symbol_promote")
+    elif bias == "SUPPRESS":
+        score -= 0.40
+        reasons.append("symbol_suppress")
+
+    def _apply_row(row_obj: Dict[str, Any], *, weight: float, label: str) -> None:
+        nonlocal score
+        rec = str(row_obj.get("recommendation") or "").strip().upper()
+        try:
+            avg = float(row_obj.get("counterfactual_pnl_points_avg") or 0.0)
+        except Exception:
+            avg = 0.0
+        local = 0.0
+        if rec == "DOCISKAJ_FILTRY":
+            local -= 1.0
+        elif rec == "ROZWAZ_LUZOWANIE_W_SHADOW":
+            local += 0.85
+        elif rec == "TRZYMAJ":
+            if avg > 4.0:
+                local += 0.20
+            elif avg < -4.0:
+                local -= 0.20
+        if avg > 10.0:
+            local += 0.10
+        elif avg < -10.0:
+            local -= 0.10
+        score += float(local) * float(weight)
+        reasons.append(f"{label}:{rec or 'NONE'}")
+
+    matched_window = None
+    for row_obj in (item.get("window_advisory") or []):
+        if not isinstance(row_obj, dict):
+            continue
+        if str(row_obj.get("window") or "").strip().upper() != target_window:
+            continue
+        samples_n = int(row_obj.get("samples_n") or 0)
+        if samples_n < min_samples:
+            continue
+        matched_window = row_obj
+        out["matched_window_samples"] = samples_n
+        break
+
+    matched_family = None
+    for row_obj in (item.get("strategy_family_advisory") or []):
+        if not isinstance(row_obj, dict):
+            continue
+        if str(row_obj.get("window") or "").strip().upper() != target_window:
+            continue
+        if str(row_obj.get("strategy_family") or "").strip().upper() != target_family:
+            continue
+        samples_n = int(row_obj.get("samples_n") or 0)
+        if samples_n < min_samples:
+            continue
+        matched_family = row_obj
+        out["matched_family_samples"] = samples_n
+        break
+
+    if isinstance(matched_window, dict):
+        _apply_row(matched_window, weight=0.35, label="window")
+    if isinstance(matched_family, dict):
+        _apply_row(matched_family, weight=0.75, label="family")
+
+    score = max(-1.0, min(1.0, float(score)))
+    out["score_delta"] = int(max(-max_abs_delta, min(max_abs_delta, int(round(score * float(max_abs_delta))))))
+    out["reasons"] = reasons
+    return out
 
 def apply_scout_tiebreak(candidates: List[Tuple[float, str, str, str]],
                          scout: Optional[Dict[str, Any]],
@@ -7785,6 +7929,47 @@ class StandardStrategy:
         adjusted = int(round(float(base_score) + float(delta) * float(weight)))
         return int(max(0, min(100, adjusted)))
 
+    def _apply_unified_learning_advisory_score(
+        self,
+        *,
+        symbol: str,
+        base_score: int,
+        strategy_family: str,
+        is_paper: bool,
+    ) -> Tuple[int, Dict[str, Any]]:
+        if not bool(getattr(CFG, "unified_learning_runtime_enabled", True)):
+            return int(base_score), {}
+        if bool(getattr(CFG, "unified_learning_runtime_paper_only", True)) and (not bool(is_paper)):
+            return int(base_score), {}
+        scan_meta = self._scan_meta if isinstance(getattr(self, "_scan_meta", None), dict) else {}
+        unified = scan_meta.get("unified_learning") if isinstance(scan_meta, dict) else None
+        tw_meta = scan_meta.get("trade_window") if isinstance(scan_meta, dict) else None
+        adj = resolve_unified_learning_family_adjustment(
+            unified=unified if isinstance(unified, dict) else None,
+            symbol=symbol,
+            window_id=str((tw_meta or {}).get("window_id") or ""),
+            window_phase=str((tw_meta or {}).get("phase") or ""),
+            strategy_family=str(strategy_family or ""),
+            min_samples=int(getattr(CFG, "unified_learning_runtime_min_samples", 20)),
+            max_abs_delta=int(getattr(CFG, "unified_learning_runtime_max_abs_score_delta", 6)),
+        )
+        delta = int(adj.get("score_delta") or 0)
+        if delta == 0:
+            return int(base_score), adj
+        adjusted = int(max(0, min(100, int(base_score) + int(delta))))
+        logging.info(
+            "UNIFIED_LEARNING_SCORE symbol=%s window=%s family=%s base=%s delta=%s adjusted=%s bias=%s reasons=%s",
+            str(symbol_base(symbol)),
+            str(adj.get("window") or "UNKNOWN"),
+            str(strategy_family or "UNKNOWN"),
+            int(base_score),
+            int(delta),
+            int(adjusted),
+            str(adj.get("advisory_bias") or "NEUTRAL"),
+            ",".join([str(x) for x in (adj.get("reasons") or [])]) or "NONE",
+        )
+        return adjusted, adj
+
     def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
         # Prefer a single dispatch path when provided by the bot (hybrid REQ/REP).
         if callable(self.dispatch_order_hook):
@@ -9305,6 +9490,7 @@ class StandardStrategy:
             entry_score = None
             entry_min_score = None
             entry_spread_cap_points = None
+            unified_learning_adj: Dict[str, Any] = {}
             candle_ctx = self._evaluate_candle_context(
                 symbol=symbol,
                 grp=grp,
@@ -9421,6 +9607,12 @@ class StandardStrategy:
                         base_score=int(entry_score),
                         renko_ctx=renko_ctx,
                     )
+                    entry_score, unified_learning_adj = self._apply_unified_learning_advisory_score(
+                        symbol=symbol,
+                        base_score=int(entry_score),
+                        strategy_family=str(strategy_family),
+                        is_paper=bool(is_paper),
+                    )
                     entry_min_score = int(min_score)
                     try:
                         entry_spread_cap_points = float(fx_parts.get("spread_cap_points", 0.0) or 0.0)
@@ -9510,6 +9702,12 @@ class StandardStrategy:
                         base_score=int(entry_score),
                         renko_ctx=renko_ctx,
                     )
+                    entry_score, unified_learning_adj = self._apply_unified_learning_advisory_score(
+                        symbol=symbol,
+                        base_score=int(entry_score),
+                        strategy_family=str(strategy_family),
+                        is_paper=bool(is_paper),
+                    )
                     entry_min_score = int(min_score)
                     try:
                         entry_spread_cap_points = float(metal_parts.get("spread_cap_points", 0.0) or 0.0)
@@ -9581,6 +9779,12 @@ class StandardStrategy:
                         signal=signal,
                         base_score=int(entry_score),
                         renko_ctx=renko_ctx,
+                    )
+                    entry_score, unified_learning_adj = self._apply_unified_learning_advisory_score(
+                        symbol=symbol,
+                        base_score=int(entry_score),
+                        strategy_family=str(strategy_family),
+                        is_paper=bool(is_paper),
                     )
                     entry_min_score = int(min_score)
                     try:
@@ -9667,6 +9871,9 @@ class StandardStrategy:
                     'regime': str(regime),
                     'signal_reason': str(signal_reason),
                     'strategy_family': str(strategy_family),
+                    'unified_learning_score_delta': int((unified_learning_adj or {}).get("score_delta") or 0),
+                    'unified_learning_advisory_bias': str((unified_learning_adj or {}).get("advisory_bias") or "NEUTRAL"),
+                    'unified_learning_reasons': list((unified_learning_adj or {}).get("reasons") or []),
                     'entry_score': int(entry_score) if entry_score is not None else None,
                     'entry_min_score': int(entry_min_score) if entry_min_score is not None else None,
                     'candle_adapter_mode': str(candle_ctx.get("mode") or "SHADOW_ONLY"),
@@ -14269,6 +14476,11 @@ class SafetyBot:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         drift_signal = self._evaluate_drift()
         learner_qa_light = self._read_learner_qa_light()
+        unified_learning = (
+            load_unified_learning_advice(self.meta_dir)
+            if bool(getattr(CFG, "unified_learning_runtime_enabled", True))
+            else None
+        )
 
         # rollover global
         rollover_safe = self.strategy.rollover_safe()
@@ -14941,6 +15153,7 @@ class SafetyBot:
                 "snapshot_health": dict(snapshot_health),
                 "snapshot_block_new_entries": bool(snapshot_block_new_entries),
                 "learner_qa_light": str(learner_qa_light),
+                "unified_learning": unified_learning,
                 "topk_base": _topk_rows(base_topk),
                 "topk_final": _topk_rows(final_topk),
                 "proposals": {},
@@ -16429,6 +16642,18 @@ if __name__ == "__main__":
     CFG.partial_tp_retry_sec = _cfg_int("partial_tp_retry_sec", CFG.partial_tp_retry_sec)
     CFG.learner_qa_gate_enabled = _cfg_bool("learner_qa_gate_enabled", CFG.learner_qa_gate_enabled)
     CFG.learner_qa_red_to_eco = _cfg_bool("learner_qa_red_to_eco", CFG.learner_qa_red_to_eco)
+    CFG.unified_learning_runtime_enabled = _cfg_bool(
+        "unified_learning_runtime_enabled", CFG.unified_learning_runtime_enabled
+    )
+    CFG.unified_learning_runtime_paper_only = _cfg_bool(
+        "unified_learning_runtime_paper_only", CFG.unified_learning_runtime_paper_only
+    )
+    CFG.unified_learning_runtime_min_samples = _cfg_int(
+        "unified_learning_runtime_min_samples", CFG.unified_learning_runtime_min_samples
+    )
+    CFG.unified_learning_runtime_max_abs_score_delta = _cfg_int(
+        "unified_learning_runtime_max_abs_score_delta", CFG.unified_learning_runtime_max_abs_score_delta
+    )
     CFG.canary_rollout_enabled = _cfg_bool("canary_rollout_enabled", CFG.canary_rollout_enabled)
     CFG.canary_max_symbols_per_iter = _cfg_int("canary_max_symbols_per_iter", CFG.canary_max_symbols_per_iter)
     CFG.live_canary_enabled = _cfg_bool("live_canary_enabled", CFG.live_canary_enabled)
