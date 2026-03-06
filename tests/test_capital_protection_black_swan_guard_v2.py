@@ -171,6 +171,39 @@ class TestCapitalProtectionBlackSwanGuardV2(unittest.TestCase):
         self.assertNotIn("crash:liquidity_floor", d2.reasons)
         self.assertIn("crash:liquidity_floor", d3.reasons)
 
+    def test_bridge_freeze_requires_streak(self):
+        guard = CapitalProtectionBlackSwanGuardV2(
+            GuardConfig(
+                warmup_ticks=1,
+                crash_bridge_mult=2.0,
+                crash_bridge_streak_required=3,
+                hard_max_bridge_wait_ms=10_000.0,
+            )
+        )
+        warm = MarketSnapshot(
+            ts_monotonic=1.0,
+            symbol="EURUSD",
+            volatility_score=1.0,
+            spread_points=4.0,
+            slippage_points=0.5,
+            liquidity_score=0.9,
+            tick_rate_per_sec=10.0,
+            tick_gap_ms=120.0,
+            price_jump_points=2.0,
+            bridge_wait_ms=20.0,
+            heartbeat_age_ms=100.0,
+            reject_count_recent=0,
+        )
+        guard.evaluate(warm)
+
+        b1 = guard.evaluate(MarketSnapshot(**{**warm.__dict__, "ts_monotonic": 2.0, "bridge_wait_ms": 60.0}))
+        b2 = guard.evaluate(MarketSnapshot(**{**warm.__dict__, "ts_monotonic": 3.0, "bridge_wait_ms": 65.0}))
+        b3 = guard.evaluate(MarketSnapshot(**{**warm.__dict__, "ts_monotonic": 4.0, "bridge_wait_ms": 70.0}))
+
+        self.assertNotIn("crash:bridge_freeze", b1.reasons)
+        self.assertNotIn("crash:bridge_freeze", b2.reasons)
+        self.assertIn("crash:bridge_freeze", b3.reasons)
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

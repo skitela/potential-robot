@@ -74,6 +74,7 @@ class GuardConfig:
     crash_move_mult: float = 6.0
     crash_spread_mult: float = 4.0
     crash_bridge_mult: float = 3.5
+    crash_bridge_streak_required: int = 3
     crash_slippage_mult: float = 5.0
     crash_tick_gap_mult: float = 4.0
     crash_reject_count: int = 3
@@ -158,6 +159,7 @@ class CapitalProtectionBlackSwanGuardV2:
         self._stable_tick_counter = 0
         self._frozen_baseline = False
         self._liquidity_floor_streak = 0
+        self._bridge_freeze_streak = 0
 
     def evaluate(self, snap: MarketSnapshot) -> GuardDecision:
         self._validate_snapshot(snap)
@@ -349,7 +351,16 @@ class CapitalProtectionBlackSwanGuardV2:
             reasons.append("crash:flash_move")
         if self._spread.value and float(snap.spread_points) >= float(self.cfg.crash_spread_mult) * float(self._spread.value):
             reasons.append("crash:spread_explosion")
-        if self._bridge_wait.value and float(snap.bridge_wait_ms) >= float(self.cfg.crash_bridge_mult) * float(self._bridge_wait.value):
+        bridge_freeze_hit = bool(
+            self._bridge_wait.value
+            and float(snap.bridge_wait_ms) >= float(self.cfg.crash_bridge_mult) * float(self._bridge_wait.value)
+        )
+        if bridge_freeze_hit:
+            self._bridge_freeze_streak += 1
+        else:
+            self._bridge_freeze_streak = 0
+        req_bridge_streak = max(1, int(self.cfg.crash_bridge_streak_required))
+        if self._bridge_freeze_streak >= req_bridge_streak:
             reasons.append("crash:bridge_freeze")
         if self._slippage.value and float(snap.slippage_points) >= float(self.cfg.crash_slippage_mult) * float(self._slippage.value):
             reasons.append("crash:slippage_spike")
