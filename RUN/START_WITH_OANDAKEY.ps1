@@ -758,11 +758,9 @@ if (Test-Path $profileSetupScript) {
         "-B",
         $profileSetupScript,
         "--root", $runtimeRoot,
-        "--profile", "OANDA_HYBRID_AUTO"
+        "--profile", "OANDA_HYBRID_AUTO",
+        "--no-launch"
     )
-    if ($DryRun) {
-        $profileArgs += "--no-launch"
-    }
     $profileRc = 0
     $profileOut = ""
     $profileOk = $false
