@@ -43,6 +43,7 @@ string G_Symbol = "";
 string G_SymbolUpper = "";
 ulong  G_LastPythonMessageTime = 0;
 bool   G_IsFailSafeActive = false;
+bool   G_HasSeenPythonTraffic = false;
 bool   G_PolicyRuntimeLoaded = false;
 bool   G_PolicyFailSafeNoTrade = false;
 bool   G_PolicyShadowMode = true;
@@ -53,6 +54,7 @@ ulong  G_LastPolicyOpenFailLogMs = 0;
 ulong  G_LastTickSendFailLogMs = 0;
 bool   G_UsesMillisecondTimer = false;
 ulong  G_LastTelemetryPulseMs = 0;
+ulong  G_LastTimeoutNoPositionLogMs = 0;
 
 int G_MAFastHandle = INVALID_HANDLE;
 int G_ADXHandle = INVALID_HANDLE;
@@ -1359,6 +1361,21 @@ void SendTickData()
   }
 }
 
+bool HasOpenPositionForCurrentSymbol()
+{
+  for(int i = PositionsTotal() - 1; i >= 0; i--)
+  {
+    ulong ticket = PositionGetTicket(i);
+    if(ticket <= 0)
+      continue;
+
+    string symbol = PositionGetString(POSITION_SYMBOL);
+    if(symbol == G_Symbol)
+      return true;
+  }
+  return false;
+}
+
 //+------------------------------------------------------------------+
 //| Telemetry out: account snapshot                                  |
 //+------------------------------------------------------------------+
@@ -1708,6 +1725,7 @@ void ProcessCommands()
   G_CurrentOrderSendMs = -1;
   G_CurrentRequestTsUtc = "";
   G_LastPythonMessageTime = (ulong)GetTickCount();
+  G_HasSeenPythonTraffic = true;
 
   JSONNode json;
   if(!json.Deserialize(command_json, CP_UTF8))
@@ -1926,6 +1944,7 @@ int OnInit()
   G_SymbolUpper = ToUpperAscii(_Symbol);
   G_LastPythonMessageTime = (ulong)GetTickCount();
   G_IsFailSafeActive = false;
+  G_HasSeenPythonTraffic = false;
   PolicyResetDefaults();
   G_PolicyRuntimeLoaded = false;
   G_PolicyFailSafeNoTrade = false;
@@ -1972,11 +1991,20 @@ void OnTimer()
   if(InpEnablePythonTimeoutWatchdog && InpPythonTimeoutSec > 0)
   {
     ulong elapsed_ms = now_ms - G_LastPythonMessageTime;
+    bool symbol_has_positions = HasOpenPositionForCurrentSymbol();
     if(!G_IsFailSafeActive && elapsed_ms > (InpPythonTimeoutSec * 1000))
     {
-      G_IsFailSafeActive = true;
-      Alert("FAIL-SAFE ACTIVATED: Python timeout exceeded. Closing open positions.");
-      CloseAllOpenPositions("FAIL_SAFE_TIMEOUT");
+      if(symbol_has_positions)
+      {
+        G_IsFailSafeActive = true;
+        Alert("FAIL-SAFE ACTIVATED: Python timeout exceeded. Closing open positions.");
+        CloseAllOpenPositions("FAIL_SAFE_TIMEOUT");
+      }
+      else if(G_HasSeenPythonTraffic && (G_LastTimeoutNoPositionLogMs == 0 || (now_ms - G_LastTimeoutNoPositionLogMs) >= 60000))
+      {
+        G_LastTimeoutNoPositionLogMs = now_ms;
+        Print("FAIL_SAFE_TIMEOUT_NO_POSITION symbol=", G_SymbolUpper, " elapsed_ms=", (long)elapsed_ms);
+      }
     }
 
     if(G_IsFailSafeActive && InpAutoRecoverFromTimeout && elapsed_ms <= (InpPythonTimeoutSec * 1000))
