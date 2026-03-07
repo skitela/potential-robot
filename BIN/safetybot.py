@@ -3160,7 +3160,7 @@ def load_env(usb_root: Path) -> Dict[str, str]:
                 continue
             if "=" in line:
                 k, v = line.split("=", 1)
-                cfg[k.strip()] = v.strip()
+                cfg[k.strip().lstrip("\ufeff")] = v.strip()
     if "MT5_PASSWORD" not in cfg:
         if "MT5_PASSWORD_DPAPI_B64" in cfg:
             try:
