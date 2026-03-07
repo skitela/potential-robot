@@ -151,6 +151,20 @@ To zrobi:
 - plan zasilania,
 - raport startowy bootstrapu.
 
+## Gdy `HybridAgent` konczy `INIT_FAILED (-1)` po starcie MT5
+Jesli w logu `MQL5` widzisz:
+
+- `cannot load ... libzmq.dll [126]`
+- `module 'libzmq.dll' is not loaded`
+
+to na VPS brakuje systemowej zaleznosci dla `libzmq.dll`. Zainstaluj ja:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\OANDA_MT5_SYSTEM\TOOLS\vps_install_mt5_prereqs.ps1
+```
+
+Potem zamknij i uruchom `MT5` ponownie.
+
 ## Pierwsza walidacja po migracji
 Na VPS sprawdź:
 
