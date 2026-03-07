@@ -19,6 +19,36 @@ function Resolve-Root {
     return (Resolve-Path $InputRoot).Path
 }
 
+function Get-PythonExe {
+    param([string]$RuntimeRoot = "")
+
+    $candidates = @(
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        (Join-Path $RuntimeRoot ".venv\Scripts\python.exe"),
+        "C:\Program Files\Python312\python.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    try {
+        $py312 = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0) {
+            $py312Path = [string]($py312 | Select-Object -First 1)
+            if (-not [string]::IsNullOrWhiteSpace($py312Path) -and (Test-Path $py312Path.Trim())) {
+                return $py312Path.Trim()
+            }
+        }
+    } catch {
+        # plain python fallback below
+    }
+
+    return "python"
+}
+
 function Write-JsonAtomic {
     param(
         [Parameter(Mandatory = $true)]
@@ -723,6 +753,7 @@ $status.key_file_rel = "TOKEN\\BotKey.env"
 
 $profileSetupScript = Join-Path $runtimeRoot "TOOLS\setup_mt5_hybrid_profile.py"
 if (Test-Path $profileSetupScript) {
+    $pythonExe = Get-PythonExe -RuntimeRoot $runtimeRoot
     $profileArgs = @(
         "-B",
         $profileSetupScript,
@@ -736,25 +767,20 @@ if (Test-Path $profileSetupScript) {
     $profileOut = ""
     $profileOk = $false
     try {
-        $profileOut = (& py -3.12 @profileArgs 2>&1 | Out-String)
+        $profileOut = (& $pythonExe @profileArgs 2>&1 | Out-String)
         $profileRc = [int]$LASTEXITCODE
         $profileOk = ($profileRc -eq 0)
     } catch {
-        try {
-            $profileOut = (& python @profileArgs 2>&1 | Out-String)
-            $profileRc = [int]$LASTEXITCODE
-            $profileOk = ($profileRc -eq 0)
-        } catch {
-            $profileRc = 7
-            $profileOut = ("MT5 profile setup launch failed: " + $_.Exception.Message)
-            $profileOk = $false
-        }
+        $profileRc = 7
+        $profileOut = ("MT5 profile setup launch failed: " + $_.Exception.Message)
+        $profileOk = $false
     }
     $status.mt5_profile_setup = [ordered]@{
         ok = [bool]$profileOk
         exit_code = [int]$profileRc
         output = [string]$profileOut
         profile = "OANDA_HYBRID_AUTO"
+        python = [string]$pythonExe
     }
     if (-not $profileOk) {
         $status.status = "FAIL"
