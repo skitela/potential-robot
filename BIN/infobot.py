@@ -32,11 +32,17 @@ except Exception:
     import common_guards as cg
 
 try:
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 except Exception:
     ZoneInfo = None  # type: ignore
+    ZoneInfoNotFoundError = Exception  # type: ignore
 
-TZ_PL = ZoneInfo("Europe/Warsaw") if ZoneInfo else None
+try:
+    TZ_PL = ZoneInfo("Europe/Warsaw") if ZoneInfo else None
+except ZoneInfoNotFoundError:
+    # Windows VPS images may not ship tzdata; fall back to UTC instead of
+    # crashing InfoBot during bootstrap.
+    TZ_PL = None
 UTC = timezone.utc
 
 HEARTBEAT_SEC = 60
