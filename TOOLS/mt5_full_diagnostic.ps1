@@ -2,7 +2,8 @@ param(
     [string]$TerminalDataDir = "",
     [string]$Server = "OANDATMS-MT5",
     [string]$TerminalExe = "",
-    [string]$OutDir = ""
+    [string]$OutDir = "",
+    [string]$PythonExe = ""
 )
 
 Set-StrictMode -Version Latest
@@ -80,8 +81,26 @@ function Find-TerminalExe {
     return ""
 }
 
+function Find-PythonExe {
+    param([string]$ExplicitPythonExe)
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPythonExe) -and (Test-Path $ExplicitPythonExe)) {
+        return (Resolve-Path $ExplicitPythonExe -ErrorAction Stop).Path
+    }
+    $candidates = @(
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        "C:\Program Files\Python312\python.exe"
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { return $p }
+    }
+    return ""
+}
+
 function Invoke-Mt5Probe {
-    param([string]$TerminalExePath)
+    param(
+        [string]$TerminalExePath,
+        [string]$PythonExePath
+    )
 
     $tmpPy = Join-Path $env:TEMP ("mt5_probe_" + [guid]::NewGuid().ToString("N") + ".py")
     $tmpJson = Join-Path $env:TEMP ("mt5_probe_" + [guid]::NewGuid().ToString("N") + ".json")
@@ -184,10 +203,12 @@ if __name__ == "__main__":
 
     Set-Content -Path $tmpPy -Value $py -Encoding UTF8
 
-    $attempts = @(
-        @{ cmd = "python"; pre = @() },
-        @{ cmd = "py"; pre = @("-3.12") }
-    )
+    $attempts = New-Object System.Collections.Generic.List[object]
+    if (-not [string]::IsNullOrWhiteSpace($PythonExePath) -and (Test-Path $PythonExePath)) {
+        [void]$attempts.Add(@{ cmd = $PythonExePath; pre = @() })
+    }
+    [void]$attempts.Add(@{ cmd = "python"; pre = @() })
+    [void]$attempts.Add(@{ cmd = "py"; pre = @("-3.12") })
 
     $lastErr = ""
     $attemptTrace = New-Object System.Collections.Generic.List[object]
@@ -339,8 +360,9 @@ $terminalExeUse = $TerminalExe
 if ([string]::IsNullOrWhiteSpace($terminalExeUse)) {
     $terminalExeUse = Find-TerminalExe
 }
+$pythonExeUse = Find-PythonExe -ExplicitPythonExe $PythonExe
 
-$probe = Invoke-Mt5Probe -TerminalExePath $terminalExeUse
+$probe = Invoke-Mt5Probe -TerminalExePath $terminalExeUse -PythonExePath $pythonExeUse
 $logs = Get-LogSummary -DataDir $dataDir
 
 $localSettingsOk = (
