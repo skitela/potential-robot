@@ -1,6 +1,6 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
-    [string]$Mt5DataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
+    [string]$Mt5DataDir = "",
     [int]$PollMs = 1200
 )
 
@@ -72,6 +72,69 @@ function Resolve-RootPath {
         return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
     }
     return (Resolve-Path $Path).Path
+}
+
+function Resolve-Mt5DataDir {
+    param([string]$Preferred = "")
+    if (-not [string]::IsNullOrWhiteSpace($Preferred) -and (Test-Path $Preferred)) {
+        return (Resolve-Path $Preferred).Path
+    }
+
+    $appData = $env:APPDATA
+    if ([string]::IsNullOrWhiteSpace($appData)) {
+        return ""
+    }
+    $base = Join-Path $appData "MetaQuotes\Terminal"
+    if (-not (Test-Path $base)) {
+        return ""
+    }
+
+    $bestDir = ""
+    $bestScore = -1
+    $bestTs = [datetime]::MinValue
+
+    foreach ($d in (Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue)) {
+        $profileMarker = Join-Path $d.FullName "MQL5\Profiles\Charts\OANDA_HYBRID_AUTO"
+        $expertMarkerEx5 = Join-Path $d.FullName "MQL5\Experts\HybridAgent.ex5"
+        $expertMarkerMq5 = Join-Path $d.FullName "MQL5\Experts\HybridAgent.mq5"
+        $commonIni = Join-Path $d.FullName "config\common.ini"
+
+        $score = 0
+        $markerPath = ""
+        if (Test-Path $profileMarker) {
+            $score += 8
+            $markerPath = $profileMarker
+        }
+        if (Test-Path $expertMarkerEx5) {
+            $score += 6
+            if ([string]::IsNullOrWhiteSpace($markerPath)) { $markerPath = $expertMarkerEx5 }
+        } elseif (Test-Path $expertMarkerMq5) {
+            $score += 4
+            if ([string]::IsNullOrWhiteSpace($markerPath)) { $markerPath = $expertMarkerMq5 }
+        }
+        if (Test-Path $commonIni) {
+            $score += 2
+            if ([string]::IsNullOrWhiteSpace($markerPath)) { $markerPath = $commonIni }
+        }
+        if ($score -le 0) { continue }
+
+        $ts = [datetime]::MinValue
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($markerPath)) {
+                $ts = (Get-Item $markerPath -ErrorAction Stop).LastWriteTimeUtc
+            }
+        } catch {
+            $ts = [datetime]::MinValue
+        }
+
+        if (($score -gt $bestScore) -or (($score -eq $bestScore) -and ($ts -gt $bestTs))) {
+            $bestScore = $score
+            $bestTs = $ts
+            $bestDir = $d.FullName
+        }
+    }
+
+    return $bestDir
 }
 
 function Read-NewLines {
@@ -218,6 +281,7 @@ $pidPath = Join-Path $runDir "mt5_risk_guard.pid"
 
 $state = [ordered]@{
     started_utc = (Get-Date).ToUniversalTime().ToString("o")
+    mt5_data_dir = ""
     accepted_events = 0
     rejected_events = 0
     popup_actions = 0
@@ -236,6 +300,11 @@ $state = [ordered]@{
 
 Append-Line -Path $eventLog -Line ("[{0}] RISK_GUARD_START pid={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $PID)
 
+$mt5DataDirResolved = Resolve-Mt5DataDir -Preferred $Mt5DataDir
+$state.mt5_data_dir = $mt5DataDirResolved
+$mt5DirLogValue = if ([string]::IsNullOrWhiteSpace($mt5DataDirResolved)) { "<unresolved>" } else { $mt5DataDirResolved }
+Append-Line -Path $eventLog -Line ("[{0}] RISK_GUARD_MT5_DIR dir={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mt5DirLogValue)
+
 $keywords = @(
     "high risk investment warning",
     "investment warning",
@@ -250,20 +319,27 @@ $offsets = @{}
 
 while ($true) {
     try {
-        $mt5log = Join-Path $Mt5DataDir ("logs\" + (Get-Date -Format "yyyyMMdd") + ".log")
-        $state.mt5_log = $mt5log
-        $newLines = Read-NewLines -Path $mt5log -Offsets $offsets
-        foreach ($line in $newLines) {
-            $msg = [string]$line
-            if ([string]::IsNullOrWhiteSpace($msg)) { continue }
-            if ($msg -match "high risk investment warning has been accepted") {
-                $state.accepted_events = [int]$state.accepted_events + 1
-                $state.last_log_event = $msg
-                Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_ACCEPTED {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
-            } elseif ($msg -match "high risk investment warning has been rejected") {
-                $state.rejected_events = [int]$state.rejected_events + 1
-                $state.last_log_event = $msg
-                Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_REJECTED {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
+        if ([string]::IsNullOrWhiteSpace($mt5DataDirResolved) -or (-not (Test-Path $mt5DataDirResolved))) {
+            $mt5DataDirResolved = Resolve-Mt5DataDir -Preferred $Mt5DataDir
+            $state.mt5_data_dir = $mt5DataDirResolved
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($mt5DataDirResolved)) {
+            $mt5log = Join-Path $mt5DataDirResolved ("logs\" + (Get-Date -Format "yyyyMMdd") + ".log")
+            $state.mt5_log = $mt5log
+            $newLines = Read-NewLines -Path $mt5log -Offsets $offsets
+            foreach ($line in $newLines) {
+                $msg = [string]$line
+                if ([string]::IsNullOrWhiteSpace($msg)) { continue }
+                if ($msg -match "high risk investment warning has been accepted") {
+                    $state.accepted_events = [int]$state.accepted_events + 1
+                    $state.last_log_event = $msg
+                    Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_ACCEPTED {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
+                } elseif ($msg -match "high risk investment warning has been rejected") {
+                    $state.rejected_events = [int]$state.rejected_events + 1
+                    $state.last_log_event = $msg
+                    Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_REJECTED {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
+                }
             }
         }
 
