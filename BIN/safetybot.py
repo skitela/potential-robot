@@ -1211,6 +1211,49 @@ def _in_window(local_now: dt.datetime, start_hm: Tuple[int, int], end_hm: Tuple[
     return bool(start <= ref <= end)
 
 
+def group_market_session_open(grp: str, now_dt: Optional[dt.datetime] = None) -> bool:
+    """
+    Lightweight market-calendar guard for trade-window activation.
+
+    We keep this intentionally conservative:
+    - CRYPTO remains always-on
+    - FX/METAL are considered closed from Friday 17:00 NY until Sunday 17:00 NY
+    - INDEX/EQUITY are considered closed on Saturday/Sunday
+
+    This guard exists to prevent runtime from treating clock-based windows as ACTIVE
+    when the underlying market is actually closed and only stale snapshots are left.
+    """
+    ref = (now_dt or now_utc()).astimezone(UTC)
+    ny = ref.astimezone(TZ_NY)
+    grp_u = _group_key(grp)
+
+    if grp_u == "CRYPTO":
+        return True
+
+    wd = int(ny.weekday())
+    hm = (int(ny.hour), int(ny.minute))
+
+    try:
+        reopen_cfg = getattr(CFG, "reopen_guard_ny_start_hm", (17, 0))
+        reopen_hm = (int(reopen_cfg[0]), int(reopen_cfg[1]))
+    except Exception:
+        reopen_hm = (17, 0)
+
+    if grp_u in {"FX", "METAL"}:
+        if wd == 5:
+            return False
+        if wd == 6 and hm < reopen_hm:
+            return False
+        if wd == 4 and hm >= reopen_hm:
+            return False
+        return True
+
+    if grp_u in {"INDEX", "EQUITY"}:
+        return wd not in (5, 6)
+
+    return True
+
+
 def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
     """Return current trade-window context.
 
@@ -1258,6 +1301,9 @@ def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
         except Exception:
             continue
         if _in_window(local_now, start_hm, end_hm):
+            grp = str(w.get("group") or "").upper()
+            if grp and (not group_market_session_open(grp, now_dt)):
+                continue
             # Closeout buffer:
             # For overnight windows (e.g. 23:00-09:00) the "end" moment is on the next day.
             # We must compute end_dt robustly, otherwise the whole overnight window becomes CLOSEOUT.
@@ -1280,7 +1326,7 @@ def trade_window_ctx(now_dt: Optional[dt.datetime] = None) -> Dict[str, object]:
             ctx.update({
                 "phase": "CLOSEOUT" if in_closeout else "ACTIVE",
                 "window_id": wid,
-                "group": str(w.get("group") or "").upper(),
+                "group": grp,
                 "anchor_tz": str(w.get("anchor_tz") or "Europe/Warsaw"),
                 "anchor_now": local_now,
                 "entry_allowed": (not in_closeout),
@@ -5077,6 +5123,70 @@ class M5BarsStore:
         rs["time"] = rs["time_utc"].dt.tz_convert(TZ_PL)
         return rs[["time", "open", "high", "low", "close"]].reset_index(drop=True)
 
+
+def inspect_m5_store_readiness(
+    store: Any,
+    base_symbol: str,
+    need_rows: int,
+    now_ts: float,
+    *,
+    timeframe_min: int,
+) -> Dict[str, Any]:
+    """
+    Lightweight readiness check for local M5 store.
+
+    Used to distinguish:
+    - real short history / missing bars
+    - stale but otherwise complete local store
+    """
+    state: Dict[str, Any] = {
+        "rows": 0,
+        "fresh_ok": False,
+        "stale": False,
+        "age_s": None,
+        "max_age_sec": None,
+        "last_bar_utc": None,
+        "df": None,
+    }
+    if store is None:
+        return state
+    try:
+        df = store.read_recent_df(str(base_symbol), max(1, int(need_rows)))
+    except Exception:
+        return state
+    if df is None or len(df) == 0:
+        return state
+
+    rows = int(len(df))
+    state["rows"] = rows
+    state["df"] = df
+    try:
+        ts = pd.Timestamp(df["time"].iloc[-1])
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(TZ_PL)
+        ts_utc = ts.tz_convert(UTC)
+        age_s = max(0.0, float(now_ts) - float(ts_utc.timestamp()))
+        trade_tf = int(getattr(CFG, "timeframe_trade", 5))
+        max_age_base = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+        max_age_bar = max(max_age_base, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)))
+        if int(timeframe_min) > int(trade_tf):
+            max_age = max(max_age_bar, int(timeframe_min) * 60 + max(120, int(trade_tf) * 60))
+        else:
+            max_age = max_age_bar
+        state.update(
+            {
+                "age_s": float(age_s),
+                "max_age_sec": int(max_age),
+                "last_bar_utc": ts_utc.replace(microsecond=0).isoformat(),
+                "fresh_ok": bool(age_s <= float(max_age)),
+                "stale": bool(age_s > float(max_age)),
+            }
+        )
+    except Exception:
+        return state
+    return state
+
+
 class TickSnapshotsStore:
     """SQLite tick snapshot store for Renko/offline analytics (no direct trading decisions)."""
 
@@ -8592,12 +8702,52 @@ class StandardStrategy:
                 except Exception as e:
                     cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+        strict_no_fetch = bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)) or bool(
+            getattr(CFG, "hybrid_no_mt5_data_fetch_hard", False)
+        )
+        store_state = inspect_m5_store_readiness(
+            getattr(self.engine, "bars_store", None),
+            symbol_base(symbol),
+            120,
+            now_ts,
+            timeframe_min=tf_min,
+        )
+        if strict_no_fetch and bool(store_state.get("stale")) and int(store_state.get("rows") or 0) > 0:
+            self.cache.last_m5_calc_ts[symbol] = now_ts
+            self._metric_inc_skip("M5_STORE_STALE")
+            logging.info(
+                "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=M5_STORE_STALE rows=%s age_s=%s max_age=%s last_bar_utc=%s",
+                symbol,
+                grp,
+                mode,
+                int(store_state.get("rows") or 0),
+                int(float(store_state.get("age_s") or 0.0)),
+                int(store_state.get("max_age_sec") or 0),
+                store_state.get("last_bar_utc"),
+            )
+            return None
+
         df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
         if df is None or len(df) < 60:
             self.cache.last_m5_calc_ts[symbol] = now_ts
             rows = 0 if df is None else int(len(df))
-            self._metric_inc_skip("M5_DATA_SHORT")
-            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_DATA_SHORT rows={rows}")
+            reason = "M5_DATA_SHORT"
+            if strict_no_fetch and int(store_state.get("rows") or 0) > 0 and bool(store_state.get("stale")):
+                reason = "M5_STORE_STALE"
+            self._metric_inc_skip(reason)
+            if reason == "M5_STORE_STALE":
+                logging.info(
+                    "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=M5_STORE_STALE rows=%s age_s=%s max_age=%s last_bar_utc=%s",
+                    symbol,
+                    grp,
+                    mode,
+                    rows,
+                    int(float(store_state.get('age_s') or 0.0)),
+                    int(store_state.get('max_age_sec') or 0),
+                    store_state.get('last_bar_utc'),
+                )
+            else:
+                logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_DATA_SHORT rows={rows}")
             return None
 
         self.cache.last_m5_calc_ts[symbol] = now_ts
