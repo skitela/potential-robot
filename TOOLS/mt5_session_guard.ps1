@@ -2,6 +2,7 @@ param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$Mt5DataDir = "",
     [int]$PollSec = 5,
+    [int]$StartupGraceSec = 300,
     [int]$RestartCooldownSec = 900,
     [int]$DisconnectGraceSec = 20,
     [int]$DisconnectBurstWindowSec = 300,
@@ -271,6 +272,7 @@ $lastAuthAt = $null
 $lastRestartAt = $null
 $connectedState = "UNKNOWN"
 $lastReason = "NONE"
+$scriptStartedAt = Get-Date
 
 $disconnectRx = [regex]'(?i)\bconnection to .* lost\b'
 $authRx = [regex]'(?i)\bauthorized on .* through access server\b'
@@ -357,15 +359,17 @@ while ($true) {
         $desired = Get-SystemDesiredState -Path $desiredStatePath
         $allowRepair = ([string]$desired.state -eq "RUNNING")
         $virtualHostWarnAlert = ([int]$virtualHostWarnEvents.Count -ge [int]([Math]::Max(1, [int]$VirtualHostWarnAlertThreshold)))
+        $startupGraceActive = ((($now - $scriptStartedAt).TotalSeconds) -lt [double]([Math]::Max(0, [int]$StartupGraceSec)))
 
         $cooldownOk = $true
         if ($null -ne $lastRestartAt) {
             $cooldownOk = ((($now - $lastRestartAt).TotalSeconds) -ge [double]([Math]::Max(60, [int]$RestartCooldownSec)))
         }
+        $repairWindowOpen = ($cooldownOk -and (-not $startupGraceActive))
 
         $shouldRepair = $false
         $repairReason = ""
-        if (($severeEvents.Count -gt 0) -and $cooldownOk) {
+        if (($severeEvents.Count -gt 0) -and $repairWindowOpen) {
             $shouldRepair = $true
             $repairReason = "SEVERE_MT5_EVENT"
         }
@@ -377,7 +381,7 @@ while ($true) {
                     $isDisconnected = $true
                 }
             }
-            if ($isDisconnected -and $cooldownOk) {
+            if ($isDisconnected -and $repairWindowOpen) {
                 $downSec = [double]($now - $lastLostAt).TotalSeconds
                 if ($downSec -ge [double]([Math]::Max(5, [int]$DisconnectGraceSec))) {
                     $shouldRepair = $true
@@ -387,14 +391,14 @@ while ($true) {
         }
 
         if (-not $shouldRepair) {
-            if (($lostEvents.Count -ge [int]([Math]::Max(1, [int]$DisconnectBurstThreshold))) -and $cooldownOk) {
+            if (($lostEvents.Count -ge [int]([Math]::Max(1, [int]$DisconnectBurstThreshold))) -and $repairWindowOpen) {
                 $shouldRepair = $true
                 $repairReason = "BROKER_DISCONNECT_BURST"
             }
         }
 
         if (-not $shouldRepair) {
-            if (($policyRetryEvents.Count -ge [int]([Math]::Max(2, [int]$PolicyRetryThreshold))) -and $cooldownOk) {
+            if (($policyRetryEvents.Count -ge [int]([Math]::Max(2, [int]$PolicyRetryThreshold))) -and $repairWindowOpen) {
                 $shouldRepair = $true
                 $repairReason = "POLICY_RUNTIME_RETRY_BURST"
             }
@@ -440,6 +444,8 @@ while ($true) {
             desired_state_source = [string]$desired.source
             desired_state_ts_utc = [string]$desired.ts_utc
             repairs_allowed = [bool]$allowRepair
+            startup_grace_sec = [int]$StartupGraceSec
+            startup_grace_active = [bool]$startupGraceActive
             last_lost_utc = $(if ($null -eq $lastLostAt) { "" } else { $lastLostAt.ToUniversalTime().ToString("o") })
             last_authorized_utc = $(if ($null -eq $lastAuthAt) { "" } else { $lastAuthAt.ToUniversalTime().ToString("o") })
             lost_events_window = [int]$lostEvents.Count
@@ -459,6 +465,7 @@ while ($true) {
                 virtual_hosting_warn_window_sec = [int]$VirtualHostWarnWindowSec
                 virtual_hosting_warn_alert_threshold = [int]$VirtualHostWarnAlertThreshold
                 restart_cooldown_sec = [int]$RestartCooldownSec
+                startup_grace_sec = [int]$StartupGraceSec
             }
             dry_run = [bool]$DryRun
             loop_error = ""
