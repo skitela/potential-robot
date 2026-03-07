@@ -41,6 +41,25 @@ try {
         Remove-Item -LiteralPath $zipPath -Force
     }
     Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zipPath -CompressionLevel Optimal
+    $manifest = [ordered]@{
+        schema = "oanda.mt5.vps.bundle.v1"
+        generated_at_utc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        root = [System.IO.Path]::GetFullPath($Root)
+        out_dir = $OutDir
+        bundle_path = $zipPath
+        bundle_name = [System.IO.Path]::GetFileName($zipPath)
+        include_dirs = $includeDirs
+    }
+    $latestJson = Join-Path $OutDir "vps_bundle_latest.json"
+    $latestTxt = Join-Path $OutDir "vps_bundle_latest.txt"
+    $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $latestJson
+    @(
+        "VPS_BUNDLE_LATEST"
+        ("generated_at_utc=" + $manifest.generated_at_utc)
+        ("bundle_path=" + $manifest.bundle_path)
+        ("root=" + $manifest.root)
+        ("include_dirs=" + ($includeDirs -join ","))
+    ) | Set-Content -Encoding UTF8 -Path $latestTxt
     Write-Host "VPS_BUNDLE_DONE path=$zipPath"
 }
 finally {
@@ -48,4 +67,3 @@ finally {
         Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-
