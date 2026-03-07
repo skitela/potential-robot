@@ -170,23 +170,40 @@ def _description_for_symbol(symbol: str) -> str:
     return base
 
 
-def _pick_source_chart(data_dir: Path) -> Optional[Path]:
-    deleted = data_dir / "MQL5" / "Profiles" / "deleted"
-    if not deleted.exists():
+def _chart_template_score(chart_path: Path) -> Optional[int]:
+    try:
+        txt = chart_path.read_text(encoding="utf-16le")
+    except Exception:
         return None
+    if "name=HybridAgent" not in txt or "path=Experts\\HybridAgent.ex5" not in txt:
+        return None
+    if "expertmode=5" not in txt:
+        return None
+    return len(txt)
+
+
+def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
+    candidates: List[Path] = []
+
+    deleted = data_dir / "MQL5" / "Profiles" / "deleted"
+    if deleted.exists():
+        candidates.extend(sorted(deleted.glob("*.chr")))
+
+    charts_root = data_dir / "MQL5" / "Profiles" / "Charts"
+    preferred_profile = charts_root / profile_name
+    if preferred_profile.exists():
+        candidates.extend(sorted(preferred_profile.glob("*.chr")))
+
+    if charts_root.exists():
+        for profile_dir in sorted(charts_root.iterdir()):
+            if profile_dir.is_dir() and profile_dir != preferred_profile:
+                candidates.extend(sorted(profile_dir.glob("*.chr")))
 
     best: Optional[Tuple[int, Path]] = None
-    for p in deleted.glob("*.chr"):
-        try:
-            txt = p.read_text(encoding="utf-16le")
-        except Exception:
+    for p in candidates:
+        score = _chart_template_score(p)
+        if score is None:
             continue
-        if "name=HybridAgent" not in txt or "path=Experts\\HybridAgent.ex5" not in txt:
-            continue
-        if "expertmode=5" not in txt:
-            continue
-        # Prefer short/clean files.
-        score = len(txt)
         if best is None or score < best[0]:
             best = (score, p)
     return best[1] if best else None
@@ -283,9 +300,9 @@ def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool, focus_grou
     if data_dir is None:
         return SetupResult(False, "Nie znaleziono katalogu danych MT5 z HybridAgent.mq5.")
 
-    template = _pick_source_chart(data_dir)
+    template = _pick_source_chart(data_dir, profile_name)
     if template is None:
-        return SetupResult(False, "Brak źródłowego pliku .chr z HybridAgent (expertmode=5) w Profiles/deleted.")
+        return SetupResult(False, "Brak źródłowego pliku .chr z HybridAgent (expertmode=5) w Profiles/deleted ani w istniejących profilach wykresow.")
 
     symbols_base = _load_strategy_symbols(root)
     symbols_base = _filter_symbols_for_focus(symbols_base, focus_group)
