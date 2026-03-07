@@ -15,13 +15,34 @@ set "SOURCE_DIR=%ROOT%\MQL5"
 set "LOG_DIR=%ROOT%\LOGS"
 set "SERVER_NAME=OANDATMS-MT5"
 set "DIAG_BAT=%ROOT%\RUN_MT5_FULL_DIAGNOSTIC.bat"
-set "TERMINAL_DATA_DIR_FALLBACK=C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
 set "PY312_AVAILABLE=0"
+set "PYTHON_EXE="
+set "PYTHON_ARGS="
 
-where py >nul 2>&1
-if "%ERRORLEVEL%"=="0" (
-  py -3.12 -c "import sys; print(sys.version_info[0])" >nul 2>&1
-  if "%ERRORLEVEL%"=="0" set "PY312_AVAILABLE=1"
+if exist "C:\OANDA_VENV\.venv\Scripts\python.exe" (
+  set "PYTHON_EXE=C:\OANDA_VENV\.venv\Scripts\python.exe"
+  set "PY312_AVAILABLE=1"
+)
+if not defined PYTHON_EXE if exist "C:\Program Files\Python312\python.exe" (
+  set "PYTHON_EXE=C:\Program Files\Python312\python.exe"
+  set "PY312_AVAILABLE=1"
+)
+if not defined PYTHON_EXE (
+  where py >nul 2>&1
+  if "%ERRORLEVEL%"=="0" (
+    py -3.12 -c "import sys; print(sys.version_info[0])" >nul 2>&1
+    if "%ERRORLEVEL%"=="0" (
+      set "PYTHON_EXE=py"
+      set "PYTHON_ARGS=-3.12"
+      set "PY312_AVAILABLE=1"
+    )
+  )
+)
+if not defined PYTHON_EXE (
+  where python >nul 2>&1
+  if "%ERRORLEVEL%"=="0" (
+    set "PYTHON_EXE=python"
+  )
 )
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
@@ -51,17 +72,11 @@ if not exist "%SOURCE_DIR%\Libraries\libsodium.dll" (
 )
 
 set "TERMINAL_DATA_DIR="
-if exist "%TERMINAL_DATA_DIR_FALLBACK%\config\common.ini" (
-  set "TERMINAL_DATA_DIR=%TERMINAL_DATA_DIR_FALLBACK%"
-)
-
-if not defined TERMINAL_DATA_DIR (
-  set "MT5_BASE=%APPDATA%\MetaQuotes\Terminal"
-  if exist "%MT5_BASE%" (
-    for /d %%D in ("%MT5_BASE%\*") do (
-      if exist "%%~fD\config\common.ini" (
-        set "TERMINAL_DATA_DIR=%%~fD"
-      )
+set "MT5_BASE=%APPDATA%\MetaQuotes\Terminal"
+if exist "%MT5_BASE%" (
+  for /d %%D in ("%MT5_BASE%\*") do (
+    if exist "%%~fD\config\common.ini" (
+      set "TERMINAL_DATA_DIR=%%~fD"
     )
   )
 )
@@ -167,10 +182,10 @@ if exist "%DIAG_BAT%" (
 
 echo [STEP] Ensuring Wave-1 MT5 symbols are selected/visible (AUDJPY/NZDJPY)
 if exist "%ROOT%\TOOLS\mt5_symbol_select.py" (
-  if "%PY312_AVAILABLE%"=="1" (
-    py -3.12 "%ROOT%\TOOLS\mt5_symbol_select.py" --mt5-path "%TERMINAL_EXE%" --symbols AUDJPY NZDJPY --out "%ROOT%\RUN\mt5_symbol_select_report.json"
+  if defined PYTHON_EXE (
+    call :run_python "%ROOT%\TOOLS\mt5_symbol_select.py" --mt5-path "%TERMINAL_EXE%" --symbols AUDJPY NZDJPY --out "%ROOT%\RUN\mt5_symbol_select_report.json"
   ) else (
-    python "%ROOT%\TOOLS\mt5_symbol_select.py" --mt5-path "%TERMINAL_EXE%" --symbols AUDJPY NZDJPY --out "%ROOT%\RUN\mt5_symbol_select_report.json"
+    echo [WARN] Python executable not found - symbol select skipped.
   )
   if not "%ERRORLEVEL%"=="0" (
     echo [WARN] Symbol select utility returned non-zero rc=%ERRORLEVEL%
@@ -181,10 +196,10 @@ if exist "%ROOT%\TOOLS\mt5_symbol_select.py" (
 
 echo [STEP] Refreshing symbols audit + preflight artifacts
 if exist "%ROOT%\TOOLS\audit_symbols_get_mt5.py" (
-  if "%PY312_AVAILABLE%"=="1" (
-    py -3.12 "%ROOT%\TOOLS\audit_symbols_get_mt5.py" --mt5-path "%TERMINAL_EXE%" --out "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json"
+  if defined PYTHON_EXE (
+    call :run_python "%ROOT%\TOOLS\audit_symbols_get_mt5.py" --mt5-path "%TERMINAL_EXE%" --out "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json"
   ) else (
-    python "%ROOT%\TOOLS\audit_symbols_get_mt5.py" --mt5-path "%TERMINAL_EXE%" --out "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json"
+    echo [WARN] Python executable not found - symbols audit skipped.
   )
   if exist "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json" (
     copy /Y "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json" "%ROOT%\RUN\symbols_audit_now.json" >nul
@@ -194,12 +209,20 @@ if exist "%ROOT%\TOOLS\audit_symbols_get_mt5.py" (
 )
 
 if exist "%ROOT%\TOOLS\generate_asia_preflight_evidence.py" (
-  python "%ROOT%\TOOLS\generate_asia_preflight_evidence.py"
+  if defined PYTHON_EXE (
+    call :run_python "%ROOT%\TOOLS\generate_asia_preflight_evidence.py"
+  ) else (
+    echo [WARN] Python executable not found - asia preflight skipped.
+  )
 ) else (
   echo [WARN] Missing tool: %ROOT%\TOOLS\generate_asia_preflight_evidence.py
 )
 if exist "%ROOT%\TOOLS\no_live_drift_check.py" (
-  python "%ROOT%\TOOLS\no_live_drift_check.py"
+  if defined PYTHON_EXE (
+    call :run_python "%ROOT%\TOOLS\no_live_drift_check.py"
+  ) else (
+    echo [WARN] Python executable not found - drift check skipped.
+  )
 ) else (
   echo [WARN] Missing tool: %ROOT%\TOOLS\no_live_drift_check.py
 )
@@ -222,6 +245,17 @@ echo [NEXT] 2) On each required chart you see "HybridAgent" in top-right corner.
 echo [NEXT] 3) In Experts/Journal there are "loaded successfully" entries and no critical errors.
 echo.
 exit /b 0
+
+:run_python
+if not defined PYTHON_EXE (
+  exit /b 9009
+)
+if /I "%PYTHON_EXE%"=="py" (
+  py %PYTHON_ARGS% %*
+) else (
+  "%PYTHON_EXE%" %*
+)
+exit /b %ERRORLEVEL%
 
 :copy_file
 set "SRC=%~1"
