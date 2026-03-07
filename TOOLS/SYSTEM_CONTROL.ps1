@@ -25,6 +25,15 @@ function Resolve-Root {
 
 function Get-PythonPath {
     param([string]$RuntimeRoot)
+    $candidates = @(
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        (Join-Path $RuntimeRoot ".venv\Scripts\python.exe")
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) {
+            return $c
+        }
+    }
     try {
         $py312 = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null)
         if ($LASTEXITCODE -eq 0) {
@@ -34,16 +43,7 @@ function Get-PythonPath {
             }
         }
     } catch {
-        # ignore and continue with local venv candidates
-    }
-    $candidates = @(
-        "C:\OANDA_VENV\.venv\Scripts\python.exe",
-        (Join-Path $RuntimeRoot ".venv\Scripts\python.exe")
-    )
-    foreach ($c in $candidates) {
-        if (Test-Path $c) {
-            return $c
-        }
+        # ignore and continue with plain python fallback
     }
     return "python"
 }
