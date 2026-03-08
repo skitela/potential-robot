@@ -18,6 +18,8 @@ set "DIAG_BAT=%ROOT%\RUN_MT5_FULL_DIAGNOSTIC.bat"
 set "PY312_AVAILABLE=0"
 set "PYTHON_EXE="
 set "PYTHON_ARGS="
+set "PYTHON_MT5_EXE="
+set "PYTHON_MT5_ARGS="
 
 if exist "C:\OANDA_VENV\.venv\Scripts\python.exe" (
   set "PYTHON_EXE=C:\OANDA_VENV\.venv\Scripts\python.exe"
@@ -44,6 +46,11 @@ if not defined PYTHON_EXE (
     set "PYTHON_EXE=python"
   )
 )
+if defined PYTHON_EXE (
+  set "PYTHON_MT5_EXE=%PYTHON_EXE%"
+  set "PYTHON_MT5_ARGS=%PYTHON_ARGS%"
+)
+call :resolve_mt5_python
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 
@@ -62,6 +69,30 @@ if not exist "%SOURCE_DIR%\Include\Json\Json.mqh" (
   echo [ERROR] Missing source include: %SOURCE_DIR%\Include\Json\Json.mqh
   exit /b 3
 )
+if not exist "%SOURCE_DIR%\Include\KernelTypes_v1.mqh" (
+  echo [ERROR] Missing source include: %SOURCE_DIR%\Include\KernelTypes_v1.mqh
+  exit /b 8
+)
+if not exist "%SOURCE_DIR%\Include\StateCache_v1.mqh" (
+  echo [ERROR] Missing source include: %SOURCE_DIR%\Include\StateCache_v1.mqh
+  exit /b 9
+)
+if not exist "%SOURCE_DIR%\Include\InstrumentProfileCache_v2.mqh" (
+  echo [ERROR] Missing source include: %SOURCE_DIR%\Include\InstrumentProfileCache_v2.mqh
+  exit /b 10
+)
+if not exist "%SOURCE_DIR%\Include\LiveConfigLoader_v2.mqh" (
+  echo [ERROR] Missing source include: %SOURCE_DIR%\Include\LiveConfigLoader_v2.mqh
+  exit /b 11
+)
+if not exist "%SOURCE_DIR%\Include\CircuitBreaker_v2.mqh" (
+  echo [ERROR] Missing source include: %SOURCE_DIR%\Include\CircuitBreaker_v2.mqh
+  exit /b 12
+)
+if not exist "%SOURCE_DIR%\Include\DecisionKernel_v1.mqh" (
+  echo [ERROR] Missing source include: %SOURCE_DIR%\Include\DecisionKernel_v1.mqh
+  exit /b 13
+)
 if not exist "%SOURCE_DIR%\Libraries\libzmq.dll" (
   echo [ERROR] Missing source library: %SOURCE_DIR%\Libraries\libzmq.dll
   exit /b 4
@@ -72,14 +103,24 @@ if not exist "%SOURCE_DIR%\Libraries\libsodium.dll" (
 )
 
 set "TERMINAL_DATA_DIR="
-set "MT5_BASE=%APPDATA%\MetaQuotes\Terminal"
-if exist "%MT5_BASE%" (
-  for /d %%D in ("%MT5_BASE%\*") do (
-    if exist "%%~fD\config\common.ini" (
-      set "TERMINAL_DATA_DIR=%%~fD"
-    )
-  )
-)
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop';" ^
+  "$server='%SERVER_NAME%';" ^
+  "function Get-IniValue { param([string[]]$Lines,[string]$Section,[string]$Key) $sec='['+$Section+']'; $inSection=$false; foreach($line in $Lines){ $t=$line.Trim(); if($t -match '^\[.*\]$'){ $inSection=($t -ieq $sec); continue }; if(-not $inSection){ continue }; if($t -match ('^' + [regex]::Escape($Key) + '\s*=(.*)$')){ return $matches[1].Trim() } }; return '' };" ^
+  "$base = Join-Path $env:APPDATA 'MetaQuotes\Terminal';" ^
+  "if(-not (Test-Path $base)){ exit 0 };" ^
+  "$best=$null; $bestScore=-1;" ^
+  "Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | ForEach-Object {" ^
+  "  $ini = Join-Path $_.FullName 'config\common.ini';" ^
+  "  if(-not (Test-Path $ini)){ return };" ^
+  "  $lines = Get-Content $ini -Encoding UTF8;" ^
+  "  $srv = Get-IniValue -Lines $lines -Section 'Common' -Key 'Server';" ^
+  "  $score = 1;" ^
+  "  if($srv -ieq $server){ $score += 1000 };" ^
+  "  try { $score += [int]((Get-Item $ini).LastWriteTimeUtc.ToFileTimeUtc() / 10000000) } catch {};" ^
+  "  if($score -gt $bestScore){ $bestScore=$score; $best=$_.FullName }" ^
+  "};" ^
+  "if($best){ Write-Output $best }"`) do set "TERMINAL_DATA_DIR=%%I"
 
 if not defined TERMINAL_DATA_DIR (
   echo [ERROR] Could not detect MT5 data directory in %%APPDATA%%\MetaQuotes\Terminal
@@ -125,39 +166,55 @@ if errorlevel 1 (
 )
 
 echo [STEP] Stopping MT5/MetaEditor processes to avoid DLL sharing conflicts
-taskkill /IM terminal64.exe /F /T >nul 2>&1
-taskkill /IM metaeditor64.exe /F /T >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$names=@('terminal64','metaeditor64'); Get-Process -Name $names -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
 timeout /t 2 /nobreak >nul
 
 echo [STEP] Copy HybridAgent source files
-call :copy_file "%SOURCE_DIR%\Experts\HybridAgent.mq5" "%TARGET_DIR%\Experts\HybridAgent.mq5" || exit /b 20
-call :copy_file "%SOURCE_DIR%\Include\zeromq_bridge.mqh" "%TARGET_DIR%\Include\zeromq_bridge.mqh" || exit /b 21
-call :copy_file "%SOURCE_DIR%\Include\Json\Json.mqh" "%TARGET_DIR%\Include\Json\Json.mqh" || exit /b 22
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Experts\HybridAgent.mq5" -Destination "%TARGET_DIR%\Experts\HybridAgent.mq5" || exit /b 20
+echo [OK] HybridAgent.mq5
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\zeromq_bridge.mqh" -Destination "%TARGET_DIR%\Include\zeromq_bridge.mqh" || exit /b 21
+echo [OK] zeromq_bridge.mqh
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\Json\Json.mqh" -Destination "%TARGET_DIR%\Include\Json\Json.mqh" || exit /b 22
+echo [OK] Json.mqh
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\KernelTypes_v1.mqh" -Destination "%TARGET_DIR%\Include\KernelTypes_v1.mqh" || exit /b 25
+echo [OK] KernelTypes_v1.mqh
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\StateCache_v1.mqh" -Destination "%TARGET_DIR%\Include\StateCache_v1.mqh" || exit /b 26
+echo [OK] StateCache_v1.mqh
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\InstrumentProfileCache_v2.mqh" -Destination "%TARGET_DIR%\Include\InstrumentProfileCache_v2.mqh" || exit /b 27
+echo [OK] InstrumentProfileCache_v2.mqh
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\LiveConfigLoader_v2.mqh" -Destination "%TARGET_DIR%\Include\LiveConfigLoader_v2.mqh" || exit /b 28
+echo [OK] LiveConfigLoader_v2.mqh
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\CircuitBreaker_v2.mqh" -Destination "%TARGET_DIR%\Include\CircuitBreaker_v2.mqh" || exit /b 29
+echo [OK] CircuitBreaker_v2.mqh
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\DecisionKernel_v1.mqh" -Destination "%TARGET_DIR%\Include\DecisionKernel_v1.mqh" || exit /b 30
+echo [OK] DecisionKernel_v1.mqh
 
 echo [STEP] Copy runtime libraries
-call :copy_file "%SOURCE_DIR%\Libraries\libzmq.dll" "%TARGET_DIR%\Libraries\libzmq.dll" || exit /b 23
-call :copy_file "%SOURCE_DIR%\Libraries\libsodium.dll" "%TARGET_DIR%\Libraries\libsodium.dll" || exit /b 24
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Libraries\libzmq.dll" -Destination "%TARGET_DIR%\Libraries\libzmq.dll"
+if errorlevel 1 (
+  if exist "%TARGET_DIR%\Libraries\libzmq.dll" (
+    echo [WARN] Runtime library locked, keeping existing file: libzmq.dll
+  ) else (
+    exit /b 23
+  )
+) else (
+  echo [OK] libzmq.dll
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Libraries\libsodium.dll" -Destination "%TARGET_DIR%\Libraries\libsodium.dll"
+if errorlevel 1 (
+  if exist "%TARGET_DIR%\Libraries\libsodium.dll" (
+    echo [WARN] Runtime library locked, keeping existing file: libsodium.dll
+  ) else (
+    exit /b 24
+  )
+) else (
+  echo [OK] libsodium.dll
+)
 
 set "COMPILE_LOG=%LOG_DIR%\MT5_COMPILE_HybridAgent.log"
 set "COMPILE_OK=0"
-if defined METAEDITOR_EXE (
-  echo [STEP] Compiling HybridAgent via MetaEditor
-  "%METAEDITOR_EXE%" /compile:"%TARGET_DIR%\Experts\HybridAgent.mq5" /log:"%COMPILE_LOG%"
-  set "COMPILE_RC=%ERRORLEVEL%"
-  if "!COMPILE_RC!"=="0" (
-    findstr /I /C:"0 error(s), 0 warning(s)" /C:"0 errors, 0 warnings" "%COMPILE_LOG%" >nul 2>&1
-    if "!ERRORLEVEL!"=="0" (
-      set "COMPILE_OK=1"
-      echo [SUCCESS] Compile OK (0 errors, 0 warnings)
-    ) else (
-      echo [WARN] Compile finished, check log: %COMPILE_LOG%
-    )
-  ) else (
-    echo [WARN] MetaEditor compile returned code !COMPILE_RC!. Check: %COMPILE_LOG%
-  )
-) else (
-  echo [WARN] MetaEditor64.exe not found - compile skipped.
-)
+call :compile_hybrid_agent
 
 set "PROFILE_LAST=Default"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command ^
@@ -175,7 +232,8 @@ for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command ^
 
 if defined TERMINAL_EXE (
   echo [STEP] Restarting MT5 with profile: %PROFILE_LAST%
-  start "" "%TERMINAL_EXE%" /profile:"%PROFILE_LAST%"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "Start-Process -FilePath '%TERMINAL_EXE%' -ArgumentList '/profile:%PROFILE_LAST%' -WindowStyle Minimized"
   timeout /t 3 /nobreak >nul
 ) else (
   echo [WARN] terminal64.exe not found - restart skipped.
@@ -186,6 +244,7 @@ if exist "%DIAG_BAT%" (
   echo [STEP] Running full MT5 diagnostic
   call "%DIAG_BAT%"
   set "DIAG_RC=%ERRORLEVEL%"
+  call :normalize_diag_rc
   if not "!DIAG_RC!"=="0" (
     echo [WARN] Diagnostic returned rc=!DIAG_RC!
   )
@@ -195,10 +254,10 @@ if exist "%DIAG_BAT%" (
 
 echo [STEP] Ensuring Wave-1 MT5 symbols are selected/visible (AUDJPY/NZDJPY)
 if exist "%ROOT%\TOOLS\mt5_symbol_select.py" (
-  if defined PYTHON_EXE (
-    call :run_python "%ROOT%\TOOLS\mt5_symbol_select.py" --mt5-path "%TERMINAL_EXE%" --symbols AUDJPY NZDJPY --out "%ROOT%\RUN\mt5_symbol_select_report.json"
+  if defined PYTHON_MT5_EXE (
+    call :run_mt5_python "%ROOT%\TOOLS\mt5_symbol_select.py" --mt5-path "%TERMINAL_EXE%" --symbols AUDJPY NZDJPY --out "%ROOT%\RUN\mt5_symbol_select_report.json"
   ) else (
-    echo [WARN] Python executable not found - symbol select skipped.
+    echo [WARN] Python with MetaTrader5 package not found - symbol select skipped.
   )
   if not "%ERRORLEVEL%"=="0" (
     echo [WARN] Symbol select utility returned non-zero rc=%ERRORLEVEL%
@@ -209,10 +268,10 @@ if exist "%ROOT%\TOOLS\mt5_symbol_select.py" (
 
 echo [STEP] Refreshing symbols audit + preflight artifacts
 if exist "%ROOT%\TOOLS\audit_symbols_get_mt5.py" (
-  if defined PYTHON_EXE (
-    call :run_python "%ROOT%\TOOLS\audit_symbols_get_mt5.py" --mt5-path "%TERMINAL_EXE%" --out "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json"
+  if defined PYTHON_MT5_EXE (
+    call :run_mt5_python "%ROOT%\TOOLS\audit_symbols_get_mt5.py" --mt5-path "%TERMINAL_EXE%" --out "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json"
   ) else (
-    echo [WARN] Python executable not found - symbols audit skipped.
+    echo [WARN] Python with MetaTrader5 package not found - symbols audit skipped.
   )
   if exist "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json" (
     copy /Y "%ROOT%\EVIDENCE\symbols_get_audit\latest_symbols_get_audit.json" "%ROOT%\RUN\symbols_audit_now.json" >nul
@@ -270,19 +329,105 @@ if /I "%PYTHON_EXE%"=="py" (
 )
 exit /b %ERRORLEVEL%
 
-:copy_file
-set "SRC=%~1"
-set "DST=%~2"
-set "DST_DIR=%~dp2"
-if not exist "%DST_DIR%" mkdir "%DST_DIR%" >nul 2>&1
-if not exist "%SRC%" (
-  echo [ERROR] Missing source: %SRC%
-  exit /b 1
+:run_mt5_python
+if not defined PYTHON_MT5_EXE (
+  exit /b 9009
 )
-copy /Y "%SRC%" "%DST%" >nul
-if errorlevel 1 (
-  echo [ERROR] Copy failed: %SRC% -> %DST%
-  exit /b 1
+if /I "%PYTHON_MT5_EXE%"=="py" (
+  py %PYTHON_MT5_ARGS% %*
+) else (
+  "%PYTHON_MT5_EXE%" %*
 )
-echo [OK] %~nx1
+exit /b %ERRORLEVEL%
+
+:compile_hybrid_agent
+if not defined METAEDITOR_EXE (
+  echo [WARN] MetaEditor64.exe not found - compile skipped.
+  exit /b 0
+)
+echo [STEP] Compiling HybridAgent via MetaEditor
+"%METAEDITOR_EXE%" /compile:"%TARGET_DIR%\Experts\HybridAgent.mq5" /log:"%COMPILE_LOG%"
+if not exist "%COMPILE_LOG%" (
+  echo [WARN] Compile log missing after MetaEditor run: %COMPILE_LOG%
+  exit /b 0
+)
+set "COMPILE_MATCH="
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$log='%COMPILE_LOG%';" ^
+  "if(Test-Path $log){" ^
+  "  $hit=Select-String -Path $log -Pattern 'Result: 0 errors, 0 warnings','0 error(s), 0 warning(s)' -SimpleMatch | Select-Object -First 1;" ^
+  "  if($hit){ Write-Output 'MATCH' }" ^
+  "}"`) do set "COMPILE_MATCH=%%I"
+if /I "%COMPILE_MATCH%"=="MATCH" (
+  set "COMPILE_OK=1"
+  echo [SUCCESS] Compile OK ^(0 errors, 0 warnings^)
+) else (
+  echo [WARN] Compile finished, check log: %COMPILE_LOG%
+)
 exit /b 0
+
+:normalize_diag_rc
+if "%DIAG_RC%"=="0" exit /b 0
+set "DIAG_VERDICT="
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$dir=Join-Path '%ROOT%' 'RUN\\DIAG_REPORTS';" ^
+  "if(Test-Path $dir){" ^
+  "  $latest=Get-ChildItem $dir -Filter 'MT5_FULL_DIAG_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1;" ^
+  "  if($latest){" ^
+  "    $hit=Select-String -Path $latest.FullName -Pattern '^verdict=(.+)$' | Select-Object -First 1;" ^
+  "    if($hit){ Write-Output $hit.Matches[0].Groups[1].Value.Trim() }" ^
+  "  }" ^
+  "}"`) do set "DIAG_VERDICT=%%I"
+if /I "%DIAG_VERDICT%"=="PASS" (
+  set "DIAG_RC=0"
+)
+exit /b 0
+
+:resolve_mt5_python
+if defined PYTHON_MT5_EXE (
+  call :python_can_import_mt5 "%PYTHON_MT5_EXE%" "%PYTHON_MT5_ARGS%"
+  if not errorlevel 1 exit /b 0
+)
+
+if exist "C:\Users\skite\AppData\Local\Programs\Python\Python312\python.exe" (
+  call :python_can_import_mt5 "C:\Users\skite\AppData\Local\Programs\Python\Python312\python.exe" ""
+  if not errorlevel 1 (
+    set "PYTHON_MT5_EXE=C:\Users\skite\AppData\Local\Programs\Python\Python312\python.exe"
+    set "PYTHON_MT5_ARGS="
+    exit /b 0
+  )
+)
+
+where py >nul 2>&1
+if "%ERRORLEVEL%"=="0" (
+  call :python_can_import_mt5 "py" "-3.12"
+  if not errorlevel 1 (
+    set "PYTHON_MT5_EXE=py"
+    set "PYTHON_MT5_ARGS=-3.12"
+    exit /b 0
+  )
+)
+
+where python >nul 2>&1
+if "%ERRORLEVEL%"=="0" (
+  call :python_can_import_mt5 "python" ""
+  if not errorlevel 1 (
+    set "PYTHON_MT5_EXE=python"
+    set "PYTHON_MT5_ARGS="
+    exit /b 0
+  )
+)
+
+set "PYTHON_MT5_EXE="
+set "PYTHON_MT5_ARGS="
+exit /b 0
+
+:python_can_import_mt5
+set "CHECK_EXE=%~1"
+set "CHECK_ARGS=%~2"
+if /I "%CHECK_EXE%"=="py" (
+  py %CHECK_ARGS% -c "import MetaTrader5" >nul 2>&1
+) else (
+  "%CHECK_EXE%" -c "import MetaTrader5" >nul 2>&1
+)
+exit /b %ERRORLEVEL%
