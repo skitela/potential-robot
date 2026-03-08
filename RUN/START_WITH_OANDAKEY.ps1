@@ -718,7 +718,48 @@ if (Test-Path $ghostDriveScript) {
 }
 
 $driveInfo = Resolve-KeyDrive -ExpectedLabel $Label -Dry:$DryRun
-if (-not [bool]$driveInfo.ok) {
+$keyRootPath = ""
+$drive = ""
+$localFallbackRoot = Join-Path $runtimeRoot "KEY"
+$localFallbackEnv = Join-Path $localFallbackRoot "TOKEN\\BotKey.env"
+
+if ([bool]$driveInfo.ok) {
+    $drive = [string]$driveInfo.drive
+    $keyRootPath = ($drive + "\")
+    $status.detected_drive = $drive
+    $status.label_state = [string]$driveInfo.label_state
+    if ($driveInfo.Contains("label_method")) {
+        $status.label_method = [string]$driveInfo.label_method
+    }
+
+    $fmt = Assert-DriveFormatReady -Drive $drive -AllowedFs $ALLOWED_FILESYSTEMS
+    if (-not [bool]$fmt.ok) {
+        $status.reason = [string]$fmt.reason
+        $status.filesystem = [string]$fmt.filesystem
+        [void](Write-JsonAtomic -Path $statusPath -Object $status)
+        if ($status.reason -eq "drive_not_formatted_raw") {
+            Write-Output ("KEY FAIL: Pendrive {0} ma format RAW. Sformatuj go na NTFS/FAT32/exFAT i sprobuj ponownie." -f $drive)
+        } elseif ($status.reason -eq "unsupported_filesystem") {
+            Write-Output ("KEY FAIL: Pendrive {0} ma nieobslugiwany format '{1}'. Uzyj NTFS/FAT32/exFAT." -f $drive, $status.filesystem)
+        } else {
+            Write-Output ("KEY FAIL: Nie mozna potwierdzic formatu systemu plikow dla {0}." -f $drive)
+        }
+        exit 5
+    }
+    $status.filesystem = [string]$fmt.filesystem
+    $status.format_check = [string]$fmt.verification
+    $status.format_reason = [string]$fmt.reason
+    $status.key_source = "USB_LABEL"
+} elseif (Test-Path -LiteralPath $localFallbackEnv) {
+    $keyRootPath = $localFallbackRoot
+    $status.detected_drive = "LOCAL_KEY"
+    $status.label_state = "fallback_local_key"
+    $status.filesystem = "LOCAL_FS"
+    $status.format_check = "fallback_skip"
+    $status.format_reason = "local_key_env_present"
+    $status.key_source = "LOCAL_FALLBACK"
+    Write-Output ("START_WITH_OANDAKEY INFO: użyto lokalnego fallbacku klucza: {0}" -f $localFallbackEnv)
+} else {
     $status.reason = [string]$driveInfo.reason
     if ($driveInfo.Contains("candidates")) {
         $status.candidates = @($driveInfo.candidates)
@@ -727,36 +768,12 @@ if (-not [bool]$driveInfo.ok) {
     if ($status.reason -eq "multiple_removable_no_label") {
         Write-Output ("KEY FAIL: Brak etykiety '{0}' i wykryto wiele pendrive. Oznacz docelowy pendrive etykieta '{0}'." -f $Label)
     } else {
-        Write-Output ("KEY FAIL: Nie znaleziono pendrive gotowego pod etykiete '{0}'." -f $Label)
+        Write-Output ("KEY FAIL: Nie znaleziono pendrive gotowego pod etykiete '{0}' ani fallbacku {1}." -f $Label, $localFallbackEnv)
     }
     exit 2
 }
-$drive = [string]$driveInfo.drive
-$status.detected_drive = $drive
-$status.label_state = [string]$driveInfo.label_state
-if ($driveInfo.Contains("label_method")) {
-    $status.label_method = [string]$driveInfo.label_method
-}
 
-$fmt = Assert-DriveFormatReady -Drive $drive -AllowedFs $ALLOWED_FILESYSTEMS
-if (-not [bool]$fmt.ok) {
-    $status.reason = [string]$fmt.reason
-    $status.filesystem = [string]$fmt.filesystem
-    [void](Write-JsonAtomic -Path $statusPath -Object $status)
-    if ($status.reason -eq "drive_not_formatted_raw") {
-        Write-Output ("KEY FAIL: Pendrive {0} ma format RAW. Sformatuj go na NTFS/FAT32/exFAT i sprobuj ponownie." -f $drive)
-    } elseif ($status.reason -eq "unsupported_filesystem") {
-        Write-Output ("KEY FAIL: Pendrive {0} ma nieobslugiwany format '{1}'. Uzyj NTFS/FAT32/exFAT." -f $drive, $status.filesystem)
-    } else {
-        Write-Output ("KEY FAIL: Nie mozna potwierdzic formatu systemu plikow dla {0}." -f $drive)
-    }
-    exit 5
-}
-$status.filesystem = [string]$fmt.filesystem
-$status.format_check = [string]$fmt.verification
-$status.format_reason = [string]$fmt.reason
-
-$tokenDir = Join-Path ($drive + "\") "TOKEN"
+$tokenDir = Join-Path $keyRootPath "TOKEN"
 if (-not (Test-Path $tokenDir)) {
     if (-not $DryRun) {
         New-Item -ItemType Directory -Force -Path $tokenDir | Out-Null
@@ -883,7 +900,11 @@ if ($rc -eq 0) {
     } else {
         Write-Output ("START_WITH_OANDAKEY MT5_SESSION_GUARD status={0} pid={1}" -f [string]$sessionGuard.status, [string]$sessionGuard.pid)
     }
-    Write-Output ("START_WITH_OANDAKEY PASS drive={0} profile={1} dry_run={2}" -f $drive, $Profile, [int]([bool]$DryRun))
+    $reportedDrive = [string]$status.detected_drive
+    if ([string]::IsNullOrWhiteSpace($reportedDrive)) {
+        $reportedDrive = [string]$drive
+    }
+    Write-Output ("START_WITH_OANDAKEY PASS drive={0} profile={1} dry_run={2}" -f $reportedDrive, $Profile, [int]([bool]$DryRun))
     exit 0
 }
 
