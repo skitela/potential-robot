@@ -579,6 +579,8 @@ class CFG:
     policy_runtime_file_name: str = "policy_runtime.json"
     policy_runtime_emit_common_file: bool = True
     policy_runtime_common_subdir: str = "OANDA_MT5_SYSTEM"
+    budget_log_interval_sec: int = 60
+    oanda_price_breakdown_log_interval_sec: int = 60
     kernel_config_emit_enabled: bool = True
     kernel_config_emit_interval_sec: int = 15
     kernel_config_file_name: str = "kernel_config_v1.json"
@@ -10706,6 +10708,8 @@ class SafetyBot:
         self._runtime_cached_group_arb: Dict[str, Dict[str, Any]] = {}
         self._runtime_cached_group_risk: Dict[str, Dict[str, Any]] = {}
         self._runtime_cached_group_ts_utc: str = ""
+        self._last_budget_log_ts: float = 0.0
+        self._last_oanda_price_breakdown_log_ts: float = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -14834,12 +14838,19 @@ class SafetyBot:
             eco_by_budget = False
             eco_reason = ""
 
-        # P0 BUDGET log (hard-required fields: day_ny + utc_day + eco)
-        logging.info(
-            f"BUDGET day_ny={st['day_ny']} utc_day={st['utc_day']} eco={int(bool(eco_by_budget))} pl_day={st.get('pl_day','')} "
-            f"price_requests_day={st['price_requests_day']} order_actions_day={st['order_actions_day']} sys_requests_day={st['sys_requests_day']} "
-            f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
+        # P0 BUDGET log (hard-required fields: day_ny + utc_day + eco), z ograniczeniem szumu.
+        budget_log_interval_s = max(
+            5,
+            int(getattr(CFG, "budget_log_interval_sec", 60)),
         )
+        now_budget_ts = float(time.time())
+        if (now_budget_ts - float(getattr(self, "_last_budget_log_ts", 0.0))) >= float(budget_log_interval_s):
+            self._last_budget_log_ts = now_budget_ts
+            logging.info(
+                f"BUDGET day_ny={st['day_ny']} utc_day={st['utc_day']} eco={int(bool(eco_by_budget))} pl_day={st.get('pl_day','')} "
+                f"price_requests_day={st['price_requests_day']} order_actions_day={st['order_actions_day']} sys_requests_day={st['sys_requests_day']} "
+                f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
+            )
 
         # Group-level arbitration snapshot (budget pressure + dynamic priority factor).
         group_arb: Dict[str, Dict[str, Any]] = {}
@@ -14917,16 +14928,23 @@ class SafetyBot:
                 eco_by_budget = True
                 eco_reason = ",".join([x for x in (eco_reason.split(",") if eco_reason else []) if x] + ["OANDA_WARN"])
             try:
-                pb = self.limits.get_price_breakdown()
-                logging.info(
-                    "OANDA_PRICE_BREAKDOWN day=%s total=%s tick=%s rates=%s other=%s warn_active=%s",
-                    str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or ""),
-                    int(pb.get("total", 0)),
-                    int(pb.get("tick", 0)),
-                    int(pb.get("rates", 0)),
-                    int(pb.get("other", 0)),
-                    int(bool(warn_degrade_active)),
+                pb_log_interval_s = max(
+                    5,
+                    int(getattr(CFG, "oanda_price_breakdown_log_interval_sec", 60)),
                 )
+                now_pb_ts = float(time.time())
+                if (now_pb_ts - float(getattr(self, "_last_oanda_price_breakdown_log_ts", 0.0))) >= float(pb_log_interval_s):
+                    self._last_oanda_price_breakdown_log_ts = now_pb_ts
+                    pb = self.limits.get_price_breakdown()
+                    logging.info(
+                        "OANDA_PRICE_BREAKDOWN day=%s total=%s tick=%s rates=%s other=%s warn_active=%s",
+                        str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or ""),
+                        int(pb.get("total", 0)),
+                        int(pb.get("tick", 0)),
+                        int(pb.get("rates", 0)),
+                        int(pb.get("other", 0)),
+                        int(bool(warn_degrade_active)),
+                    )
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         except Exception as e:
@@ -17024,6 +17042,10 @@ if __name__ == "__main__":
     CFG.policy_runtime_common_subdir = str(
         strategy_cfg.get("policy_runtime_common_subdir", CFG.policy_runtime_common_subdir)
         or CFG.policy_runtime_common_subdir
+    )
+    CFG.budget_log_interval_sec = _cfg_int("budget_log_interval_sec", CFG.budget_log_interval_sec)
+    CFG.oanda_price_breakdown_log_interval_sec = _cfg_int(
+        "oanda_price_breakdown_log_interval_sec", CFG.oanda_price_breakdown_log_interval_sec
     )
     CFG.kernel_config_emit_enabled = _cfg_bool("kernel_config_emit_enabled", CFG.kernel_config_emit_enabled)
     CFG.kernel_config_emit_interval_sec = _cfg_int(
