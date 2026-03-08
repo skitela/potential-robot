@@ -15911,6 +15911,25 @@ class SafetyBot:
         policy_shadow_mode: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """Sends a synchronous trade command to MQL5 and returns parsed reply."""
+        effective_trigger_mode = self._trade_trigger_mode()
+        if effective_trigger_mode == "MQL5_ACTIVE":
+            # Docelowy cutover: brak współdecydowania Python/bridge na ticku.
+            logging.info(
+                "TRADE_BRIDGE_BYPASS mode=%s symbol=%s signal=%s",
+                effective_trigger_mode,
+                str(symbol or ""),
+                str(signal or "").upper(),
+            )
+            return {
+                "status": "SKIPPED",
+                "action": "TRADE_REPLY",
+                "retcode": 0,
+                "retcode_str": "MQL5_ACTIVE_BRIDGE_BYPASS",
+                "comment": "Bridge bypass enabled in MQL5_ACTIVE mode.",
+                "symbol": str(symbol or ""),
+                "request_hash": "",
+            }
+
         def _f(v: Any, default: float = 0.0) -> float:
             try:
                 return float(v)

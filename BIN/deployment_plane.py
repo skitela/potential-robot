@@ -3,7 +3,10 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from kernel_config_plane import KERNEL_CONFIG_POLICY_VERSION, build_kernel_config_payload
+try:
+    from .kernel_config_plane import KERNEL_CONFIG_POLICY_VERSION, build_kernel_config_payload
+except ImportError:  # pragma: no cover - fallback for script-style imports
+    from kernel_config_plane import KERNEL_CONFIG_POLICY_VERSION, build_kernel_config_payload
 
 
 UTC = dt.timezone.utc
