@@ -2828,6 +2828,18 @@ def get_usb_path(label: Optional[str] = None) -> Optional[Path]:
     """
     label = (label or "OANDAKEY").strip()
     drive_letter: Optional[str] = None
+    # VPS/serwer fallback: lokalny katalog z TOKEN/BotKey.env.
+    # Priorytet nadal ma fizyczny wolumin o etykiecie OANDAKEY.
+    fallback_candidates: List[Path] = []
+    for env_key in ("OANDAKEY_ROOT", "OANDAKEY_FALLBACK_ROOT"):
+        raw = (os.environ.get(env_key) or "").strip()
+        if raw:
+            try:
+                fallback_candidates.append(Path(raw))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+    # Standardowy fallback dla runtime na VPS.
+    fallback_candidates.append(Path("C:/OANDA_MT5_SYSTEM/KEY"))
 
     timeout_s = 8
 
@@ -2910,6 +2922,13 @@ def get_usb_path(label: Optional[str] = None) -> Optional[Path]:
             drive_letter = None
 
     if not drive_letter:
+        for root in fallback_candidates:
+            try:
+                env_path = root / "TOKEN" / "BotKey.env"
+                if env_path.exists():
+                    return root
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return None
 
     usb_root = Path(f"{drive_letter}:/")
