@@ -34,6 +34,22 @@ class TestHybridKernelShadowContract(unittest.TestCase):
         for path in expected:
             self.assertTrue(path.exists(), f"Missing kernel include: {path}")
 
+    def test_live_config_loader_verifies_kernel_hash_contract(self) -> None:
+        loader = (ROOT / "MQL5" / "Include" / "LiveConfigLoader_v2.mqh").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        required_tokens = (
+            "hash_method",
+            "hash_scope",
+            "sha256_sig_v1",
+            "kernel_core_v1",
+            "KERNEL_CONFIG_HASH_INVALID_FORMAT",
+            "KERNEL_CONFIG_HASH_MISMATCH",
+            "CryptEncode(CRYPT_HASH_SHA256",
+        )
+        for token in required_tokens:
+            self.assertIn(token, loader, f"Missing loader hash-verification token: {token}")
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

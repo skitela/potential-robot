@@ -19,8 +19,11 @@ if "MetaTrader5" not in sys.modules:
 
 import safetybot
 from kernel_config_plane import (
+    KERNEL_CONFIG_HASH_METHOD,
+    KERNEL_CONFIG_HASH_SCOPE,
     KERNEL_CONFIG_SCHEMA_VERSION,
     build_kernel_config_payload,
+    build_kernel_config_signature,
     sanitize_symbol_entry,
 )
 
@@ -45,9 +48,44 @@ class TestKernelConfigPlane(unittest.TestCase):
             meta={"source": "unit-test"},
         )
         self.assertEqual(KERNEL_CONFIG_SCHEMA_VERSION, payload.get("schema_version"))
-        self.assertTrue(str(payload.get("config_hash") or ""))
+        self.assertEqual(KERNEL_CONFIG_HASH_METHOD, str(payload.get("hash_method") or ""))
+        self.assertEqual(KERNEL_CONFIG_HASH_SCOPE, str(payload.get("hash_scope") or ""))
+        self.assertEqual(64, len(str(payload.get("config_hash") or "")))
         symbols = payload.get("symbols") or []
         self.assertEqual(["EURUSD.pro", "GBPUSD.pro"], [str(x.get("symbol")) for x in symbols])
+
+    def test_build_kernel_config_signature_is_stable_for_same_rows(self) -> None:
+        rows = [
+            sanitize_symbol_entry(
+                {
+                    "symbol": "EURUSD.pro",
+                    "group": "FX",
+                    "entry_allowed": True,
+                    "close_only": False,
+                    "halt": False,
+                    "reason": "NONE",
+                    "spread_cap_points": 12.5,
+                    "max_latency_ms": 300.0,
+                    "min_tick_rate_1s": 3,
+                    "min_liquidity_score": 0.1,
+                    "min_tradeability_score": 0.2,
+                    "min_setup_quality_score": 0.3,
+                }
+            )
+        ]
+        a = build_kernel_config_signature(
+            schema_version="kernel_config_v1",
+            generated_at_utc="2026-03-08T00:00:00Z",
+            policy_version="kernel.shadow.v1",
+            symbols=rows,
+        )
+        b = build_kernel_config_signature(
+            schema_version="kernel_config_v1",
+            generated_at_utc="2026-03-08T00:00:00Z",
+            policy_version="kernel.shadow.v1",
+            symbols=rows,
+        )
+        self.assertEqual(a, b)
 
     def test_safetybot_builds_kernel_payload_for_universe(self) -> None:
         with patch.object(safetybot.SafetyBot, "__init__", lambda s, *args, **kwargs: None):

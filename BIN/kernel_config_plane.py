@@ -11,6 +11,8 @@ UTC = dt.timezone.utc
 
 KERNEL_CONFIG_SCHEMA_VERSION = "kernel_config_v1"
 KERNEL_CONFIG_POLICY_VERSION = "kernel.shadow.v1"
+KERNEL_CONFIG_HASH_METHOD = "sha256_sig_v1"
+KERNEL_CONFIG_HASH_SCOPE = "kernel_core_v1"
 
 RISK_LOCKED_KEYS = {
     "risk_per_trade",
@@ -56,6 +58,10 @@ def canonical_json_dumps(payload: Dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def sha256_hex(value: str) -> str:
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
 def compute_hash_excluding_field(payload: Dict[str, Any], field_name: str = "config_hash") -> str:
     obj = copy.deepcopy(payload)
     obj.pop(field_name, None)
@@ -77,6 +83,53 @@ def _clamp_int(raw: Any, default: int, low: int, high: int) -> int:
     except Exception:
         value = int(default)
     return int(max(low, min(high, value)))
+
+
+def _sig_bool(value: Any) -> str:
+    return "1" if bool(value) else "0"
+
+
+def _sig_float(value: Any) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        v = 0.0
+    return f"{v:.6f}"
+
+
+def _symbol_signature(row: Dict[str, Any]) -> str:
+    return (
+        f"symbol={str(row.get('symbol') or '')};"
+        f"group={str(row.get('group') or '')};"
+        f"entry_allowed={_sig_bool(row.get('entry_allowed'))};"
+        f"close_only={_sig_bool(row.get('close_only'))};"
+        f"halt={_sig_bool(row.get('halt'))};"
+        f"reason={str(row.get('reason') or '')};"
+        f"spread_cap_points={_sig_float(row.get('spread_cap_points'))};"
+        f"max_latency_ms={_sig_float(row.get('max_latency_ms'))};"
+        f"min_tick_rate_1s={int(row.get('min_tick_rate_1s') or 0)};"
+        f"min_liquidity_score={_sig_float(row.get('min_liquidity_score'))};"
+        f"min_tradeability_score={_sig_float(row.get('min_tradeability_score'))};"
+        f"min_setup_quality_score={_sig_float(row.get('min_setup_quality_score'))}"
+    )
+
+
+def build_kernel_config_signature(
+    *,
+    schema_version: str,
+    generated_at_utc: str,
+    policy_version: str,
+    symbols: Iterable[Dict[str, Any]],
+) -> str:
+    rows = [str(_symbol_signature(dict(row))) for row in symbols]
+    parts = [
+        f"schema_version={str(schema_version or '')}",
+        f"generated_at_utc={str(generated_at_utc or '')}",
+        f"policy_version={str(policy_version or '')}",
+        f"symbols_n={len(rows)}",
+    ]
+    parts.extend(rows)
+    return "\n".join(parts)
 
 
 def sanitize_symbol_entry(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -134,11 +187,19 @@ def build_kernel_config_payload(
         "schema_version": KERNEL_CONFIG_SCHEMA_VERSION,
         "generated_at_utc": str(generated_at_utc or iso_utc()),
         "policy_version": str(policy_version or KERNEL_CONFIG_POLICY_VERSION),
+        "hash_method": KERNEL_CONFIG_HASH_METHOD,
+        "hash_scope": KERNEL_CONFIG_HASH_SCOPE,
         "config_hash": "",
         "symbols": rows,
         "meta": dict(meta or {}),
     }
-    payload["config_hash"] = compute_hash_excluding_field(payload, "config_hash")
+    signature = build_kernel_config_signature(
+        schema_version=str(payload.get("schema_version") or ""),
+        generated_at_utc=str(payload.get("generated_at_utc") or ""),
+        policy_version=str(payload.get("policy_version") or ""),
+        symbols=rows,
+    )
+    payload["config_hash"] = sha256_hex(signature)
     return payload
 
 
