@@ -585,6 +585,7 @@ class CFG:
     kernel_config_emit_common_file: bool = True
     kernel_config_common_subdir: str = "OANDA_MT5_SYSTEM"
     trade_trigger_mode: str = "BRIDGE_ACTIVE"
+    trade_trigger_mode_allow_mql5_active: bool = False
     # Stage-1 live profile adapter (control-plane only, no hot-path blocking).
     stage1_live_config_enabled: bool = True
     stage1_live_config_file: str = "LAB/RUN/live_config_stage1_apply.json"
@@ -14561,11 +14562,15 @@ class SafetyBot:
             file_name=str(getattr(CFG, "kernel_config_file_name", "kernel_config_v1.json") or "kernel_config_v1.json"),
         )
 
-    def _trade_trigger_mode(self) -> str:
-        mode, _reason = resolve_trade_trigger_mode(
+    def _trade_trigger_mode_info(self) -> Tuple[str, str]:
+        mode, reason = resolve_trade_trigger_mode(
             getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE"),
-            allow_mql5_active=False,
+            allow_mql5_active=bool(getattr(CFG, "trade_trigger_mode_allow_mql5_active", False)),
         )
+        return mode, reason
+
+    def _trade_trigger_mode(self) -> str:
+        mode, _reason = self._trade_trigger_mode_info()
         return mode
 
     def _kernel_spread_cap_points(self, symbol: str, grp_u: str) -> float:
@@ -16259,12 +16264,13 @@ class SafetyBot:
         logging.info(f"BOT START | HYBRID MODE | MT5 SAFETY BOT {CFG.BOT_VERSION}")
         logging.info("Uruchamianie pętli hybrydowej (ZMQ + Periodic Scan)...")
         requested_trigger_mode = str(getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE") or "BRIDGE_ACTIVE").strip().upper()
-        effective_trigger_mode = self._trade_trigger_mode()
+        effective_trigger_mode, trigger_mode_reason = self._trade_trigger_mode_info()
         if requested_trigger_mode != effective_trigger_mode:
             logging.warning(
-                "TRADE_TRIGGER_MODE_FALLBACK requested=%s effective=%s reason=MQL5_ACTIVE_NOT_CUTOVER_READY",
+                "TRADE_TRIGGER_MODE_FALLBACK requested=%s effective=%s reason=%s",
                 requested_trigger_mode,
                 effective_trigger_mode,
+                str(trigger_mode_reason or "UNKNOWN"),
             )
         logging.info("TRADE_TRIGGER_MODE mode=%s", effective_trigger_mode)
 
@@ -17038,6 +17044,9 @@ if __name__ == "__main__":
     ).strip().upper()
     if CFG.trade_trigger_mode not in {"BRIDGE_ACTIVE", "MQL5_SHADOW_COMPARE", "MQL5_ACTIVE"}:
         CFG.trade_trigger_mode = "BRIDGE_ACTIVE"
+    CFG.trade_trigger_mode_allow_mql5_active = _cfg_bool(
+        "trade_trigger_mode_allow_mql5_active", CFG.trade_trigger_mode_allow_mql5_active
+    )
     CFG.stage1_live_config_enabled = _cfg_bool(
         "stage1_live_config_enabled", CFG.stage1_live_config_enabled
     )

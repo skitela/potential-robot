@@ -23,6 +23,10 @@ class TestRuntimeSupervisorDeploymentPlane(unittest.TestCase):
             resolve_trade_trigger_mode("MQL5_ACTIVE", allow_mql5_active=False),
         )
         self.assertEqual(
+            ("MQL5_ACTIVE", "OK"),
+            resolve_trade_trigger_mode("MQL5_ACTIVE", allow_mql5_active=True),
+        )
+        self.assertEqual(
             ("BRIDGE_ACTIVE", "INVALID_MODE"),
             resolve_trade_trigger_mode("weird-mode", allow_mql5_active=False),
         )
