@@ -8,7 +8,8 @@ Cel:
 Co jest teraz wdrozone:
 1) start.bat -> RUN\START_WITH_OANDAKEY.ps1
 2) pre-check etykiety OANDAKEY, formatu pendrive i pliku TOKEN\BotKey.env
-3) dopiero po PASS uruchamiany jest TOOLS\SYSTEM_CONTROL.ps1 -Action start
+3) dopiero po PASS uruchamiany jest TOOLS\SYSTEM_CONTROL.ps1 -Action start -Profile safety_only (domyslnie)
+   - tryb pelny (full) uruchamiaj tylko swiadomie, gdy wymagane sa wszystkie moduly pomocnicze
 4) gdy pendrive nie ma etykiety, a jest jedyny w USB: etykieta jest nadawana automatycznie jako OANDAKEY
 5) przy pierwszym starcie (brak loginu/hasla): skrypt pyta o MT5_LOGIN i MT5_PASSWORD i zapisuje haslo jako DPAPI
 

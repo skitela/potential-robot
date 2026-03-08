@@ -1,6 +1,8 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$Mt5TerminalRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "safety_only",
     [ValidateSet("single", "cycle")]
     [string]$Mode = "cycle",
     [int]$PollSec = 5,
@@ -138,7 +140,7 @@ function Invoke-ActiveChecklist {
 
     $statusOutput = ""
     try {
-        $statusOutput = (& powershell -ExecutionPolicy Bypass -File (Join-Path $RuntimeRoot "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Profile full 2>&1 | Out-String).Trim()
+        $statusOutput = (& powershell -ExecutionPolicy Bypass -File (Join-Path $RuntimeRoot "TOOLS\SYSTEM_CONTROL.ps1") -Action status -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
     } catch {
         $statusOutput = "SYSTEM_CONTROL_STATUS_CALL_FAILED: $($_.Exception.Message)"
     }
@@ -199,6 +201,7 @@ function Invoke-ActiveChecklist {
             window_id = $WindowId
             line = $TriggerLine
         }
+        runtime_profile = $Profile
         system_control_status_pass = [bool]$statusPass
         system_control_status_raw = $statusOutput
         process_alive = $procChecks

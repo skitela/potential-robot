@@ -1,5 +1,7 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "safety_only",
     [int]$DurationHours = 8,
     [int]$IntervalSec = 60,
     [int]$MinAlive = 3,
@@ -119,6 +121,8 @@ function Invoke-SystemControlAction {
         [string]$PwshExe,
         [string]$SystemControlPath,
         [string]$RuntimeRoot,
+        [ValidateSet("full", "safety_only")]
+        [string]$Profile,
         [string]$ActionName,
         [int]$TimeoutSec,
         [string]$EvidenceDir
@@ -126,7 +130,7 @@ function Invoke-SystemControlAction {
     $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $outPath = Join-Path $EvidenceDir ("system_control_" + $ActionName + "_" + $stamp + "_out.log")
     $errPath = Join-Path $EvidenceDir ("system_control_" + $ActionName + "_" + $stamp + "_err.log")
-    $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $SystemControlPath, "-Action", $ActionName, "-Root", $RuntimeRoot, "-Profile", "full")
+    $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $SystemControlPath, "-Action", $ActionName, "-Root", $RuntimeRoot, "-Profile", $Profile)
     return (Invoke-ToolCommand -ExePath $PwshExe -ArgumentList $args -WorkingDir $RuntimeRoot -TimeoutSec $TimeoutSec -StdOutPath $outPath -StdErrPath $errPath)
 }
 
@@ -182,6 +186,9 @@ $runtimeRoot = Resolve-Root -InputRoot $Root
 $interval = [Math]::Max(10, [int]$IntervalSec)
 $duration = [Math]::Max(1, [int]$DurationHours)
 $minAliveCount = [Math]::Max(1, [int]$MinAlive)
+if ($Profile -eq "safety_only") {
+    $minAliveCount = 1
+}
 $strikeLimit = [Math]::Max(1, [int]$UnhealthyStrike)
 $smokeEvery = [Math]::Max(5, [int]$SmokeEveryMin)
 $sysCtlTimeout = [Math]::Max(30, [int]$SystemControlTimeoutSec)
@@ -212,7 +219,7 @@ $nextSmoke = Get-Date
 $unhealthyStreak = 0
 $lastMt5AlertSig = ""
 
-Write-Output ("NIGHT_WATCH start run_id={0} root={1} duration_h={2} interval_s={3}" -f $runId, $runtimeRoot, $duration, $interval)
+Write-Output ("NIGHT_WATCH start run_id={0} root={1} profile={2} duration_h={3} interval_s={4}" -f $runId, $runtimeRoot, $Profile, $duration, $interval)
 Write-Output ("NIGHT_WATCH evidence={0}" -f $jsonlPath)
 
 Write-EventJsonl -Path $jsonlPath -Payload @{
@@ -220,6 +227,7 @@ Write-EventJsonl -Path $jsonlPath -Payload @{
     event = "start"
     run_id = $runId
     root = $runtimeRoot
+    profile = $Profile
     duration_h = $duration
     interval_s = $interval
     min_alive = $minAliveCount
@@ -238,12 +246,16 @@ Write-EventJsonl -Path $jsonlPath -Payload @{
 while ((Get-Date) -lt $deadline) {
     try {
         $components = @(
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SafetyBot" -LockRel "RUN\safetybot.lock" -LogRel "LOGS\safetybot.log" -LogTtlSec $safetyTtl),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SCUD" -LockRel "RUN\scudfab02.lock" -LogRel "LOGS\scudfab02.log" -LogTtlSec $scudTtl),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "InfoBot" -LockRel "RUN\infobot.lock" -LogRel "LOGS\infobot\infobot.log" -LogTtlSec $infoTtl),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "RepairAgent" -LockRel "RUN\repair_agent.lock" -LogRel "LOGS\repair_agent\repair_agent.log" -LogTtlSec $repairTtl),
-            (Test-ComponentAlive -RootPath $runtimeRoot -Name "Learner" -LockRel "" -LogRel "LOGS\learner_offline.log" -LogTtlSec $learnerTtl)
+            (Test-ComponentAlive -RootPath $runtimeRoot -Name "SafetyBot" -LockRel "RUN\safetybot.lock" -LogRel "LOGS\safetybot.log" -LogTtlSec $safetyTtl)
         )
+        if ($Profile -eq "full") {
+            $components += @(
+                (Test-ComponentAlive -RootPath $runtimeRoot -Name "SCUD" -LockRel "RUN\scudfab02.lock" -LogRel "LOGS\scudfab02.log" -LogTtlSec $scudTtl),
+                (Test-ComponentAlive -RootPath $runtimeRoot -Name "InfoBot" -LockRel "RUN\infobot.lock" -LogRel "LOGS\infobot\infobot.log" -LogTtlSec $infoTtl),
+                (Test-ComponentAlive -RootPath $runtimeRoot -Name "RepairAgent" -LockRel "RUN\repair_agent.lock" -LogRel "LOGS\repair_agent\repair_agent.log" -LogTtlSec $repairTtl),
+                (Test-ComponentAlive -RootPath $runtimeRoot -Name "Learner" -LockRel "" -LogRel "LOGS\learner_offline.log" -LogTtlSec $learnerTtl)
+            )
+        }
 
         $aliveCount = @($components | Where-Object { $_.alive }).Count
         $healthy = ($aliveCount -ge $minAliveCount)
@@ -301,7 +313,7 @@ while ((Get-Date) -lt $deadline) {
             }
             Write-EventJsonl -Path $jsonlPath -Payload $evt
             if (-not $DryRun) {
-                $stopRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -ActionName "stop" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
+                $stopRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -Profile $Profile -ActionName "stop" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
                 Write-EventJsonl -Path $jsonlPath -Payload @{
                     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
                     event = "restart_step"
@@ -317,7 +329,7 @@ while ((Get-Date) -lt $deadline) {
 
                 Start-Sleep -Seconds 3
 
-                $startRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -ActionName "start" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
+                $startRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -Profile $Profile -ActionName "start" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
                 Write-EventJsonl -Path $jsonlPath -Payload @{
                     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
                     event = "restart_step"
@@ -331,7 +343,7 @@ while ((Get-Date) -lt $deadline) {
                     stderr = $startRes.stderr
                 }
 
-                $statusRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -ActionName "status" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
+                $statusRes = Invoke-SystemControlAction -PwshExe $pwshExe -SystemControlPath $systemControl -RuntimeRoot $runtimeRoot -Profile $Profile -ActionName "status" -TimeoutSec $sysCtlTimeout -EvidenceDir $evidenceDir
                 Write-EventJsonl -Path $jsonlPath -Payload @{
                     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
                     event = "restart_step"

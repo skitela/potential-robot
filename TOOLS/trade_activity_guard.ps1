@@ -1,5 +1,7 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "safety_only",
     [int]$PollSec = 15,
     [int]$NoTradeSec = 900,
     [int]$RestartCooldownSec = 1200
@@ -79,6 +81,8 @@ function Invoke-SystemControlAction {
     param(
         [string]$RuntimeRoot,
         [string]$ActionName,
+        [ValidateSet("full", "safety_only")]
+        [string]$Profile = "safety_only",
         [int]$TimeoutSec = 240
     )
     $sc = Join-Path $RuntimeRoot "TOOLS\SYSTEM_CONTROL.ps1"
@@ -91,7 +95,7 @@ function Invoke-SystemControlAction {
         }
     }
     try {
-        $out = (& powershell -ExecutionPolicy Bypass -File $sc -Action $ActionName -Profile full 2>&1 | Out-String).Trim()
+        $out = (& powershell -ExecutionPolicy Bypass -File $sc -Action $ActionName -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
         $ok = ($out -match "status=PASS")
         return @{
             ok = [bool]$ok
@@ -200,7 +204,7 @@ $lastTradeEventAt = $null
 $lastRestartAt = $null
 $restartDoneForActiveCycle = $false
 
-Write-Host ("[TRADE_GUARD] start root={0} no_trade_sec={1} cooldown_sec={2}" -f $runtimeRoot, $NoTradeSec, $RestartCooldownSec) -ForegroundColor Cyan
+Write-Host ("[TRADE_GUARD] start root={0} profile={1} no_trade_sec={2} cooldown_sec={3}" -f $runtimeRoot, $Profile, $NoTradeSec, $RestartCooldownSec) -ForegroundColor Cyan
 
 while ($true) {
     $lines = Read-AppendedLines -Path $safetyLog -Offsets $offsets
@@ -255,17 +259,18 @@ while ($true) {
     )
 
     if ($shouldRepair) {
-        $preStatus = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "status"
-        $stopRes = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "stop"
+        $preStatus = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "status" -Profile $Profile
+        $stopRes = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "stop" -Profile $Profile
         Start-Sleep -Seconds 3
-        $startRes = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "start"
+        $startRes = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "start" -Profile $Profile
         Start-Sleep -Seconds 2
-        $postStatus = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "status"
+        $postStatus = Invoke-SystemControlAction -RuntimeRoot $runtimeRoot -ActionName "status" -Profile $Profile
         $topSkips = Get-TopSkipReasons -SafetyLogPath $safetyLog -Tail 1500 -Top 4
 
         $evt = @{
             ts_utc = $now.ToUniversalTime().ToString("o")
             event = "repair_trigger_no_trade"
+            profile = $Profile
             phase = $phase
             window = $windowId
             no_trade_sec = [int]$NoTradeSec
@@ -287,6 +292,7 @@ while ($true) {
 
     $status = @{
         ts_utc = $now.ToUniversalTime().ToString("o")
+        profile = $Profile
         phase = $phase
         window = $windowId
         scan_age_sec = $(if ([double]::IsInfinity($scanAgeSec)) { -1 } else { [int]$scanAgeSec })

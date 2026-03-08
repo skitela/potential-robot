@@ -92,13 +92,26 @@ if not exist "%TARGET_DIR%" (
   exit /b 7
 )
 
+set "PF64=%ProgramW6432%"
+if not defined PF64 set "PF64=%ProgramFiles%"
+set "PF32=%ProgramFiles(x86)%"
+if not defined PF32 set "PF32=%ProgramFiles%"
+
 set "TERMINAL_EXE="
-if exist "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe" set "TERMINAL_EXE=C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe"
-if not defined TERMINAL_EXE if exist "C:\Program Files\MetaTrader 5\terminal64.exe" set "TERMINAL_EXE=C:\Program Files\MetaTrader 5\terminal64.exe"
+if not defined TERMINAL_EXE if exist "%PF64%\OANDA TMS MT5 Terminal\terminal64.exe" set "TERMINAL_EXE=%PF64%\OANDA TMS MT5 Terminal\terminal64.exe"
+if not defined TERMINAL_EXE if exist "%ProgramFiles%\OANDA TMS MT5 Terminal\terminal64.exe" set "TERMINAL_EXE=%ProgramFiles%\OANDA TMS MT5 Terminal\terminal64.exe"
+if not defined TERMINAL_EXE if exist "%PF32%\OANDA TMS MT5 Terminal\terminal64.exe" set "TERMINAL_EXE=%PF32%\OANDA TMS MT5 Terminal\terminal64.exe"
+if not defined TERMINAL_EXE if exist "%PF64%\MetaTrader 5\terminal64.exe" set "TERMINAL_EXE=%PF64%\MetaTrader 5\terminal64.exe"
+if not defined TERMINAL_EXE if exist "%ProgramFiles%\MetaTrader 5\terminal64.exe" set "TERMINAL_EXE=%ProgramFiles%\MetaTrader 5\terminal64.exe"
+if not defined TERMINAL_EXE if exist "%PF32%\MetaTrader 5\terminal64.exe" set "TERMINAL_EXE=%PF32%\MetaTrader 5\terminal64.exe"
 
 set "METAEDITOR_EXE="
-if exist "C:\Program Files\OANDA TMS MT5 Terminal\MetaEditor64.exe" set "METAEDITOR_EXE=C:\Program Files\OANDA TMS MT5 Terminal\MetaEditor64.exe"
-if not defined METAEDITOR_EXE if exist "C:\Program Files\MetaTrader 5\MetaEditor64.exe" set "METAEDITOR_EXE=C:\Program Files\MetaTrader 5\MetaEditor64.exe"
+if not defined METAEDITOR_EXE if exist "%PF64%\OANDA TMS MT5 Terminal\MetaEditor64.exe" set "METAEDITOR_EXE=%PF64%\OANDA TMS MT5 Terminal\MetaEditor64.exe"
+if not defined METAEDITOR_EXE if exist "%ProgramFiles%\OANDA TMS MT5 Terminal\MetaEditor64.exe" set "METAEDITOR_EXE=%ProgramFiles%\OANDA TMS MT5 Terminal\MetaEditor64.exe"
+if not defined METAEDITOR_EXE if exist "%PF32%\OANDA TMS MT5 Terminal\MetaEditor64.exe" set "METAEDITOR_EXE=%PF32%\OANDA TMS MT5 Terminal\MetaEditor64.exe"
+if not defined METAEDITOR_EXE if exist "%PF64%\MetaTrader 5\MetaEditor64.exe" set "METAEDITOR_EXE=%PF64%\MetaTrader 5\MetaEditor64.exe"
+if not defined METAEDITOR_EXE if exist "%ProgramFiles%\MetaTrader 5\MetaEditor64.exe" set "METAEDITOR_EXE=%ProgramFiles%\MetaTrader 5\MetaEditor64.exe"
+if not defined METAEDITOR_EXE if exist "%PF32%\MetaTrader 5\MetaEditor64.exe" set "METAEDITOR_EXE=%PF32%\MetaTrader 5\MetaEditor64.exe"
 
 echo [INFO] Target data dir: %TERMINAL_DATA_DIR%
 echo [INFO] Target MQL5 dir: %TARGET_DIR%

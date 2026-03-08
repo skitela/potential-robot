@@ -1,6 +1,8 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$Mt5DataDir = "",
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "safety_only",
     [int]$PollSec = 5,
     [int]$StartupGraceSec = 300,
     [int]$RestartCooldownSec = 900,
@@ -9,6 +11,8 @@ param(
     [int]$DisconnectBurstThreshold = 3,
     [int]$PolicyRetryWindowSec = 600,
     [int]$PolicyRetryThreshold = 12,
+    [int]$FailSafeActivatedWindowSec = 600,
+    [int]$FailSafeActivatedThreshold = 8,
     [int]$VirtualHostWarnWindowSec = 3600,
     [int]$VirtualHostWarnAlertThreshold = 5,
     [switch]$DryRun
@@ -157,10 +161,19 @@ function Write-JsonAtomic {
     param([string]$Path, [object]$Object)
     $parent = Split-Path -Parent $Path
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
-    $tmp = "$Path.tmp"
     $json = $Object | ConvertTo-Json -Depth 10
-    $json | Set-Content -Path $tmp -Encoding UTF8
-    Move-Item -Force $tmp $Path
+    $tmp = [System.IO.Path]::Combine(
+        $parent,
+        ([System.IO.Path]::GetFileName($Path) + ".tmp." + [guid]::NewGuid().ToString("N"))
+    )
+    try {
+        $json | Set-Content -Path $tmp -Encoding UTF8
+        Move-Item -Force $tmp $Path
+    } finally {
+        if (Test-Path -LiteralPath $tmp) {
+            try { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
 }
 
 function Get-SystemDesiredState {
@@ -201,6 +214,8 @@ function Invoke-SystemRepair {
     param(
         [string]$RuntimeRoot,
         [string]$Reason,
+        [ValidateSet("full", "safety_only")]
+        [string]$Profile = "safety_only",
         [switch]$Dry
     )
     $sc = Join-Path $RuntimeRoot "TOOLS\SYSTEM_CONTROL.ps1"
@@ -219,15 +234,16 @@ function Invoke-SystemRepair {
         }
     }
     try {
-        $stopOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action stop -Root $RuntimeRoot -Profile full 2>&1 | Out-String).Trim()
+        $stopOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action stop -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
         Start-Sleep -Seconds 3
-        $startOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action start -Root $RuntimeRoot -Profile full 2>&1 | Out-String).Trim()
+        $startOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action start -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
         Start-Sleep -Seconds 2
-        $statusOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action status -Root $RuntimeRoot -Profile full 2>&1 | Out-String).Trim()
+        $statusOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action status -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
         $ok = ($statusOut -match "status=PASS")
         return @{
             ok = [bool]$ok
             reason = $Reason
+            profile = $Profile
             stop = $stopOut
             start = $startOut
             status = $statusOut
@@ -257,6 +273,7 @@ Write-JsonAtomic -Path $pidPath -Object @{
     pid = [int]$PID
     started_utc = (Get-Date).ToUniversalTime().ToString("o")
     root = $runtimeRoot
+    profile = $Profile
     mt5_data_dir = $mt5DataDirResolved
     status_path = $statusPath
 }
@@ -265,6 +282,7 @@ $offsets = @{}
 $lostEvents = New-Object System.Collections.ArrayList
 $policyRetryEvents = New-Object System.Collections.ArrayList
 $severeEvents = New-Object System.Collections.ArrayList
+$failSafeActivatedEvents = New-Object System.Collections.ArrayList
 $virtualHostWarnEvents = New-Object System.Collections.ArrayList
 
 $lastLostAt = $null
@@ -278,10 +296,11 @@ $disconnectRx = [regex]'(?i)\bconnection to .* lost\b'
 $authRx = [regex]'(?i)\bauthorized on .* through access server\b'
 $syncRx = [regex]'(?i)\bterminal synchronized with oanda\b'
 $policyRetryRx = [regex]'(?i)\bPOLICY_RUNTIME_OPEN_RETRY\b'
-$severeRx = [regex]'(?i)\b(POLICY_RUNTIME_FAILSAFE|FAIL-SAFE ACTIVATED|ZMQ_INIT_FAIL)\b'
+$severeRx = [regex]'(?i)\b(POLICY_RUNTIME_FAILSAFE|ZMQ_INIT_FAIL)\b'
+$failSafeActivatedRx = [regex]'(?i)\bFAIL-SAFE ACTIVATED\b'
 $virtualHostWarnRx = [regex]'(?i)\bVirtual Hosting\b.*failed to get list of virtual hosts\b'
 
-Write-Output ("MT5_SESSION_GUARD start root={0} mt5_dir={1} poll={2}s cooldown={3}s" -f $runtimeRoot, $mt5DataDirResolved, [int]$PollSec, [int]$RestartCooldownSec)
+Write-Output ("MT5_SESSION_GUARD start root={0} mt5_dir={1} profile={2} poll={3}s cooldown={4}s" -f $runtimeRoot, $mt5DataDirResolved, $Profile, [int]$PollSec, [int]$RestartCooldownSec)
 
 while ($true) {
     $now = Get-Date
@@ -336,6 +355,17 @@ while ($true) {
                             }
                         }
                     }
+                    if ($failSafeActivatedRx.IsMatch($msg)) {
+                        if (-not $isBootstrapRead) {
+                            [void]$failSafeActivatedEvents.Add($now)
+                            Append-Jsonl -Path $eventPath -Payload @{
+                                ts_utc = $nowUtc
+                                event = "FAILSAFE_ACTIVATED_EVENT"
+                                severity = "WATCH"
+                                message = $msg
+                            }
+                        }
+                    }
                     if ($virtualHostWarnRx.IsMatch($msg)) {
                         if (-not $isBootstrapRead) {
                             [void]$virtualHostWarnEvents.Add($now)
@@ -354,6 +384,7 @@ while ($true) {
         Prune-Timestamps -List $lostEvents -WindowSec ([Math]::Max(60, [int]$DisconnectBurstWindowSec)) -Now $now
         Prune-Timestamps -List $policyRetryEvents -WindowSec ([Math]::Max(120, [int]$PolicyRetryWindowSec)) -Now $now
         Prune-Timestamps -List $severeEvents -WindowSec 120 -Now $now
+        Prune-Timestamps -List $failSafeActivatedEvents -WindowSec ([Math]::Max(120, [int]$FailSafeActivatedWindowSec)) -Now $now
         Prune-Timestamps -List $virtualHostWarnEvents -WindowSec ([Math]::Max(300, [int]$VirtualHostWarnWindowSec)) -Now $now
 
         $desired = Get-SystemDesiredState -Path $desiredStatePath
@@ -391,6 +422,13 @@ while ($true) {
         }
 
         if (-not $shouldRepair) {
+            if (($failSafeActivatedEvents.Count -ge [int]([Math]::Max(2, [int]$FailSafeActivatedThreshold))) -and $repairWindowOpen) {
+                $shouldRepair = $true
+                $repairReason = "FAILSAFE_ACTIVATION_BURST"
+            }
+        }
+
+        if (-not $shouldRepair) {
             if (($lostEvents.Count -ge [int]([Math]::Max(1, [int]$DisconnectBurstThreshold))) -and $repairWindowOpen) {
                 $shouldRepair = $true
                 $repairReason = "BROKER_DISCONNECT_BURST"
@@ -415,7 +453,7 @@ while ($true) {
         }
 
         if ($shouldRepair) {
-            $repair = Invoke-SystemRepair -RuntimeRoot $runtimeRoot -Reason $repairReason -Dry:$DryRun
+            $repair = Invoke-SystemRepair -RuntimeRoot $runtimeRoot -Reason $repairReason -Profile $Profile -Dry:$DryRun
             $lastRestartAt = Get-Date
             $lastReason = $repairReason
             Append-Jsonl -Path $eventPath -Payload @{
@@ -426,16 +464,19 @@ while ($true) {
                 lost_events_window = [int]$lostEvents.Count
                 policy_retry_window = [int]$policyRetryEvents.Count
                 severe_events_window = [int]$severeEvents.Count
+                failsafe_activated_window = [int]$failSafeActivatedEvents.Count
             }
             $lostEvents.Clear()
             $policyRetryEvents.Clear()
             $severeEvents.Clear()
+            $failSafeActivatedEvents.Clear()
         }
 
         $status = @{
             schema = "oanda_mt5.mt5_session_guard.v1"
             ts_utc = (Get-Date).ToUniversalTime().ToString("o")
             root = $runtimeRoot
+            profile = $Profile
             mt5_data_dir = $mt5DataDirResolved
             mt5_log = $(if (@($activeLogs).Count -gt 0) { [string]$activeLogs[0] } else { "" })
             mt5_logs = @($activeLogs)
@@ -451,6 +492,7 @@ while ($true) {
             lost_events_window = [int]$lostEvents.Count
             policy_retry_window = [int]$policyRetryEvents.Count
             severe_events_window = [int]$severeEvents.Count
+            failsafe_activated_window = [int]$failSafeActivatedEvents.Count
             virtual_hosting_warning_window = [int]$virtualHostWarnEvents.Count
             virtual_hosting_warning_alert = [bool]$virtualHostWarnAlert
             last_restart_utc = $(if ($null -eq $lastRestartAt) { "" } else { $lastRestartAt.ToUniversalTime().ToString("o") })
@@ -462,6 +504,8 @@ while ($true) {
                 disconnect_burst_threshold = [int]$DisconnectBurstThreshold
                 policy_retry_window_sec = [int]$PolicyRetryWindowSec
                 policy_retry_threshold = [int]$PolicyRetryThreshold
+                failsafe_activated_window_sec = [int]$FailSafeActivatedWindowSec
+                failsafe_activated_threshold = [int]$FailSafeActivatedThreshold
                 virtual_hosting_warn_window_sec = [int]$VirtualHostWarnWindowSec
                 virtual_hosting_warn_alert_threshold = [int]$VirtualHostWarnAlertThreshold
                 restart_cooldown_sec = [int]$RestartCooldownSec
@@ -482,6 +526,7 @@ while ($true) {
             schema = "oanda_mt5.mt5_session_guard.v1"
             ts_utc = (Get-Date).ToUniversalTime().ToString("o")
             root = $runtimeRoot
+            profile = $Profile
             mt5_data_dir = $mt5DataDirResolved
             connected_state = $connectedState
             last_restart_reason = $lastReason

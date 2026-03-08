@@ -210,10 +210,19 @@ function Write-JsonAtomic {
     )
     $parent = Split-Path -Parent $Path
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
-    $tmp = "$Path.tmp"
     $json = $Object | ConvertTo-Json -Depth 8
-    $json | Set-Content -Path $tmp -Encoding UTF8
-    Move-Item -Force $tmp $Path
+    $tmp = [System.IO.Path]::Combine(
+        $parent,
+        ([System.IO.Path]::GetFileName($Path) + ".tmp." + [guid]::NewGuid().ToString("N"))
+    )
+    try {
+        $json | Set-Content -Path $tmp -Encoding UTF8
+        Move-Item -Force $tmp $Path
+    } finally {
+        if (Test-Path -LiteralPath $tmp) {
+            try { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
 }
 
 function Append-Line {

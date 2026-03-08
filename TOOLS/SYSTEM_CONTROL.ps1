@@ -5,7 +5,7 @@ param(
     [string]$Root = "",
     [switch]$DryRun,
     [ValidateSet("full", "safety_only")]
-    [string]$Profile = "full"
+    [string]$Profile = "safety_only"
 )
 
 Set-StrictMode -Version Latest

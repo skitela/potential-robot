@@ -1,6 +1,8 @@
 param(
     [string]$Root = "",
     [string]$Label = "OANDAKEY",
+    [ValidateSet("full", "safety_only")]
+    [string]$Profile = "safety_only",
     [switch]$DryRun
 )
 
@@ -434,7 +436,11 @@ function Start-RiskPopupGuard {
 }
 
 function Start-Mt5SessionGuard {
-    param([string]$RuntimeRoot)
+    param(
+        [string]$RuntimeRoot,
+        [ValidateSet("full", "safety_only")]
+        [string]$Profile = "safety_only"
+    )
     $scriptPath = Join-Path $RuntimeRoot "TOOLS\mt5_session_guard.ps1"
     $pidPath = Join-Path $RuntimeRoot "RUN\mt5_session_guard.pid"
     $statusPath = Join-Path $RuntimeRoot "RUN\mt5_session_guard_status.json"
@@ -477,6 +483,7 @@ function Start-Mt5SessionGuard {
                     status = "already_running"
                     pid = $existingPid
                     pid_file = $pidPath
+                    profile = $Profile
                 }
             }
         }
@@ -487,7 +494,8 @@ function Start-Mt5SessionGuard {
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
             "-File", $scriptPath,
-            "-Root", $RuntimeRoot
+            "-Root", $RuntimeRoot,
+            "-Profile", $Profile
         )
         if ($DryRun) {
             $argList += "-DryRun"
@@ -499,6 +507,7 @@ function Start-Mt5SessionGuard {
             status = "started"
             pid = [int]$proc.Id
             pid_file = $pidPath
+            profile = $Profile
             dry_run = [bool]$DryRun
         }
     } catch {
@@ -679,6 +688,7 @@ $status = [ordered]@{
     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
     root = $runtimeRoot
     expected_label = $Label
+    profile = $Profile
     dry_run = [bool]$DryRun
     status = "FAIL"
 }
@@ -815,7 +825,8 @@ $args = @(
     "-ExecutionPolicy", "Bypass",
     "-File", $systemControl,
     "-Action", "start",
-    "-Root", $runtimeRoot
+    "-Root", $runtimeRoot,
+    "-Profile", $Profile
 )
 if ($DryRun) {
     $args += "-DryRun"
@@ -837,7 +848,7 @@ if ($rc -eq 0) {
     } else {
         Write-Output ("START_WITH_OANDAKEY RISK_GUARD status={0} pid={1}" -f [string]$riskGuard.status, [string]$riskGuard.pid)
     }
-    $sessionGuard = Start-Mt5SessionGuard -RuntimeRoot $runtimeRoot
+    $sessionGuard = Start-Mt5SessionGuard -RuntimeRoot $runtimeRoot -Profile $Profile
     $status.mt5_session_guard = $sessionGuard
     [void](Write-JsonAtomic -Path $statusPath -Object $status)
     if (-not [bool]$sessionGuard.ok) {
@@ -845,7 +856,7 @@ if ($rc -eq 0) {
     } else {
         Write-Output ("START_WITH_OANDAKEY MT5_SESSION_GUARD status={0} pid={1}" -f [string]$sessionGuard.status, [string]$sessionGuard.pid)
     }
-    Write-Output ("START_WITH_OANDAKEY PASS drive={0} dry_run={1}" -f $drive, [int]([bool]$DryRun))
+    Write-Output ("START_WITH_OANDAKEY PASS drive={0} profile={1} dry_run={2}" -f $drive, $Profile, [int]([bool]$DryRun))
     exit 0
 }
 

@@ -11,6 +11,7 @@
 #include <Json/Json.mqh>
 
 #define PROTOCOL_VERSION "1.0"
+#define FAILSAFE_ALERT_GV "OANDA_HYBRID_FAILSAFE_ALERT_TS"
 
 // --- Expert inputs ---
 input string InpPythonHost = "127.0.0.1";
@@ -20,6 +21,9 @@ input uint   InpTimerSec   = 1;     // Fallback cadence for EventSetTimer (secon
 input uint   InpPythonTimeoutSec = 180;
 input bool   InpEnablePythonTimeoutWatchdog = true;
 input bool   InpAutoRecoverFromTimeout = true;
+input bool   InpFailSafeAlertEnabled = true; // terminal-wide popup on timeout with open positions
+input uint   InpFailSafeAlertCooldownSec = 180; // shared cooldown for FAIL-SAFE popup across charts
+input uint   InpFailSafeNoPositionLogSec = 0; // 0=disable; >0 throttle for FAIL_SAFE_TIMEOUT_NO_POSITION
 input uint   InpAccountPulseSec = 5;
 input uint   InpReplyCacheSize = 64;
 input bool   InpPolicyRuntimeEnabled = true;
@@ -123,6 +127,27 @@ bool ShouldEmitLogThrottled(ulong &last_ts_ms, uint interval_sec)
   if(last_ts_ms == 0 || (now_ms - last_ts_ms) >= ((ulong)safe_sec * 1000))
   {
     last_ts_ms = now_ms;
+    return true;
+  }
+  return false;
+}
+
+bool ShouldEmitTerminalAlert(string key, uint interval_sec)
+{
+  if(interval_sec == 0)
+    return true;
+
+  double now_sec = (double)TimeCurrent();
+  if(!GlobalVariableCheck(key))
+  {
+    GlobalVariableSet(key, now_sec);
+    return true;
+  }
+
+  double prev_sec = GlobalVariableGet(key);
+  if((now_sec - prev_sec) >= (double)interval_sec)
+  {
+    GlobalVariableSet(key, now_sec);
     return true;
   }
   return false;
@@ -1997,12 +2022,16 @@ void OnTimer()
       if(symbol_has_positions)
       {
         G_IsFailSafeActive = true;
-        Alert("FAIL-SAFE ACTIVATED: Python timeout exceeded. Closing open positions.");
+        if(InpFailSafeAlertEnabled && ShouldEmitTerminalAlert(FAILSAFE_ALERT_GV, InpFailSafeAlertCooldownSec))
+          Alert("FAIL-SAFE ACTIVATED: Python timeout exceeded. Closing open positions.");
         CloseAllOpenPositions("FAIL_SAFE_TIMEOUT");
       }
-      else if(G_HasSeenPythonTraffic && (G_LastTimeoutNoPositionLogMs == 0 || (now_ms - G_LastTimeoutNoPositionLogMs) >= 60000))
+      else if(
+        G_HasSeenPythonTraffic &&
+        InpFailSafeNoPositionLogSec > 0 &&
+        ShouldEmitLogThrottled(G_LastTimeoutNoPositionLogMs, InpFailSafeNoPositionLogSec)
+      )
       {
-        G_LastTimeoutNoPositionLogMs = now_ms;
         Print("FAIL_SAFE_TIMEOUT_NO_POSITION symbol=", G_SymbolUpper, " elapsed_ms=", (long)elapsed_ms);
       }
     }
