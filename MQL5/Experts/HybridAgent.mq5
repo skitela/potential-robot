@@ -4,11 +4,17 @@
 //+------------------------------------------------------------------+
 #property copyright "Gemini"
 #property link      "https://github.com/gemini"
-#property version   "1.12"
+#property version   "1.13"
 #property description "Hybrid execution agent with deterministic REQ/REP contract and runtime policy fail-safe."
 
 #include <zeromq_bridge.mqh>
 #include <Json/Json.mqh>
+#include <KernelTypes_v1.mqh>
+#include <StateCache_v1.mqh>
+#include <InstrumentProfileCache_v2.mqh>
+#include <LiveConfigLoader_v2.mqh>
+#include <CircuitBreaker_v2.mqh>
+#include <DecisionKernel_v1.mqh>
 
 #define PROTOCOL_VERSION "1.0"
 #define FAILSAFE_ALERT_GV "OANDA_HYBRID_FAILSAFE_ALERT_TS"
@@ -33,6 +39,13 @@ input bool   InpPolicyRuntimeAllowAmbiguousReasonNone = true;
 input uint   InpPolicyRuntimeReloadSec = 15;
 input uint   InpPolicyRuntimeOpenFailLogThrottleSec = 30;
 input string InpPolicyRuntimeRelativePath = "OANDA_MT5_SYSTEM\\policy_runtime.json";
+input bool   InpKernelConfigEnabled = true;
+input bool   InpKernelConfigShadowCompare = true;
+input bool   InpKernelConfigRequireFile = false;
+input uint   InpKernelConfigReloadSec = 15;
+input uint   InpKernelConfigOpenFailLogThrottleSec = 30;
+input string InpKernelConfigRelativePath = "OANDA_MT5_SYSTEM\\kernel_config_v1.json";
+input uint   InpKernelShadowLogThrottleSec = 30;
 input int    InpSmaFastPeriod = 20;
 input int    InpAdxPeriod = 14;
 input int    InpAtrPeriod = 14;
@@ -82,6 +95,10 @@ ulong  G_MicroTickRateWindowStartMs = 0;
 int    G_MicroBurstCount = 0;
 bool   G_MicroBurstFlag = false;
 bool   G_MicroAskLtBid = false;
+StateCacheV1 G_KernelStateCache;
+KernelDecisionResultV1 G_LastKernelDecision;
+string G_LastKernelShadowSignature = "";
+ulong  G_LastKernelShadowLogMs = 0;
 
 // Per-command latency context (single-threaded event loop; used for reply diagnostics).
 long   G_CurrentCmdStartMsc = 0;
@@ -747,6 +764,114 @@ double PriorityFactorForGroup(const string group_name)
   if(!MathIsValidNumber(pf))
     return 1.0;
   return MathMax(0.05, MathMin(1.80, pf));
+}
+
+void EvaluateKernelShadowForCurrentSymbol(const string source_tag)
+{
+  if(!InpKernelConfigEnabled || !InpKernelConfigShadowCompare)
+    return;
+
+  StateCacheUpdateFromGlobalsV1(G_KernelStateCache);
+
+  KernelSymbolProfileV1 profile;
+  bool profile_ok = InstrumentProfileCacheGetV2(G_Symbol, profile);
+  if(!profile_ok)
+    profile_ok = InstrumentProfileCacheGetV2(G_SymbolUpper, profile);
+
+  if(!profile_ok)
+  {
+    profile.symbol = G_SymbolUpper;
+    profile.symbol_base = SymbolBaseUpper(G_SymbolUpper);
+    profile.group_name = GuessGroupForSymbol(G_SymbolUpper);
+    profile.entry_allowed = true;
+    profile.close_only = false;
+    profile.halt = false;
+    profile.reason_code = "PROFILE_NOT_LOADED";
+    profile.spread_cap_points = 0.0;
+    profile.max_latency_ms = 0.0;
+    profile.min_tick_rate_1s = 0;
+    profile.min_liquidity_score = 0.0;
+    profile.min_tradeability_score = 0.0;
+    profile.min_setup_quality_score = 0.0;
+    profile.loaded = false;
+  }
+
+  CircuitBreakerStateV2 breaker;
+  CircuitBreakerEvaluateV2(breaker);
+
+  KernelRuntimeSnapshotV1 snapshot;
+  StateCacheBuildSnapshotV1(
+    G_SymbolUpper,
+    (profile.group_name == "" ? GuessGroupForSymbol(G_SymbolUpper) : profile.group_name),
+    HasOpenPositionForCurrentSymbol(),
+    G_KernelStateCache,
+    snapshot
+  );
+
+  DecisionKernelEvaluateV1(snapshot, profile, breaker, G_LastKernelDecision);
+
+  string signature = StringFormat(
+    "%s|%s|%s|%d|%d|%d|%.1f|%d",
+    G_SymbolUpper,
+    KernelDecisionActionToString(G_LastKernelDecision.action),
+    G_LastKernelDecision.reason_code,
+    (int)G_LastKernelDecision.entry_allowed,
+    (int)G_LastKernelDecision.close_only,
+    (int)G_LastKernelDecision.halt,
+    snapshot.spread_p95_points,
+    snapshot.tick_rate_1s
+  );
+
+  bool log_now = (signature != G_LastKernelShadowSignature);
+  if(!log_now)
+    log_now = ShouldEmitLogThrottled(G_LastKernelShadowLogMs, InpKernelShadowLogThrottleSec);
+  else
+    G_LastKernelShadowLogMs = (ulong)GetTickCount();
+
+  if(log_now)
+  {
+    Print(
+      "KERNEL_SHADOW_STATE src=", source_tag,
+      " symbol=", G_SymbolUpper,
+      " action=", KernelDecisionActionToString(G_LastKernelDecision.action),
+      " reason=", G_LastKernelDecision.reason_code,
+      " profile_loaded=", (int)G_LastKernelDecision.profile_loaded,
+      " spread_now=", DoubleToString(snapshot.spread_points, 2),
+      " spread_p95=", DoubleToString(snapshot.spread_p95_points, 2),
+      " tick_gap_sec=", DoubleToString(snapshot.tick_gap_sec, 3),
+      " tick_rate_1s=", snapshot.tick_rate_1s,
+      " burst=", (int)snapshot.burst_flag,
+      " ask_lt_bid=", (int)snapshot.ask_lt_bid,
+      " stale=", (int)snapshot.tick_stale
+    );
+  }
+
+  G_LastKernelShadowSignature = signature;
+}
+
+void CompareKernelShadowTradeParity(
+  const string symbol_req,
+  const bool legacy_entry_allowed,
+  const string legacy_reason
+)
+{
+  if(!InpKernelConfigEnabled || !InpKernelConfigShadowCompare)
+    return;
+  if(!IsCurrentSymbol(symbol_req))
+    return;
+
+  EvaluateKernelShadowForCurrentSymbol("TRADE_COMPARE");
+
+  bool kernel_entry_allowed = (G_LastKernelDecision.action == KERNEL_ALLOW);
+  string parity = (kernel_entry_allowed == legacy_entry_allowed ? "MATCH" : "MISMATCH");
+  Print(
+    "KERNEL_SHADOW_TRADE_PARITY parity=", parity,
+    " symbol=", G_SymbolUpper,
+    " legacy_allowed=", (int)legacy_entry_allowed,
+    " legacy_reason=", legacy_reason,
+    " kernel_action=", KernelDecisionActionToString(G_LastKernelDecision.action),
+    " kernel_reason=", G_LastKernelDecision.reason_code
+  );
 }
 
 string Fnv1a32Hex(string text)
@@ -1868,6 +1993,12 @@ void ProcessCommands()
     bool payload_risk_reopen = JsonGetBool(payload, "risk_reopen", false);
     bool payload_policy_shadow = JsonGetBool(payload, "policy_shadow_mode", true);
 
+    CompareKernelShadowTradeParity(
+      symbol,
+      payload_risk_entry_allowed,
+      payload_risk_reason
+    );
+
     string expected_hash = BuildRequestHashTrade(
       action,
       msg_id,
@@ -1971,13 +2102,16 @@ int OnInit()
   G_IsFailSafeActive = false;
   G_HasSeenPythonTraffic = false;
   PolicyResetDefaults();
+  InstrumentProfileCacheResetV2();
   G_PolicyRuntimeLoaded = false;
   G_PolicyFailSafeNoTrade = false;
   G_PolicyLastError = "";
   G_LastPolicyReloadMs = 0;
   G_LastPolicyOpenFailLogMs = 0;
   MicroInitState();
+  StateCacheResetV1(G_KernelStateCache);
   RefreshPolicyRuntime();
+  RefreshKernelConfigV2();
 
   if(!InitIndicatorHandles())
     Print("WARN: indicator handles partially unavailable. BAR feature payload may be incomplete.");
@@ -1992,7 +2126,9 @@ int OnInit()
     " account_pulse_sec=", InpAccountPulseSec,
     " policy_runtime=", (InpPolicyRuntimeEnabled ? "ON" : "OFF"),
     " policy_loaded=", (G_PolicyRuntimeLoaded ? "YES" : "NO"),
-    " policy_shadow=", (G_PolicyShadowMode ? "YES" : "NO")
+    " policy_shadow=", (G_PolicyShadowMode ? "YES" : "NO"),
+    " kernel_cfg=", (InpKernelConfigEnabled ? "ON" : "OFF"),
+    " kernel_loaded=", (G_KernelConfigLoaded ? "YES" : "NO")
   );
   return INIT_SUCCEEDED;
 }
@@ -2009,6 +2145,7 @@ void OnTimer()
 {
   ulong now_ms = (ulong)GetTickCount();
   RefreshPolicyRuntime();
+  RefreshKernelConfigV2();
 
   // Always service REQ/REP first so HEARTBEAT and TRADE replies stay responsive.
   ProcessCommands();
@@ -2054,6 +2191,8 @@ void OnTimer()
     SendAccountData();
     G_LastTelemetryPulseMs = now_ms;
   }
+
+  EvaluateKernelShadowForCurrentSymbol("TIMER");
 }
 
 // OnTick keeps micro-metrics incremental and opportunistically services commands.
@@ -2065,4 +2204,5 @@ void OnTick()
 
   // Fast command servicing path: keeps REQ/REP bridge wait low during active market ticks.
   ProcessCommands();
+  EvaluateKernelShadowForCurrentSymbol("TICK");
 }

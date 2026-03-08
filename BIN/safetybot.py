@@ -130,6 +130,19 @@ try:
     )
     from .config_manager import ConfigManager
     from .risk_manager import RiskManager
+    from .deployment_plane import (
+        build_kernel_runtime_payload,
+        build_kernel_symbol_rows,
+        build_policy_runtime_payload,
+    )
+    from .kernel_config_plane import (
+        KERNEL_CONFIG_POLICY_VERSION,
+    )
+    from .runtime_supervisor import (
+        build_mt5_common_file_path,
+        resolve_trade_trigger_mode,
+        should_emit_interval,
+    )
     from .zeromq_bridge import ZMQBridge, build_request_hash, build_response_hash
 except Exception:  # pragma: no cover
     import common_guards as cg
@@ -176,6 +189,19 @@ except Exception:  # pragma: no cover
     )
     from config_manager import ConfigManager
     from risk_manager import RiskManager
+    from deployment_plane import (
+        build_kernel_runtime_payload,
+        build_kernel_symbol_rows,
+        build_policy_runtime_payload,
+    )
+    from kernel_config_plane import (
+        KERNEL_CONFIG_POLICY_VERSION,
+    )
+    from runtime_supervisor import (
+        build_mt5_common_file_path,
+        resolve_trade_trigger_mode,
+        should_emit_interval,
+    )
     from zeromq_bridge import ZMQBridge, build_request_hash, build_response_hash
 try:
     from .runtime_root import (
@@ -553,6 +579,12 @@ class CFG:
     policy_runtime_file_name: str = "policy_runtime.json"
     policy_runtime_emit_common_file: bool = True
     policy_runtime_common_subdir: str = "OANDA_MT5_SYSTEM"
+    kernel_config_emit_enabled: bool = True
+    kernel_config_emit_interval_sec: int = 15
+    kernel_config_file_name: str = "kernel_config_v1.json"
+    kernel_config_emit_common_file: bool = True
+    kernel_config_common_subdir: str = "OANDA_MT5_SYSTEM"
+    trade_trigger_mode: str = "BRIDGE_ACTIVE"
     # Stage-1 live profile adapter (control-plane only, no hot-path blocking).
     stage1_live_config_enabled: bool = True
     stage1_live_config_file: str = "LAB/RUN/live_config_stage1_apply.json"
@@ -10668,6 +10700,8 @@ class SafetyBot:
         self._last_scan_suppressed_log_ts: float = 0.0
         self._last_heartbeat_fail_log_ts: float = 0.0
         self._last_loop_health_emit_ts: float = 0.0
+        self._last_policy_runtime_emit_ts: float = 0.0
+        self._last_kernel_config_emit_ts: float = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -14511,16 +14545,95 @@ class SafetyBot:
         }
 
     def _policy_runtime_common_path(self) -> Optional[Path]:
-        if not bool(getattr(CFG, "policy_runtime_emit_common_file", True)):
-            return None
-        appdata = os.environ.get("APPDATA")
-        if not appdata:
-            return None
-        subdir = str(getattr(CFG, "policy_runtime_common_subdir", "OANDA_MT5_SYSTEM") or "OANDA_MT5_SYSTEM").strip()
-        fname = str(getattr(CFG, "policy_runtime_file_name", "policy_runtime.json") or "policy_runtime.json").strip()
-        if not fname:
-            fname = "policy_runtime.json"
-        return Path(appdata) / "MetaQuotes" / "Terminal" / "Common" / "Files" / subdir / fname
+        return build_mt5_common_file_path(
+            enabled=bool(getattr(CFG, "policy_runtime_emit_common_file", True)),
+            subdir=str(getattr(CFG, "policy_runtime_common_subdir", "OANDA_MT5_SYSTEM") or "OANDA_MT5_SYSTEM"),
+            file_name=str(getattr(CFG, "policy_runtime_file_name", "policy_runtime.json") or "policy_runtime.json"),
+        )
+
+    def _kernel_config_common_path(self) -> Optional[Path]:
+        return build_mt5_common_file_path(
+            enabled=bool(getattr(CFG, "kernel_config_emit_common_file", True)),
+            subdir=str(getattr(CFG, "kernel_config_common_subdir", "OANDA_MT5_SYSTEM") or "OANDA_MT5_SYSTEM"),
+            file_name=str(getattr(CFG, "kernel_config_file_name", "kernel_config_v1.json") or "kernel_config_v1.json"),
+        )
+
+    def _trade_trigger_mode(self) -> str:
+        mode, _reason = resolve_trade_trigger_mode(
+            getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE"),
+            allow_mql5_active=False,
+        )
+        return mode
+
+    def _kernel_spread_cap_points(self, symbol: str, grp_u: str) -> float:
+        grp_u = _group_key(grp_u)
+        if grp_u == "FX":
+            return float(fx_spread_cap_points(symbol, grp=grp_u))
+        if grp_u == "METAL":
+            return float(metal_spread_cap_points(symbol, grp=grp_u))
+        return float(max(0.0, _cfg_group_float(grp_u, "spread_cap_points", 0.0, symbol=symbol)))
+
+    def _kernel_group_float(self, grp_u: str, key: str, default: float, symbol: str) -> float:
+        return float(_cfg_group_float(grp_u, key, default, symbol=symbol))
+
+    def _kernel_group_int(self, grp_u: str, key: str, default: int, symbol: str) -> int:
+        return int(_cfg_group_int(grp_u, key, default, symbol=symbol))
+
+    def _build_kernel_config_symbol_rows(
+        self,
+        group_risk: Dict[str, Dict[str, Any]],
+        *,
+        now_dt: Optional[dt.datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        ref = (now_dt or now_utc()).astimezone(UTC)
+        return build_kernel_symbol_rows(
+            self.universe or [],
+            group_risk,
+            black_swan_action=str(getattr(self, "_black_swan_v2_action", "ALLOW") or "ALLOW"),
+            black_swan_reason=str(getattr(self, "_black_swan_v2_reason", "NONE") or "NONE"),
+            black_swan_blocks=bool(getattr(self, "_black_swan_block_new_entries", False)),
+            group_risk_fallback=group_market_risk_state,
+            spread_cap_resolver=self._kernel_spread_cap_points,
+            group_float_resolver=self._kernel_group_float,
+            group_int_resolver=self._kernel_group_int,
+            canonical_symbol_func=canonical_symbol,
+            group_key_func=_group_key,
+            now_dt=ref,
+        )
+
+    def _build_kernel_config_payload(
+        self,
+        group_risk: Dict[str, Dict[str, Any]],
+        *,
+        now_dt: Optional[dt.datetime] = None,
+    ) -> Dict[str, Any]:
+        ref = (now_dt or now_utc()).astimezone(UTC)
+        meta = {
+            "trade_trigger_mode": self._trade_trigger_mode(),
+            "source": "SafetyBot",
+            "runtime_root": str(self.runtime_root),
+            "stage1_loaded_symbols": int(getattr(self, "_stage1_live_last_loaded_symbols", 0)),
+            "stage1_config_hash": str((_STAGE1_LIVE_META or {}).get("config_hash") or ""),
+            "black_swan_v2_state": str(getattr(self, "_black_swan_v2_state", "NORMAL") or "NORMAL"),
+            "black_swan_v2_action": str(getattr(self, "_black_swan_v2_action", "ALLOW") or "ALLOW"),
+            "black_swan_v2_reason": str(getattr(self, "_black_swan_v2_reason", "NONE") or "NONE"),
+        }
+        return build_kernel_runtime_payload(
+            self.universe or [],
+            group_risk,
+            black_swan_action=str(getattr(self, "_black_swan_v2_action", "ALLOW") or "ALLOW"),
+            black_swan_reason=str(getattr(self, "_black_swan_v2_reason", "NONE") or "NONE"),
+            black_swan_blocks=bool(getattr(self, "_black_swan_block_new_entries", False)),
+            group_risk_fallback=group_market_risk_state,
+            spread_cap_resolver=self._kernel_spread_cap_points,
+            group_float_resolver=self._kernel_group_float,
+            group_int_resolver=self._kernel_group_int,
+            canonical_symbol_func=canonical_symbol,
+            group_key_func=_group_key,
+            generated_at_utc=ref.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            meta=meta,
+            policy_version=KERNEL_CONFIG_POLICY_VERSION,
+        )
 
     def _build_policy_runtime_payload(
         self,
@@ -14530,44 +14643,19 @@ class SafetyBot:
         now_dt: Optional[dt.datetime] = None,
     ) -> Dict[str, Any]:
         ref = (now_dt or now_utc()).astimezone(UTC)
-        baseline_groups = {"FX", "METAL", "INDEX", "CRYPTO", "EQUITY"}
-        groups = sorted(set(list(group_arb.keys()) + list(group_risk.keys()) + list(baseline_groups)))
-        groups_payload: Dict[str, Any] = {}
-        for g in groups:
-            st = dict(group_arb.get(g) or {})
-            rs = dict(group_risk.get(g) or {})
-            groups_payload[g] = {
-                "entry_allowed": bool(rs.get("entry_allowed", True)),
-                "borrow_blocked": bool(rs.get("borrow_blocked", False)),
-                "priority_factor": float(st.get("priority_factor", rs.get("priority_factor", 1.0))),
-                "reason": str(rs.get("reason", "NONE")),
-                "risk_friday": bool(rs.get("friday_risk", False)),
-                "risk_reopen": bool(rs.get("reopen_guard", False)),
-                "price_cap": int(st.get("price_cap", 0)),
-                "price_used": int(st.get("price_used", 0)),
-                "price_borrow": int(st.get("price_borrow", 0)),
-                "order_cap": int(st.get("order_cap", 0)),
-                "order_used": int(st.get("order_used", 0)),
-                "order_borrow": int(st.get("order_borrow", 0)),
-                "sys_cap": int(st.get("sys_cap", 0)),
-                "sys_used": int(st.get("sys_used", 0)),
-                "sys_borrow": int(st.get("sys_borrow", 0)),
-            }
-
-        return {
-            "schema_version": "1.0",
-            "policy_version": "windows_v2",
-            "ts_utc": ref.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            "flags": {
+        return build_policy_runtime_payload(
+            group_arb,
+            group_risk,
+            flags={
                 "policy_windows_v2_enabled": bool(getattr(CFG, "policy_windows_v2_enabled", True)),
                 "policy_risk_windows_enabled": bool(getattr(CFG, "policy_risk_windows_enabled", True)),
                 "policy_group_arbitration_enabled": bool(getattr(CFG, "policy_group_arbitration_enabled", True)),
                 "policy_overlap_arbitration_enabled": bool(getattr(CFG, "policy_overlap_arbitration_enabled", True)),
                 "policy_shadow_mode_enabled": bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
             },
-            "us_overlap_active": bool(us_overlap_window_active(ref)),
-            "groups": groups_payload,
-        }
+            ts_utc=ref.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            us_overlap_active=bool(us_overlap_window_active(ref)),
+        )
 
     def _emit_policy_runtime(
         self,
@@ -14581,7 +14669,7 @@ class SafetyBot:
         now_ts = float(time.time())
         interval_s = max(1, int(getattr(CFG, "policy_runtime_emit_interval_sec", 15)))
         last_ts = float(getattr(self, "_last_policy_runtime_emit_ts", 0.0))
-        if (now_ts - last_ts) < float(interval_s):
+        if not should_emit_interval(now_ts=now_ts, last_ts=last_ts, interval_s=interval_s):
             return
         self._last_policy_runtime_emit_ts = now_ts
 
@@ -14602,6 +14690,56 @@ class SafetyBot:
                 atomic_write_json(common_path, payload)
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _emit_kernel_config(
+        self,
+        group_risk: Dict[str, Dict[str, Any]],
+        *,
+        now_dt: Optional[dt.datetime] = None,
+    ) -> None:
+        if not bool(getattr(CFG, "kernel_config_emit_enabled", True)):
+            return
+        now_ts = float(time.time())
+        interval_s = max(1, int(getattr(CFG, "kernel_config_emit_interval_sec", 15)))
+        if not should_emit_interval(
+            now_ts=now_ts,
+            last_ts=float(getattr(self, "_last_kernel_config_emit_ts", 0.0)),
+            interval_s=interval_s,
+        ):
+            return
+        self._last_kernel_config_emit_ts = now_ts
+
+        payload = self._build_kernel_config_payload(group_risk, now_dt=now_dt)
+        file_name = str(getattr(CFG, "kernel_config_file_name", "kernel_config_v1.json") or "kernel_config_v1.json").strip()
+        if not file_name:
+            file_name = "kernel_config_v1.json"
+
+        try:
+            atomic_write_json(self.meta_dir / file_name, payload)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        common_path = self._kernel_config_common_path()
+        if common_path is not None:
+            try:
+                atomic_write_json(common_path, payload)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _runtime_maintenance_step(self) -> bool:
+        try:
+            self._reload_stage1_live_config(force=False)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        if self.manual_kill_switch_path.exists():
+            logging.info("BOT STOP | Wykryto plik kill_switch.")
+            return False
+        return True
+
+    def _runtime_idle_step(self, had_market_data: bool, idle_sleep_sec: float) -> None:
+        if not had_market_data:
+            time.sleep(float(idle_sleep_sec))
 
     def scan_once(self):
         st = self.gov.day_state()
@@ -14732,6 +14870,7 @@ class SafetyBot:
                         int(gs.get("sys_borrow", 0.0)),
                     )
             self._emit_policy_runtime(group_arb, group_risk, now_dt=now_arb)
+            self._emit_kernel_config(group_risk, now_dt=now_arb)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -16102,6 +16241,15 @@ class SafetyBot:
     def run(self):
         logging.info(f"BOT START | HYBRID MODE | MT5 SAFETY BOT {CFG.BOT_VERSION}")
         logging.info("Uruchamianie pętli hybrydowej (ZMQ + Periodic Scan)...")
+        requested_trigger_mode = str(getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE") or "BRIDGE_ACTIVE").strip().upper()
+        effective_trigger_mode = self._trade_trigger_mode()
+        if requested_trigger_mode != effective_trigger_mode:
+            logging.warning(
+                "TRADE_TRIGGER_MODE_FALLBACK requested=%s effective=%s reason=MQL5_ACTIVE_NOT_CUTOVER_READY",
+                requested_trigger_mode,
+                effective_trigger_mode,
+            )
+        logging.info("TRADE_TRIGGER_MODE mode=%s", effective_trigger_mode)
 
         last_scan_ts = 0.0
         scan_interval = int(getattr(CFG, "scan_interval_sec", 60))
@@ -16422,20 +16570,12 @@ class SafetyBot:
                                 )
                     last_scan_ts = now
 
-                # 4. Stage1 live profile adapter (control-plane cadence, no blocking waits).
-                try:
-                    self._reload_stage1_live_config(force=False)
-                except Exception as e:
-                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-
-                # 5. Sprawdzenie Kill-Switch
-                if self.manual_kill_switch_path.exists():
-                    logging.info("BOT STOP | Wykryto plik kill_switch.")
+                # 4. Control-plane maintenance outside decision hot section.
+                if not self._runtime_maintenance_step():
                     break
 
-                # 6. Krótki odpoczynek dla CPU, jeśli nie było danych
-                if not market_data:
-                    time.sleep(float(run_loop_idle_sleep))
+                # 5. Krótki odpoczynek dla CPU, jeśli nie było danych
+                self._runtime_idle_step(bool(market_data), float(run_loop_idle_sleep))
 
         except KeyboardInterrupt:
             logging.info("BOT STOP | manual (Ctrl+C)")
@@ -16862,6 +17002,25 @@ if __name__ == "__main__":
         strategy_cfg.get("policy_runtime_common_subdir", CFG.policy_runtime_common_subdir)
         or CFG.policy_runtime_common_subdir
     )
+    CFG.kernel_config_emit_enabled = _cfg_bool("kernel_config_emit_enabled", CFG.kernel_config_emit_enabled)
+    CFG.kernel_config_emit_interval_sec = _cfg_int(
+        "kernel_config_emit_interval_sec", CFG.kernel_config_emit_interval_sec
+    )
+    CFG.kernel_config_file_name = str(
+        strategy_cfg.get("kernel_config_file_name", CFG.kernel_config_file_name) or CFG.kernel_config_file_name
+    )
+    CFG.kernel_config_emit_common_file = _cfg_bool(
+        "kernel_config_emit_common_file", CFG.kernel_config_emit_common_file
+    )
+    CFG.kernel_config_common_subdir = str(
+        strategy_cfg.get("kernel_config_common_subdir", CFG.kernel_config_common_subdir)
+        or CFG.kernel_config_common_subdir
+    )
+    CFG.trade_trigger_mode = str(
+        strategy_cfg.get("trade_trigger_mode", CFG.trade_trigger_mode) or CFG.trade_trigger_mode
+    ).strip().upper()
+    if CFG.trade_trigger_mode not in {"BRIDGE_ACTIVE", "MQL5_SHADOW_COMPARE", "MQL5_ACTIVE"}:
+        CFG.trade_trigger_mode = "BRIDGE_ACTIVE"
     CFG.stage1_live_config_enabled = _cfg_bool(
         "stage1_live_config_enabled", CFG.stage1_live_config_enabled
     )
