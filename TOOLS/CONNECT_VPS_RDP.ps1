@@ -81,7 +81,7 @@ if ([string]::IsNullOrWhiteSpace($plain)) {
 $target = "TERMSRV/$vpsHost"
 $null = & cmdkey /generic:$target /user:$vpsUser /pass:$plain 2>$null
 if ($LASTEXITCODE -ne 0) {
-    throw "Nie udalo sie zapisac poświadczeń RDP (cmdkey)."
+    throw "Nie udalo sie zapisac poswiadczen RDP (cmdkey)."
 }
 
 $rdpDir = Join-Path $runtimeRoot "RUN"
@@ -97,7 +97,7 @@ $rdpLines = @(
 )
 Set-Content -LiteralPath $rdpPath -Value $rdpLines -Encoding ASCII
 
-# Czyszczenie jawnego hasla z pamięci skryptu.
+# Czyszczenie jawnego hasla z pamieci skryptu.
 $plain = ""
 Remove-Variable plain -ErrorAction SilentlyContinue
 Remove-Variable secure -ErrorAction SilentlyContinue
