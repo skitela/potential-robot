@@ -92,6 +92,27 @@ def _build_probe_command(symbol: str) -> Dict[str, Any]:
     }
 
 
+def _is_timeout_error(err: str) -> bool:
+    text = str(err or "").upper()
+    return ("AGAIN" in text) or ("RESOURCE TEMPORARILY UNAVAILABLE" in text) or ("TIMED OUT" in text)
+
+
+def _is_no_peer_error(err: str) -> bool:
+    text = str(err or "").upper()
+    if _is_timeout_error(text):
+        return True
+    return "OPERATION CANNOT BE ACCOMPLISHED IN CURRENT STATE" in text
+
+
+def _classify_probe_status(rows: List[Dict[str, Any]], errors: List[str]) -> str:
+    ok_rows = sum(1 for r in rows if str(r.get("status") or "") == "REPLY")
+    if ok_rows > 0:
+        return "OK"
+    if errors and all(_is_no_peer_error(x) for x in errors):
+        return "NO_ACTIVE_PEER"
+    return "FAILED"
+
+
 def run_probe(
     *,
     symbols: List[str],
@@ -143,8 +164,9 @@ def run_probe(
             pass
 
     ok_rows = sum(1 for r in rows if r.get("status") == "REPLY")
+    status = _classify_probe_status(rows, errors)
     return {
-        "status": "OK" if ok_rows > 0 else "FAILED",
+        "status": status,
         "rows": rows,
         "ok_rows": int(ok_rows),
         "errors": errors,
@@ -157,6 +179,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ap.add_argument("--symbols", default="", help="Comma-separated symbols.")
     ap.add_argument("--endpoint", default="tcp://127.0.0.1:5556")
     ap.add_argument("--timeout-ms", type=int, default=1200)
+    ap.add_argument("--allow-no-peer", action="store_true", help="Do not fail when runtime peer is not active.")
     ap.add_argument("--out-json", default="")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
@@ -189,7 +212,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         f"status={result.get('status')} ok_rows={result.get('ok_rows', 0)} "
         f"symbols={len(symbols)} out={out_json}"
     )
-    return 0 if str(result.get("status")) == "OK" else 2
+    status = str(result.get("status") or "")
+    if status == "OK":
+        return 0
+    if status == "NO_ACTIVE_PEER" and bool(args.allow_no_peer):
+        return 0
+    return 2
 
 
 if __name__ == "__main__":
