@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+from typing import List
+
+
+def _class_method_node(source_path: Path, class_name: str, method_name: str) -> ast.FunctionDef:
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for method in node.body:
+                if isinstance(method, ast.FunctionDef) and method.name == method_name:
+                    return method
+    raise AssertionError(f"Method not found: {class_name}.{method_name}")
+
+
+def _called_names(fn: ast.FunctionDef) -> List[str]:
+    names: List[str] = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            names.append(str(node.func.attr))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            names.append(str(node.func.id))
+    return names
+
+
+def test_scan_once_no_longer_emits_policy_and_kernel_config() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "scan_once")
+    called = _called_names(fn)
+    assert "_emit_policy_runtime" not in called
+    assert "_emit_kernel_config" not in called
+
+
+def test_runtime_maintenance_step_emits_policy_and_kernel_config() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "_runtime_maintenance_step")
+    called = _called_names(fn)
+    assert "_emit_policy_runtime" in called
+    assert "_emit_kernel_config" in called

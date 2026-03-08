@@ -10702,6 +10702,9 @@ class SafetyBot:
         self._last_loop_health_emit_ts: float = 0.0
         self._last_policy_runtime_emit_ts: float = 0.0
         self._last_kernel_config_emit_ts: float = 0.0
+        self._runtime_cached_group_arb: Dict[str, Dict[str, Any]] = {}
+        self._runtime_cached_group_risk: Dict[str, Dict[str, Any]] = {}
+        self._runtime_cached_group_ts_utc: str = ""
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -14728,6 +14731,15 @@ class SafetyBot:
 
     def _runtime_maintenance_step(self) -> bool:
         try:
+            # Control-plane emit poza sekcją decyzyjną scan_once (mniej I/O w decision core).
+            group_arb = dict(getattr(self, "_runtime_cached_group_arb", {}) or {})
+            group_risk = dict(getattr(self, "_runtime_cached_group_risk", {}) or {})
+            self._emit_policy_runtime(group_arb, group_risk, now_dt=now_utc())
+            self._emit_kernel_config(group_risk, now_dt=now_utc())
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
             self._reload_stage1_live_config(force=False)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
@@ -14869,8 +14881,13 @@ class SafetyBot:
                         int(gs.get("sys_cap", 0.0)),
                         int(gs.get("sys_borrow", 0.0)),
                     )
-            self._emit_policy_runtime(group_arb, group_risk, now_dt=now_arb)
-            self._emit_kernel_config(group_risk, now_dt=now_arb)
+            self._runtime_cached_group_arb = {
+                str(g): dict(v or {}) for g, v in (group_arb or {}).items()
+            }
+            self._runtime_cached_group_risk = {
+                str(g): dict(v or {}) for g, v in (group_risk or {}).items()
+            }
+            self._runtime_cached_group_ts_utc = now_arb.replace(microsecond=0).isoformat().replace("+00:00", "Z")
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
