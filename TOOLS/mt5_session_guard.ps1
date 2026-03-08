@@ -15,6 +15,9 @@ param(
     [int]$FailSafeActivatedThreshold = 8,
     [int]$VirtualHostWarnWindowSec = 3600,
     [int]$VirtualHostWarnAlertThreshold = 5,
+    [int]$NoActivePeerWindowSec = 180,
+    [int]$NoActivePeerThreshold = 4,
+    [int]$NoActivePeerGraceSec = 90,
     [switch]$DryRun
 )
 
@@ -268,6 +271,7 @@ $statusPath = Join-Path $runDir "mt5_session_guard_status.json"
 $pidPath = Join-Path $runDir "mt5_session_guard.pid"
 $eventPath = Join-Path $logDir "mt5_session_guard_events.jsonl"
 $desiredStatePath = Join-Path $runDir "system_desired_state.json"
+$safetyLogPath = Join-Path $runtimeRoot "LOGS\safetybot.log"
 
 Write-JsonAtomic -Path $pidPath -Object @{
     pid = [int]$PID
@@ -284,6 +288,7 @@ $policyRetryEvents = New-Object System.Collections.ArrayList
 $severeEvents = New-Object System.Collections.ArrayList
 $failSafeActivatedEvents = New-Object System.Collections.ArrayList
 $virtualHostWarnEvents = New-Object System.Collections.ArrayList
+$noActivePeerEvents = New-Object System.Collections.ArrayList
 
 $lastLostAt = $null
 $lastAuthAt = $null
@@ -299,6 +304,7 @@ $policyRetryRx = [regex]'(?i)\bPOLICY_RUNTIME_OPEN_RETRY\b'
 $severeRx = [regex]'(?i)\b(POLICY_RUNTIME_FAILSAFE|ZMQ_INIT_FAIL)\b'
 $failSafeActivatedRx = [regex]'(?i)\bFAIL-SAFE ACTIVATED\b'
 $virtualHostWarnRx = [regex]'(?i)\bVirtual Hosting\b.*failed to get list of virtual hosts\b'
+$noActivePeerRx = [regex]'(?i)\b(NO_ACTIVE_PEER|COMMAND_SEND_TIMEOUT)\b'
 
 Write-Output ("MT5_SESSION_GUARD start root={0} mt5_dir={1} profile={2} poll={3}s cooldown={4}s" -f $runtimeRoot, $mt5DataDirResolved, $Profile, [int]$PollSec, [int]$RestartCooldownSec)
 
@@ -381,11 +387,32 @@ while ($true) {
             }
         }
 
+        if (Test-Path $safetyLogPath) {
+            $isSafetyBootstrapRead = (-not $offsets.ContainsKey($safetyLogPath))
+            $safetyLines = Read-AppendedLines -Path $safetyLogPath -Offsets $offsets
+            foreach ($line in $safetyLines) {
+                $msg = [string]$line
+                if ([string]::IsNullOrWhiteSpace($msg)) { continue }
+                if ($noActivePeerRx.IsMatch($msg)) {
+                    if (-not $isSafetyBootstrapRead) {
+                        [void]$noActivePeerEvents.Add($now)
+                        Append-Jsonl -Path $eventPath -Payload @{
+                            ts_utc = $nowUtc
+                            event = "NO_ACTIVE_PEER_EVENT"
+                            severity = "WATCH"
+                            message = $msg
+                        }
+                    }
+                }
+            }
+        }
+
         Prune-Timestamps -List $lostEvents -WindowSec ([Math]::Max(60, [int]$DisconnectBurstWindowSec)) -Now $now
         Prune-Timestamps -List $policyRetryEvents -WindowSec ([Math]::Max(120, [int]$PolicyRetryWindowSec)) -Now $now
         Prune-Timestamps -List $severeEvents -WindowSec 120 -Now $now
         Prune-Timestamps -List $failSafeActivatedEvents -WindowSec ([Math]::Max(120, [int]$FailSafeActivatedWindowSec)) -Now $now
         Prune-Timestamps -List $virtualHostWarnEvents -WindowSec ([Math]::Max(300, [int]$VirtualHostWarnWindowSec)) -Now $now
+        Prune-Timestamps -List $noActivePeerEvents -WindowSec ([Math]::Max(60, [int]$NoActivePeerWindowSec)) -Now $now
 
         $desired = Get-SystemDesiredState -Path $desiredStatePath
         $allowRepair = ([string]$desired.state -eq "RUNNING")
@@ -442,6 +469,14 @@ while ($true) {
             }
         }
 
+        if (-not $shouldRepair) {
+            $noActivePeerReady = ((($now - $scriptStartedAt).TotalSeconds) -ge [double]([Math]::Max(0, [int]$NoActivePeerGraceSec)))
+            if ($noActivePeerReady -and ($noActivePeerEvents.Count -ge [int]([Math]::Max(1, [int]$NoActivePeerThreshold))) -and $repairWindowOpen) {
+                $shouldRepair = $true
+                $repairReason = "NO_ACTIVE_PEER_BURST"
+            }
+        }
+
         if ($shouldRepair -and (-not $allowRepair)) {
             $shouldRepair = $false
             $lastReason = "SKIP_DESIRED_STOPPED"
@@ -465,11 +500,15 @@ while ($true) {
                 policy_retry_window = [int]$policyRetryEvents.Count
                 severe_events_window = [int]$severeEvents.Count
                 failsafe_activated_window = [int]$failSafeActivatedEvents.Count
+                no_active_peer_window = [int]$noActivePeerEvents.Count
+                no_active_peer_window_sec = [int]$NoActivePeerWindowSec
+                no_active_peer_threshold = [int]$NoActivePeerThreshold
             }
             $lostEvents.Clear()
             $policyRetryEvents.Clear()
             $severeEvents.Clear()
             $failSafeActivatedEvents.Clear()
+            $noActivePeerEvents.Clear()
         }
 
         $status = @{
@@ -495,6 +534,7 @@ while ($true) {
             failsafe_activated_window = [int]$failSafeActivatedEvents.Count
             virtual_hosting_warning_window = [int]$virtualHostWarnEvents.Count
             virtual_hosting_warning_alert = [bool]$virtualHostWarnAlert
+            no_active_peer_window = [int]$noActivePeerEvents.Count
             last_restart_utc = $(if ($null -eq $lastRestartAt) { "" } else { $lastRestartAt.ToUniversalTime().ToString("o") })
             last_restart_reason = $lastReason
             cooldown_ok = [bool]$cooldownOk
@@ -506,6 +546,9 @@ while ($true) {
                 policy_retry_threshold = [int]$PolicyRetryThreshold
                 failsafe_activated_window_sec = [int]$FailSafeActivatedWindowSec
                 failsafe_activated_threshold = [int]$FailSafeActivatedThreshold
+                no_active_peer_window_sec = [int]$NoActivePeerWindowSec
+                no_active_peer_threshold = [int]$NoActivePeerThreshold
+                no_active_peer_grace_sec = [int]$NoActivePeerGraceSec
                 virtual_hosting_warn_window_sec = [int]$VirtualHostWarnWindowSec
                 virtual_hosting_warn_alert_threshold = [int]$VirtualHostWarnAlertThreshold
                 restart_cooldown_sec = [int]$RestartCooldownSec

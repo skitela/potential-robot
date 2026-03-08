@@ -693,6 +693,30 @@ $status = [ordered]@{
     status = "FAIL"
 }
 
+$ghostDriveScript = Join-Path $runtimeRoot "TOOLS\quiet_ghost_drive.ps1"
+if (Test-Path $ghostDriveScript) {
+    try {
+        $ghostArgs = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $ghostDriveScript,
+            "-Root", $runtimeRoot,
+            "-DriveLetter", "E"
+        )
+        if ($DryRun) { $ghostArgs += "-DryRun" }
+        $ghostOut = (& powershell @ghostArgs 2>&1 | Out-String).Trim()
+        $status.ghost_drive_quiet = [ordered]@{
+            status = "ok"
+            output = $ghostOut
+        }
+    } catch {
+        $status.ghost_drive_quiet = [ordered]@{
+            status = "error"
+            error = $_.Exception.Message
+        }
+    }
+}
+
 $driveInfo = Resolve-KeyDrive -ExpectedLabel $Label -Dry:$DryRun
 if (-not [bool]$driveInfo.ok) {
     $status.reason = [string]$driveInfo.reason
@@ -820,6 +844,17 @@ if (-not (Test-Path $systemControl)) {
     exit 4
 }
 
+# Uruchamiamy guard popupu przed startem runtime/MT5, aby złapać okno ryzyka
+# natychmiast po pojawieniu się (bez ingerencji w hot-path).
+$riskGuard = Start-RiskPopupGuard -RuntimeRoot $runtimeRoot
+$status.risk_popup_guard = $riskGuard
+[void](Write-JsonAtomic -Path $statusPath -Object $status)
+if (-not [bool]$riskGuard.ok) {
+    Write-Output ("START_WITH_OANDAKEY WARN: risk popup guard failed status={0}" -f [string]$riskGuard.status)
+} else {
+    Write-Output ("START_WITH_OANDAKEY RISK_GUARD status={0} pid={1}" -f [string]$riskGuard.status, [string]$riskGuard.pid)
+}
+
 $args = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
@@ -840,14 +875,6 @@ $status.start_exit_code = $rc
 [void](Write-JsonAtomic -Path $statusPath -Object $status)
 
 if ($rc -eq 0) {
-    $riskGuard = Start-RiskPopupGuard -RuntimeRoot $runtimeRoot
-    $status.risk_popup_guard = $riskGuard
-    [void](Write-JsonAtomic -Path $statusPath -Object $status)
-    if (-not [bool]$riskGuard.ok) {
-        Write-Output ("START_WITH_OANDAKEY WARN: risk popup guard failed status={0}" -f [string]$riskGuard.status)
-    } else {
-        Write-Output ("START_WITH_OANDAKEY RISK_GUARD status={0} pid={1}" -f [string]$riskGuard.status, [string]$riskGuard.pid)
-    }
     $sessionGuard = Start-Mt5SessionGuard -RuntimeRoot $runtimeRoot -Profile $Profile
     $status.mt5_session_guard = $sessionGuard
     [void](Write-JsonAtomic -Path $statusPath -Object $status)

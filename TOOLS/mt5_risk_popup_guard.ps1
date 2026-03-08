@@ -231,6 +231,86 @@ function Append-Line {
     Add-Content -Path $Path -Value $Line -Encoding UTF8
 }
 
+function Normalize-Text {
+    param([string]$Value = "")
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+    return $Value.Trim().ToLowerInvariant()
+}
+
+function Test-RiskPopupWindow {
+    param(
+        [Parameter(Mandatory = $true)][IntPtr]$Hwnd,
+        [Parameter(Mandatory = $true)][string]$Title
+    )
+
+    $markers = @(
+        "high risk investment warning",
+        "high risk warning",
+        "ostrzeżenie o ryzyku",
+        "ostrzezenie o ryzyku",
+        "ryzyku inwestycyjnym",
+        "zapoznałem",
+        "zapoznalem",
+        "i have read and accept"
+    )
+
+    $titleNorm = Normalize-Text -Value $Title
+    $children = [WinApi]::EnumerateChildWindows($Hwnd)
+    $buttonTexts = @()
+    $allTexts = @()
+    if (-not [string]::IsNullOrWhiteSpace($titleNorm)) {
+        $allTexts += $titleNorm
+    }
+
+    $hasOkButton = $false
+    foreach ($it in $children) {
+        $cls = [string]$it.Item2
+        $txt = Normalize-Text -Value ([string]$it.Item3)
+        if (-not [string]::IsNullOrWhiteSpace($txt)) {
+            $allTexts += $txt
+        }
+        if ($cls -eq "Button") {
+            if (-not [string]::IsNullOrWhiteSpace($txt)) { $buttonTexts += $txt }
+            if ($txt -match "^(ok|yes|tak)$") {
+                $hasOkButton = $true
+            }
+        }
+    }
+    if (-not $hasOkButton) {
+        return @{
+            is_risk_popup = $false
+            reason = "no_ok_button"
+            matched_marker = ""
+            title = $Title
+        }
+    }
+
+    $joined = ($allTexts -join " | ")
+    $matched = ""
+    foreach ($m in $markers) {
+        if ($joined.Contains($m)) {
+            $matched = $m
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($matched)) {
+        return @{
+            is_risk_popup = $false
+            reason = "marker_not_found"
+            matched_marker = ""
+            title = $Title
+        }
+    }
+    return @{
+        is_risk_popup = $true
+        reason = "marker_match"
+        matched_marker = $matched
+        title = $Title
+    }
+}
+
 function Invoke-Win32AcceptRiskPopup {
     param(
         [Parameter(Mandatory = $true)][IntPtr]$Hwnd,
@@ -314,15 +394,6 @@ $state.mt5_data_dir = $mt5DataDirResolved
 $mt5DirLogValue = if ([string]::IsNullOrWhiteSpace($mt5DataDirResolved)) { "<unresolved>" } else { $mt5DataDirResolved }
 Append-Line -Path $eventLog -Line ("[{0}] RISK_GUARD_MT5_DIR dir={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mt5DirLogValue)
 
-$keywords = @(
-    "high risk investment warning",
-    "investment warning",
-    "high risk",
-    "ostrze",
-    "ryzyk",
-    "warning"
-)
-
 $lastActionByHwnd = @{}
 $offsets = @{}
 
@@ -362,12 +433,8 @@ while ($true) {
                 if (-not ($terminalPids -contains $wndPid)) { continue }
                 $title = [string]$w.Item3
                 if ([string]::IsNullOrWhiteSpace($title)) { continue }
-                $titleLower = $title.ToLowerInvariant()
-                $match = $false
-                foreach ($k in $keywords) {
-                    if ($titleLower.Contains($k)) { $match = $true; break }
-                }
-                if (-not $match) { continue }
+                $candidate = Test-RiskPopupWindow -Hwnd $w.Item1 -Title $title
+                if (-not [bool]$candidate.is_risk_popup) { continue }
 
                 $hwnd = $w.Item1
                 $hwndKey = $hwnd.ToString()
@@ -384,11 +451,11 @@ while ($true) {
 
                 $res = Invoke-Win32AcceptRiskPopup -Hwnd $hwnd -Title $title
                 if (-not [bool]$res.ok) {
-                    Append-Line -Path $eventLog -Line ("[{0}] POPUP_ACCEPT_FAIL title=""{1}"" pid={2} hwnd={3} mode={4} err={5}" -f `
-                        (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $title, $wndPid, $hwndKey, $res.mode, $res.error)
+                    Append-Line -Path $eventLog -Line ("[{0}] POPUP_ACCEPT_FAIL title=""{1}"" pid={2} hwnd={3} marker={4} mode={5} err={6}" -f `
+                        (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $title, $wndPid, $hwndKey, [string]$candidate.matched_marker, $res.mode, $res.error)
                 } else {
-                    Append-Line -Path $eventLog -Line ("[{0}] POPUP_ACCEPT_OK title=""{1}"" pid={2} hwnd={3} mode={4}" -f `
-                        (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $title, $wndPid, $hwndKey, $res.mode)
+                    Append-Line -Path $eventLog -Line ("[{0}] POPUP_ACCEPT_OK title=""{1}"" pid={2} hwnd={3} marker={4} mode={5}" -f `
+                        (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $title, $wndPid, $hwndKey, [string]$candidate.matched_marker, $res.mode)
                 }
 
                 $lastActionByHwnd[$hwndKey] = $now
