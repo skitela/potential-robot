@@ -61,7 +61,8 @@ class TestMt5DeployContract(unittest.TestCase):
         script = (ROOT / "Aktualizuj_EA.bat").read_text(encoding="utf-8", errors="ignore")
         required_tokens = (
             ":compile_hybrid_agent",
-            ":normalize_diag_rc",
+            "for /L %%N in (1,1,3) do",
+            "Diagnostic not ready yet",
             "MT5_FULL_DIAG_*.txt",
             "Compile OK",
             "Result: 0 errors, 0 warnings",

@@ -1,6 +1,21 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
+if /I not "%~1"=="__quiet_inner" (
+  set "DEPLOY_STDOUT=%TEMP%\oanda_mt5_deploy_%RANDOM%_%RANDOM%.out"
+  set "DEPLOY_STDERR=%TEMP%\oanda_mt5_deploy_%RANDOM%_%RANDOM%.err"
+  call "%~f0" __quiet_inner %* > "!DEPLOY_STDOUT!" 2> "!DEPLOY_STDERR!"
+  set "INNER_RC=%ERRORLEVEL%"
+  if exist "!DEPLOY_STDOUT!" type "!DEPLOY_STDOUT!"
+  if exist "!DEPLOY_STDERR!" (
+    findstr /V /C:"ERROR: Input redirection is not supported, exiting the process immediately." "!DEPLOY_STDERR!"
+  )
+  if exist "!DEPLOY_STDOUT!" del /q "!DEPLOY_STDOUT!" >nul 2>&1
+  if exist "!DEPLOY_STDERR!" del /q "!DEPLOY_STDERR!" >nul 2>&1
+  exit /b !INNER_RC!
+)
+shift
+
 rem ============================================================================
 rem OANDA_MT5_SYSTEM - HybridAgent deploy script (v3.0)
 rem - copies EA + include + dll to MT5 data directory
@@ -31,9 +46,9 @@ if not defined PYTHON_EXE if exist "C:\Program Files\Python312\python.exe" (
 )
 if not defined PYTHON_EXE (
   where py >nul 2>&1
-  if "%ERRORLEVEL%"=="0" (
+  if not errorlevel 1 (
     py -3.12 -c "import sys; print(sys.version_info[0])" >nul 2>&1
-    if "%ERRORLEVEL%"=="0" (
+    if not errorlevel 1 (
       set "PYTHON_EXE=py"
       set "PYTHON_ARGS=-3.12"
       set "PY312_AVAILABLE=1"
@@ -42,7 +57,7 @@ if not defined PYTHON_EXE (
 )
 if not defined PYTHON_EXE (
   where python >nul 2>&1
-  if "%ERRORLEVEL%"=="0" (
+  if not errorlevel 1 (
     set "PYTHON_EXE=python"
   )
 )
@@ -242,9 +257,28 @@ if defined TERMINAL_EXE (
 set "DIAG_RC=0"
 if exist "%DIAG_BAT%" (
   echo [STEP] Running full MT5 diagnostic
-  call "%DIAG_BAT%"
-  set "DIAG_RC=%ERRORLEVEL%"
-  call :normalize_diag_rc
+  set "DIAG_VERDICT="
+  for /L %%N in (1,1,3) do (
+    call "%DIAG_BAT%"
+    set "DIAG_RC=!ERRORLEVEL!"
+    set "DIAG_VERDICT="
+    for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$dir=Join-Path '%ROOT%' 'RUN\\DIAG_REPORTS';" ^
+      "if(Test-Path $dir){" ^
+      "  $latest=Get-ChildItem $dir -Filter 'MT5_FULL_DIAG_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1;" ^
+      "  if($latest){" ^
+      "    $hit=Select-String -Path $latest.FullName -Pattern '^verdict=(.+)$' | Select-Object -First 1;" ^
+      "    if($hit){ Write-Output $hit.Matches[0].Groups[1].Value.Trim() }" ^
+      "  }" ^
+      "}"`) do set "DIAG_VERDICT=%%I"
+    if /I "!DIAG_VERDICT!"=="PASS" set "DIAG_RC=0"
+    if "!DIAG_RC!"=="0" goto :diag_ok
+    if %%N LSS 3 (
+      echo [WARN] Diagnostic not ready yet ^(attempt %%N/3, verdict=!DIAG_VERDICT!^). Retrying...
+      timeout /t 5 /nobreak >nul
+    )
+  )
+  :diag_ok
   if not "!DIAG_RC!"=="0" (
     echo [WARN] Diagnostic returned rc=!DIAG_RC!
   )
@@ -259,8 +293,8 @@ if exist "%ROOT%\TOOLS\mt5_symbol_select.py" (
   ) else (
     echo [WARN] Python with MetaTrader5 package not found - symbol select skipped.
   )
-  if not "%ERRORLEVEL%"=="0" (
-    echo [WARN] Symbol select utility returned non-zero rc=%ERRORLEVEL%
+  if errorlevel 1 (
+    echo [WARN] Symbol select utility returned non-zero rc=!ERRORLEVEL!
   )
 ) else (
   echo [WARN] Missing symbol-select utility: %ROOT%\TOOLS\mt5_symbol_select.py
@@ -346,7 +380,7 @@ if not defined METAEDITOR_EXE (
   exit /b 0
 )
 echo [STEP] Compiling HybridAgent via MetaEditor
-"%METAEDITOR_EXE%" /compile:"%TARGET_DIR%\Experts\HybridAgent.mq5" /log:"%COMPILE_LOG%"
+start "" /wait "%METAEDITOR_EXE%" /compile:"%TARGET_DIR%\Experts\HybridAgent.mq5" /log:"%COMPILE_LOG%" >nul 2>&1
 if not exist "%COMPILE_LOG%" (
   echo [WARN] Compile log missing after MetaEditor run: %COMPILE_LOG%
   exit /b 0
@@ -366,23 +400,6 @@ if /I "%COMPILE_MATCH%"=="MATCH" (
 )
 exit /b 0
 
-:normalize_diag_rc
-if "%DIAG_RC%"=="0" exit /b 0
-set "DIAG_VERDICT="
-for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$dir=Join-Path '%ROOT%' 'RUN\\DIAG_REPORTS';" ^
-  "if(Test-Path $dir){" ^
-  "  $latest=Get-ChildItem $dir -Filter 'MT5_FULL_DIAG_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -First 1;" ^
-  "  if($latest){" ^
-  "    $hit=Select-String -Path $latest.FullName -Pattern '^verdict=(.+)$' | Select-Object -First 1;" ^
-  "    if($hit){ Write-Output $hit.Matches[0].Groups[1].Value.Trim() }" ^
-  "  }" ^
-  "}"`) do set "DIAG_VERDICT=%%I"
-if /I "%DIAG_VERDICT%"=="PASS" (
-  set "DIAG_RC=0"
-)
-exit /b 0
-
 :resolve_mt5_python
 if defined PYTHON_MT5_EXE (
   call :python_can_import_mt5 "%PYTHON_MT5_EXE%" "%PYTHON_MT5_ARGS%"
@@ -399,7 +416,7 @@ if exist "C:\Users\skite\AppData\Local\Programs\Python\Python312\python.exe" (
 )
 
 where py >nul 2>&1
-if "%ERRORLEVEL%"=="0" (
+if not errorlevel 1 (
   call :python_can_import_mt5 "py" "-3.12"
   if not errorlevel 1 (
     set "PYTHON_MT5_EXE=py"
@@ -409,7 +426,7 @@ if "%ERRORLEVEL%"=="0" (
 )
 
 where python >nul 2>&1
-if "%ERRORLEVEL%"=="0" (
+if not errorlevel 1 (
   call :python_can_import_mt5 "python" ""
   if not errorlevel 1 (
     set "PYTHON_MT5_EXE=python"
