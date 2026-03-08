@@ -72,6 +72,17 @@ if ([string]::IsNullOrWhiteSpace($vpsHost) -or [string]::IsNullOrWhiteSpace($vps
     throw "Brakuje VPS_HOST / VPS_ADMIN_LOGIN / VPS_ADMIN_PASSWORD_DPAPI w BotKey.env."
 }
 
+# Twardy precheck lacznosci - gdy serwer jest wylaczony po aktualizacji/zamknieciu
+# od razu zwracamy jasny komunikat zamiast ogolnego bledu RDP 0x204.
+try {
+    $rdpReachable = Test-NetConnection -ComputerName $vpsHost -Port 3389 -InformationLevel Quiet -WarningAction SilentlyContinue
+} catch {
+    $rdpReachable = $false
+}
+if (-not [bool]$rdpReachable) {
+    throw "Port RDP 3389 na VPS jest niedostepny. Najpierw uruchom serwer w panelu VPS (Start/Restart), odczekaj 1-2 min i kliknij skrót ponownie."
+}
+
 $secure = ConvertTo-SecureString $vpsDpapi
 $plain = Convert-SecureToPlain -Secret $secure
 if ([string]::IsNullOrWhiteSpace($plain)) {
