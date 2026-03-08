@@ -852,6 +852,48 @@ if (Test-Path $profileSetupScript) {
     exit 6
 }
 
+$preseedScript = Join-Path $runtimeRoot "TOOLS\preseed_kernel_config.py"
+if (Test-Path $preseedScript) {
+    $pythonPreseed = $null
+    try { $pythonPreseed = [string]$status.mt5_profile_setup.python } catch { $pythonPreseed = "" }
+    if ([string]::IsNullOrWhiteSpace($pythonPreseed)) {
+        $pythonPreseed = Get-PythonExe -RuntimeRoot $runtimeRoot
+    }
+    if ($DryRun) {
+        $status.kernel_config_preseed = [ordered]@{
+            ok = $true
+            status = "dry_run_skip"
+            script = $preseedScript
+        }
+    } else {
+        $preseedRc = 0
+        $preseedOut = ""
+        try {
+            $preseedOut = (& $pythonPreseed -B $preseedScript --root $runtimeRoot 2>&1 | Out-String)
+            $preseedRc = [int]$LASTEXITCODE
+        } catch {
+            $preseedRc = 8
+            $preseedOut = ("preseed launch failed: " + $_.Exception.Message)
+        }
+        $status.kernel_config_preseed = [ordered]@{
+            ok = ($preseedRc -eq 0)
+            exit_code = [int]$preseedRc
+            output = [string]$preseedOut
+            script = $preseedScript
+            python = $pythonPreseed
+        }
+        if ($preseedRc -ne 0) {
+            Write-Output ("START_WITH_OANDAKEY WARN: kernel config preseed failed rc={0}" -f $preseedRc)
+        }
+    }
+} else {
+    $status.kernel_config_preseed = [ordered]@{
+        ok = $false
+        status = "missing_script"
+        script = $preseedScript
+    }
+}
+
 $systemControl = Join-Path $runtimeRoot "TOOLS\SYSTEM_CONTROL.ps1"
 if (-not (Test-Path $systemControl)) {
     $status.status = "FAIL"
