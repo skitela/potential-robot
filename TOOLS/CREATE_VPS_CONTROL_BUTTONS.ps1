@@ -56,7 +56,7 @@ New-OrUpdateShortcut `
 New-OrUpdateShortcut `
     -Name "VPS OANDA STATUS" `
     -TargetPath "powershell.exe" `
-    -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$controller`" -Action status -Root `"$runtimeRoot`"" `
+    -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$controller`" -Action status -Root `"$runtimeRoot`" -OpenRdp" `
     -WorkingDirectory $runtimeRoot `
     -IconLocation "$env:SystemRoot\System32\imageres.dll,76" `
     -Description "Status systemu na VPS"
@@ -64,7 +64,7 @@ New-OrUpdateShortcut `
 New-OrUpdateShortcut `
     -Name "VPS OANDA STOP" `
     -TargetPath "powershell.exe" `
-    -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$controller`" -Action stop -Root `"$runtimeRoot`"" `
+    -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$controller`" -Action stop -Root `"$runtimeRoot`" -OpenRdp" `
     -WorkingDirectory $runtimeRoot `
     -IconLocation "$env:SystemRoot\System32\shell32.dll,132" `
     -Description "Stop systemu na VPS"
