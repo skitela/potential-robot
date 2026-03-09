@@ -16879,6 +16879,115 @@ if __name__ == "__main__":
             return int(hh), int(mm)
         raise SystemExit(f"CONFIG_STRATEGY_FAIL: {key} must be [HH,MM] or 'HH:MM'")
 
+    def _apply_runtime_loop_and_bridge_cfg() -> None:
+        CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
+        CFG.m5_wait_new_bar_max_sec = _cfg_int(
+            "m5_wait_new_bar_max_sec",
+            CFG.m5_wait_new_bar_max_sec,
+        )
+        CFG.zmq_heartbeat_interval_sec = _cfg_int(
+            "zmq_heartbeat_interval_sec", CFG.zmq_heartbeat_interval_sec
+        )
+        CFG.zmq_heartbeat_fail_threshold = _cfg_int(
+            "zmq_heartbeat_fail_threshold", CFG.zmq_heartbeat_fail_threshold
+        )
+        CFG.zmq_heartbeat_fail_safe_cooldown_sec = _cfg_int(
+            "zmq_heartbeat_fail_safe_cooldown_sec",
+            CFG.zmq_heartbeat_fail_safe_cooldown_sec,
+        )
+        CFG.zmq_heartbeat_fail_log_interval_sec = _cfg_int(
+            "zmq_heartbeat_fail_log_interval_sec",
+            CFG.zmq_heartbeat_fail_log_interval_sec,
+        )
+        CFG.zmq_scan_suppressed_log_interval_sec = _cfg_int(
+            "zmq_scan_suppressed_log_interval_sec",
+            CFG.zmq_scan_suppressed_log_interval_sec,
+        )
+        CFG.bridge_default_timeout_ms = _cfg_int("bridge_default_timeout_ms", CFG.bridge_default_timeout_ms)
+        CFG.bridge_default_retries = _cfg_int("bridge_default_retries", CFG.bridge_default_retries)
+        CFG.bridge_heartbeat_timeout_ms = _cfg_int("bridge_heartbeat_timeout_ms", CFG.bridge_heartbeat_timeout_ms)
+        CFG.bridge_heartbeat_retries = _cfg_int("bridge_heartbeat_retries", CFG.bridge_heartbeat_retries)
+        CFG.bridge_heartbeat_queue_lock_timeout_ms = _cfg_int(
+            "bridge_heartbeat_queue_lock_timeout_ms",
+            CFG.bridge_heartbeat_queue_lock_timeout_ms,
+        )
+        CFG.bridge_heartbeat_reconnect_on_timeout = _cfg_bool(
+            "bridge_heartbeat_reconnect_on_timeout",
+            CFG.bridge_heartbeat_reconnect_on_timeout,
+        )
+        CFG.bridge_heartbeat_timeout_nonfatal = _cfg_bool(
+            "bridge_heartbeat_timeout_nonfatal",
+            CFG.bridge_heartbeat_timeout_nonfatal,
+        )
+        CFG.bridge_heartbeat_trade_priority_window_ms = _cfg_int(
+            "bridge_heartbeat_trade_priority_window_ms",
+            CFG.bridge_heartbeat_trade_priority_window_ms,
+        )
+        CFG.bridge_audit_async_enabled = _cfg_bool(
+            "bridge_audit_async_enabled",
+            CFG.bridge_audit_async_enabled,
+        )
+        CFG.bridge_audit_queue_maxsize = _cfg_int(
+            "bridge_audit_queue_maxsize",
+            CFG.bridge_audit_queue_maxsize,
+        )
+        CFG.bridge_audit_queue_put_timeout_ms = _cfg_int(
+            "bridge_audit_queue_put_timeout_ms",
+            CFG.bridge_audit_queue_put_timeout_ms,
+        )
+        CFG.bridge_audit_batch_size = _cfg_int(
+            "bridge_audit_batch_size",
+            CFG.bridge_audit_batch_size,
+        )
+        CFG.bridge_audit_flush_interval_ms = _cfg_int(
+            "bridge_audit_flush_interval_ms",
+            CFG.bridge_audit_flush_interval_ms,
+        )
+        CFG.bridge_trade_timeout_ms = _cfg_int("bridge_trade_timeout_ms", CFG.bridge_trade_timeout_ms)
+        CFG.bridge_trade_retries = _cfg_int("bridge_trade_retries", CFG.bridge_trade_retries)
+        CFG.bridge_trade_probe_enabled = _cfg_bool(
+            "bridge_trade_probe_enabled", CFG.bridge_trade_probe_enabled
+        )
+        CFG.bridge_trade_probe_interval_sec = _cfg_int(
+            "bridge_trade_probe_interval_sec", CFG.bridge_trade_probe_interval_sec
+        )
+        CFG.bridge_trade_probe_max_per_run = _cfg_int(
+            "bridge_trade_probe_max_per_run", CFG.bridge_trade_probe_max_per_run
+        )
+        CFG.bridge_trade_probe_signal = str(
+            strategy_cfg.get("bridge_trade_probe_signal", CFG.bridge_trade_probe_signal)
+            or CFG.bridge_trade_probe_signal
+        ).strip().upper()
+        if CFG.bridge_trade_probe_signal not in {"BUY", "SELL"}:
+            CFG.bridge_trade_probe_signal = "BUY"
+        CFG.bridge_trade_probe_symbol = str(
+            strategy_cfg.get("bridge_trade_probe_symbol", CFG.bridge_trade_probe_symbol)
+            or CFG.bridge_trade_probe_symbol
+        ).strip()
+        CFG.bridge_trade_probe_group = str(
+            strategy_cfg.get("bridge_trade_probe_group", CFG.bridge_trade_probe_group)
+            or CFG.bridge_trade_probe_group
+        ).strip().upper()
+        CFG.bridge_trade_probe_volume = _cfg_float(
+            "bridge_trade_probe_volume", CFG.bridge_trade_probe_volume
+        )
+        CFG.bridge_trade_probe_deviation_points = _cfg_int(
+            "bridge_trade_probe_deviation_points", CFG.bridge_trade_probe_deviation_points
+        )
+        CFG.bridge_trade_probe_comment = str(
+            strategy_cfg.get("bridge_trade_probe_comment", CFG.bridge_trade_probe_comment)
+            or CFG.bridge_trade_probe_comment
+        ).strip()
+        CFG.run_loop_idle_sleep_sec = _cfg_float("run_loop_idle_sleep_sec", CFG.run_loop_idle_sleep_sec)
+        CFG.run_loop_scan_slow_warn_ms = _cfg_int(
+            "run_loop_scan_slow_warn_ms",
+            CFG.run_loop_scan_slow_warn_ms,
+        )
+        CFG.run_loop_scan_stats_window = _cfg_int(
+            "run_loop_scan_stats_window",
+            CFG.run_loop_scan_stats_window,
+        )
+
     # Required runtime fields (previously declared-only) are now sourced from CONFIG/strategy.json.
     CFG.fixed_sl_points = _cfg_int("fixed_sl_points", CFG.fixed_sl_points)
     CFG.fixed_tp_points = _cfg_int("fixed_tp_points", CFG.fixed_tp_points)
@@ -16890,113 +16999,7 @@ if __name__ == "__main__":
     CFG.price_budget_day = _cfg_int("price_budget_day", CFG.price_budget_day)
     CFG.order_budget_day = _cfg_int("order_budget_day", CFG.order_budget_day)
     CFG.sys_emergency_reserve = _cfg_int("sys_emergency_reserve", CFG.sys_emergency_reserve)
-    CFG.scan_interval_sec = _cfg_int("scan_interval_sec", CFG.scan_interval_sec)
-    CFG.m5_wait_new_bar_max_sec = _cfg_int(
-        "m5_wait_new_bar_max_sec",
-        CFG.m5_wait_new_bar_max_sec,
-    )
-    CFG.zmq_heartbeat_interval_sec = _cfg_int(
-        "zmq_heartbeat_interval_sec", CFG.zmq_heartbeat_interval_sec
-    )
-    CFG.zmq_heartbeat_fail_threshold = _cfg_int(
-        "zmq_heartbeat_fail_threshold", CFG.zmq_heartbeat_fail_threshold
-    )
-    CFG.zmq_heartbeat_fail_safe_cooldown_sec = _cfg_int(
-        "zmq_heartbeat_fail_safe_cooldown_sec",
-        CFG.zmq_heartbeat_fail_safe_cooldown_sec,
-    )
-    CFG.zmq_heartbeat_fail_log_interval_sec = _cfg_int(
-        "zmq_heartbeat_fail_log_interval_sec",
-        CFG.zmq_heartbeat_fail_log_interval_sec,
-    )
-    CFG.zmq_scan_suppressed_log_interval_sec = _cfg_int(
-        "zmq_scan_suppressed_log_interval_sec",
-        CFG.zmq_scan_suppressed_log_interval_sec,
-    )
-    CFG.bridge_default_timeout_ms = _cfg_int("bridge_default_timeout_ms", CFG.bridge_default_timeout_ms)
-    CFG.bridge_default_retries = _cfg_int("bridge_default_retries", CFG.bridge_default_retries)
-    CFG.bridge_heartbeat_timeout_ms = _cfg_int("bridge_heartbeat_timeout_ms", CFG.bridge_heartbeat_timeout_ms)
-    CFG.bridge_heartbeat_retries = _cfg_int("bridge_heartbeat_retries", CFG.bridge_heartbeat_retries)
-    CFG.bridge_heartbeat_queue_lock_timeout_ms = _cfg_int(
-        "bridge_heartbeat_queue_lock_timeout_ms",
-        CFG.bridge_heartbeat_queue_lock_timeout_ms,
-    )
-    CFG.bridge_heartbeat_reconnect_on_timeout = _cfg_bool(
-        "bridge_heartbeat_reconnect_on_timeout",
-        CFG.bridge_heartbeat_reconnect_on_timeout,
-    )
-    CFG.bridge_heartbeat_timeout_nonfatal = _cfg_bool(
-        "bridge_heartbeat_timeout_nonfatal",
-        CFG.bridge_heartbeat_timeout_nonfatal,
-    )
-    CFG.bridge_heartbeat_trade_priority_window_ms = _cfg_int(
-        "bridge_heartbeat_trade_priority_window_ms",
-        CFG.bridge_heartbeat_trade_priority_window_ms,
-    )
-    CFG.bridge_audit_async_enabled = _cfg_bool(
-        "bridge_audit_async_enabled",
-        CFG.bridge_audit_async_enabled,
-    )
-    CFG.bridge_audit_queue_maxsize = _cfg_int(
-        "bridge_audit_queue_maxsize",
-        CFG.bridge_audit_queue_maxsize,
-    )
-    CFG.bridge_audit_queue_put_timeout_ms = _cfg_int(
-        "bridge_audit_queue_put_timeout_ms",
-        CFG.bridge_audit_queue_put_timeout_ms,
-    )
-    CFG.bridge_audit_batch_size = _cfg_int(
-        "bridge_audit_batch_size",
-        CFG.bridge_audit_batch_size,
-    )
-    CFG.bridge_audit_flush_interval_ms = _cfg_int(
-        "bridge_audit_flush_interval_ms",
-        CFG.bridge_audit_flush_interval_ms,
-    )
-    CFG.bridge_trade_timeout_ms = _cfg_int("bridge_trade_timeout_ms", CFG.bridge_trade_timeout_ms)
-    CFG.bridge_trade_retries = _cfg_int("bridge_trade_retries", CFG.bridge_trade_retries)
-    CFG.bridge_trade_probe_enabled = _cfg_bool(
-        "bridge_trade_probe_enabled", CFG.bridge_trade_probe_enabled
-    )
-    CFG.bridge_trade_probe_interval_sec = _cfg_int(
-        "bridge_trade_probe_interval_sec", CFG.bridge_trade_probe_interval_sec
-    )
-    CFG.bridge_trade_probe_max_per_run = _cfg_int(
-        "bridge_trade_probe_max_per_run", CFG.bridge_trade_probe_max_per_run
-    )
-    CFG.bridge_trade_probe_signal = str(
-        strategy_cfg.get("bridge_trade_probe_signal", CFG.bridge_trade_probe_signal)
-        or CFG.bridge_trade_probe_signal
-    ).strip().upper()
-    if CFG.bridge_trade_probe_signal not in {"BUY", "SELL"}:
-        CFG.bridge_trade_probe_signal = "BUY"
-    CFG.bridge_trade_probe_symbol = str(
-        strategy_cfg.get("bridge_trade_probe_symbol", CFG.bridge_trade_probe_symbol)
-        or CFG.bridge_trade_probe_symbol
-    ).strip()
-    CFG.bridge_trade_probe_group = str(
-        strategy_cfg.get("bridge_trade_probe_group", CFG.bridge_trade_probe_group)
-        or CFG.bridge_trade_probe_group
-    ).strip().upper()
-    CFG.bridge_trade_probe_volume = _cfg_float(
-        "bridge_trade_probe_volume", CFG.bridge_trade_probe_volume
-    )
-    CFG.bridge_trade_probe_deviation_points = _cfg_int(
-        "bridge_trade_probe_deviation_points", CFG.bridge_trade_probe_deviation_points
-    )
-    CFG.bridge_trade_probe_comment = str(
-        strategy_cfg.get("bridge_trade_probe_comment", CFG.bridge_trade_probe_comment)
-        or CFG.bridge_trade_probe_comment
-    ).strip()
-    CFG.run_loop_idle_sleep_sec = _cfg_float("run_loop_idle_sleep_sec", CFG.run_loop_idle_sleep_sec)
-    CFG.run_loop_scan_slow_warn_ms = _cfg_int(
-        "run_loop_scan_slow_warn_ms",
-        CFG.run_loop_scan_slow_warn_ms,
-    )
-    CFG.run_loop_scan_stats_window = _cfg_int(
-        "run_loop_scan_stats_window",
-        CFG.run_loop_scan_stats_window,
-    )
+    _apply_runtime_loop_and_bridge_cfg()
     CFG.runtime_metrics_interval_sec = _cfg_int(
         "runtime_metrics_interval_sec", CFG.runtime_metrics_interval_sec
     )
