@@ -13376,6 +13376,21 @@ class SafetyBot:
                     retcode,
                     comment,
                 )
+            elif status == "SKIPPED":
+                retcode = _as_int(
+                    reply.get("retcode"),
+                    default=retcode or int(getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017)),
+                )
+                if retcode <= 0:
+                    retcode = int(getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017))
+                order = 0
+                deal = 0
+                logging.info(
+                    "HYBRID_DISPATCH_SKIPPED | symbol=%s retcode=%s reason=%s",
+                    symbol,
+                    retcode,
+                    str(details.get("retcode_str") or "MQL5_ACTIVE_BRIDGE_BYPASS"),
+                )
             else:
                 retcode = _as_int(reply.get("retcode"), default=retcode or error_code)
                 if retcode <= 0:
@@ -15923,11 +15938,16 @@ class SafetyBot:
             return {
                 "status": "SKIPPED",
                 "action": "TRADE_REPLY",
-                "retcode": 0,
+                "retcode": int(getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017)),
                 "retcode_str": "MQL5_ACTIVE_BRIDGE_BYPASS",
                 "comment": "Bridge bypass enabled in MQL5_ACTIVE mode.",
                 "symbol": str(symbol or ""),
                 "request_hash": "",
+                "details": {
+                    "retcode": int(getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017)),
+                    "retcode_str": "MQL5_ACTIVE_BRIDGE_BYPASS",
+                    "comment": "Bridge bypass enabled in MQL5_ACTIVE mode.",
+                },
             }
 
         def _f(v: Any, default: float = 0.0) -> float:

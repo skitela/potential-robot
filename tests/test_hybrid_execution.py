@@ -200,6 +200,32 @@ class TestHybridExecution(unittest.TestCase):
         self.assertEqual("SKIPPED", str(reply.get("status")))
         self.assertEqual("MQL5_ACTIVE_BRIDGE_BYPASS", str(reply.get("retcode_str")))
 
+    @patch("BIN.safetybot.mt5")
+    def test_dispatch_order_handles_skipped_bridge_reply_as_neutral(self, mock_mt5):
+        bot = self._build_bot()
+        mock_mt5.TRADE_ACTION_DEAL = 1
+        mock_mt5.ORDER_TYPE_BUY = 0
+        mock_mt5.TRADE_RETCODE_TRADE_DISABLED = 10017
+
+        bot._send_trade_command.return_value = {
+            "status": "SKIPPED",
+            "retcode": 10017,
+            "details": {
+                "retcode": 10017,
+                "retcode_str": "MQL5_ACTIVE_BRIDGE_BYPASS",
+                "comment": "Bridge bypass enabled in MQL5_ACTIVE mode.",
+            },
+        }
+
+        req = {
+            "action": mock_mt5.TRADE_ACTION_DEAL,
+            "type": mock_mt5.ORDER_TYPE_BUY,
+            "volume": 0.01,
+        }
+        res = bot._dispatch_order("EURUSD", "FX", req, emergency=False)
+        self.assertIsNotNone(res)
+        self.assertEqual(10017, int(getattr(res, "retcode", 0)))
+
 
 if __name__ == "__main__":
     unittest.main()
