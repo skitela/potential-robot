@@ -20,3 +20,11 @@ def test_cycle_status_review_required_when_no_active_peer() -> None:
     )
     assert got == "REVIEW_REQUIRED"
 
+
+def test_cycle_status_review_required_when_probe_runtime_missing() -> None:
+    got = evaluate_cycle_status(
+        probe_status="NO_ZMQ",
+        readiness_status="REVIEW_REQUIRED",
+        parity_rows=0,
+    )
+    assert got == "REVIEW_REQUIRED"
