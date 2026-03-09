@@ -281,6 +281,63 @@ class TestHybridExecution(unittest.TestCase):
         bot._record_scan_duration.assert_not_called()
         bot._record_section_duration.assert_not_called()
 
+    def test_runtime_trade_probe_step_sends_probe_and_updates_counters(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._send_trade_command = MagicMock(return_value={"status": "PROCESSED", "details": {"retcode_str": "OK"}})
+        bot._record_bridge_diag = MagicMock()
+        bot.zmq_bridge = MagicMock()
+        bot.zmq_bridge.get_last_command_diag.return_value = {"status": "OK"}
+
+        next_ts, next_count = bot._runtime_trade_probe_step(
+            now=100.0,
+            heartbeat_fail_safe_active=False,
+            trade_probe_enabled=True,
+            trade_probe_interval_sec=15,
+            trade_probe_max_per_run=120,
+            trade_probe_sent=0,
+            last_trade_probe_ts=0.0,
+            trade_probe_signal="BUY",
+            trade_probe_symbol="__TRADE_PROBE_INVALID__",
+            trade_probe_volume=0.01,
+            trade_probe_deviation_points=10,
+            trade_probe_comment="TRADE_PROBE_SAFE_NO_LIVE",
+            trade_probe_group="FX",
+        )
+
+        self.assertEqual(100.0, next_ts)
+        self.assertEqual(1, int(next_count))
+        bot._send_trade_command.assert_called_once()
+        bot._record_bridge_diag.assert_called_once()
+
+    def test_runtime_trade_probe_step_returns_unchanged_when_disabled(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._send_trade_command = MagicMock()
+        bot._record_bridge_diag = MagicMock()
+        bot.zmq_bridge = MagicMock()
+
+        next_ts, next_count = bot._runtime_trade_probe_step(
+            now=100.0,
+            heartbeat_fail_safe_active=False,
+            trade_probe_enabled=False,
+            trade_probe_interval_sec=15,
+            trade_probe_max_per_run=120,
+            trade_probe_sent=7,
+            last_trade_probe_ts=90.0,
+            trade_probe_signal="BUY",
+            trade_probe_symbol="__TRADE_PROBE_INVALID__",
+            trade_probe_volume=0.01,
+            trade_probe_deviation_points=10,
+            trade_probe_comment="TRADE_PROBE_SAFE_NO_LIVE",
+            trade_probe_group="FX",
+        )
+
+        self.assertEqual(90.0, next_ts)
+        self.assertEqual(7, int(next_count))
+        bot._send_trade_command.assert_not_called()
+        bot._record_bridge_diag.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

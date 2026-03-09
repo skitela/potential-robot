@@ -14819,6 +14819,87 @@ class SafetyBot:
                 )
         return float(now)
 
+    def _runtime_trade_probe_step(
+        self,
+        *,
+        now: float,
+        heartbeat_fail_safe_active: bool,
+        trade_probe_enabled: bool,
+        trade_probe_interval_sec: int,
+        trade_probe_max_per_run: int,
+        trade_probe_sent: int,
+        last_trade_probe_ts: float,
+        trade_probe_signal: str,
+        trade_probe_symbol: str,
+        trade_probe_volume: float,
+        trade_probe_deviation_points: int,
+        trade_probe_comment: str,
+        trade_probe_group: str,
+    ) -> Tuple[float, int]:
+        if (
+            (not bool(trade_probe_enabled))
+            or bool(heartbeat_fail_safe_active)
+            or ((float(now) - float(last_trade_probe_ts)) < float(trade_probe_interval_sec))
+        ):
+            return float(last_trade_probe_ts), int(trade_probe_sent)
+
+        if trade_probe_max_per_run > 0 and int(trade_probe_sent) >= int(trade_probe_max_per_run):
+            return float(last_trade_probe_ts), int(trade_probe_sent)
+
+        probe_reply = self._send_trade_command(
+            signal=str(trade_probe_signal),
+            symbol=str(trade_probe_symbol),
+            volume=float(trade_probe_volume),
+            sl_price=0.0,
+            tp_price=0.0,
+            request_price=0.0,
+            deviation_points=int(trade_probe_deviation_points),
+            spread_at_decision_points=None,
+            spread_unit="points",
+            spread_provenance="trade_probe",
+            estimated_entry_cost_components={},
+            estimated_round_trip_cost={},
+            cost_feasibility_shadow=None,
+            net_cost_feasible=None,
+            cost_gate_policy_mode="DIAGNOSTIC_ONLY",
+            cost_gate_reason_code="TRADE_PROBE",
+            magic=int(getattr(CFG, "magic_number", 0) or 0),
+            comment=str(trade_probe_comment),
+            group=str(trade_probe_group),
+            risk_entry_allowed=True,
+            risk_reason="TRADE_PROBE",
+            risk_friday=False,
+            risk_reopen=False,
+            policy_shadow_mode=True,
+        )
+        self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="TRADE")
+        next_trade_probe_sent = int(trade_probe_sent) + 1
+        next_trade_probe_ts = float(now)
+        if isinstance(probe_reply, dict):
+            p_status = str(probe_reply.get("status") or "UNKNOWN").upper()
+            p_ret = ""
+            try:
+                p_ret = str((probe_reply.get("details") or {}).get("retcode_str") or "")
+            except Exception:
+                p_ret = ""
+            logging.info(
+                "TRADE_PROBE_REPLY status=%s retcode_str=%s sent=%s/%s symbol=%s",
+                p_status,
+                p_ret or "NONE",
+                int(next_trade_probe_sent),
+                int(trade_probe_max_per_run),
+                str(trade_probe_symbol),
+            )
+        else:
+            logging.warning(
+                "TRADE_PROBE_FAIL sent=%s/%s symbol=%s reason=no_reply",
+                int(next_trade_probe_sent),
+                int(trade_probe_max_per_run),
+                str(trade_probe_symbol),
+            )
+
+        return next_trade_probe_ts, int(next_trade_probe_sent)
+
     def _runtime_idle_step(self, had_market_data: bool, idle_sleep_sec: float) -> None:
         if not had_market_data:
             time.sleep(float(idle_sleep_sec))
@@ -16579,63 +16660,21 @@ class SafetyBot:
                 # 2b. Controlled TRADE-path probe (disabled by default).
                 # Sends synthetic TRADE command with intentionally invalid symbol.
                 # This provides TRADE samples for bridge latency audits without live order execution.
-                if (
-                    trade_probe_enabled
-                    and (not heartbeat_fail_safe_active)
-                    and (now - last_trade_probe_ts) >= float(trade_probe_interval_sec)
-                ):
-                    if trade_probe_max_per_run <= 0 or int(trade_probe_sent) < int(trade_probe_max_per_run):
-                        probe_reply = self._send_trade_command(
-                            signal=str(trade_probe_signal),
-                            symbol=str(trade_probe_symbol),
-                            volume=float(trade_probe_volume),
-                            sl_price=0.0,
-                            tp_price=0.0,
-                            request_price=0.0,
-                            deviation_points=int(trade_probe_deviation_points),
-                            spread_at_decision_points=None,
-                            spread_unit="points",
-                            spread_provenance="trade_probe",
-                            estimated_entry_cost_components={},
-                            estimated_round_trip_cost={},
-                            cost_feasibility_shadow=None,
-                            net_cost_feasible=None,
-                            cost_gate_policy_mode="DIAGNOSTIC_ONLY",
-                            cost_gate_reason_code="TRADE_PROBE",
-                            magic=int(getattr(CFG, "magic_number", 0) or 0),
-                            comment=str(trade_probe_comment),
-                            group=str(trade_probe_group),
-                            risk_entry_allowed=True,
-                            risk_reason="TRADE_PROBE",
-                            risk_friday=False,
-                            risk_reopen=False,
-                            policy_shadow_mode=True,
-                        )
-                        self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="TRADE")
-                        trade_probe_sent = int(trade_probe_sent) + 1
-                        last_trade_probe_ts = now
-                        if isinstance(probe_reply, dict):
-                            p_status = str(probe_reply.get("status") or "UNKNOWN").upper()
-                            p_ret = ""
-                            try:
-                                p_ret = str((probe_reply.get("details") or {}).get("retcode_str") or "")
-                            except Exception:
-                                p_ret = ""
-                            logging.info(
-                                "TRADE_PROBE_REPLY status=%s retcode_str=%s sent=%s/%s symbol=%s",
-                                p_status,
-                                p_ret or "NONE",
-                                int(trade_probe_sent),
-                                int(trade_probe_max_per_run),
-                                str(trade_probe_symbol),
-                            )
-                        else:
-                            logging.warning(
-                                "TRADE_PROBE_FAIL sent=%s/%s symbol=%s reason=no_reply",
-                                int(trade_probe_sent),
-                                int(trade_probe_max_per_run),
-                                str(trade_probe_symbol),
-                            )
+                last_trade_probe_ts, trade_probe_sent = self._runtime_trade_probe_step(
+                    now=float(now),
+                    heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
+                    trade_probe_enabled=bool(trade_probe_enabled),
+                    trade_probe_interval_sec=int(trade_probe_interval_sec),
+                    trade_probe_max_per_run=int(trade_probe_max_per_run),
+                    trade_probe_sent=int(trade_probe_sent),
+                    last_trade_probe_ts=float(last_trade_probe_ts),
+                    trade_probe_signal=str(trade_probe_signal),
+                    trade_probe_symbol=str(trade_probe_symbol),
+                    trade_probe_volume=float(trade_probe_volume),
+                    trade_probe_deviation_points=int(trade_probe_deviation_points),
+                    trade_probe_comment=str(trade_probe_comment),
+                    trade_probe_group=str(trade_probe_group),
+                )
 
                 # 3. Cykliczny skan logiki (wstrzymany, gdy heartbeat fail-safe aktywny)
                 last_scan_ts = self._runtime_scan_step(
