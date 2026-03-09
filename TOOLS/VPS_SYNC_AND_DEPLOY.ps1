@@ -89,6 +89,7 @@ $syncDir = Join-Path $runtimeRoot "EVIDENCE\vps_sync"
 New-Item -ItemType Directory -Force -Path $syncDir | Out-Null
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
 $syncReport = Join-Path $syncDir ("vps_sync_report_" + $stamp + ".json")
+$syncLatest = Join-Path $syncDir "vps_sync_report_latest.json"
 
 $result = [ordered]@{
     schema = "oanda.mt5.vps.sync_and_deploy.v1"
@@ -105,11 +106,19 @@ $result = [ordered]@{
 
 function Add-Step {
     param([string]$Name, [string]$Status, [string]$Info = "")
+    $stepTs = (Get-Date).ToUniversalTime().ToString("o")
     $result.steps += [ordered]@{
         name = $Name
         status = $Status
         info = $Info
-        ts_utc = (Get-Date).ToUniversalTime().ToString("o")
+        ts_utc = $stepTs
+    }
+    Write-Output ("[VPS_SYNC] step={0} status={1} ts={2} info={3}" -f $Name, $Status, $stepTs, $Info)
+    try {
+        $result | ConvertTo-Json -Depth 8 | Set-Content -Path $syncReport -Encoding UTF8
+        $result | ConvertTo-Json -Depth 8 | Set-Content -Path $syncLatest -Encoding UTF8
+    } catch {
+        # telemetry write best-effort; never block sync flow
     }
 }
 
@@ -122,6 +131,7 @@ try {
     if ($DryRun) {
         Add-Step -Name "build_bundle" -Status "DRY_RUN" -Info "Pomijam budowę i upload."
     } else {
+        Add-Step -Name "build_bundle" -Status "START" -Info $buildScript
         $bundleOut = & powershell -NoProfile -ExecutionPolicy Bypass -File $buildScript -Root $runtimeRoot
         $latest = Join-Path $runtimeRoot "EVIDENCE\vps_prep\vps_bundle_latest.json"
         if (-not (Test-Path -LiteralPath $latest)) {
@@ -136,21 +146,27 @@ try {
         Add-Step -Name "build_bundle" -Status "OK" -Info $bundlePath
 
         $session = $null
+        $remoteJob = $null
         try {
             $sessionOpt = New-PSSessionOption -OperationTimeout 120000 -OpenTimeout 30000 -IdleTimeout 180000
+            Add-Step -Name "open_pssession" -Status "START" -Info $vps.host
             $session = New-PSSession -ComputerName $vps.host -Credential $vps.cred -SessionOption $sessionOpt
             Add-Step -Name "open_pssession" -Status "OK" -Info ("id=" + [string]$session.Id)
 
             $remoteZipDir = "C:\OANDA_MT5_SYSTEM\RUN\vps_sync"
             $remoteZip = "$remoteZipDir\incoming_bundle.zip"
+            Add-Step -Name "prepare_remote_dir" -Status "START" -Info $remoteZipDir
             Invoke-Command -Session $session -ArgumentList $remoteZipDir -ScriptBlock {
                 param($p)
                 New-Item -ItemType Directory -Force -Path $p | Out-Null
             } | Out-Null
+            Add-Step -Name "prepare_remote_dir" -Status "OK" -Info $remoteZipDir
+            Add-Step -Name "upload_bundle" -Status "START" -Info $remoteZip
             Copy-Item -ToSession $session -Path $bundlePath -Destination $remoteZip -Force
             Add-Step -Name "upload_bundle" -Status "OK" -Info $remoteZip
 
-            $remoteAction = Invoke-Command -Session $session -ErrorAction Stop -ArgumentList $remoteZip, "C:\OANDA_MT5_SYSTEM", [bool]$StartAfterSync, [bool]$RunEaDeploy, [bool]$SkipBootstrap, [bool]$SkipRemoteStatus, $Profile -ScriptBlock {
+            Add-Step -Name "remote_apply" -Status "START" -Info $remoteZip
+            $remoteJob = Invoke-Command -Session $session -AsJob -ErrorAction Stop -ArgumentList $remoteZip, "C:\OANDA_MT5_SYSTEM", [bool]$StartAfterSync, [bool]$RunEaDeploy, [bool]$SkipBootstrap, [bool]$SkipRemoteStatus, $Profile -ScriptBlock {
                 param($ZipPath, $RemoteRoot, $DoStart, $DoEaDeploy, $DoSkipBootstrap, $DoSkipRemoteStatus, $RuntimeProfile)
                 $ErrorActionPreference = "Continue"
                 $out = [ordered]@{
@@ -172,7 +188,14 @@ try {
                     New-Item -ItemType Directory -Force -Path $RemoteRoot | Out-Null
                     Get-ChildItem -LiteralPath $extract -Force | ForEach-Object {
                         $dest = Join-Path $RemoteRoot $_.Name
-                        Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force
+                        if ($_.PSIsContainer) {
+                            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+                            Get-ChildItem -LiteralPath $_.FullName -Force | ForEach-Object {
+                                Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force
+                            }
+                        } else {
+                            Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+                        }
                     }
                     $out.sync = "OK"
 
@@ -219,9 +242,36 @@ try {
                 }
                 return ($out | ConvertTo-Json -Depth 8)
             }
-            Add-Step -Name "remote_apply" -Status "OK" -Info ([string]$remoteAction)
+            Add-Step -Name "remote_apply" -Status "JOB_STARTED" -Info ("job_id=" + [string]$remoteJob.Id)
+            $deadline = (Get-Date).AddMinutes(30)
+            while ($true) {
+                $jobState = [string]$remoteJob.State
+                if ($jobState -eq "Completed" -or $jobState -eq "Failed" -or $jobState -eq "Stopped") {
+                    break
+                }
+                Write-Output ("[VPS_SYNC] step=remote_apply status=RUNNING job_id={0} state={1}" -f [string]$remoteJob.Id, $jobState)
+                if ((Get-Date) -gt $deadline) {
+                    try { Stop-Job -Job $remoteJob -Force -ErrorAction SilentlyContinue } catch {}
+                    throw "remote_apply timeout po 30 minutach (job_id=$([string]$remoteJob.Id))."
+                }
+                Start-Sleep -Seconds 10
+                $remoteJob = Get-Job -Id $remoteJob.Id
+            }
+
+            $remoteOut = (Receive-Job -Job $remoteJob -ErrorAction SilentlyContinue | Out-String).Trim()
+            if ([string]$remoteJob.State -ne "Completed") {
+                $remoteErr = ($remoteJob.ChildJobs | ForEach-Object { $_.JobStateInfo.Reason } | Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString() }) -join " | "
+                if ([string]::IsNullOrWhiteSpace($remoteErr)) {
+                    $remoteErr = "remote_apply job nie zakonczony powodzeniem: state=$([string]$remoteJob.State)"
+                }
+                throw $remoteErr
+            }
+            Add-Step -Name "remote_apply" -Status "OK" -Info $remoteOut
             $result.status = "PASS"
         } finally {
+            if ($null -ne $remoteJob) {
+                Remove-Job -Job $remoteJob -Force -ErrorAction SilentlyContinue
+            }
             if ($null -ne $session) {
                 Remove-PSSession -Session $session -ErrorAction SilentlyContinue
             }
@@ -238,8 +288,7 @@ try {
 }
 
 $result | ConvertTo-Json -Depth 8 | Set-Content -Path $syncReport -Encoding UTF8
-$latest = Join-Path $syncDir "vps_sync_report_latest.json"
-$result | ConvertTo-Json -Depth 8 | Set-Content -Path $latest -Encoding UTF8
+$result | ConvertTo-Json -Depth 8 | Set-Content -Path $syncLatest -Encoding UTF8
 Write-Output ("VPS_SYNC_AND_DEPLOY status={0} report={1}" -f [string]$result.status, $syncReport)
 if ($result.Contains("error") -and -not [string]::IsNullOrWhiteSpace([string]$result.error)) {
     Write-Output ("DETAILS: " + [string]$result.error)
@@ -247,3 +296,4 @@ if ($result.Contains("error") -and -not [string]::IsNullOrWhiteSpace([string]$re
 
 if ([string]$result.status -eq "FAIL") { exit 2 }
 exit 0
+
