@@ -14897,19 +14897,49 @@ class SafetyBot:
         scan_suppressed_log_interval: int,
         scan_slow_warn_ms: int,
     ) -> float:
-        if float(now) - float(last_scan_ts) < float(scan_interval):
+        if not self._runtime_scan_due(
+            now=float(now),
+            last_scan_ts=float(last_scan_ts),
+            scan_interval=int(scan_interval),
+        ):
             return float(last_scan_ts)
 
-        if bool(heartbeat_fail_safe_active):
-            if (float(now) - float(self._last_scan_suppressed_log_ts or 0.0)) >= float(scan_suppressed_log_interval):
-                self._last_scan_suppressed_log_ts = float(now)
-                logging.warning(
-                    "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s cooldown_remain_s=%s",
-                    int(heartbeat_failures),
-                    int(max(0, round(float(heartbeat_fail_safe_until) - float(now)))),
-                )
+        if self._runtime_is_scan_suppressed(
+            now=float(now),
+            heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
+            heartbeat_failures=int(heartbeat_failures),
+            heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
+            scan_suppressed_log_interval=int(scan_suppressed_log_interval),
+        ):
             return float(now)
 
+        self._runtime_execute_scan(scan_slow_warn_ms=int(scan_slow_warn_ms))
+        return float(now)
+
+    def _runtime_scan_due(self, *, now: float, last_scan_ts: float, scan_interval: int) -> bool:
+        return bool((float(now) - float(last_scan_ts)) >= float(scan_interval))
+
+    def _runtime_is_scan_suppressed(
+        self,
+        *,
+        now: float,
+        heartbeat_fail_safe_active: bool,
+        heartbeat_failures: int,
+        heartbeat_fail_safe_until: float,
+        scan_suppressed_log_interval: int,
+    ) -> bool:
+        if not bool(heartbeat_fail_safe_active):
+            return False
+        if (float(now) - float(self._last_scan_suppressed_log_ts or 0.0)) >= float(scan_suppressed_log_interval):
+            self._last_scan_suppressed_log_ts = float(now)
+            logging.warning(
+                "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s cooldown_remain_s=%s",
+                int(heartbeat_failures),
+                int(max(0, round(float(heartbeat_fail_safe_until) - float(now)))),
+            )
+        return True
+
+    def _runtime_execute_scan(self, *, scan_slow_warn_ms: int) -> None:
         self._loop_scan_runs = int(self._loop_scan_runs) + 1
         scan_start_ts = float(time.perf_counter())
         try:
@@ -14927,7 +14957,6 @@ class SafetyBot:
                     int(scan_ms),
                     int(scan_slow_warn_ms),
                 )
-        return float(now)
 
     def _runtime_heartbeat_step(
         self,
