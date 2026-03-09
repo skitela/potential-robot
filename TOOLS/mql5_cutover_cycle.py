@@ -87,6 +87,9 @@ def main() -> int:
     ap.add_argument("--skip-probe", action="store_true")
     ap.add_argument("--min-parity-rows", type=int, default=200)
     ap.add_argument("--max-mismatch-ratio", type=float, default=0.02)
+    ap.add_argument("--min-active-windows", type=int, default=1)
+    ap.add_argument("--min-window-parity-rows", type=int, default=20)
+    ap.add_argument("--max-window-mismatch-ratio", type=float, default=0.05)
     ap.add_argument("--out-json", default="")
     args = ap.parse_args()
 
@@ -138,6 +141,12 @@ def main() -> int:
         str(int(args.min_parity_rows)),
         "--max-mismatch-ratio",
         str(float(args.max_mismatch_ratio)),
+        "--min-active-windows",
+        str(int(args.min_active_windows)),
+        "--min-window-parity-rows",
+        str(int(args.min_window_parity_rows)),
+        "--max-window-mismatch-ratio",
+        str(float(args.max_window_mismatch_ratio)),
     ]
     readiness_step = _run_tool(readiness_cmd, root)
     cycle["steps"]["readiness"] = readiness_step
