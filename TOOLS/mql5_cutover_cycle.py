@@ -78,7 +78,7 @@ def should_ignore_probe_failure(probe_status: str, allow_no_peer: bool) -> bool:
     return bool(allow_no_peer and status_u == "NO_ACTIVE_PEER")
 
 
-def main() -> int:
+def main(argv: Optional[Iterable[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Run parity probe + report + cutover readiness in one cycle.")
     ap.add_argument("--root", default="C:/OANDA_MT5_SYSTEM")
     ap.add_argument("--hours", type=int, default=6)
@@ -91,7 +91,7 @@ def main() -> int:
     ap.add_argument("--min-window-parity-rows", type=int, default=20)
     ap.add_argument("--max-window-mismatch-ratio", type=float, default=0.05)
     ap.add_argument("--out-json", default="")
-    args = ap.parse_args()
+    args = ap.parse_args(list(argv) if argv is not None else None)
 
     root = Path(args.root).resolve()
     py = sys.executable
