@@ -14832,17 +14832,33 @@ class SafetyBot:
     ) -> None:
         loop_state["last_scan_ts"] = float(last_scan_ts)
 
+    def _runtime_next_loop_id(self, *, loop_state: Dict[str, Any]) -> int:
+        loop_id = int(loop_state.get("loop_id", 0) or 0) + 1
+        loop_state["loop_id"] = int(loop_id)
+        self._runtime_loop_id = int(loop_id)
+        return int(loop_id)
+
+    def _runtime_apply_ingest_state(
+        self,
+        *,
+        loop_state: Dict[str, Any],
+        last_market_data_ts: float,
+    ) -> None:
+        loop_state["last_market_data_ts"] = float(last_market_data_ts)
+
     def _runtime_loop_step(self, *, loop_cfg: Any, loop_state: Dict[str, Any]) -> bool:
         now = float(time.time())
-        loop_state["loop_id"] = int(loop_state.get("loop_id", 0) or 0) + 1
-        self._runtime_loop_id = int(loop_state["loop_id"])
+        self._runtime_next_loop_id(loop_state=loop_state)
 
         market_data, next_market_data_ts = self._runtime_ingest_step(
             now=float(now),
             last_market_data_ts=float(loop_state.get("last_market_data_ts", 0.0) or 0.0),
             receive_timeout_ms=100,
         )
-        loop_state["last_market_data_ts"] = float(next_market_data_ts)
+        self._runtime_apply_ingest_state(
+            loop_state=loop_state,
+            last_market_data_ts=float(next_market_data_ts),
+        )
 
         self._runtime_run_heartbeat(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
         self._runtime_run_trade_probe(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
