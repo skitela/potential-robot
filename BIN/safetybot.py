@@ -14775,6 +14775,22 @@ class SafetyBot:
             return False
         return True
 
+    def _runtime_ingest_step(
+        self,
+        *,
+        now: float,
+        last_market_data_ts: float,
+        receive_timeout_ms: int = 100,
+    ) -> Tuple[Any, float]:
+        tick_ingest_t0 = time.perf_counter()
+        market_data = self.zmq_bridge.receive_data(timeout=int(receive_timeout_ms))
+        next_market_data_ts = float(last_market_data_ts)
+        if market_data:
+            next_market_data_ts = float(now)
+            self._handle_market_data(market_data)
+        self._record_section_duration("tick_ingest", int((time.perf_counter() - tick_ingest_t0) * 1000.0))
+        return market_data, float(next_market_data_ts)
+
     def _runtime_scan_step(
         self,
         *,
@@ -16695,12 +16711,11 @@ class SafetyBot:
                 self._runtime_loop_id = int(loop_id)
 
                 # 1. Receive ZMQ data (non-blocking, short timeout)
-                tick_ingest_t0 = time.perf_counter()
-                market_data = self.zmq_bridge.receive_data(timeout=100)
-                if market_data:
-                    last_market_data_ts = now
-                    self._handle_market_data(market_data)
-                self._record_section_duration("tick_ingest", int((time.perf_counter() - tick_ingest_t0) * 1000.0))
+                market_data, last_market_data_ts = self._runtime_ingest_step(
+                    now=float(now),
+                    last_market_data_ts=float(last_market_data_ts),
+                    receive_timeout_ms=100,
+                )
 
                 # 2. Synchronous heartbeat over REQ/REP
                 (

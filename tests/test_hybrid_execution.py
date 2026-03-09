@@ -442,6 +442,36 @@ class TestHybridExecution(unittest.TestCase):
         self.assertEqual((100.0, 2, True, 130.0), out)
         self.assertEqual(1, int(bot._loop_heartbeat_fail_total))
 
+    def test_runtime_ingest_step_updates_timestamp_on_market_data(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot.zmq_bridge = MagicMock()
+        bot.zmq_bridge.receive_data.return_value = {"type": "TICK", "symbol": "EURUSD.pro"}
+        bot._handle_market_data = MagicMock()
+        bot._record_section_duration = MagicMock()
+
+        market_data, ts = bot._runtime_ingest_step(now=100.0, last_market_data_ts=0.0, receive_timeout_ms=100)
+
+        self.assertIsInstance(market_data, dict)
+        self.assertEqual(100.0, float(ts))
+        bot._handle_market_data.assert_called_once()
+        bot._record_section_duration.assert_called_once()
+
+    def test_runtime_ingest_step_keeps_timestamp_when_no_data(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot.zmq_bridge = MagicMock()
+        bot.zmq_bridge.receive_data.return_value = None
+        bot._handle_market_data = MagicMock()
+        bot._record_section_duration = MagicMock()
+
+        market_data, ts = bot._runtime_ingest_step(now=100.0, last_market_data_ts=50.0, receive_timeout_ms=100)
+
+        self.assertIsNone(market_data)
+        self.assertEqual(50.0, float(ts))
+        bot._handle_market_data.assert_not_called()
+        bot._record_section_duration.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
