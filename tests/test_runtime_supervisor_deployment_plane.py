@@ -1,6 +1,7 @@
 import datetime as dt
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 
@@ -10,7 +11,11 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from deployment_plane import build_kernel_symbol_rows, build_policy_runtime_payload
-from runtime_supervisor import build_mt5_common_file_path, resolve_trade_trigger_mode
+from runtime_supervisor import (
+    build_mt5_common_file_path,
+    build_runtime_loop_settings,
+    resolve_trade_trigger_mode,
+)
 
 
 UTC = dt.timezone.utc
@@ -75,6 +80,60 @@ class TestRuntimeSupervisorDeploymentPlane(unittest.TestCase):
         self.assertIn("FX", payload["groups"])
         self.assertFalse(payload["groups"]["FX"]["entry_allowed"])
         self.assertEqual("BLACK_SWAN", payload["groups"]["FX"]["reason"])
+
+    def test_build_runtime_loop_settings_normalizes_bounds(self) -> None:
+        cfg = SimpleNamespace(
+            scan_interval_sec=30,
+            zmq_heartbeat_interval_sec=0,
+            zmq_heartbeat_fail_threshold=0,
+            zmq_heartbeat_fail_safe_cooldown_sec=-5,
+            zmq_heartbeat_fail_log_interval_sec=0,
+            zmq_scan_suppressed_log_interval_sec=0,
+            bridge_trade_timeout_ms=2000,
+            bridge_default_timeout_ms=1200,
+            bridge_trade_retries=3,
+            bridge_default_retries=2,
+            bridge_heartbeat_timeout_ms=3000,
+            bridge_heartbeat_retries=5,
+            bridge_heartbeat_queue_lock_timeout_ms=250,
+            run_loop_idle_sleep_sec=0.0,
+            run_loop_scan_slow_warn_ms=10,
+            zmq_heartbeat_worker_stale_sec=10,
+            bridge_trade_probe_enabled=True,
+            bridge_trade_probe_interval_sec=2,
+            bridge_trade_probe_max_per_run=-1,
+            bridge_trade_probe_signal="invalid",
+            bridge_trade_probe_symbol=" EURUSD.pro ",
+            bridge_trade_probe_group=" fx ",
+            bridge_trade_probe_volume=-1.0,
+            bridge_trade_probe_deviation_points=0,
+            bridge_trade_probe_comment=" test-comment ",
+        )
+
+        got = build_runtime_loop_settings(cfg)
+        self.assertEqual(30, got.scan_interval)
+        self.assertEqual(1, got.heartbeat_interval)
+        self.assertEqual(1, got.heartbeat_fail_threshold)
+        self.assertEqual(1, got.heartbeat_fail_safe_cooldown)
+        self.assertEqual(1, got.heartbeat_fail_log_interval)
+        self.assertEqual(1, got.scan_suppressed_log_interval)
+        self.assertEqual(2000, got.trade_timeout_budget_ms)
+        self.assertEqual(3, got.trade_retries_budget)
+        self.assertEqual(1500, got.heartbeat_timeout_budget_ms)
+        self.assertEqual(3, got.heartbeat_retries_budget)
+        self.assertEqual(100, got.heartbeat_queue_lock_timeout_ms)
+        self.assertEqual(0.001, got.run_loop_idle_sleep)
+        self.assertEqual(100, got.scan_slow_warn_ms)
+        self.assertEqual(30, got.heartbeat_worker_stale_sec)
+        self.assertTrue(got.trade_probe_enabled)
+        self.assertEqual(5, got.trade_probe_interval_sec)
+        self.assertEqual(0, got.trade_probe_max_per_run)
+        self.assertEqual("BUY", got.trade_probe_signal)
+        self.assertEqual("EURUSD.pro", got.trade_probe_symbol)
+        self.assertEqual("FX", got.trade_probe_group)
+        self.assertEqual(0.0, got.trade_probe_volume)
+        self.assertEqual(10, got.trade_probe_deviation_points)
+        self.assertEqual("test-comment", got.trade_probe_comment)
 
 
 if __name__ == "__main__":

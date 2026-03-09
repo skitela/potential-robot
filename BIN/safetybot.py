@@ -139,6 +139,7 @@ try:
         KERNEL_CONFIG_POLICY_VERSION,
     )
     from .runtime_supervisor import (
+        build_runtime_loop_settings,
         build_mt5_common_file_path,
         resolve_trade_trigger_mode,
         should_emit_interval,
@@ -198,6 +199,7 @@ except Exception:  # pragma: no cover
         KERNEL_CONFIG_POLICY_VERSION,
     )
     from runtime_supervisor import (
+        build_runtime_loop_settings,
         build_mt5_common_file_path,
         resolve_trade_trigger_mode,
         should_emit_interval,
@@ -16332,59 +16334,30 @@ class SafetyBot:
         logging.info("TRADE_TRIGGER_MODE mode=%s", effective_trigger_mode)
 
         last_scan_ts = 0.0
-        scan_interval = int(getattr(CFG, "scan_interval_sec", 60))
-        heartbeat_interval = max(1, int(getattr(CFG, "zmq_heartbeat_interval_sec", 15)))
-        heartbeat_fail_threshold = max(1, int(getattr(CFG, "zmq_heartbeat_fail_threshold", 3)))
-        heartbeat_fail_safe_cooldown = max(
-            1,
-            int(getattr(CFG, "zmq_heartbeat_fail_safe_cooldown_sec", 30)),
-        )
-        heartbeat_fail_log_interval = max(
-            1,
-            int(getattr(CFG, "zmq_heartbeat_fail_log_interval_sec", 15)),
-        )
-        scan_suppressed_log_interval = max(
-            1,
-            int(getattr(CFG, "zmq_scan_suppressed_log_interval_sec", 60)),
-        )
-        trade_timeout_budget_ms = int(
-            max(1, getattr(CFG, "bridge_trade_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))
-        )
-        trade_retries_budget = int(max(1, getattr(CFG, "bridge_trade_retries", getattr(CFG, "bridge_default_retries", 1))))
-        heartbeat_timeout_cfg_ms = int(
-            max(1, getattr(CFG, "bridge_heartbeat_timeout_ms", getattr(CFG, "bridge_default_timeout_ms", 1200)))
-        )
-        heartbeat_timeout_budget_ms = int(
-            max(100, min(heartbeat_timeout_cfg_ms, int(max(150, trade_timeout_budget_ms * 0.75))))
-        )
-        heartbeat_retries_cfg = int(
-            max(1, getattr(CFG, "bridge_heartbeat_retries", getattr(CFG, "bridge_default_retries", 1)))
-        )
-        heartbeat_retries_budget = int(min(heartbeat_retries_cfg, trade_retries_budget))
-        heartbeat_queue_lock_timeout_ms = int(max(1, min(100, getattr(CFG, "bridge_heartbeat_queue_lock_timeout_ms", 25))))
-        run_loop_idle_sleep = max(0.001, float(getattr(CFG, "run_loop_idle_sleep_sec", 0.01)))
-        scan_slow_warn_ms = max(100, int(getattr(CFG, "run_loop_scan_slow_warn_ms", 1500)))
-        heartbeat_worker_stale_sec = max(
-            30,
-            int(getattr(CFG, "zmq_heartbeat_worker_stale_sec", 120)),
-        )
-        trade_probe_enabled = bool(getattr(CFG, "bridge_trade_probe_enabled", False))
-        trade_probe_interval_sec = max(5, int(getattr(CFG, "bridge_trade_probe_interval_sec", 15)))
-        trade_probe_max_per_run = max(0, int(getattr(CFG, "bridge_trade_probe_max_per_run", 120)))
-        trade_probe_signal = str(getattr(CFG, "bridge_trade_probe_signal", "BUY") or "BUY").strip().upper()
-        if trade_probe_signal not in {"BUY", "SELL"}:
-            trade_probe_signal = "BUY"
-        trade_probe_symbol = str(
-            getattr(CFG, "bridge_trade_probe_symbol", "__TRADE_PROBE_INVALID__") or "__TRADE_PROBE_INVALID__"
-        ).strip()
-        trade_probe_group = str(getattr(CFG, "bridge_trade_probe_group", "FX") or "FX").strip().upper()
-        trade_probe_volume = float(max(0.0, float(getattr(CFG, "bridge_trade_probe_volume", 0.01) or 0.01)))
-        trade_probe_deviation_points = int(
-            max(1, int(getattr(CFG, "bridge_trade_probe_deviation_points", 10) or 10))
-        )
-        trade_probe_comment = str(
-            getattr(CFG, "bridge_trade_probe_comment", "TRADE_PROBE_SAFE_NO_LIVE") or "TRADE_PROBE_SAFE_NO_LIVE"
-        ).strip()
+        loop_cfg = build_runtime_loop_settings(CFG)
+        scan_interval = int(loop_cfg.scan_interval)
+        heartbeat_interval = int(loop_cfg.heartbeat_interval)
+        heartbeat_fail_threshold = int(loop_cfg.heartbeat_fail_threshold)
+        heartbeat_fail_safe_cooldown = int(loop_cfg.heartbeat_fail_safe_cooldown)
+        heartbeat_fail_log_interval = int(loop_cfg.heartbeat_fail_log_interval)
+        scan_suppressed_log_interval = int(loop_cfg.scan_suppressed_log_interval)
+        trade_timeout_budget_ms = int(loop_cfg.trade_timeout_budget_ms)
+        trade_retries_budget = int(loop_cfg.trade_retries_budget)
+        heartbeat_timeout_budget_ms = int(loop_cfg.heartbeat_timeout_budget_ms)
+        heartbeat_retries_budget = int(loop_cfg.heartbeat_retries_budget)
+        heartbeat_queue_lock_timeout_ms = int(loop_cfg.heartbeat_queue_lock_timeout_ms)
+        run_loop_idle_sleep = float(loop_cfg.run_loop_idle_sleep)
+        scan_slow_warn_ms = int(loop_cfg.scan_slow_warn_ms)
+        heartbeat_worker_stale_sec = int(loop_cfg.heartbeat_worker_stale_sec)
+        trade_probe_enabled = bool(loop_cfg.trade_probe_enabled)
+        trade_probe_interval_sec = int(loop_cfg.trade_probe_interval_sec)
+        trade_probe_max_per_run = int(loop_cfg.trade_probe_max_per_run)
+        trade_probe_signal = str(loop_cfg.trade_probe_signal)
+        trade_probe_symbol = str(loop_cfg.trade_probe_symbol)
+        trade_probe_group = str(loop_cfg.trade_probe_group)
+        trade_probe_volume = float(loop_cfg.trade_probe_volume)
+        trade_probe_deviation_points = int(loop_cfg.trade_probe_deviation_points)
+        trade_probe_comment = str(loop_cfg.trade_probe_comment)
         last_heartbeat_ts = 0.0
         last_market_data_ts = 0.0
         heartbeat_failures = 0
