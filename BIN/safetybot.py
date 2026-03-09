@@ -14765,12 +14765,17 @@ class SafetyBot:
     def _runtime_emit_control_plane(self) -> None:
         try:
             # Control-plane emit poza sekcją decyzyjną scan_once (mniej I/O w decision core).
-            group_arb = dict(getattr(self, "_runtime_cached_group_arb", {}) or {})
-            group_risk = dict(getattr(self, "_runtime_cached_group_risk", {}) or {})
-            self._emit_policy_runtime(group_arb, group_risk, now_dt=now_utc())
-            self._emit_kernel_config(group_risk, now_dt=now_utc())
+            group_arb, group_risk = self._runtime_get_cached_group_policy_state()
+            now_dt = now_utc()
+            self._emit_policy_runtime(group_arb, group_risk, now_dt=now_dt)
+            self._emit_kernel_config(group_risk, now_dt=now_dt)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+    def _runtime_get_cached_group_policy_state(self) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        group_arb = dict(getattr(self, "_runtime_cached_group_arb", {}) or {})
+        group_risk = dict(getattr(self, "_runtime_cached_group_risk", {}) or {})
+        return group_arb, group_risk
 
     def _runtime_reload_stage1_config(self) -> None:
         try:
