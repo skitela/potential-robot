@@ -597,6 +597,7 @@ class CFG:
     trade_trigger_mode_require_cutover_readiness: bool = True
     trade_trigger_mode_cutover_readiness_file: str = "EVIDENCE/cutover/mql5_cutover_readiness_latest.json"
     trade_trigger_mode_cutover_readiness_max_age_sec: int = 7200
+    trade_bridge_bypass_log_interval_sec: int = 30
     # Stage-1 live profile adapter (control-plane only, no hot-path blocking).
     stage1_live_config_enabled: bool = True
     stage1_live_config_file: str = "LAB/RUN/live_config_stage1_apply.json"
@@ -16721,12 +16722,22 @@ class SafetyBot:
         effective_trigger_mode = self._trade_trigger_mode()
         if effective_trigger_mode == "MQL5_ACTIVE":
             # Docelowy cutover: brak współdecydowania Python/bridge na ticku.
-            logging.info(
-                "TRADE_BRIDGE_BYPASS mode=%s symbol=%s signal=%s",
-                effective_trigger_mode,
-                str(symbol or ""),
-                str(signal or "").upper(),
-            )
+            now_ts = float(time.time())
+            log_interval = max(1, int(getattr(CFG, "trade_bridge_bypass_log_interval_sec", 30) or 30))
+            last_log_ts = float(getattr(self, "_last_trade_bridge_bypass_log_ts", 0.0) or 0.0)
+            suppressed = int(getattr(self, "_trade_bridge_bypass_suppressed", 0) or 0)
+            if (now_ts - last_log_ts) >= float(log_interval):
+                logging.info(
+                    "TRADE_BRIDGE_BYPASS mode=%s symbol=%s signal=%s suppressed_since_last=%s",
+                    effective_trigger_mode,
+                    str(symbol or ""),
+                    str(signal or "").upper(),
+                    suppressed,
+                )
+                self._last_trade_bridge_bypass_log_ts = now_ts
+                self._trade_bridge_bypass_suppressed = 0
+            else:
+                self._trade_bridge_bypass_suppressed = suppressed + 1
             return {
                 "status": "SKIPPED",
                 "action": "TRADE_REPLY",
@@ -17666,6 +17677,10 @@ if __name__ == "__main__":
     CFG.trade_trigger_mode_cutover_readiness_max_age_sec = _cfg_int(
         "trade_trigger_mode_cutover_readiness_max_age_sec",
         CFG.trade_trigger_mode_cutover_readiness_max_age_sec,
+    )
+    CFG.trade_bridge_bypass_log_interval_sec = max(
+        1,
+        _cfg_int("trade_bridge_bypass_log_interval_sec", CFG.trade_bridge_bypass_log_interval_sec),
     )
     CFG.stage1_live_config_enabled = _cfg_bool(
         "stage1_live_config_enabled", CFG.stage1_live_config_enabled
