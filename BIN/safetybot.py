@@ -15394,33 +15394,14 @@ class SafetyBot:
         if trade_probe_max_per_run > 0 and int(trade_probe_sent) >= int(trade_probe_max_per_run):
             return float(last_trade_probe_ts), int(trade_probe_sent)
 
-        probe_reply = self._send_trade_command(
+        probe_reply = self._runtime_send_trade_probe_command(
             signal=str(trade_probe_signal),
             symbol=str(trade_probe_symbol),
             volume=float(trade_probe_volume),
-            sl_price=0.0,
-            tp_price=0.0,
-            request_price=0.0,
             deviation_points=int(trade_probe_deviation_points),
-            spread_at_decision_points=None,
-            spread_unit="points",
-            spread_provenance="trade_probe",
-            estimated_entry_cost_components={},
-            estimated_round_trip_cost={},
-            cost_feasibility_shadow=None,
-            net_cost_feasible=None,
-            cost_gate_policy_mode="DIAGNOSTIC_ONLY",
-            cost_gate_reason_code="TRADE_PROBE",
-            magic=int(getattr(CFG, "magic_number", 0) or 0),
             comment=str(trade_probe_comment),
             group=str(trade_probe_group),
-            risk_entry_allowed=True,
-            risk_reason="TRADE_PROBE",
-            risk_friday=False,
-            risk_reopen=False,
-            policy_shadow_mode=True,
         )
-        self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="TRADE")
         next_trade_probe_sent = int(trade_probe_sent) + 1
         next_trade_probe_ts = float(now)
         self._log_trade_probe_result(
@@ -15431,6 +15412,45 @@ class SafetyBot:
         )
 
         return next_trade_probe_ts, int(next_trade_probe_sent)
+
+    def _runtime_send_trade_probe_command(
+        self,
+        *,
+        signal: str,
+        symbol: str,
+        volume: float,
+        deviation_points: int,
+        comment: str,
+        group: str,
+    ) -> Any:
+        probe_reply = self._send_trade_command(
+            signal=str(signal),
+            symbol=str(symbol),
+            volume=float(volume),
+            sl_price=0.0,
+            tp_price=0.0,
+            request_price=0.0,
+            deviation_points=int(deviation_points),
+            spread_at_decision_points=None,
+            spread_unit="points",
+            spread_provenance="trade_probe",
+            estimated_entry_cost_components={},
+            estimated_round_trip_cost={},
+            cost_feasibility_shadow=None,
+            net_cost_feasible=None,
+            cost_gate_policy_mode="DIAGNOSTIC_ONLY",
+            cost_gate_reason_code="TRADE_PROBE",
+            magic=int(getattr(CFG, "magic_number", 0) or 0),
+            comment=str(comment),
+            group=str(group),
+            risk_entry_allowed=True,
+            risk_reason="TRADE_PROBE",
+            risk_friday=False,
+            risk_reopen=False,
+            policy_shadow_mode=True,
+        )
+        self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="TRADE")
+        return probe_reply
 
     def _runtime_trade_probe_eligible(
         self,
