@@ -160,8 +160,8 @@ def run_probe(
     finally:
         try:
             sock.close(0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _ = exc
 
     ok_rows = sum(1 for r in rows if r.get("status") == "REPLY")
     status = _classify_probe_status(rows, errors)

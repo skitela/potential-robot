@@ -498,10 +498,9 @@ class ZMQBridge:
         if queue_lock_timeout_ms is None:
             acquired = bool(self._command_lock.acquire())
         else:
+            queue_lock_timeout_s = max(0.0, float(max(0, int(queue_lock_timeout_ms))) / 1000.0)
             acquired = bool(
-                self._command_lock.acquire(
-                    timeout=max(0.0, float(max(0, int(queue_lock_timeout_ms))) / 1000.0)
-                )
+                self._command_lock.acquire(timeout=queue_lock_timeout_s)
             )
         command_queue_wait_ms = int((time.perf_counter() - queue_wait_t0) * 1000.0)
         if not acquired:
@@ -522,13 +521,13 @@ class ZMQBridge:
                 "bridge_total_ms": 0,
                 "bridge_timeout_reason": "QUEUE_LOCK_TIMEOUT",
                 "bridge_timeout_subreason": "LOCK_BUSY",
-                    "status": "SKIPPED",
-                    "fallback_used": True,
-                    "channel": "REQ_REP",
-                    "endpoint": endpoint,
-                    "command_queue_wait_ms": int(command_queue_wait_ms),
-                    "audit_log_lock_wait_max_ms": 0,
-                }
+                "status": "SKIPPED",
+                "fallback_used": True,
+                "channel": "REQ_REP",
+                "endpoint": endpoint,
+                "command_queue_wait_ms": int(command_queue_wait_ms),
+                "audit_log_lock_wait_max_ms": 0,
+            }
             self._set_last_command_diag(diag)
             self._write_audit_log(
                 "COMMAND_SKIPPED",
@@ -789,7 +788,7 @@ class ZMQBridge:
                             {
                                 "phase": "recv_timeout",
                                 "channel": "REQ_REP",
-                                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                                "endpoint": endpoint,
                                 "attempt": int(attempt + 1),
                                 "retry_count": int(attempt),
                                 "action": action_norm,
@@ -838,7 +837,7 @@ class ZMQBridge:
                         {
                             "phase": "send_timeout",
                             "channel": "REQ_REP",
-                            "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                            "endpoint": endpoint,
                             "attempt": int(attempt + 1),
                             "retry_count": int(attempt),
                             "action": action_norm,
@@ -876,7 +875,7 @@ class ZMQBridge:
                 {
                     "phase": "command_fail",
                     "channel": "REQ_REP",
-                    "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                    "endpoint": endpoint,
                     "retries": int(effective_retries),
                     "action": action_norm,
                     "command_type": command_type,

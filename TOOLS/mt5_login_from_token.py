@@ -104,8 +104,8 @@ def main() -> int:
         try:
             import MetaTrader5 as mt5
             mt5.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            _ = exc
 
 
 if __name__ == "__main__":

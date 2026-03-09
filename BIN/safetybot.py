@@ -14758,11 +14758,6 @@ class SafetyBot:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _runtime_maintenance_step(self) -> bool:
-        self._runtime_emit_control_plane()
-        self._runtime_reload_stage1_config()
-        return self._runtime_check_kill_switch()
-
-    def _runtime_emit_control_plane(self) -> None:
         try:
             # Control-plane emit poza sekcją decyzyjną scan_once (mniej I/O w decision core).
             group_arb, group_risk = self._runtime_get_cached_group_policy_state()
@@ -14771,6 +14766,8 @@ class SafetyBot:
             self._emit_kernel_config(group_risk, now_dt=now_dt)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        self._runtime_reload_stage1_config()
+        return self._runtime_check_kill_switch()
 
     def _runtime_get_cached_group_policy_state(self) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
         group_arb = dict(getattr(self, "_runtime_cached_group_arb", {}) or {})
@@ -14900,14 +14897,17 @@ class SafetyBot:
         )
 
     def _runtime_run_trade_probe(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
+        heartbeat_fail_safe_active = bool(loop_state.get("heartbeat_fail_safe_active", False))
+        trade_probe_sent = int(loop_state.get("trade_probe_sent", 0) or 0)
+        last_trade_probe_ts = float(loop_state.get("last_trade_probe_ts", 0.0) or 0.0)
         next_probe_ts, next_probe_sent = self._runtime_trade_probe_step(
             now=now,
-            heartbeat_fail_safe_active=bool(loop_state["heartbeat_fail_safe_active"]),
+            heartbeat_fail_safe_active=heartbeat_fail_safe_active,
             trade_probe_enabled=loop_cfg.trade_probe_enabled,
             trade_probe_interval_sec=loop_cfg.trade_probe_interval_sec,
             trade_probe_max_per_run=loop_cfg.trade_probe_max_per_run,
-            trade_probe_sent=int(loop_state.get("trade_probe_sent", 0) or 0),
-            last_trade_probe_ts=float(loop_state.get("last_trade_probe_ts", 0.0) or 0.0),
+            trade_probe_sent=trade_probe_sent,
+            last_trade_probe_ts=last_trade_probe_ts,
             trade_probe_signal=loop_cfg.trade_probe_signal,
             trade_probe_symbol=loop_cfg.trade_probe_symbol,
             trade_probe_volume=loop_cfg.trade_probe_volume,
@@ -14917,8 +14917,8 @@ class SafetyBot:
         )
         self._runtime_apply_trade_probe_state(
             loop_state=loop_state,
-            last_trade_probe_ts=float(next_probe_ts),
-            trade_probe_sent=int(next_probe_sent),
+            last_trade_probe_ts=next_probe_ts,
+            trade_probe_sent=next_probe_sent,
         )
 
     def _runtime_run_scan(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
@@ -15349,14 +15349,14 @@ class SafetyBot:
         hb_reply = self.zmq_bridge.send_command(
             {
                 "action": "HEARTBEAT",
-                "loop_id": int(loop_id),
-                "hb_loop_lag_ms": int(heartbeat_loop_lag_ms),
-                "hb_market_data_stale_ms": int(market_data_stale_ms),
+                "loop_id": loop_id,
+                "hb_loop_lag_ms": heartbeat_loop_lag_ms,
+                "hb_market_data_stale_ms": market_data_stale_ms,
             },
-            timeout_ms=int(heartbeat_timeout_budget_ms),
-            max_retries=int(heartbeat_retries_budget),
-            loop_id=str(int(loop_id)),
-            queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
+            timeout_ms=heartbeat_timeout_budget_ms,
+            max_retries=heartbeat_retries_budget,
+            loop_id=str(loop_id),
+            queue_lock_timeout_ms=heartbeat_queue_lock_timeout_ms,
             reconnect_on_timeout=bool(
                 getattr(CFG, "bridge_heartbeat_reconnect_on_timeout", False)
             ),
@@ -15410,35 +15410,35 @@ class SafetyBot:
         trade_probe_group: str,
     ) -> Tuple[float, int]:
         if not self._runtime_trade_probe_eligible(
-            now=float(now),
-            heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-            trade_probe_enabled=bool(trade_probe_enabled),
-            trade_probe_interval_sec=int(trade_probe_interval_sec),
-            last_trade_probe_ts=float(last_trade_probe_ts),
+            now=now,
+            heartbeat_fail_safe_active=heartbeat_fail_safe_active,
+            trade_probe_enabled=trade_probe_enabled,
+            trade_probe_interval_sec=trade_probe_interval_sec,
+            last_trade_probe_ts=last_trade_probe_ts,
         ):
-            return float(last_trade_probe_ts), int(trade_probe_sent)
+            return last_trade_probe_ts, trade_probe_sent
 
-        if trade_probe_max_per_run > 0 and int(trade_probe_sent) >= int(trade_probe_max_per_run):
-            return float(last_trade_probe_ts), int(trade_probe_sent)
+        if trade_probe_max_per_run > 0 and trade_probe_sent >= trade_probe_max_per_run:
+            return last_trade_probe_ts, trade_probe_sent
 
         probe_reply = self._runtime_send_trade_probe_command(
-            signal=str(trade_probe_signal),
-            symbol=str(trade_probe_symbol),
-            volume=float(trade_probe_volume),
-            deviation_points=int(trade_probe_deviation_points),
-            comment=str(trade_probe_comment),
-            group=str(trade_probe_group),
+            signal=trade_probe_signal,
+            symbol=trade_probe_symbol,
+            volume=trade_probe_volume,
+            deviation_points=trade_probe_deviation_points,
+            comment=trade_probe_comment,
+            group=trade_probe_group,
         )
-        next_trade_probe_sent = int(trade_probe_sent) + 1
-        next_trade_probe_ts = float(now)
+        next_trade_probe_sent = trade_probe_sent + 1
+        next_trade_probe_ts = now
         self._log_trade_probe_result(
             probe_reply=probe_reply,
-            next_trade_probe_sent=int(next_trade_probe_sent),
-            trade_probe_max_per_run=int(trade_probe_max_per_run),
-            trade_probe_symbol=str(trade_probe_symbol),
+            next_trade_probe_sent=next_trade_probe_sent,
+            trade_probe_max_per_run=trade_probe_max_per_run,
+            trade_probe_symbol=trade_probe_symbol,
         )
 
-        return next_trade_probe_ts, int(next_trade_probe_sent)
+        return next_trade_probe_ts, next_trade_probe_sent
 
     def _runtime_send_trade_probe_command(
         self,
@@ -15451,13 +15451,13 @@ class SafetyBot:
         group: str,
     ) -> Any:
         probe_reply = self._send_trade_command(
-            signal=str(signal),
-            symbol=str(symbol),
-            volume=float(volume),
+            signal=signal,
+            symbol=symbol,
+            volume=volume,
             sl_price=0.0,
             tp_price=0.0,
             request_price=0.0,
-            deviation_points=int(deviation_points),
+            deviation_points=deviation_points,
             spread_at_decision_points=None,
             spread_unit="points",
             spread_provenance="trade_probe",
@@ -15468,8 +15468,8 @@ class SafetyBot:
             cost_gate_policy_mode="DIAGNOSTIC_ONLY",
             cost_gate_reason_code="TRADE_PROBE",
             magic=int(getattr(CFG, "magic_number", 0) or 0),
-            comment=str(comment),
-            group=str(group),
+            comment=comment,
+            group=group,
             risk_entry_allowed=True,
             risk_reason="TRADE_PROBE",
             risk_friday=False,
