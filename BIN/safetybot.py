@@ -15181,10 +15181,12 @@ class SafetyBot:
         trade_probe_comment: str,
         trade_probe_group: str,
     ) -> Tuple[float, int]:
-        if (
-            (not bool(trade_probe_enabled))
-            or bool(heartbeat_fail_safe_active)
-            or ((float(now) - float(last_trade_probe_ts)) < float(trade_probe_interval_sec))
+        if not self._runtime_trade_probe_eligible(
+            now=float(now),
+            heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
+            trade_probe_enabled=bool(trade_probe_enabled),
+            trade_probe_interval_sec=int(trade_probe_interval_sec),
+            last_trade_probe_ts=float(last_trade_probe_ts),
         ):
             return float(last_trade_probe_ts), int(trade_probe_sent)
 
@@ -15220,6 +15222,40 @@ class SafetyBot:
         self._record_bridge_diag(self.zmq_bridge.get_last_command_diag(), action="TRADE")
         next_trade_probe_sent = int(trade_probe_sent) + 1
         next_trade_probe_ts = float(now)
+        self._log_trade_probe_result(
+            probe_reply=probe_reply,
+            next_trade_probe_sent=int(next_trade_probe_sent),
+            trade_probe_max_per_run=int(trade_probe_max_per_run),
+            trade_probe_symbol=str(trade_probe_symbol),
+        )
+
+        return next_trade_probe_ts, int(next_trade_probe_sent)
+
+    def _runtime_trade_probe_eligible(
+        self,
+        *,
+        now: float,
+        heartbeat_fail_safe_active: bool,
+        trade_probe_enabled: bool,
+        trade_probe_interval_sec: int,
+        last_trade_probe_ts: float,
+    ) -> bool:
+        if not bool(trade_probe_enabled):
+            return False
+        if bool(heartbeat_fail_safe_active):
+            return False
+        if (float(now) - float(last_trade_probe_ts)) < float(trade_probe_interval_sec):
+            return False
+        return True
+
+    def _log_trade_probe_result(
+        self,
+        *,
+        probe_reply: Any,
+        next_trade_probe_sent: int,
+        trade_probe_max_per_run: int,
+        trade_probe_symbol: str,
+    ) -> None:
         if isinstance(probe_reply, dict):
             p_status = str(probe_reply.get("status") or "UNKNOWN").upper()
             p_ret = ""
@@ -15235,15 +15271,13 @@ class SafetyBot:
                 int(trade_probe_max_per_run),
                 str(trade_probe_symbol),
             )
-        else:
-            logging.warning(
-                "TRADE_PROBE_FAIL sent=%s/%s symbol=%s reason=no_reply",
-                int(next_trade_probe_sent),
-                int(trade_probe_max_per_run),
-                str(trade_probe_symbol),
-            )
-
-        return next_trade_probe_ts, int(next_trade_probe_sent)
+            return
+        logging.warning(
+            "TRADE_PROBE_FAIL sent=%s/%s symbol=%s reason=no_reply",
+            int(next_trade_probe_sent),
+            int(trade_probe_max_per_run),
+            str(trade_probe_symbol),
+        )
 
     def _runtime_idle_step(self, had_market_data: bool, idle_sleep_sec: float) -> None:
         if not had_market_data:
