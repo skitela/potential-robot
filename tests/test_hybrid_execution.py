@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from BIN.safetybot import SafetyBot, StandardStrategy
+from BIN.safetybot import SafetyBot, StandardStrategy, build_response_hash
 
 
 class TestHybridExecution(unittest.TestCase):
@@ -337,6 +337,110 @@ class TestHybridExecution(unittest.TestCase):
         self.assertEqual(7, int(next_count))
         bot._send_trade_command.assert_not_called()
         bot._record_bridge_diag.assert_not_called()
+
+    def test_runtime_heartbeat_step_returns_unchanged_when_not_due(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._record_bridge_diag = MagicMock()
+        bot.zmq_bridge = MagicMock()
+        bot._last_heartbeat_fail_log_ts = 0.0
+        bot._loop_heartbeat_recoveries = 0
+        bot._loop_heartbeat_fail_total = 0
+        bot.incident_journal = None
+
+        out = bot._runtime_heartbeat_step(
+            now=100.0,
+            loop_id=1,
+            last_heartbeat_ts=95.0,
+            last_market_data_ts=99.0,
+            heartbeat_interval=15,
+            heartbeat_fail_safe_active=False,
+            heartbeat_failures=0,
+            heartbeat_fail_safe_until=0.0,
+            heartbeat_fail_threshold=3,
+            heartbeat_fail_safe_cooldown=30,
+            heartbeat_fail_log_interval=15,
+            heartbeat_timeout_budget_ms=800,
+            heartbeat_retries_budget=1,
+            heartbeat_queue_lock_timeout_ms=25,
+            heartbeat_worker_stale_sec=120,
+        )
+
+        self.assertEqual((95.0, 0, False, 0.0), out)
+        bot.zmq_bridge.send_command.assert_not_called()
+        bot._record_bridge_diag.assert_not_called()
+
+    def test_runtime_heartbeat_step_success_clears_failures(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._record_bridge_diag = MagicMock()
+        bot.zmq_bridge = MagicMock()
+        bot._last_heartbeat_fail_log_ts = 0.0
+        bot._loop_heartbeat_recoveries = 0
+        bot._loop_heartbeat_fail_total = 0
+        bot.incident_journal = None
+
+        reply = {"action": "HEARTBEAT_REPLY", "status": "OK"}
+        reply["response_hash"] = build_response_hash(reply)
+        bot.zmq_bridge.send_command.return_value = reply
+        bot.zmq_bridge.get_last_command_diag.return_value = {}
+
+        out = bot._runtime_heartbeat_step(
+            now=100.0,
+            loop_id=1,
+            last_heartbeat_ts=0.0,
+            last_market_data_ts=95.0,
+            heartbeat_interval=15,
+            heartbeat_fail_safe_active=True,
+            heartbeat_failures=2,
+            heartbeat_fail_safe_until=0.0,
+            heartbeat_fail_threshold=3,
+            heartbeat_fail_safe_cooldown=30,
+            heartbeat_fail_log_interval=15,
+            heartbeat_timeout_budget_ms=800,
+            heartbeat_retries_budget=1,
+            heartbeat_queue_lock_timeout_ms=25,
+            heartbeat_worker_stale_sec=120,
+        )
+
+        self.assertEqual((100.0, 0, False, 0.0), out)
+        self.assertEqual(1, int(bot._loop_heartbeat_recoveries))
+        bot.zmq_bridge.send_command.assert_called_once()
+        bot._record_bridge_diag.assert_called_once()
+
+    def test_runtime_heartbeat_step_fail_triggers_failsafe(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._record_bridge_diag = MagicMock()
+        bot.zmq_bridge = MagicMock()
+        bot._last_heartbeat_fail_log_ts = 0.0
+        bot._loop_heartbeat_recoveries = 0
+        bot._loop_heartbeat_fail_total = 0
+        bot.incident_journal = None
+
+        bot.zmq_bridge.send_command.return_value = None
+        bot.zmq_bridge.get_last_command_diag.return_value = {}
+
+        out = bot._runtime_heartbeat_step(
+            now=100.0,
+            loop_id=1,
+            last_heartbeat_ts=0.0,
+            last_market_data_ts=95.0,
+            heartbeat_interval=15,
+            heartbeat_fail_safe_active=False,
+            heartbeat_failures=1,
+            heartbeat_fail_safe_until=0.0,
+            heartbeat_fail_threshold=2,
+            heartbeat_fail_safe_cooldown=30,
+            heartbeat_fail_log_interval=15,
+            heartbeat_timeout_budget_ms=800,
+            heartbeat_retries_budget=1,
+            heartbeat_queue_lock_timeout_ms=25,
+            heartbeat_worker_stale_sec=120,
+        )
+
+        self.assertEqual((100.0, 2, True, 130.0), out)
+        self.assertEqual(1, int(bot._loop_heartbeat_fail_total))
 
 
 if __name__ == "__main__":

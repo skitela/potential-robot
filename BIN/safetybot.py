@@ -14819,6 +14819,194 @@ class SafetyBot:
                 )
         return float(now)
 
+    def _runtime_heartbeat_step(
+        self,
+        *,
+        now: float,
+        loop_id: int,
+        last_heartbeat_ts: float,
+        last_market_data_ts: float,
+        heartbeat_interval: int,
+        heartbeat_fail_safe_active: bool,
+        heartbeat_failures: int,
+        heartbeat_fail_safe_until: float,
+        heartbeat_fail_threshold: int,
+        heartbeat_fail_safe_cooldown: int,
+        heartbeat_fail_log_interval: int,
+        heartbeat_timeout_budget_ms: int,
+        heartbeat_retries_budget: int,
+        heartbeat_queue_lock_timeout_ms: int,
+        heartbeat_worker_stale_sec: int,
+    ) -> Tuple[float, int, bool, float]:
+        if (float(now) - float(last_heartbeat_ts)) < float(heartbeat_interval):
+            return (
+                float(last_heartbeat_ts),
+                int(heartbeat_failures),
+                bool(heartbeat_fail_safe_active),
+                float(heartbeat_fail_safe_until),
+            )
+
+        if bool(heartbeat_fail_safe_active) and float(now) < float(heartbeat_fail_safe_until):
+            return (
+                float(now),
+                int(heartbeat_failures),
+                bool(heartbeat_fail_safe_active),
+                float(heartbeat_fail_safe_until),
+            )
+
+        heartbeat_loop_lag_ms = 0
+        if float(last_heartbeat_ts) > 0:
+            heartbeat_loop_lag_ms = int(
+                max(0.0, (float(now) - float(last_heartbeat_ts) - float(heartbeat_interval)) * 1000.0)
+            )
+        market_data_stale_ms = -1
+        if float(last_market_data_ts) > 0.0:
+            market_data_stale_ms = int(max(0.0, (float(now) - float(last_market_data_ts)) * 1000.0))
+
+        heartbeat_suppressed = (
+            bool(heartbeat_fail_safe_active)
+            and market_data_stale_ms >= int(heartbeat_worker_stale_sec * 1000)
+        )
+        if heartbeat_suppressed:
+            heartbeat_fail_safe_until = float(now) + float(heartbeat_fail_safe_cooldown)
+            if (float(now) - float(self._last_heartbeat_fail_log_ts or 0.0)) >= float(heartbeat_fail_log_interval):
+                self._last_heartbeat_fail_log_ts = float(now)
+                logging.warning(
+                    "HEARTBEAT_SUPPRESSED reason=HB_NO_WORKER_RESPONSE stale_ms=%s cooldown_s=%s",
+                    int(market_data_stale_ms),
+                    int(heartbeat_fail_safe_cooldown),
+                )
+            return (
+                float(now),
+                int(heartbeat_failures),
+                bool(heartbeat_fail_safe_active),
+                float(heartbeat_fail_safe_until),
+            )
+
+        hb_reply = self.zmq_bridge.send_command(
+            {
+                "action": "HEARTBEAT",
+                "loop_id": int(loop_id),
+                "hb_loop_lag_ms": int(heartbeat_loop_lag_ms),
+                "hb_market_data_stale_ms": int(market_data_stale_ms),
+            },
+            timeout_ms=int(heartbeat_timeout_budget_ms),
+            max_retries=int(heartbeat_retries_budget),
+            loop_id=str(int(loop_id)),
+            queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
+            reconnect_on_timeout=bool(
+                getattr(CFG, "bridge_heartbeat_reconnect_on_timeout", False)
+            ),
+        )
+        hb_diag: Dict[str, Any] = self.zmq_bridge.get_last_command_diag()
+        self._record_bridge_diag(hb_diag, action="HEARTBEAT")
+        hb_reason = str((hb_diag.get("bridge_timeout_reason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
+        hb_subreason = str((hb_diag.get("bridge_timeout_subreason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
+        hb_skipped_lock = bool(hb_reason == "QUEUE_LOCK_TIMEOUT")
+        hb_timeout_nonfatal = (
+            bool(getattr(CFG, "bridge_heartbeat_timeout_nonfatal", True))
+            and hb_reason in ("TIMEOUT_NO_RESPONSE", "SEND_TIMEOUT")
+            and (
+                int(market_data_stale_ms) < 0
+                or int(market_data_stale_ms) < int(heartbeat_worker_stale_sec * 1000)
+            )
+        )
+        hb_hash_ok = False
+        try:
+            hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
+            hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            hb_hash_ok = False
+        hb_ok = (
+            isinstance(hb_reply, dict)
+            and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
+            and str(hb_reply.get("status") or "").upper() == "OK"
+            and bool(hb_hash_ok)
+        )
+
+        if hb_skipped_lock:
+            logging.info(
+                "HEARTBEAT_SKIP reason=queue_lock_busy queue_wait_ms=%s subreason=%s",
+                int((hb_diag.get("command_queue_wait_ms") if isinstance(hb_diag, dict) else 0) or 0),
+                hb_subreason or "LOCK_BUSY",
+            )
+            return (
+                float(now),
+                int(heartbeat_failures),
+                bool(heartbeat_fail_safe_active),
+                float(heartbeat_fail_safe_until),
+            )
+
+        if hb_timeout_nonfatal:
+            logging.info(
+                "HEARTBEAT_SKIP reason=timeout_nonfatal reason=%s subreason=%s wait_ms=%s timeout_budget_ms=%s",
+                hb_reason or "TIMEOUT_NO_RESPONSE",
+                hb_subreason or "NO_RESPONSE",
+                int((hb_diag.get("bridge_wait_ms") if isinstance(hb_diag, dict) else 0) or 0),
+                int((hb_diag.get("timeout_budget_ms") if isinstance(hb_diag, dict) else 0) or 0),
+            )
+            return (
+                float(now),
+                int(heartbeat_failures),
+                bool(heartbeat_fail_safe_active),
+                float(heartbeat_fail_safe_until),
+            )
+
+        if hb_ok:
+            if bool(heartbeat_fail_safe_active) or int(heartbeat_failures) > 0:
+                logging.warning(
+                    "HEARTBEAT_RECOVERED | previous_failures=%s",
+                    int(heartbeat_failures),
+                )
+                self._loop_heartbeat_recoveries = int(self._loop_heartbeat_recoveries) + 1
+            self._last_heartbeat_ok_ts = float(now)
+            return float(now), 0, False, 0.0
+
+        heartbeat_failures = int(heartbeat_failures) + 1
+        self._loop_heartbeat_fail_total = int(self._loop_heartbeat_fail_total) + 1
+        if (float(now) - float(self._last_heartbeat_fail_log_ts or 0.0)) >= float(heartbeat_fail_log_interval):
+            self._last_heartbeat_fail_log_ts = float(now)
+            logging.error(
+                "HEARTBEAT_FAIL | consecutive=%s threshold=%s cooldown_s=%s reply=%s",
+                int(heartbeat_failures),
+                int(heartbeat_fail_threshold),
+                int(heartbeat_fail_safe_cooldown),
+                hb_reply,
+            )
+        if int(heartbeat_failures) >= int(heartbeat_fail_threshold) and not bool(heartbeat_fail_safe_active):
+            heartbeat_fail_safe_active = True
+            logging.critical(
+                "HEARTBEAT_FAILSAFE_ACTIVE | consecutive=%s threshold=%s mode=NO_TRADE cooldown_s=%s",
+                int(heartbeat_failures),
+                int(heartbeat_fail_threshold),
+                int(heartbeat_fail_safe_cooldown),
+            )
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_guard(
+                        guard="zmq_heartbeat",
+                        reason="consecutive_heartbeat_failures",
+                        severity="CRITICAL",
+                        category="system",
+                        symbol="__ALL__",
+                        extra={
+                            "failures": int(heartbeat_failures),
+                            "threshold": int(heartbeat_fail_threshold),
+                            "cooldown_sec": int(heartbeat_fail_safe_cooldown),
+                        },
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        if bool(heartbeat_fail_safe_active):
+            heartbeat_fail_safe_until = float(now) + float(heartbeat_fail_safe_cooldown)
+        return (
+            float(now),
+            int(heartbeat_failures),
+            bool(heartbeat_fail_safe_active),
+            float(heartbeat_fail_safe_until),
+        )
+
     def _runtime_trade_probe_step(
         self,
         *,
@@ -16515,147 +16703,28 @@ class SafetyBot:
                 self._record_section_duration("tick_ingest", int((time.perf_counter() - tick_ingest_t0) * 1000.0))
 
                 # 2. Synchronous heartbeat over REQ/REP
-                if (now - last_heartbeat_ts) >= heartbeat_interval:
-                    if heartbeat_fail_safe_active and now < float(heartbeat_fail_safe_until):
-                        pass
-                    else:
-                        heartbeat_loop_lag_ms = 0
-                        if last_heartbeat_ts > 0:
-                            heartbeat_loop_lag_ms = int(max(0.0, (now - float(last_heartbeat_ts) - float(heartbeat_interval)) * 1000.0))
-                        market_data_stale_ms = -1
-                        if float(last_market_data_ts) > 0.0:
-                            market_data_stale_ms = int(max(0.0, (now - float(last_market_data_ts)) * 1000.0))
-                        # Jeśli worker od dłuższego czasu nie wysyła danych i jesteśmy już w fail-safe,
-                        # ograniczamy agresywne heartbeat retry (bez wpływu na strategię/trading).
-                        heartbeat_suppressed = (
-                            heartbeat_fail_safe_active
-                            and market_data_stale_ms >= int(heartbeat_worker_stale_sec * 1000)
-                        )
-                        if heartbeat_suppressed:
-                            heartbeat_fail_safe_until = now + float(heartbeat_fail_safe_cooldown)
-                            if (now - float(self._last_heartbeat_fail_log_ts or 0.0)) >= float(heartbeat_fail_log_interval):
-                                self._last_heartbeat_fail_log_ts = now
-                                logging.warning(
-                                    "HEARTBEAT_SUPPRESSED reason=HB_NO_WORKER_RESPONSE stale_ms=%s cooldown_s=%s",
-                                    int(market_data_stale_ms),
-                                    int(heartbeat_fail_safe_cooldown),
-                                )
-                            last_heartbeat_ts = now
-                        hb_reply = None
-                        hb_diag: Dict[str, Any] = {}
-                        if not heartbeat_suppressed:
-                            hb_reply = self.zmq_bridge.send_command(
-                                {
-                                    "action": "HEARTBEAT",
-                                    "loop_id": int(loop_id),
-                                    "hb_loop_lag_ms": int(heartbeat_loop_lag_ms),
-                                    "hb_market_data_stale_ms": int(market_data_stale_ms),
-                                },
-                                timeout_ms=int(heartbeat_timeout_budget_ms),
-                                max_retries=int(heartbeat_retries_budget),
-                                loop_id=str(int(loop_id)),
-                                queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
-                                reconnect_on_timeout=bool(
-                                    getattr(CFG, "bridge_heartbeat_reconnect_on_timeout", False)
-                                ),
-                            )
-                        if not heartbeat_suppressed:
-                            hb_diag = self.zmq_bridge.get_last_command_diag()
-                            self._record_bridge_diag(hb_diag, action="HEARTBEAT")
-                        hb_hash_ok = False
-                        hb_ok = False
-                        hb_skipped_lock = False
-                        hb_timeout_nonfatal = False
-                        if not heartbeat_suppressed:
-                            hb_reason = str((hb_diag.get("bridge_timeout_reason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
-                            hb_subreason = str((hb_diag.get("bridge_timeout_subreason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
-                            hb_skipped_lock = bool(hb_reason == "QUEUE_LOCK_TIMEOUT")
-                            hb_timeout_nonfatal = (
-                                bool(getattr(CFG, "bridge_heartbeat_timeout_nonfatal", True))
-                                and hb_reason in ("TIMEOUT_NO_RESPONSE", "SEND_TIMEOUT")
-                                and (
-                                    int(market_data_stale_ms) < 0
-                                    or int(market_data_stale_ms) < int(heartbeat_worker_stale_sec * 1000)
-                                )
-                            )
-                            try:
-                                hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
-                                hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
-                            except Exception as e:
-                                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                                hb_hash_ok = False
-                            hb_ok = (
-                                isinstance(hb_reply, dict)
-                                and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
-                                and str(hb_reply.get("status") or "").upper() == "OK"
-                                and bool(hb_hash_ok)
-                            )
-                        if heartbeat_suppressed:
-                            pass
-                        elif hb_skipped_lock:
-                            logging.info(
-                                "HEARTBEAT_SKIP reason=queue_lock_busy queue_wait_ms=%s subreason=%s",
-                                int((hb_diag.get("command_queue_wait_ms") if isinstance(hb_diag, dict) else 0) or 0),
-                                hb_subreason or "LOCK_BUSY",
-                            )
-                        elif hb_timeout_nonfatal:
-                            logging.info(
-                                "HEARTBEAT_SKIP reason=timeout_nonfatal reason=%s subreason=%s wait_ms=%s timeout_budget_ms=%s",
-                                hb_reason or "TIMEOUT_NO_RESPONSE",
-                                hb_subreason or "NO_RESPONSE",
-                                int((hb_diag.get("bridge_wait_ms") if isinstance(hb_diag, dict) else 0) or 0),
-                                int((hb_diag.get("timeout_budget_ms") if isinstance(hb_diag, dict) else 0) or 0),
-                            )
-                        elif hb_ok:
-                            if heartbeat_fail_safe_active or heartbeat_failures > 0:
-                                logging.warning(
-                                    "HEARTBEAT_RECOVERED | previous_failures=%s",
-                                    int(heartbeat_failures),
-                                )
-                                self._loop_heartbeat_recoveries = int(self._loop_heartbeat_recoveries) + 1
-                            self._last_heartbeat_ok_ts = float(now)
-                            heartbeat_failures = 0
-                            heartbeat_fail_safe_active = False
-                            heartbeat_fail_safe_until = 0.0
-                        else:
-                            heartbeat_failures += 1
-                            self._loop_heartbeat_fail_total = int(self._loop_heartbeat_fail_total) + 1
-                            if (now - float(self._last_heartbeat_fail_log_ts or 0.0)) >= float(heartbeat_fail_log_interval):
-                                self._last_heartbeat_fail_log_ts = now
-                                logging.error(
-                                    "HEARTBEAT_FAIL | consecutive=%s threshold=%s cooldown_s=%s reply=%s",
-                                    int(heartbeat_failures),
-                                    int(heartbeat_fail_threshold),
-                                    int(heartbeat_fail_safe_cooldown),
-                                    hb_reply,
-                                )
-                            if heartbeat_failures >= heartbeat_fail_threshold and not heartbeat_fail_safe_active:
-                                heartbeat_fail_safe_active = True
-                                logging.critical(
-                                    "HEARTBEAT_FAILSAFE_ACTIVE | consecutive=%s threshold=%s mode=NO_TRADE cooldown_s=%s",
-                                    int(heartbeat_failures),
-                                    int(heartbeat_fail_threshold),
-                                    int(heartbeat_fail_safe_cooldown),
-                                )
-                                try:
-                                    if self.incident_journal is not None:
-                                        self.incident_journal.note_guard(
-                                            guard="zmq_heartbeat",
-                                            reason="consecutive_heartbeat_failures",
-                                            severity="CRITICAL",
-                                            category="system",
-                                            symbol="__ALL__",
-                                            extra={
-                                                "failures": int(heartbeat_failures),
-                                                "threshold": int(heartbeat_fail_threshold),
-                                                "cooldown_sec": int(heartbeat_fail_safe_cooldown),
-                                            },
-                                        )
-                                except Exception as e:
-                                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                            if heartbeat_fail_safe_active:
-                                heartbeat_fail_safe_until = now + float(heartbeat_fail_safe_cooldown)
-                    last_heartbeat_ts = now
+                (
+                    last_heartbeat_ts,
+                    heartbeat_failures,
+                    heartbeat_fail_safe_active,
+                    heartbeat_fail_safe_until,
+                ) = self._runtime_heartbeat_step(
+                    now=float(now),
+                    loop_id=int(loop_id),
+                    last_heartbeat_ts=float(last_heartbeat_ts),
+                    last_market_data_ts=float(last_market_data_ts),
+                    heartbeat_interval=int(heartbeat_interval),
+                    heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
+                    heartbeat_failures=int(heartbeat_failures),
+                    heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
+                    heartbeat_fail_threshold=int(heartbeat_fail_threshold),
+                    heartbeat_fail_safe_cooldown=int(heartbeat_fail_safe_cooldown),
+                    heartbeat_fail_log_interval=int(heartbeat_fail_log_interval),
+                    heartbeat_timeout_budget_ms=int(heartbeat_timeout_budget_ms),
+                    heartbeat_retries_budget=int(heartbeat_retries_budget),
+                    heartbeat_queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
+                    heartbeat_worker_stale_sec=int(heartbeat_worker_stale_sec),
+                )
 
                 # 2b. Controlled TRADE-path probe (disabled by default).
                 # Sends synthetic TRADE command with intentionally invalid symbol.
