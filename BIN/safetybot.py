@@ -16741,19 +16741,7 @@ class SafetyBot:
         )
 
     def run(self):
-        logging.info(f"BOT START | HYBRID MODE | MT5 SAFETY BOT {CFG.BOT_VERSION}")
-        logging.info("Uruchamianie pętli hybrydowej (ZMQ + Periodic Scan)...")
-        requested_trigger_mode = str(getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE") or "BRIDGE_ACTIVE").strip().upper()
-        effective_trigger_mode, trigger_mode_reason = self._trade_trigger_mode_info()
-        if requested_trigger_mode != effective_trigger_mode:
-            logging.warning(
-                "TRADE_TRIGGER_MODE_FALLBACK requested=%s effective=%s reason=%s",
-                requested_trigger_mode,
-                effective_trigger_mode,
-                str(trigger_mode_reason or "UNKNOWN"),
-            )
-        logging.info("TRADE_TRIGGER_MODE mode=%s", effective_trigger_mode)
-
+        self._runtime_log_startup()
         loop_cfg = build_runtime_loop_settings(CFG)
         loop_state: Dict[str, Any] = build_runtime_loop_state()
         logging.info(
@@ -16779,6 +16767,20 @@ class SafetyBot:
             logging.info("Zamykanie bota i zwalnianie zasobów...")
             if self.execution_queue:
                 self.execution_queue.stop()
+
+    def _runtime_log_startup(self) -> None:
+        logging.info(f"BOT START | HYBRID MODE | MT5 SAFETY BOT {CFG.BOT_VERSION}")
+        logging.info("Uruchamianie pętli hybrydowej (ZMQ + Periodic Scan)...")
+        requested_trigger_mode = str(getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE") or "BRIDGE_ACTIVE").strip().upper()
+        effective_trigger_mode, trigger_mode_reason = self._trade_trigger_mode_info()
+        if requested_trigger_mode != effective_trigger_mode:
+            logging.warning(
+                "TRADE_TRIGGER_MODE_FALLBACK requested=%s effective=%s reason=%s",
+                requested_trigger_mode,
+                effective_trigger_mode,
+                str(trigger_mode_reason or "UNKNOWN"),
+            )
+        logging.info("TRADE_TRIGGER_MODE mode=%s", effective_trigger_mode)
 
 
 if __name__ == "__main__":
