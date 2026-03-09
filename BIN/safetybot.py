@@ -14869,9 +14869,15 @@ class SafetyBot:
         self._runtime_run_trade_probe(loop_cfg=loop_cfg, loop_state=loop_state, now=now)
         self._runtime_run_scan(loop_cfg=loop_cfg, loop_state=loop_state, now=now)
 
+        return self._runtime_finalize_loop_step(
+            had_market_data=bool(market_data),
+            idle_sleep_sec=loop_cfg.run_loop_idle_sleep,
+        )
+
+    def _runtime_finalize_loop_step(self, *, had_market_data: bool, idle_sleep_sec: float) -> bool:
         if not self._runtime_maintenance_step():
             return False
-        self._runtime_idle_step(bool(market_data), loop_cfg.run_loop_idle_sleep)
+        self._runtime_idle_step(bool(had_market_data), idle_sleep_sec)
         return True
 
     def _runtime_run_heartbeat(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
