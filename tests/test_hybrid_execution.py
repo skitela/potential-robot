@@ -585,6 +585,48 @@ class TestHybridExecution(unittest.TestCase):
         self.assertFalse(ok)
         bot._runtime_idle_step.assert_not_called()
 
+    def test_handle_market_data_dispatches_account(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._handle_account_snapshot = MagicMock()
+        bot._handle_tick_snapshot = MagicMock()
+        bot._handle_bar_snapshot = MagicMock()
+
+        with patch("BIN.safetybot.time.time", return_value=123.0):
+            bot._handle_market_data({"type": "ACCOUNT", "balance": 1.0})
+
+        bot._handle_account_snapshot.assert_called_once()
+        bot._handle_tick_snapshot.assert_not_called()
+        bot._handle_bar_snapshot.assert_not_called()
+
+    def test_handle_market_data_dispatches_tick_and_bar(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._handle_account_snapshot = MagicMock()
+        bot._handle_tick_snapshot = MagicMock()
+        bot._handle_bar_snapshot = MagicMock()
+
+        with patch("BIN.safetybot.time.time", return_value=123.0):
+            bot._handle_market_data({"type": "TICK", "symbol": "EURUSD.pro"})
+            bot._handle_market_data({"type": "BAR", "symbol": "EURUSD.pro"})
+
+        bot._handle_account_snapshot.assert_not_called()
+        bot._handle_tick_snapshot.assert_called_once()
+        bot._handle_bar_snapshot.assert_called_once()
+
+    def test_handle_market_data_rejects_schema_mismatch(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._handle_account_snapshot = MagicMock()
+        bot._handle_tick_snapshot = MagicMock()
+        bot._handle_bar_snapshot = MagicMock()
+
+        bot._handle_market_data({"type": "TICK", "symbol": "EURUSD.pro", "schema_version": "2.0"})
+
+        bot._handle_account_snapshot.assert_not_called()
+        bot._handle_tick_snapshot.assert_not_called()
+        bot._handle_bar_snapshot.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

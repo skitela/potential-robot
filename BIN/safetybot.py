@@ -16549,180 +16549,183 @@ class SafetyBot:
         now_ts = float(time.time())
 
         if msg_type == "ACCOUNT":
-            try:
-                self._zmq_account_cache.clear()
-                self._zmq_account_cache.update(
-                    {
-                        "recv_ts": now_ts,
-                        "balance": float(data.get("balance", 0.0) or 0.0),
-                        "equity": float(data.get("equity", 0.0) or 0.0),
-                        "margin_free": float(data.get("margin_free", 0.0) or 0.0),
-                        "margin_level": float(data.get("margin_level", 0.0) or 0.0),
-                    }
-                )
-                if isinstance(self.execution_engine._account_info_static_cache, dict):
-                    self.execution_engine._account_info_static_cache.clear()
-                    self.execution_engine._account_info_static_cache.update(
-                        {
-                            "recv_ts": now_ts,
-                            "seed_static": False,
-                            "balance": float(data.get("balance", 0.0) or 0.0),
-                            "equity": float(data.get("equity", 0.0) or 0.0),
-                            "margin_free": float(data.get("margin_free", 0.0) or 0.0),
-                            "margin_level": float(data.get("margin_level", 0.0) or 0.0),
-                        }
-                    )
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            self._handle_account_snapshot(data, now_ts=now_ts)
             return
 
         if not symbol:
             return
 
         base_symbol = symbol_base(symbol)
-
-        # Aktualizacja cache'u ticków dla silnika wykonawczego
         if msg_type == "TICK":
-            # Wstrzykujemy tick do cache'u silnika
-            if hasattr(self.execution_engine, "_zmq_tick_cache"):
-                self.execution_engine._zmq_tick_cache[symbol] = data
-                self.execution_engine._zmq_tick_cache[base_symbol] = data
-            self._zmq_last_tick_ts[base_symbol] = now_ts
-            tick_persisted = False
+            self._handle_tick_snapshot(symbol=symbol, base_symbol=base_symbol, data=data, now_ts=now_ts)
+            return
+        if msg_type == "BAR":
+            self._handle_bar_snapshot(symbol=symbol, base_symbol=base_symbol, data=data, now_ts=now_ts)
 
-            # Snapshot metadata for strict no-fetch symbol_info replacement.
-            try:
-                point = float(data.get("point", 0.0) or 0.0)
-                bid = float(data.get("bid", 0.0) or 0.0)
-                ask = float(data.get("ask", 0.0) or 0.0)
-                spread_pts = float(data.get("spread_points", 0.0) or 0.0)
-                if spread_pts <= 0.0 and point > 0.0:
-                    spread_pts = max(0.0, float((ask - bid) / point))
-                self._zmq_symbol_info_cache[base_symbol] = {
+    def _handle_account_snapshot(self, data: Dict[str, Any], *, now_ts: float) -> None:
+        try:
+            self._zmq_account_cache.clear()
+            self._zmq_account_cache.update(
+                {
                     "recv_ts": now_ts,
-                    "point": point,
-                    "digits": int(data.get("digits", 0) or 0),
-                    "spread": spread_pts,
-                    "trade_tick_size": float(data.get("trade_tick_size", 0.0) or 0.0),
-                    "trade_tick_value": float(data.get("trade_tick_value", 0.0) or 0.0),
-                    "volume_min": float(data.get("volume_min", 0.0) or 0.0),
-                    "volume_max": float(data.get("volume_max", 0.0) or 0.0),
-                    "volume_step": float(data.get("volume_step", 0.0) or 0.0),
-                    "trade_stops_level": int(data.get("trade_stops_level", 0) or 0),
-                    "trade_freeze_level": int(data.get("trade_freeze_level", 0) or 0),
+                    "balance": float(data.get("balance", 0.0) or 0.0),
+                    "equity": float(data.get("equity", 0.0) or 0.0),
+                    "margin_free": float(data.get("margin_free", 0.0) or 0.0),
+                    "margin_level": float(data.get("margin_level", 0.0) or 0.0),
                 }
-                prev = dict(self._micro_tick_state.get(base_symbol) or {})
-                prev_ts = float(prev.get("recv_ts", 0.0) or 0.0)
-                prev_mid = float(prev.get("mid", 0.0) or 0.0)
-                mql5_tick_gap_sec: Optional[float] = None
-                mql5_price_jump_points: Optional[float] = None
-                mql5_ask_lt_bid: Optional[bool] = None
-                try:
-                    if data.get("tick_gap_sec") is not None:
-                        mql5_tick_gap_sec = max(0.0, float(data.get("tick_gap_sec") or 0.0))
-                except Exception:
-                    mql5_tick_gap_sec = None
-                try:
-                    if data.get("price_jump_points") is not None:
-                        mql5_price_jump_points = max(0.0, float(data.get("price_jump_points") or 0.0))
-                except Exception:
-                    mql5_price_jump_points = None
-                try:
-                    if data.get("ask_lt_bid") is not None:
-                        mql5_ask_lt_bid = bool(data.get("ask_lt_bid"))
-                except Exception:
-                    mql5_ask_lt_bid = None
-                tick_gap_sec = None
-                if prev_ts > 0.0:
-                    tick_gap_sec = max(0.0, float(now_ts) - float(prev_ts))
-                mid = 0.0
-                if bid > 0.0 and ask > 0.0:
-                    mid = (bid + ask) * 0.5
-                price_jump_points = None
-                if point > 0.0 and prev_mid > 0.0 and mid > 0.0:
-                    price_jump_points = abs(float(mid) - float(prev_mid)) / float(point)
-                if mql5_tick_gap_sec is not None:
-                    tick_gap_sec = float(mql5_tick_gap_sec)
-                if mql5_price_jump_points is not None:
-                    price_jump_points = float(mql5_price_jump_points)
-                ask_lt_bid_flag = bool((ask > 0.0 and bid > 0.0) and (ask < bid))
-                if mql5_ask_lt_bid is not None:
-                    ask_lt_bid_flag = bool(mql5_ask_lt_bid)
-                self._micro_tick_state[base_symbol] = {
-                    "recv_ts": float(now_ts),
-                    "mid": float(mid),
-                    "tick_gap_sec": tick_gap_sec,
-                    "price_jump_points": price_jump_points,
-                    "ask_lt_bid": bool(ask_lt_bid_flag),
-                    "tick_rate_1s": (
-                        None if data.get("tick_rate_1s") is None else int(max(0, int(data.get("tick_rate_1s") or 0)))
-                    ),
-                    "spread_roll_mean_points": (
-                        None
-                        if data.get("spread_roll_mean_points") is None
-                        else float(max(0.0, float(data.get("spread_roll_mean_points") or 0.0)))
-                    ),
-                    "spread_roll_p95_points": (
-                        None
-                        if data.get("spread_roll_p95_points") is None
-                        else float(max(0.0, float(data.get("spread_roll_p95_points") or 0.0)))
-                    ),
-                    "stale_tick_flag": bool(data.get("stale_tick_flag", False)),
-                    "burst_flag": bool(data.get("burst_flag", False)),
-                    "quality_flags": str(data.get("quality_flags") or "UNKNOWN"),
-                }
-                if bool(getattr(CFG, "renko_tick_store_enabled", True)) and getattr(self, "tick_store", None) is not None:
-                    tick_persisted = bool(self.tick_store.upsert_tick_snapshot(base_symbol, data, recv_ts=now_ts))
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            logging.debug(
-                "ZMQ_TICK | %s | Bid: %s Ask: %s persisted=%s",
-                symbol,
-                data.get("bid"),
-                data.get("ask"),
-                int(bool(tick_persisted)),
             )
+            if isinstance(self.execution_engine._account_info_static_cache, dict):
+                self.execution_engine._account_info_static_cache.clear()
+                self.execution_engine._account_info_static_cache.update(
+                    {
+                        "recv_ts": now_ts,
+                        "seed_static": False,
+                        "balance": float(data.get("balance", 0.0) or 0.0),
+                        "equity": float(data.get("equity", 0.0) or 0.0),
+                        "margin_free": float(data.get("margin_free", 0.0) or 0.0),
+                        "margin_level": float(data.get("margin_level", 0.0) or 0.0),
+                    }
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
-        # Przetwarzanie danych barowych (M5)
-        elif msg_type == "BAR":
-            self._zmq_last_bar_ts[base_symbol] = now_ts
-            persisted = False
+    def _handle_tick_snapshot(self, *, symbol: str, base_symbol: str, data: Dict[str, Any], now_ts: float) -> None:
+        if hasattr(self.execution_engine, "_zmq_tick_cache"):
+            self.execution_engine._zmq_tick_cache[symbol] = data
+            self.execution_engine._zmq_tick_cache[base_symbol] = data
+        self._zmq_last_tick_ts[base_symbol] = now_ts
+        tick_persisted = False
+
+        try:
+            point = float(data.get("point", 0.0) or 0.0)
+            bid = float(data.get("bid", 0.0) or 0.0)
+            ask = float(data.get("ask", 0.0) or 0.0)
+            spread_pts = float(data.get("spread_points", 0.0) or 0.0)
+            if spread_pts <= 0.0 and point > 0.0:
+                spread_pts = max(0.0, float((ask - bid) / point))
+            self._zmq_symbol_info_cache[base_symbol] = {
+                "recv_ts": now_ts,
+                "point": point,
+                "digits": int(data.get("digits", 0) or 0),
+                "spread": spread_pts,
+                "trade_tick_size": float(data.get("trade_tick_size", 0.0) or 0.0),
+                "trade_tick_value": float(data.get("trade_tick_value", 0.0) or 0.0),
+                "volume_min": float(data.get("volume_min", 0.0) or 0.0),
+                "volume_max": float(data.get("volume_max", 0.0) or 0.0),
+                "volume_step": float(data.get("volume_step", 0.0) or 0.0),
+                "trade_stops_level": int(data.get("trade_stops_level", 0) or 0),
+                "trade_freeze_level": int(data.get("trade_freeze_level", 0) or 0),
+            }
+            prev = dict(self._micro_tick_state.get(base_symbol) or {})
+            prev_ts = float(prev.get("recv_ts", 0.0) or 0.0)
+            prev_mid = float(prev.get("mid", 0.0) or 0.0)
+            mql5_tick_gap_sec: Optional[float] = None
+            mql5_price_jump_points: Optional[float] = None
+            mql5_ask_lt_bid: Optional[bool] = None
             try:
-                if getattr(self, "bars_store", None) is not None:
-                    persisted = bool(self.bars_store.upsert_bar_snapshot(base_symbol, data))
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-
-            # Optional fast-feature payload from MQL5 (sma_fast/adx/atr on closed M5 bar).
+                if data.get("tick_gap_sec") is not None:
+                    mql5_tick_gap_sec = max(0.0, float(data.get("tick_gap_sec") or 0.0))
+            except Exception:
+                mql5_tick_gap_sec = None
             try:
-                if all(k in data for k in ("open", "close", "sma_fast", "adx", "atr", "time")):
-                    ts = int(data.get("time") or 0)
-                    if ts > 0:
-                        _maybe_update_mt5_server_epoch_offset(
-                            int(ts),
-                            source="zmq_feature_bar",
-                            max_age_s=max(300, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900))),
-                        )
-                        bar_ts_pl = pd.Timestamp(mt5_epoch_to_utc_dt(int(ts)).astimezone(TZ_PL))
-                        self._zmq_m5_feature_cache[base_symbol] = {
-                            "recv_ts": now_ts,
-                            "bar_time_pl": bar_ts_pl,
-                            "open": float(data.get("open")),
-                            "close": float(data.get("close")),
-                            "sma_fast": float(data.get("sma_fast")),
-                            "adx": float(data.get("adx")),
-                            "atr": float(data.get("atr")),
-                        }
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                if data.get("price_jump_points") is not None:
+                    mql5_price_jump_points = max(0.0, float(data.get("price_jump_points") or 0.0))
+            except Exception:
+                mql5_price_jump_points = None
+            try:
+                if data.get("ask_lt_bid") is not None:
+                    mql5_ask_lt_bid = bool(data.get("ask_lt_bid"))
+            except Exception:
+                mql5_ask_lt_bid = None
+            tick_gap_sec = None
+            if prev_ts > 0.0:
+                tick_gap_sec = max(0.0, float(now_ts) - float(prev_ts))
+            mid = 0.0
+            if bid > 0.0 and ask > 0.0:
+                mid = (bid + ask) * 0.5
+            price_jump_points = None
+            if point > 0.0 and prev_mid > 0.0 and mid > 0.0:
+                price_jump_points = abs(float(mid) - float(prev_mid)) / float(point)
+            if mql5_tick_gap_sec is not None:
+                tick_gap_sec = float(mql5_tick_gap_sec)
+            if mql5_price_jump_points is not None:
+                price_jump_points = float(mql5_price_jump_points)
+            ask_lt_bid_flag = bool((ask > 0.0 and bid > 0.0) and (ask < bid))
+            if mql5_ask_lt_bid is not None:
+                ask_lt_bid_flag = bool(mql5_ask_lt_bid)
+            self._micro_tick_state[base_symbol] = {
+                "recv_ts": float(now_ts),
+                "mid": float(mid),
+                "tick_gap_sec": tick_gap_sec,
+                "price_jump_points": price_jump_points,
+                "ask_lt_bid": bool(ask_lt_bid_flag),
+                "tick_rate_1s": (
+                    None if data.get("tick_rate_1s") is None else int(max(0, int(data.get("tick_rate_1s") or 0)))
+                ),
+                "spread_roll_mean_points": (
+                    None
+                    if data.get("spread_roll_mean_points") is None
+                    else float(max(0.0, float(data.get("spread_roll_mean_points") or 0.0)))
+                ),
+                "spread_roll_p95_points": (
+                    None
+                    if data.get("spread_roll_p95_points") is None
+                    else float(max(0.0, float(data.get("spread_roll_p95_points") or 0.0)))
+                ),
+                "stale_tick_flag": bool(data.get("stale_tick_flag", False)),
+                "burst_flag": bool(data.get("burst_flag", False)),
+                "quality_flags": str(data.get("quality_flags") or "UNKNOWN"),
+            }
+            if bool(getattr(CFG, "renko_tick_store_enabled", True)) and getattr(self, "tick_store", None) is not None:
+                tick_persisted = bool(self.tick_store.upsert_tick_snapshot(base_symbol, data, recv_ts=now_ts))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        logging.debug(
+            "ZMQ_TICK | %s | Bid: %s Ask: %s persisted=%s",
+            symbol,
+            data.get("bid"),
+            data.get("ask"),
+            int(bool(tick_persisted)),
+        )
 
-            logging.info(
-                "ZMQ_BAR | %s | Time: %s Close: %s persisted=%s",
-                symbol,
-                data.get("time"),
-                data.get("close"),
-                int(bool(persisted)),
-            )
+    def _handle_bar_snapshot(self, *, symbol: str, base_symbol: str, data: Dict[str, Any], now_ts: float) -> None:
+        self._zmq_last_bar_ts[base_symbol] = now_ts
+        persisted = False
+        try:
+            if getattr(self, "bars_store", None) is not None:
+                persisted = bool(self.bars_store.upsert_bar_snapshot(base_symbol, data))
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            if all(k in data for k in ("open", "close", "sma_fast", "adx", "atr", "time")):
+                ts = int(data.get("time") or 0)
+                if ts > 0:
+                    _maybe_update_mt5_server_epoch_offset(
+                        int(ts),
+                        source="zmq_feature_bar",
+                        max_age_s=max(300, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900))),
+                    )
+                    bar_ts_pl = pd.Timestamp(mt5_epoch_to_utc_dt(int(ts)).astimezone(TZ_PL))
+                    self._zmq_m5_feature_cache[base_symbol] = {
+                        "recv_ts": now_ts,
+                        "bar_time_pl": bar_ts_pl,
+                        "open": float(data.get("open")),
+                        "close": float(data.get("close")),
+                        "sma_fast": float(data.get("sma_fast")),
+                        "adx": float(data.get("adx")),
+                        "atr": float(data.get("atr")),
+                    }
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        logging.info(
+            "ZMQ_BAR | %s | Time: %s Close: %s persisted=%s",
+            symbol,
+            data.get("time"),
+            data.get("close"),
+            int(bool(persisted)),
+        )
 
     def run(self):
         logging.info(f"BOT START | HYBRID MODE | MT5 SAFETY BOT {CFG.BOT_VERSION}")
