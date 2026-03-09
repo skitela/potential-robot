@@ -448,6 +448,7 @@ class ZMQBridge:
         pre_loop_id = str(loop_id if loop_id is not None else (command.get("loop_id") or "none"))
         trade_priority_window_ms = int(max(0, self._heartbeat_trade_priority_window_ms))
         is_trade_command = bool(pre_command_type == "TRADE")
+        endpoint = f"tcp://127.0.0.1:{self.req_port}"
 
         if is_trade_command:
             self._trade_mark_waiting(+1)
@@ -471,7 +472,7 @@ class ZMQBridge:
                     "status": "SKIPPED",
                     "fallback_used": True,
                     "channel": "REQ_REP",
-                    "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                    "endpoint": endpoint,
                     "command_queue_wait_ms": 0,
                     "audit_log_lock_wait_max_ms": 0,
                     "heartbeat_trade_priority_window_ms": int(trade_priority_window_ms),
@@ -521,13 +522,13 @@ class ZMQBridge:
                 "bridge_total_ms": 0,
                 "bridge_timeout_reason": "QUEUE_LOCK_TIMEOUT",
                 "bridge_timeout_subreason": "LOCK_BUSY",
-                "status": "SKIPPED",
-                "fallback_used": True,
-                "channel": "REQ_REP",
-                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
-                "command_queue_wait_ms": int(command_queue_wait_ms),
-                "audit_log_lock_wait_max_ms": 0,
-            }
+                    "status": "SKIPPED",
+                    "fallback_used": True,
+                    "channel": "REQ_REP",
+                    "endpoint": endpoint,
+                    "command_queue_wait_ms": int(command_queue_wait_ms),
+                    "audit_log_lock_wait_max_ms": 0,
+                }
             self._set_last_command_diag(diag)
             self._write_audit_log(
                 "COMMAND_SKIPPED",
@@ -568,7 +569,6 @@ class ZMQBridge:
             action_norm = str(original_command.get("action") or "").strip().upper()
             command_type = self._command_type(action_norm)
             budget_bucket = self._timeout_budget_bucket(effective_timeout_ms)
-            endpoint = f"tcp://127.0.0.1:{self.req_port}"
             hb_loop_lag_ms = 0
             hb_market_data_stale_ms = -1
             trade_started = False
