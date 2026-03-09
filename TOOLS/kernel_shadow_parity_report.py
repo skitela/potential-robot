@@ -7,7 +7,7 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SCHEMA = "oanda.mt5.kernel_shadow_parity_report.v1"
 
@@ -21,6 +21,84 @@ PARITY_RE = re.compile(
     r"kernel_action=(?P<kernel_action>[A-Z_]+)\s+kernel_reason=(?P<kernel_reason>[A-Z0-9_]+)"
 )
 TIME_RE = re.compile(r"\b(?P<hh>\d{2}):(?P<mm>\d{2}):(?P<ss>\d{2})(?:\.(?P<ms>\d{1,3}))?\b")
+
+
+def _load_zoneinfo(name: str) -> Optional[timezone]:
+    try:
+        from zoneinfo import ZoneInfo  # type: ignore
+
+        return ZoneInfo(str(name).strip())
+    except Exception:
+        return None
+
+
+def _safe_int_pair(value: Any) -> Optional[Tuple[int, int]]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        hh = int(value[0])
+        mm = int(value[1])
+    except Exception:
+        return None
+    if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+        return None
+    return hh, mm
+
+
+def _minute_of_day(hh: int, mm: int) -> int:
+    return int(hh * 60 + mm)
+
+
+def _minute_in_window(minute: int, start_min: int, end_min: int) -> bool:
+    if start_min == end_min:
+        return True
+    if start_min < end_min:
+        return bool(start_min <= minute < end_min)
+    return bool(minute >= start_min or minute < end_min)
+
+
+def _load_trade_windows(root: Path) -> List[Dict[str, Any]]:
+    cfg = _safe_read_json(root / "CONFIG" / "strategy.json")
+    raw = cfg.get("trade_windows")
+    if not isinstance(raw, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    for window_id, payload in raw.items():
+        if not isinstance(payload, dict):
+            continue
+        start = _safe_int_pair(payload.get("start_hm"))
+        end = _safe_int_pair(payload.get("end_hm"))
+        if start is None or end is None:
+            continue
+        tz_name = str(payload.get("anchor_tz") or "UTC").strip() or "UTC"
+        tz = _load_zoneinfo(tz_name) or timezone.utc
+        out.append(
+            {
+                "id": str(window_id or "").strip().upper() or "UNKNOWN_WINDOW",
+                "group": str(payload.get("group") or "").strip().upper(),
+                "tz_name": tz_name,
+                "tz": tz,
+                "start_min": _minute_of_day(start[0], start[1]),
+                "end_min": _minute_of_day(end[0], end[1]),
+            }
+        )
+    return out
+
+
+def _resolve_window_bucket(ts_utc: Optional[datetime], windows: List[Dict[str, Any]]) -> str:
+    if ts_utc is None:
+        return "UNKNOWN_TS"
+    if not windows:
+        return "WINDOWS_UNCONFIGURED"
+    active: List[str] = []
+    for window in windows:
+        local_dt = ts_utc.astimezone(window["tz"])
+        minute = int(local_dt.hour * 60 + local_dt.minute)
+        if _minute_in_window(minute, int(window["start_min"]), int(window["end_min"])):
+            active.append(str(window["id"]))
+    if not active:
+        return "OFF"
+    return "+".join(sorted(active))
 
 
 def _utc_now() -> datetime:
@@ -98,7 +176,7 @@ def _resolve_latest_mql_log(mt5_data_dir: Path) -> Optional[Path]:
     return files[0] if files else None
 
 
-def _parse_line_ts_utc(line: str, log_date_utc: datetime) -> Optional[datetime]:
+def _parse_line_ts_utc(line: str, log_date_local: datetime, log_tz: timezone) -> Optional[datetime]:
     m = TIME_RE.search(line)
     if not m:
         return None
@@ -108,16 +186,17 @@ def _parse_line_ts_utc(line: str, log_date_utc: datetime) -> Optional[datetime]:
         ss = int(m.group("ss"))
         ms_raw = str(m.group("ms") or "0")
         ms = int((ms_raw + "000")[:3])
-        return datetime(
-            log_date_utc.year,
-            log_date_utc.month,
-            log_date_utc.day,
+        local_dt = datetime(
+            log_date_local.year,
+            log_date_local.month,
+            log_date_local.day,
             hh,
             mm,
             ss,
             ms * 1000,
-            tzinfo=timezone.utc,
+            tzinfo=log_tz,
         )
+        return local_dt.astimezone(timezone.utc)
     except Exception:
         return None
 
@@ -158,13 +237,22 @@ def _iter_lines(path: Path) -> Iterable[str]:
         return path.read_text(encoding="utf-8", errors="ignore").splitlines()
 
 
-def build_report(root: Path, *, hours: int, mt5_data_dir: Optional[Path], log_path: Optional[Path]) -> Dict[str, Any]:
+def build_report(
+    root: Path,
+    *,
+    hours: int,
+    mt5_data_dir: Optional[Path],
+    log_path: Optional[Path],
+    log_tz_name: str = "UTC",
+) -> Dict[str, Any]:
     now_utc = _utc_now()
     window_hours = max(1, int(hours))
     cutoff = now_utc - timedelta(hours=window_hours)
+    log_tz = _load_zoneinfo(log_tz_name) or timezone.utc
 
     resolved_data_dir = mt5_data_dir or _resolve_mt5_data_dir(root)
     resolved_log = log_path or (_resolve_latest_mql_log(resolved_data_dir) if resolved_data_dir else None)
+    trade_windows = _load_trade_windows(root)
 
     if not resolved_log or not resolved_log.exists():
         return {
@@ -174,6 +262,7 @@ def build_report(root: Path, *, hours: int, mt5_data_dir: Optional[Path], log_pa
             "status": "NO_LOG",
             "inputs": {
                 "hours": window_hours,
+                "log_tz": str(log_tz_name or "UTC"),
                 "mt5_data_dir": str(resolved_data_dir) if resolved_data_dir else "MISSING",
                 "mql_log": str(resolved_log) if resolved_log else "MISSING",
             },
@@ -182,23 +271,28 @@ def build_report(root: Path, *, hours: int, mt5_data_dir: Optional[Path], log_pa
             "notes": ["Brak logu MQL5 do analizy parity kernela."],
         }
 
-    log_date = datetime.strptime(resolved_log.stem, "%Y%m%d").replace(tzinfo=timezone.utc)
+    log_date_local = datetime.strptime(resolved_log.stem, "%Y%m%d").replace(tzinfo=log_tz)
     state_count = 0
     state_profile_not_loaded = 0
     state_by_action: Counter[str] = Counter()
     state_by_reason: Counter[str] = Counter()
     state_by_symbol: Dict[str, Counter[str]] = defaultdict(Counter)
+    state_by_window: Counter[str] = Counter()
 
     parity_count = 0
     parity_match = 0
     parity_mismatch = 0
     mismatch_by_symbol: Counter[str] = Counter()
     mismatch_kernel_reason: Counter[str] = Counter()
+    parity_by_window: Counter[str] = Counter()
+    parity_mismatch_by_window: Counter[str] = Counter()
+    parity_mismatch_by_symbol_window: Counter[str] = Counter()
 
     for line in _iter_lines(resolved_log):
-        ts = _parse_line_ts_utc(line, log_date)
+        ts = _parse_line_ts_utc(line, log_date_local, log_tz)
         if ts and ts < cutoff:
             continue
+        window_bucket = _resolve_window_bucket(ts, trade_windows)
 
         state = _parse_state_line(line)
         if state:
@@ -206,6 +300,7 @@ def build_report(root: Path, *, hours: int, mt5_data_dir: Optional[Path], log_pa
             state_by_action[state["action"]] += 1
             state_by_reason[state["reason"]] += 1
             state_by_symbol[state["symbol"]][state["action"]] += 1
+            state_by_window[window_bucket] += 1
             if not bool(state["profile_loaded"]):
                 state_profile_not_loaded += 1
             continue
@@ -213,12 +308,15 @@ def build_report(root: Path, *, hours: int, mt5_data_dir: Optional[Path], log_pa
         parity = _parse_parity_line(line)
         if parity:
             parity_count += 1
+            parity_by_window[window_bucket] += 1
             if parity["parity"] == "MATCH":
                 parity_match += 1
             else:
                 parity_mismatch += 1
                 mismatch_by_symbol[parity["symbol"]] += 1
                 mismatch_kernel_reason[parity["kernel_reason"]] += 1
+                parity_mismatch_by_window[window_bucket] += 1
+                parity_mismatch_by_symbol_window[f"{parity['symbol']}|{window_bucket}"] += 1
 
     mismatch_ratio = (float(parity_mismatch) / float(parity_count)) if parity_count > 0 else None
     status = "PASS"
@@ -241,10 +339,12 @@ def build_report(root: Path, *, hours: int, mt5_data_dir: Optional[Path], log_pa
         "status": status,
         "inputs": {
             "hours": window_hours,
+            "log_tz": str(log_tz_name or "UTC"),
             "window_start_utc": _iso_utc(cutoff),
             "window_end_utc": _iso_utc(now_utc),
             "mt5_data_dir": str(resolved_data_dir) if resolved_data_dir else "MISSING",
             "mql_log": str(resolved_log),
+            "trade_windows_loaded": int(len(trade_windows)),
         },
         "summary": {
             "state_rows": state_count,
@@ -257,12 +357,21 @@ def build_report(root: Path, *, hours: int, mt5_data_dir: Optional[Path], log_pa
         "counts": {
             "state_by_action": dict(state_by_action),
             "state_by_reason_top10": [{"reason": k, "count": int(v)} for k, v in state_by_reason.most_common(10)],
+            "state_by_window_top10": [{"window": k, "count": int(v)} for k, v in state_by_window.most_common(10)],
             "state_by_symbol_top10": [
                 {"symbol": sym, "actions": dict(cnt)}
                 for sym, cnt in sorted(state_by_symbol.items(), key=lambda kv: sum(kv[1].values()), reverse=True)[:10]
             ],
+            "parity_by_window_top10": [{"window": k, "count": int(v)} for k, v in parity_by_window.most_common(10)],
+            "parity_mismatch_by_window_top10": [
+                {"window": k, "count": int(v)} for k, v in parity_mismatch_by_window.most_common(10)
+            ],
             "parity_mismatch_by_symbol_top10": [
                 {"symbol": sym, "count": int(cnt)} for sym, cnt in mismatch_by_symbol.most_common(10)
+            ],
+            "parity_mismatch_by_symbol_window_top10": [
+                {"symbol_window": key, "count": int(cnt)}
+                for key, cnt in parity_mismatch_by_symbol_window.most_common(10)
             ],
             "parity_mismatch_kernel_reason_top10": [
                 {"reason": reason, "count": int(cnt)} for reason, cnt in mismatch_kernel_reason.most_common(10)
@@ -311,6 +420,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Build kernel shadow parity report from MT5 MQL logs.")
     ap.add_argument("--root", default="C:/OANDA_MT5_SYSTEM")
     ap.add_argument("--hours", type=int, default=6)
+    ap.add_argument("--log-tz", default="UTC", help="Strefa czasowa godzin z logu MQL5 (np. UTC, Europe/Warsaw).")
     ap.add_argument("--mt5-data-dir", default="")
     ap.add_argument("--mql-log", default="")
     ap.add_argument("--out-json", default="")
@@ -327,7 +437,13 @@ def main() -> int:
     mt5_data_dir = Path(args.mt5_data_dir).resolve() if str(args.mt5_data_dir).strip() else None
     mql_log = Path(args.mql_log).resolve() if str(args.mql_log).strip() else None
 
-    report = build_report(root, hours=int(args.hours), mt5_data_dir=mt5_data_dir, log_path=mql_log)
+    report = build_report(
+        root,
+        hours=int(args.hours),
+        mt5_data_dir=mt5_data_dir,
+        log_path=mql_log,
+        log_tz_name=str(args.log_tz),
+    )
     out_json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     out_txt.write_text(render_txt(report), encoding="utf-8")
 

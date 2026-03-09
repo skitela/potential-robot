@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from TOOLS.kernel_shadow_parity_report import (
@@ -40,6 +41,22 @@ def test_parse_parity_line_extracts_core_fields() -> None:
 def test_build_report_counts_state_and_parity(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
+    (root / "CONFIG").mkdir(parents=True, exist_ok=True)
+    (root / "CONFIG" / "strategy.json").write_text(
+        json.dumps(
+            {
+                "trade_windows": {
+                    "FX_EVE": {
+                        "anchor_tz": "UTC",
+                        "start_hm": [19, 0],
+                        "end_hm": [20, 0],
+                        "group": "FX",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     mql_log = tmp_path / "20260308.log"
     mql_log.write_text(
         "\n".join(
@@ -59,3 +76,8 @@ def test_build_report_counts_state_and_parity(tmp_path: Path) -> None:
     assert summary.get("state_profile_not_loaded_rows") == 1
     assert summary.get("parity_rows") == 2
     assert summary.get("parity_mismatch") == 1
+    counts = dict(report.get("counts") or {})
+    parity_by_window = list(counts.get("parity_by_window_top10") or [])
+    assert parity_by_window and parity_by_window[0]["window"] == "FX_EVE"
+    mismatch_symbol_window = list(counts.get("parity_mismatch_by_symbol_window_top10") or [])
+    assert mismatch_symbol_window and mismatch_symbol_window[0]["symbol_window"] == "GBPUSD.PRO|FX_EVE"
