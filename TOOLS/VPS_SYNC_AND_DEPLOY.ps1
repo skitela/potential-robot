@@ -150,13 +150,13 @@ try {
             Copy-Item -ToSession $session -Path $bundlePath -Destination $remoteZip -Force
             Add-Step -Name "upload_bundle" -Status "OK" -Info $remoteZip
 
-            $remoteErrors = @()
-            $remoteAction = Invoke-Command -Session $session -ErrorAction Continue -ErrorVariable remoteErrors -ArgumentList $remoteZip, "C:\OANDA_MT5_SYSTEM", [bool]$StartAfterSync, [bool]$RunEaDeploy, [bool]$SkipBootstrap, [bool]$SkipRemoteStatus, $Profile -ScriptBlock {
+            $remoteAction = Invoke-Command -Session $session -ErrorAction Stop -ArgumentList $remoteZip, "C:\OANDA_MT5_SYSTEM", [bool]$StartAfterSync, [bool]$RunEaDeploy, [bool]$SkipBootstrap, [bool]$SkipRemoteStatus, $Profile -ScriptBlock {
                 param($ZipPath, $RemoteRoot, $DoStart, $DoEaDeploy, $DoSkipBootstrap, $DoSkipRemoteStatus, $RuntimeProfile)
                 $ErrorActionPreference = "Continue"
                 $out = [ordered]@{
                     unzip = "INIT"
                     sync = "INIT"
+                    sync_method = "POWERSHELL_COPY"
                     bootstrap = "SKIP"
                     ea_deploy = "SKIP"
                     start = "SKIP"
@@ -165,15 +165,14 @@ try {
                 $extract = Join-Path $env:TEMP ("oanda_sync_" + [guid]::NewGuid().ToString("N"))
                 New-Item -ItemType Directory -Force -Path $extract | Out-Null
                 try {
-                    Expand-Archive -Path $ZipPath -DestinationPath $extract -Force
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+                    [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $extract)
                     $out.unzip = "OK"
 
-                    robocopy $extract $RemoteRoot /E /NFL /NDL /NJH /NJS /NP /XD ".git" "__pycache__" ".pytest_cache" "EVIDENCE" "DB" | Out-Null
-                    $rc = $LASTEXITCODE
-                    if ($rc -ge 8) {
-                        $out.sync = "FAIL"
-                        $out.status = "FAIL_SYNC"
-                        return ($out | ConvertTo-Json -Depth 8)
+                    New-Item -ItemType Directory -Force -Path $RemoteRoot | Out-Null
+                    Get-ChildItem -LiteralPath $extract -Force | ForEach-Object {
+                        $dest = Join-Path $RemoteRoot $_.Name
+                        Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force
                     }
                     $out.sync = "OK"
 
@@ -219,16 +218,6 @@ try {
                     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
                 }
                 return ($out | ConvertTo-Json -Depth 8)
-            }
-            if ($remoteErrors.Count -gt 0) {
-                $msgs = @($remoteErrors | ForEach-Object { [string]$_.Exception.Message })
-                $critical = @($msgs | Where-Object { $_ -notmatch "Input redirection is not supported" })
-                if ($critical.Count -gt 0) {
-                    throw ($critical -join " | ")
-                }
-                if ($msgs.Count -gt 0) {
-                    Add-Step -Name "remote_warning" -Status "WARN" -Info ($msgs -join " | ")
-                }
             }
             Add-Step -Name "remote_apply" -Status "OK" -Info ([string]$remoteAction)
             $result.status = "PASS"
