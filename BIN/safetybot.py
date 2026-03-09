@@ -14856,7 +14856,7 @@ class SafetyBot:
         self._runtime_next_loop_id(loop_state=loop_state)
 
         market_data, next_market_data_ts = self._runtime_ingest_step(
-            now=float(now),
+            now=now,
             last_market_data_ts=float(loop_state.get("last_market_data_ts", 0.0) or 0.0),
             receive_timeout_ms=100,
         )
@@ -14865,13 +14865,13 @@ class SafetyBot:
             last_market_data_ts=float(next_market_data_ts),
         )
 
-        self._runtime_run_heartbeat(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
-        self._runtime_run_trade_probe(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
-        self._runtime_run_scan(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
+        self._runtime_run_heartbeat(loop_cfg=loop_cfg, loop_state=loop_state, now=now)
+        self._runtime_run_trade_probe(loop_cfg=loop_cfg, loop_state=loop_state, now=now)
+        self._runtime_run_scan(loop_cfg=loop_cfg, loop_state=loop_state, now=now)
 
         if not self._runtime_maintenance_step():
             return False
-        self._runtime_idle_step(bool(market_data), float(loop_cfg.run_loop_idle_sleep))
+        self._runtime_idle_step(bool(market_data), loop_cfg.run_loop_idle_sleep)
         return True
 
     def _runtime_run_heartbeat(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
@@ -14881,7 +14881,7 @@ class SafetyBot:
             next_heartbeat_fail_safe_active,
             next_heartbeat_fail_safe_until,
         ) = self._runtime_heartbeat_step_from_state(
-            now=float(now),
+            now=now,
             loop_cfg=loop_cfg,
             loop_state=loop_state,
         )
@@ -14895,19 +14895,19 @@ class SafetyBot:
 
     def _runtime_run_trade_probe(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
         next_probe_ts, next_probe_sent = self._runtime_trade_probe_step(
-            now=float(now),
+            now=now,
             heartbeat_fail_safe_active=bool(loop_state["heartbeat_fail_safe_active"]),
-            trade_probe_enabled=bool(loop_cfg.trade_probe_enabled),
-            trade_probe_interval_sec=int(loop_cfg.trade_probe_interval_sec),
-            trade_probe_max_per_run=int(loop_cfg.trade_probe_max_per_run),
+            trade_probe_enabled=loop_cfg.trade_probe_enabled,
+            trade_probe_interval_sec=loop_cfg.trade_probe_interval_sec,
+            trade_probe_max_per_run=loop_cfg.trade_probe_max_per_run,
             trade_probe_sent=int(loop_state.get("trade_probe_sent", 0) or 0),
             last_trade_probe_ts=float(loop_state.get("last_trade_probe_ts", 0.0) or 0.0),
-            trade_probe_signal=str(loop_cfg.trade_probe_signal),
-            trade_probe_symbol=str(loop_cfg.trade_probe_symbol),
-            trade_probe_volume=float(loop_cfg.trade_probe_volume),
-            trade_probe_deviation_points=int(loop_cfg.trade_probe_deviation_points),
-            trade_probe_comment=str(loop_cfg.trade_probe_comment),
-            trade_probe_group=str(loop_cfg.trade_probe_group),
+            trade_probe_signal=loop_cfg.trade_probe_signal,
+            trade_probe_symbol=loop_cfg.trade_probe_symbol,
+            trade_probe_volume=loop_cfg.trade_probe_volume,
+            trade_probe_deviation_points=loop_cfg.trade_probe_deviation_points,
+            trade_probe_comment=loop_cfg.trade_probe_comment,
+            trade_probe_group=loop_cfg.trade_probe_group,
         )
         self._runtime_apply_trade_probe_state(
             loop_state=loop_state,
@@ -14917,14 +14917,14 @@ class SafetyBot:
 
     def _runtime_run_scan(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
         next_scan_ts = self._runtime_scan_step(
-            now=float(now),
+            now=now,
             last_scan_ts=float(loop_state.get("last_scan_ts", 0.0) or 0.0),
-            scan_interval=int(loop_cfg.scan_interval),
+            scan_interval=loop_cfg.scan_interval,
             heartbeat_fail_safe_active=bool(loop_state["heartbeat_fail_safe_active"]),
             heartbeat_failures=int(loop_state["heartbeat_failures"]),
             heartbeat_fail_safe_until=float(loop_state["heartbeat_fail_safe_until"]),
-            scan_suppressed_log_interval=int(loop_cfg.scan_suppressed_log_interval),
-            scan_slow_warn_ms=int(loop_cfg.scan_slow_warn_ms),
+            scan_suppressed_log_interval=loop_cfg.scan_suppressed_log_interval,
+            scan_slow_warn_ms=loop_cfg.scan_slow_warn_ms,
         )
         self._runtime_apply_scan_state(
             loop_state=loop_state,
@@ -15369,21 +15369,21 @@ class SafetyBot:
         loop_state: Dict[str, Any],
     ) -> Tuple[float, int, bool, float]:
         return self._runtime_heartbeat_step(
-            now=float(now),
+            now=now,
             loop_id=int(loop_state.get("loop_id", 0) or 0),
             last_heartbeat_ts=float(loop_state.get("last_heartbeat_ts", 0.0) or 0.0),
             last_market_data_ts=float(loop_state.get("last_market_data_ts", 0.0) or 0.0),
-            heartbeat_interval=int(loop_cfg.heartbeat_interval),
+            heartbeat_interval=loop_cfg.heartbeat_interval,
             heartbeat_fail_safe_active=bool(loop_state.get("heartbeat_fail_safe_active", False)),
             heartbeat_failures=int(loop_state.get("heartbeat_failures", 0) or 0),
             heartbeat_fail_safe_until=float(loop_state.get("heartbeat_fail_safe_until", 0.0) or 0.0),
-            heartbeat_fail_threshold=int(loop_cfg.heartbeat_fail_threshold),
-            heartbeat_fail_safe_cooldown=int(loop_cfg.heartbeat_fail_safe_cooldown),
-            heartbeat_fail_log_interval=int(loop_cfg.heartbeat_fail_log_interval),
-            heartbeat_timeout_budget_ms=int(loop_cfg.heartbeat_timeout_budget_ms),
-            heartbeat_retries_budget=int(loop_cfg.heartbeat_retries_budget),
-            heartbeat_queue_lock_timeout_ms=int(loop_cfg.heartbeat_queue_lock_timeout_ms),
-            heartbeat_worker_stale_sec=int(loop_cfg.heartbeat_worker_stale_sec),
+            heartbeat_fail_threshold=loop_cfg.heartbeat_fail_threshold,
+            heartbeat_fail_safe_cooldown=loop_cfg.heartbeat_fail_safe_cooldown,
+            heartbeat_fail_log_interval=loop_cfg.heartbeat_fail_log_interval,
+            heartbeat_timeout_budget_ms=loop_cfg.heartbeat_timeout_budget_ms,
+            heartbeat_retries_budget=loop_cfg.heartbeat_retries_budget,
+            heartbeat_queue_lock_timeout_ms=loop_cfg.heartbeat_queue_lock_timeout_ms,
+            heartbeat_worker_stale_sec=loop_cfg.heartbeat_worker_stale_sec,
         )
 
     def _runtime_trade_probe_step(
