@@ -14775,6 +14775,50 @@ class SafetyBot:
             return False
         return True
 
+    def _runtime_scan_step(
+        self,
+        *,
+        now: float,
+        last_scan_ts: float,
+        scan_interval: int,
+        heartbeat_fail_safe_active: bool,
+        heartbeat_failures: int,
+        heartbeat_fail_safe_until: float,
+        scan_suppressed_log_interval: int,
+        scan_slow_warn_ms: int,
+    ) -> float:
+        if float(now) - float(last_scan_ts) < float(scan_interval):
+            return float(last_scan_ts)
+
+        if bool(heartbeat_fail_safe_active):
+            if (float(now) - float(self._last_scan_suppressed_log_ts or 0.0)) >= float(scan_suppressed_log_interval):
+                self._last_scan_suppressed_log_ts = float(now)
+                logging.warning(
+                    "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s cooldown_remain_s=%s",
+                    int(heartbeat_failures),
+                    int(max(0, round(float(heartbeat_fail_safe_until) - float(now)))),
+                )
+            return float(now)
+
+        self._loop_scan_runs = int(self._loop_scan_runs) + 1
+        scan_start_ts = float(time.perf_counter())
+        try:
+            self.scan_once()
+        except Exception as e:
+            self._loop_scan_errors = int(self._loop_scan_errors) + 1
+            logging.error(f"scan_once error: {e}", exc_info=True)
+        finally:
+            scan_ms = int((time.perf_counter() - scan_start_ts) * 1000.0)
+            self._record_scan_duration(scan_ms)
+            self._record_section_duration("decision_core", scan_ms)
+            if scan_ms >= int(scan_slow_warn_ms):
+                logging.warning(
+                    "SCAN_SLOW scan_ms=%s threshold_ms=%s",
+                    int(scan_ms),
+                    int(scan_slow_warn_ms),
+                )
+        return float(now)
+
     def _runtime_idle_step(self, had_market_data: bool, idle_sleep_sec: float) -> None:
         if not had_market_data:
             time.sleep(float(idle_sleep_sec))
@@ -16594,34 +16638,16 @@ class SafetyBot:
                             )
 
                 # 3. Cykliczny skan logiki (wstrzymany, gdy heartbeat fail-safe aktywny)
-                if now - last_scan_ts >= scan_interval:
-                    if heartbeat_fail_safe_active:
-                        if (now - float(self._last_scan_suppressed_log_ts or 0.0)) >= float(scan_suppressed_log_interval):
-                            self._last_scan_suppressed_log_ts = now
-                            logging.warning(
-                                "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s cooldown_remain_s=%s",
-                                int(heartbeat_failures),
-                                int(max(0, round(float(heartbeat_fail_safe_until) - now))),
-                            )
-                    else:
-                        self._loop_scan_runs = int(self._loop_scan_runs) + 1
-                        scan_start_ts = float(time.perf_counter())
-                        try:
-                            self.scan_once()
-                        except Exception as e:
-                            self._loop_scan_errors = int(self._loop_scan_errors) + 1
-                            logging.error(f"scan_once error: {e}", exc_info=True)
-                        finally:
-                            scan_ms = int((time.perf_counter() - scan_start_ts) * 1000.0)
-                            self._record_scan_duration(scan_ms)
-                            self._record_section_duration("decision_core", scan_ms)
-                            if scan_ms >= int(scan_slow_warn_ms):
-                                logging.warning(
-                                    "SCAN_SLOW scan_ms=%s threshold_ms=%s",
-                                    int(scan_ms),
-                                    int(scan_slow_warn_ms),
-                                )
-                    last_scan_ts = now
+                last_scan_ts = self._runtime_scan_step(
+                    now=float(now),
+                    last_scan_ts=float(last_scan_ts),
+                    scan_interval=int(scan_interval),
+                    heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
+                    heartbeat_failures=int(heartbeat_failures),
+                    heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
+                    scan_suppressed_log_interval=int(scan_suppressed_log_interval),
+                    scan_slow_warn_ms=int(scan_slow_warn_ms),
+                )
 
                 # 4. Control-plane maintenance outside decision hot section.
                 if not self._runtime_maintenance_step():

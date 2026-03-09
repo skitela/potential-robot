@@ -226,6 +226,61 @@ class TestHybridExecution(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertEqual(10017, int(getattr(res, "retcode", 0)))
 
+    def test_runtime_scan_step_runs_scan_once_when_due(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._last_scan_suppressed_log_ts = 0.0
+        bot._loop_scan_runs = 0
+        bot._loop_scan_errors = 0
+        bot.scan_once = MagicMock()
+        bot._record_scan_duration = MagicMock()
+        bot._record_section_duration = MagicMock()
+
+        out_ts = bot._runtime_scan_step(
+            now=100.0,
+            last_scan_ts=0.0,
+            scan_interval=10,
+            heartbeat_fail_safe_active=False,
+            heartbeat_failures=0,
+            heartbeat_fail_safe_until=0.0,
+            scan_suppressed_log_interval=60,
+            scan_slow_warn_ms=1000,
+        )
+
+        self.assertEqual(100.0, out_ts)
+        self.assertEqual(1, int(bot._loop_scan_runs))
+        bot.scan_once.assert_called_once()
+        bot._record_scan_duration.assert_called_once()
+        bot._record_section_duration.assert_called_once()
+
+    def test_runtime_scan_step_skips_when_heartbeat_failsafe_active(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._last_scan_suppressed_log_ts = 0.0
+        bot._loop_scan_runs = 0
+        bot._loop_scan_errors = 0
+        bot.scan_once = MagicMock()
+        bot._record_scan_duration = MagicMock()
+        bot._record_section_duration = MagicMock()
+
+        out_ts = bot._runtime_scan_step(
+            now=100.0,
+            last_scan_ts=0.0,
+            scan_interval=10,
+            heartbeat_fail_safe_active=True,
+            heartbeat_failures=3,
+            heartbeat_fail_safe_until=140.0,
+            scan_suppressed_log_interval=60,
+            scan_slow_warn_ms=1000,
+        )
+
+        self.assertEqual(100.0, out_ts)
+        self.assertEqual(0, int(bot._loop_scan_runs))
+        self.assertEqual(100.0, float(bot._last_scan_suppressed_log_ts))
+        bot.scan_once.assert_not_called()
+        bot._record_scan_duration.assert_not_called()
+        bot._record_section_duration.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
