@@ -1,5 +1,7 @@
 import datetime as dt
+import json
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -15,6 +17,7 @@ from runtime_supervisor import (
     build_runtime_loop_state,
     build_mt5_common_file_path,
     build_runtime_loop_settings,
+    evaluate_mql5_active_readiness_gate,
     resolve_trade_trigger_mode,
 )
 
@@ -147,6 +150,49 @@ class TestRuntimeSupervisorDeploymentPlane(unittest.TestCase):
         self.assertEqual(0.0, float(st["last_trade_probe_ts"]))
         self.assertEqual(0, int(st["trade_probe_sent"]))
         self.assertEqual(0, int(st["loop_id"]))
+
+    def test_evaluate_mql5_active_readiness_gate_missing_and_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ok, reason = evaluate_mql5_active_readiness_gate(runtime_root=root, enabled=False)
+            self.assertFalse(ok)
+            self.assertEqual("CUTOVER_GATE_DISABLED", reason)
+
+            ok, reason = evaluate_mql5_active_readiness_gate(runtime_root=root, enabled=True)
+            self.assertFalse(ok)
+            self.assertEqual("CUTOVER_READINESS_MISSING", reason)
+
+    def test_evaluate_mql5_active_readiness_gate_pass_and_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            readiness = root / "EVIDENCE" / "cutover" / "mql5_cutover_readiness_latest.json"
+            readiness.parent.mkdir(parents=True, exist_ok=True)
+
+            fresh_payload = {
+                "status": "PASS",
+                "generated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+            readiness.write_text(json.dumps(fresh_payload), encoding="utf-8")
+            ok, reason = evaluate_mql5_active_readiness_gate(
+                runtime_root=root,
+                enabled=True,
+                max_age_sec=3600,
+            )
+            self.assertTrue(ok)
+            self.assertEqual("OK", reason)
+
+            stale_payload = {
+                "status": "PASS",
+                "generated_at_utc": "2026-03-01T00:00:00Z",
+            }
+            readiness.write_text(json.dumps(stale_payload), encoding="utf-8")
+            ok, reason = evaluate_mql5_active_readiness_gate(
+                runtime_root=root,
+                enabled=True,
+                max_age_sec=300,
+            )
+            self.assertFalse(ok)
+            self.assertEqual("CUTOVER_READINESS_STALE", reason)
 
 
 if __name__ == "__main__":

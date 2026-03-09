@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
@@ -47,6 +49,58 @@ def resolve_trade_trigger_mode(
     if mode == "MQL5_ACTIVE" and not allow_mql5_active:
         return "MQL5_SHADOW_COMPARE", "MQL5_ACTIVE_NOT_CUTOVER_READY"
     return mode, "OK"
+
+
+def _parse_iso_utc(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def evaluate_mql5_active_readiness_gate(
+    *,
+    runtime_root: Path,
+    enabled: bool,
+    readiness_relpath: str = "EVIDENCE/cutover/mql5_cutover_readiness_latest.json",
+    max_age_sec: int = 7200,
+) -> Tuple[bool, str]:
+    if not enabled:
+        return False, "CUTOVER_GATE_DISABLED"
+    rel = str(readiness_relpath or "").strip()
+    if not rel:
+        return False, "CUTOVER_READINESS_PATH_EMPTY"
+    readiness_path = Path(rel)
+    if not readiness_path.is_absolute():
+        readiness_path = (Path(runtime_root) / readiness_path).resolve()
+    if not readiness_path.exists():
+        return False, "CUTOVER_READINESS_MISSING"
+    try:
+        payload = json.loads(readiness_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False, "CUTOVER_READINESS_INVALID_JSON"
+
+    status = str(payload.get("status") or payload.get("readiness") or "").strip().upper()
+    if status != "PASS":
+        if status:
+            return False, f"CUTOVER_READINESS_{status}"
+        return False, "CUTOVER_READINESS_UNKNOWN"
+
+    safe_age = max(60, int(max_age_sec))
+    generated_at = _parse_iso_utc(payload.get("generated_at_utc") or payload.get("ts_utc"))
+    if generated_at is None:
+        return False, "CUTOVER_READINESS_TS_MISSING"
+    age_sec = (datetime.now(timezone.utc) - generated_at).total_seconds()
+    if age_sec > float(safe_age):
+        return False, "CUTOVER_READINESS_STALE"
+
+    return True, "OK"
 
 
 def build_mt5_common_file_path(

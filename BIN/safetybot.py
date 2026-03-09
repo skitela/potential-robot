@@ -142,6 +142,7 @@ try:
         build_runtime_loop_state,
         build_runtime_loop_settings,
         build_mt5_common_file_path,
+        evaluate_mql5_active_readiness_gate,
         resolve_trade_trigger_mode,
         should_emit_interval,
     )
@@ -203,6 +204,7 @@ except Exception:  # pragma: no cover
         build_runtime_loop_state,
         build_runtime_loop_settings,
         build_mt5_common_file_path,
+        evaluate_mql5_active_readiness_gate,
         resolve_trade_trigger_mode,
         should_emit_interval,
     )
@@ -592,6 +594,9 @@ class CFG:
     kernel_config_common_subdir: str = "OANDA_MT5_SYSTEM"
     trade_trigger_mode: str = "BRIDGE_ACTIVE"
     trade_trigger_mode_allow_mql5_active: bool = False
+    trade_trigger_mode_require_cutover_readiness: bool = True
+    trade_trigger_mode_cutover_readiness_file: str = "EVIDENCE/cutover/mql5_cutover_readiness_latest.json"
+    trade_trigger_mode_cutover_readiness_max_age_sec: int = 7200
     # Stage-1 live profile adapter (control-plane only, no hot-path blocking).
     stage1_live_config_enabled: bool = True
     stage1_live_config_file: str = "LAB/RUN/live_config_stage1_apply.json"
@@ -14586,10 +14591,43 @@ class SafetyBot:
         )
 
     def _trade_trigger_mode_info(self) -> Tuple[str, str]:
+        requested_mode = str(getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE") or "BRIDGE_ACTIVE").strip().upper()
+        allow_mql5_active = bool(getattr(CFG, "trade_trigger_mode_allow_mql5_active", False))
+        gate_reason = "OK"
+        if requested_mode == "MQL5_ACTIVE" and allow_mql5_active:
+            if bool(getattr(CFG, "trade_trigger_mode_require_cutover_readiness", True)):
+                gate_ok, gate_reason = evaluate_mql5_active_readiness_gate(
+                    runtime_root=Path(self.runtime_root),
+                    enabled=True,
+                    readiness_relpath=str(
+                        getattr(
+                            CFG,
+                            "trade_trigger_mode_cutover_readiness_file",
+                            "EVIDENCE/cutover/mql5_cutover_readiness_latest.json",
+                        )
+                        or "EVIDENCE/cutover/mql5_cutover_readiness_latest.json"
+                    ),
+                    max_age_sec=int(
+                        max(
+                            60,
+                            int(getattr(CFG, "trade_trigger_mode_cutover_readiness_max_age_sec", 7200) or 7200),
+                        )
+                    ),
+                )
+                allow_mql5_active = bool(gate_ok)
+                prev_gate_reason = str(getattr(self, "_last_trade_trigger_gate_reason", "") or "")
+                if gate_reason != prev_gate_reason:
+                    setattr(self, "_last_trade_trigger_gate_reason", gate_reason)
+                    if gate_reason != "OK":
+                        logging.warning("MQL5_ACTIVE_GATE reason=%s", gate_reason)
+                    else:
+                        logging.info("MQL5_ACTIVE_GATE reason=%s", gate_reason)
         mode, reason = resolve_trade_trigger_mode(
-            getattr(CFG, "trade_trigger_mode", "BRIDGE_ACTIVE"),
-            allow_mql5_active=bool(getattr(CFG, "trade_trigger_mode_allow_mql5_active", False)),
+            requested_mode,
+            allow_mql5_active=allow_mql5_active,
         )
+        if reason == "MQL5_ACTIVE_NOT_CUTOVER_READY" and gate_reason != "OK":
+            return mode, gate_reason
         return mode, reason
 
     def _trade_trigger_mode(self) -> str:
@@ -17614,6 +17652,20 @@ if __name__ == "__main__":
         CFG.trade_trigger_mode = "BRIDGE_ACTIVE"
     CFG.trade_trigger_mode_allow_mql5_active = _cfg_bool(
         "trade_trigger_mode_allow_mql5_active", CFG.trade_trigger_mode_allow_mql5_active
+    )
+    CFG.trade_trigger_mode_require_cutover_readiness = _cfg_bool(
+        "trade_trigger_mode_require_cutover_readiness", CFG.trade_trigger_mode_require_cutover_readiness
+    )
+    CFG.trade_trigger_mode_cutover_readiness_file = str(
+        strategy_cfg.get(
+            "trade_trigger_mode_cutover_readiness_file",
+            CFG.trade_trigger_mode_cutover_readiness_file,
+        )
+        or CFG.trade_trigger_mode_cutover_readiness_file
+    ).strip()
+    CFG.trade_trigger_mode_cutover_readiness_max_age_sec = _cfg_int(
+        "trade_trigger_mode_cutover_readiness_max_age_sec",
+        CFG.trade_trigger_mode_cutover_readiness_max_age_sec,
     )
     CFG.stage1_live_config_enabled = _cfg_bool(
         "stage1_live_config_enabled", CFG.stage1_live_config_enabled
