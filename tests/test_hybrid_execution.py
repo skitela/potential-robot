@@ -169,6 +169,37 @@ class TestHybridExecution(unittest.TestCase):
         hook.assert_called_once()
         engine.order_send.assert_not_called()
 
+    def test_send_trade_command_bypasses_bridge_in_mql5_active_mode(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._trade_trigger_mode = MagicMock(return_value="MQL5_ACTIVE")
+
+        reply = SafetyBot._send_trade_command(
+            bot,
+            signal="BUY",
+            symbol="EURUSD.pro",
+            volume=0.01,
+            sl_price=1.0,
+            tp_price=1.1,
+            request_price=1.05,
+            deviation_points=10,
+            spread_at_decision_points=1.2,
+            spread_unit="points",
+            spread_provenance="TEST",
+            estimated_entry_cost_components={},
+            estimated_round_trip_cost={},
+            cost_feasibility_shadow=True,
+            net_cost_feasible=True,
+            cost_gate_policy_mode="DIAGNOSTIC_ONLY",
+            cost_gate_reason_code="NONE",
+            magic=37630,
+            comment="unit",
+        )
+
+        self.assertIsInstance(reply, dict)
+        self.assertEqual("SKIPPED", str(reply.get("status")))
+        self.assertEqual("MQL5_ACTIVE_BRIDGE_BYPASS", str(reply.get("retcode_str")))
+
 
 if __name__ == "__main__":
     unittest.main()
