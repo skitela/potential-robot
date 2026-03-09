@@ -14793,6 +14793,30 @@ class SafetyBot:
         self._record_section_duration("tick_ingest", int((time.perf_counter() - tick_ingest_t0) * 1000.0))
         return market_data, float(next_market_data_ts)
 
+    def _runtime_apply_heartbeat_state(
+        self,
+        *,
+        loop_state: Dict[str, Any],
+        last_heartbeat_ts: float,
+        heartbeat_failures: int,
+        heartbeat_fail_safe_active: bool,
+        heartbeat_fail_safe_until: float,
+    ) -> None:
+        loop_state["last_heartbeat_ts"] = float(last_heartbeat_ts)
+        loop_state["heartbeat_failures"] = int(heartbeat_failures)
+        loop_state["heartbeat_fail_safe_active"] = bool(heartbeat_fail_safe_active)
+        loop_state["heartbeat_fail_safe_until"] = float(heartbeat_fail_safe_until)
+
+    def _runtime_apply_trade_probe_state(
+        self,
+        *,
+        loop_state: Dict[str, Any],
+        last_trade_probe_ts: float,
+        trade_probe_sent: int,
+    ) -> None:
+        loop_state["last_trade_probe_ts"] = float(last_trade_probe_ts)
+        loop_state["trade_probe_sent"] = int(trade_probe_sent)
+
     def _runtime_loop_step(self, *, loop_cfg: Any, loop_state: Dict[str, Any]) -> bool:
         now = float(time.time())
         loop_state["loop_id"] = int(loop_state.get("loop_id", 0) or 0) + 1
@@ -14815,10 +14839,13 @@ class SafetyBot:
             loop_cfg=loop_cfg,
             loop_state=loop_state,
         )
-        loop_state["last_heartbeat_ts"] = float(next_last_heartbeat_ts)
-        loop_state["heartbeat_failures"] = int(next_heartbeat_failures)
-        loop_state["heartbeat_fail_safe_active"] = bool(next_heartbeat_fail_safe_active)
-        loop_state["heartbeat_fail_safe_until"] = float(next_heartbeat_fail_safe_until)
+        self._runtime_apply_heartbeat_state(
+            loop_state=loop_state,
+            last_heartbeat_ts=float(next_last_heartbeat_ts),
+            heartbeat_failures=int(next_heartbeat_failures),
+            heartbeat_fail_safe_active=bool(next_heartbeat_fail_safe_active),
+            heartbeat_fail_safe_until=float(next_heartbeat_fail_safe_until),
+        )
 
         next_probe_ts, next_probe_sent = self._runtime_trade_probe_step(
             now=float(now),
@@ -14835,8 +14862,11 @@ class SafetyBot:
             trade_probe_comment=str(loop_cfg.trade_probe_comment),
             trade_probe_group=str(loop_cfg.trade_probe_group),
         )
-        loop_state["last_trade_probe_ts"] = float(next_probe_ts)
-        loop_state["trade_probe_sent"] = int(next_probe_sent)
+        self._runtime_apply_trade_probe_state(
+            loop_state=loop_state,
+            last_trade_probe_ts=float(next_probe_ts),
+            trade_probe_sent=int(next_probe_sent),
+        )
 
         next_scan_ts = self._runtime_scan_step(
             now=float(now),
