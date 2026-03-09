@@ -568,6 +568,7 @@ class ZMQBridge:
             action_norm = str(original_command.get("action") or "").strip().upper()
             command_type = self._command_type(action_norm)
             budget_bucket = self._timeout_budget_bucket(effective_timeout_ms)
+            endpoint = f"tcp://127.0.0.1:{self.req_port}"
             hb_loop_lag_ms = 0
             hb_market_data_stale_ms = -1
             trade_started = False
@@ -602,7 +603,7 @@ class ZMQBridge:
                 "status": "PENDING",
                 "fallback_used": False,
                 "channel": "REQ_REP",
-                "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                "endpoint": endpoint,
                 "command_queue_wait_ms": int(command_queue_wait_ms),
                 "audit_log_lock_wait_max_ms": 0,
             }
@@ -612,6 +613,7 @@ class ZMQBridge:
             last_reason = "UNKNOWN"
             last_subreason = "UNKNOWN"
             max_audit_lock_wait_ms = 0
+            encoded_message = json.dumps(original_command, separators=(",", ":"))
 
             for attempt in range(effective_retries):
                 send_ms = 0
@@ -627,7 +629,7 @@ class ZMQBridge:
                             **original_command,
                             "phase": "command_send",
                             "channel": "REQ_REP",
-                            "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                            "endpoint": endpoint,
                             "attempt": int(attempt + 1),
                             "retry_count": int(attempt),
                             "timeout_budget_ms": int(effective_timeout_ms),
@@ -641,8 +643,7 @@ class ZMQBridge:
                     max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
 
                     send_t0 = time.perf_counter()
-                    message = json.dumps(original_command, separators=(",", ":"))
-                    self.req_socket.send_string(message)
+                    self.req_socket.send_string(encoded_message)
                     send_ms = int((time.perf_counter() - send_t0) * 1000.0)
                     wait_t0 = time.perf_counter()
 
@@ -663,7 +664,7 @@ class ZMQBridge:
                                     **reply_data,
                                     "phase": "reply_receive",
                                     "channel": "REQ_REP",
-                                    "endpoint": f"tcp://127.0.0.1:{self.req_port}",
+                                    "endpoint": endpoint,
                                     "attempt": int(attempt + 1),
                                     "retry_count": int(attempt),
                                     "send_ms": int(send_ms),
