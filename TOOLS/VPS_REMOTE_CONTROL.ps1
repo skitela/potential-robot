@@ -16,7 +16,8 @@ $ErrorActionPreference = "Stop"
 function Resolve-TokenEnvPath {
     param(
         [string]$ExplicitPath,
-        [string]$Label
+        [string]$Label,
+        [string]$RuntimeRoot
     )
     if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
         return (Resolve-Path -LiteralPath $ExplicitPath -ErrorAction Stop).Path
@@ -24,7 +25,9 @@ function Resolve-TokenEnvPath {
 
     $candidates = @(
         "D:\TOKEN\BotKey.env",
-        "C:\TOKEN\BotKey.env"
+        "C:\TOKEN\BotKey.env",
+        (Join-Path $RuntimeRoot "OANDAKEY\TOKEN\BotKey.env"),
+        (Join-Path $RuntimeRoot "KEY\TOKEN\BotKey.env")
     )
     foreach ($cand in $candidates) {
         if (Test-Path -LiteralPath $cand) {
@@ -42,7 +45,7 @@ function Resolve-TokenEnvPath {
         }
     }
 
-    throw "Brak pliku BotKey.env (sprawdzono D:\TOKEN, C:\TOKEN oraz wolumin '$Label')."
+    throw "Brak pliku BotKey.env (sprawdzono D:\TOKEN, C:\TOKEN, <ROOT>\\OANDAKEY\\TOKEN, <ROOT>\\KEY\\TOKEN oraz wolumin '$Label')."
 }
 
 function Parse-EnvFile {
@@ -89,7 +92,7 @@ function Stop-LocalRuntimeBestEffort {
 }
 
 $runtimeRoot = (Resolve-Path -LiteralPath $Root -ErrorAction Stop).Path
-$envPath = Resolve-TokenEnvPath -ExplicitPath $TokenEnvPath -Label $UsbLabel
+$envPath = Resolve-TokenEnvPath -ExplicitPath $TokenEnvPath -Label $UsbLabel -RuntimeRoot $runtimeRoot
 $cfg = Parse-EnvFile -Path $envPath
 $vps = Get-VpsCredential -Cfg $cfg
 $vpsRoot = "C:\OANDA_MT5_SYSTEM"

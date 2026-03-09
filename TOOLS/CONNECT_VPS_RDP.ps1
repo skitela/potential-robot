@@ -10,25 +10,37 @@ $ErrorActionPreference = "Stop"
 function Resolve-TokenEnvPath {
     param(
         [string]$ExplicitPath,
-        [string]$Label
+        [string]$Label,
+        [string]$RuntimeRoot
     )
     if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
         return (Resolve-Path -LiteralPath $ExplicitPath -ErrorAction Stop).Path
+    }
+
+    $candidates = @(
+        "D:\TOKEN\BotKey.env",
+        "C:\TOKEN\BotKey.env",
+        (Join-Path $RuntimeRoot "OANDAKEY\TOKEN\BotKey.env"),
+        (Join-Path $RuntimeRoot "KEY\TOKEN\BotKey.env")
+    )
+    foreach ($cand in $candidates) {
+        if (Test-Path -LiteralPath $cand) {
+            return (Resolve-Path -LiteralPath $cand -ErrorAction Stop).Path
+        }
     }
 
     $vol = Get-Volume -ErrorAction SilentlyContinue | Where-Object {
         [string]$_.FileSystemLabel -eq [string]$Label
     } | Select-Object -First 1
 
-    if ($null -eq $vol -or [string]::IsNullOrWhiteSpace([string]$vol.DriveLetter)) {
-        throw "Nie znaleziono nosnika o etykiecie '$Label'."
+    if ($null -ne $vol -and -not [string]::IsNullOrWhiteSpace([string]$vol.DriveLetter)) {
+        $p = "$($vol.DriveLetter):\TOKEN\BotKey.env"
+        if (Test-Path -LiteralPath $p) {
+            return (Resolve-Path -LiteralPath $p -ErrorAction Stop).Path
+        }
     }
 
-    $p = "$($vol.DriveLetter):\TOKEN\BotKey.env"
-    if (-not (Test-Path -LiteralPath $p)) {
-        throw "Brak pliku TOKEN\\BotKey.env na nosniku '$Label'."
-    }
-    return (Resolve-Path -LiteralPath $p -ErrorAction Stop).Path
+    throw "Brak pliku BotKey.env (sprawdzono D:\\TOKEN, C:\\TOKEN, <ROOT>\\OANDAKEY\\TOKEN, <ROOT>\\KEY\\TOKEN oraz wolumin '$Label')."
 }
 
 function Parse-EnvFile {
@@ -61,7 +73,7 @@ function Convert-SecureToPlain {
 }
 
 $runtimeRoot = (Resolve-Path -LiteralPath $Root -ErrorAction Stop).Path
-$envPath = Resolve-TokenEnvPath -ExplicitPath $TokenEnvPath -Label $UsbLabel
+$envPath = Resolve-TokenEnvPath -ExplicitPath $TokenEnvPath -Label $UsbLabel -RuntimeRoot $runtimeRoot
 $cfg = Parse-EnvFile -Path $envPath
 
 $vpsHost = [string]$cfg["VPS_HOST"]

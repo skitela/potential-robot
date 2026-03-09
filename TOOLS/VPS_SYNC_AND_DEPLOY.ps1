@@ -24,7 +24,8 @@ function Resolve-TokenEnvPath {
     $candidates = @(
         "D:\TOKEN\BotKey.env",
         "C:\TOKEN\BotKey.env",
-        (Join-Path $RuntimeRoot "OANDAKEY\TOKEN\BotKey.env")
+        (Join-Path $RuntimeRoot "OANDAKEY\TOKEN\BotKey.env"),
+        (Join-Path $RuntimeRoot "KEY\TOKEN\BotKey.env")
     )
     foreach ($cand in $candidates) {
         if (Test-Path -LiteralPath $cand) {
