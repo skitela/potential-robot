@@ -73,6 +73,11 @@ def evaluate_cycle_status(
     return "REVIEW_REQUIRED"
 
 
+def should_ignore_probe_failure(probe_status: str, allow_no_peer: bool) -> bool:
+    status_u = str(probe_status or "").upper()
+    return bool(allow_no_peer and status_u == "NO_ACTIVE_PEER")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run parity probe + report + cutover readiness in one cycle.")
     ap.add_argument("--root", default="C:/OANDA_MT5_SYSTEM")
@@ -195,8 +200,11 @@ def main() -> int:
         return 2
     if int(report_step.get("returncode", 0)) != 0:
         return 2
-    if (not bool(args.skip_probe)) and probe_rc != 0 and not bool(args.allow_no_peer):
-        return 2
+    if not bool(args.skip_probe):
+        if str(probe_status or "").upper() == "NO_ZMQ":
+            return 3
+        if probe_rc != 0 and not should_ignore_probe_failure(probe_status, bool(args.allow_no_peer)):
+            return 2
     return 0
 
 
