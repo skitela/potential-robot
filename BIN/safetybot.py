@@ -14824,6 +14824,14 @@ class SafetyBot:
         loop_state["last_trade_probe_ts"] = float(last_trade_probe_ts)
         loop_state["trade_probe_sent"] = int(trade_probe_sent)
 
+    def _runtime_apply_scan_state(
+        self,
+        *,
+        loop_state: Dict[str, Any],
+        last_scan_ts: float,
+    ) -> None:
+        loop_state["last_scan_ts"] = float(last_scan_ts)
+
     def _runtime_loop_step(self, *, loop_cfg: Any, loop_state: Dict[str, Any]) -> bool:
         now = float(time.time())
         loop_state["loop_id"] = int(loop_state.get("loop_id", 0) or 0) + 1
@@ -14885,7 +14893,10 @@ class SafetyBot:
             scan_suppressed_log_interval=int(loop_cfg.scan_suppressed_log_interval),
             scan_slow_warn_ms=int(loop_cfg.scan_slow_warn_ms),
         )
-        loop_state["last_scan_ts"] = float(next_scan_ts)
+        self._runtime_apply_scan_state(
+            loop_state=loop_state,
+            last_scan_ts=float(next_scan_ts),
+        )
 
         if not self._runtime_maintenance_step():
             return False
