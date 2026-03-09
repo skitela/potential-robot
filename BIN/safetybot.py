@@ -14944,22 +14944,22 @@ class SafetyBot:
         scan_slow_warn_ms: int,
     ) -> float:
         if not self._runtime_scan_due(
-            now=float(now),
-            last_scan_ts=float(last_scan_ts),
-            scan_interval=int(scan_interval),
+            now=now,
+            last_scan_ts=last_scan_ts,
+            scan_interval=scan_interval,
         ):
             return float(last_scan_ts)
 
         if self._runtime_is_scan_suppressed(
-            now=float(now),
-            heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-            heartbeat_failures=int(heartbeat_failures),
-            heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
-            scan_suppressed_log_interval=int(scan_suppressed_log_interval),
+            now=now,
+            heartbeat_fail_safe_active=heartbeat_fail_safe_active,
+            heartbeat_failures=heartbeat_failures,
+            heartbeat_fail_safe_until=heartbeat_fail_safe_until,
+            scan_suppressed_log_interval=scan_suppressed_log_interval,
         ):
             return float(now)
 
-        self._runtime_execute_scan(scan_slow_warn_ms=int(scan_slow_warn_ms))
+        self._runtime_execute_scan(scan_slow_warn_ms=scan_slow_warn_ms)
         return float(now)
 
     def _runtime_scan_due(self, *, now: float, last_scan_ts: float, scan_interval: int) -> bool:
@@ -15024,24 +15024,24 @@ class SafetyBot:
         heartbeat_worker_stale_sec: int,
     ) -> Tuple[float, int, bool, float]:
         precheck = self._runtime_heartbeat_precheck(
-            now=float(now),
-            last_heartbeat_ts=float(last_heartbeat_ts),
-            heartbeat_interval=int(heartbeat_interval),
-            heartbeat_failures=int(heartbeat_failures),
-            heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-            heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
+            now=now,
+            last_heartbeat_ts=last_heartbeat_ts,
+            heartbeat_interval=heartbeat_interval,
+            heartbeat_failures=heartbeat_failures,
+            heartbeat_fail_safe_active=heartbeat_fail_safe_active,
+            heartbeat_fail_safe_until=heartbeat_fail_safe_until,
         )
         if precheck is not None:
             return precheck
 
         heartbeat_loop_lag_ms = self._runtime_heartbeat_loop_lag_ms(
-            now=float(now),
-            last_heartbeat_ts=float(last_heartbeat_ts),
-            heartbeat_interval=int(heartbeat_interval),
+            now=now,
+            last_heartbeat_ts=last_heartbeat_ts,
+            heartbeat_interval=heartbeat_interval,
         )
         market_data_stale_ms = self._runtime_market_data_stale_ms(
-            now=float(now),
-            last_market_data_ts=float(last_market_data_ts),
+            now=now,
+            last_market_data_ts=last_market_data_ts,
         )
 
         heartbeat_suppressed = (
@@ -15050,46 +15050,46 @@ class SafetyBot:
         )
         if heartbeat_suppressed:
             return self._runtime_heartbeat_suppressed_result(
-                now=float(now),
-                heartbeat_failures=int(heartbeat_failures),
-                heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-                heartbeat_fail_safe_cooldown=int(heartbeat_fail_safe_cooldown),
-                heartbeat_fail_log_interval=int(heartbeat_fail_log_interval),
-                market_data_stale_ms=int(market_data_stale_ms),
+                now=now,
+                heartbeat_failures=heartbeat_failures,
+                heartbeat_fail_safe_active=heartbeat_fail_safe_active,
+                heartbeat_fail_safe_cooldown=heartbeat_fail_safe_cooldown,
+                heartbeat_fail_log_interval=heartbeat_fail_log_interval,
+                market_data_stale_ms=market_data_stale_ms,
             )
 
         hb_reply, hb_diag, hb_reason, hb_subreason = self._runtime_send_heartbeat(
-            loop_id=int(loop_id),
-            heartbeat_loop_lag_ms=int(heartbeat_loop_lag_ms),
-            market_data_stale_ms=int(market_data_stale_ms),
-            heartbeat_timeout_budget_ms=int(heartbeat_timeout_budget_ms),
-            heartbeat_retries_budget=int(heartbeat_retries_budget),
-            heartbeat_queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
+            loop_id=loop_id,
+            heartbeat_loop_lag_ms=heartbeat_loop_lag_ms,
+            market_data_stale_ms=market_data_stale_ms,
+            heartbeat_timeout_budget_ms=heartbeat_timeout_budget_ms,
+            heartbeat_retries_budget=heartbeat_retries_budget,
+            heartbeat_queue_lock_timeout_ms=heartbeat_queue_lock_timeout_ms,
         )
         hb_skipped_lock = bool(hb_reason == "QUEUE_LOCK_TIMEOUT")
         hb_timeout_nonfatal = self._runtime_is_heartbeat_timeout_nonfatal(
             hb_reason=hb_reason,
-            market_data_stale_ms=int(market_data_stale_ms),
-            heartbeat_worker_stale_sec=int(heartbeat_worker_stale_sec),
+            market_data_stale_ms=market_data_stale_ms,
+            heartbeat_worker_stale_sec=heartbeat_worker_stale_sec,
         )
         hb_ok = self._runtime_is_heartbeat_reply_ok(hb_reply)
 
         if hb_skipped_lock:
             return self._runtime_heartbeat_skip_lock_result(
-                now=float(now),
-                heartbeat_failures=int(heartbeat_failures),
-                heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-                heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
+                now=now,
+                heartbeat_failures=heartbeat_failures,
+                heartbeat_fail_safe_active=heartbeat_fail_safe_active,
+                heartbeat_fail_safe_until=heartbeat_fail_safe_until,
                 hb_diag=hb_diag,
                 hb_subreason=str(hb_subreason),
             )
 
         if hb_timeout_nonfatal:
             return self._runtime_heartbeat_skip_nonfatal_timeout_result(
-                now=float(now),
-                heartbeat_failures=int(heartbeat_failures),
-                heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-                heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
+                now=now,
+                heartbeat_failures=heartbeat_failures,
+                heartbeat_fail_safe_active=heartbeat_fail_safe_active,
+                heartbeat_fail_safe_until=heartbeat_fail_safe_until,
                 hb_reason=str(hb_reason),
                 hb_subreason=str(hb_subreason),
                 hb_diag=hb_diag,
@@ -15097,19 +15097,19 @@ class SafetyBot:
 
         if hb_ok:
             return self._runtime_heartbeat_recovered_result(
-                now=float(now),
-                heartbeat_failures=int(heartbeat_failures),
-                heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
+                now=now,
+                heartbeat_failures=heartbeat_failures,
+                heartbeat_fail_safe_active=heartbeat_fail_safe_active,
             )
 
         return self._runtime_heartbeat_failure_result(
-            now=float(now),
-            heartbeat_failures=int(heartbeat_failures),
-            heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-            heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
-            heartbeat_fail_threshold=int(heartbeat_fail_threshold),
-            heartbeat_fail_safe_cooldown=int(heartbeat_fail_safe_cooldown),
-            heartbeat_fail_log_interval=int(heartbeat_fail_log_interval),
+            now=now,
+            heartbeat_failures=heartbeat_failures,
+            heartbeat_fail_safe_active=heartbeat_fail_safe_active,
+            heartbeat_fail_safe_until=heartbeat_fail_safe_until,
+            heartbeat_fail_threshold=heartbeat_fail_threshold,
+            heartbeat_fail_safe_cooldown=heartbeat_fail_safe_cooldown,
+            heartbeat_fail_log_interval=heartbeat_fail_log_interval,
             hb_reply=hb_reply,
         )
 
