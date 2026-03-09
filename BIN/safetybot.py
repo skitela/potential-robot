@@ -14969,9 +14969,10 @@ class SafetyBot:
             heartbeat_loop_lag_ms = int(
                 max(0.0, (float(now) - float(last_heartbeat_ts) - float(heartbeat_interval)) * 1000.0)
             )
-        market_data_stale_ms = -1
-        if float(last_market_data_ts) > 0.0:
-            market_data_stale_ms = int(max(0.0, (float(now) - float(last_market_data_ts)) * 1000.0))
+        market_data_stale_ms = self._runtime_market_data_stale_ms(
+            now=float(now),
+            last_market_data_ts=float(last_market_data_ts),
+        )
 
         heartbeat_suppressed = (
             bool(heartbeat_fail_safe_active)
@@ -15013,27 +15014,12 @@ class SafetyBot:
         hb_reason = str((hb_diag.get("bridge_timeout_reason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
         hb_subreason = str((hb_diag.get("bridge_timeout_subreason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
         hb_skipped_lock = bool(hb_reason == "QUEUE_LOCK_TIMEOUT")
-        hb_timeout_nonfatal = (
-            bool(getattr(CFG, "bridge_heartbeat_timeout_nonfatal", True))
-            and hb_reason in ("TIMEOUT_NO_RESPONSE", "SEND_TIMEOUT")
-            and (
-                int(market_data_stale_ms) < 0
-                or int(market_data_stale_ms) < int(heartbeat_worker_stale_sec * 1000)
-            )
+        hb_timeout_nonfatal = self._runtime_is_heartbeat_timeout_nonfatal(
+            hb_reason=hb_reason,
+            market_data_stale_ms=int(market_data_stale_ms),
+            heartbeat_worker_stale_sec=int(heartbeat_worker_stale_sec),
         )
-        hb_hash_ok = False
-        try:
-            hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
-            hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            hb_hash_ok = False
-        hb_ok = (
-            isinstance(hb_reply, dict)
-            and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
-            and str(hb_reply.get("status") or "").upper() == "OK"
-            and bool(hb_hash_ok)
-        )
+        hb_ok = self._runtime_is_heartbeat_reply_ok(hb_reply)
 
         if hb_skipped_lock:
             logging.info(
@@ -15115,6 +15101,42 @@ class SafetyBot:
             int(heartbeat_failures),
             bool(heartbeat_fail_safe_active),
             float(heartbeat_fail_safe_until),
+        )
+
+    def _runtime_market_data_stale_ms(self, *, now: float, last_market_data_ts: float) -> int:
+        if float(last_market_data_ts) <= 0.0:
+            return -1
+        return int(max(0.0, (float(now) - float(last_market_data_ts)) * 1000.0))
+
+    def _runtime_is_heartbeat_timeout_nonfatal(
+        self,
+        *,
+        hb_reason: str,
+        market_data_stale_ms: int,
+        heartbeat_worker_stale_sec: int,
+    ) -> bool:
+        return bool(
+            bool(getattr(CFG, "bridge_heartbeat_timeout_nonfatal", True))
+            and str(hb_reason or "").upper() in ("TIMEOUT_NO_RESPONSE", "SEND_TIMEOUT")
+            and (
+                int(market_data_stale_ms) < 0
+                or int(market_data_stale_ms) < int(heartbeat_worker_stale_sec * 1000)
+            )
+        )
+
+    def _runtime_is_heartbeat_reply_ok(self, hb_reply: Any) -> bool:
+        hb_hash_ok = False
+        try:
+            hb_hash = str(hb_reply.get("response_hash") or "") if isinstance(hb_reply, dict) else ""
+            hb_hash_ok = bool(hb_hash) and hb_hash == str(build_response_hash(hb_reply))  # type: ignore[arg-type]
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            hb_hash_ok = False
+        return bool(
+            isinstance(hb_reply, dict)
+            and str(hb_reply.get("action") or "").upper() == "HEARTBEAT_REPLY"
+            and str(hb_reply.get("status") or "").upper() == "OK"
+            and bool(hb_hash_ok)
         )
 
     def _runtime_heartbeat_step_from_state(
