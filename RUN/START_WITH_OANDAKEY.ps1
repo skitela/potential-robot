@@ -381,6 +381,107 @@ function Read-JsonFileSafe {
     }
 }
 
+function Get-BridgeHeartbeatOkAgeSec {
+    param(
+        [string]$LogPath,
+        [int]$TailLines = 500
+    )
+    if ([string]::IsNullOrWhiteSpace($LogPath)) { return $null }
+    if (-not (Test-Path $LogPath)) { return $null }
+    $lines = @()
+    try {
+        $lines = @(Get-Content -Path $LogPath -Tail ([Math]::Max(50, [int]$TailLines)) -ErrorAction Stop)
+    } catch {
+        return $null
+    }
+    $rx = [regex]'^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}).*\bBRIDGE_DIAG\b.*\baction=HEARTBEAT\b.*\bstatus=OK\b'
+    $lastTs = $null
+    foreach ($line in $lines) {
+        $msg = [string]$line
+        if ([string]::IsNullOrWhiteSpace($msg)) { continue }
+        $m = $rx.Match($msg)
+        if (-not $m.Success) { continue }
+        try {
+            $lastTs = [datetime]::ParseExact(
+                [string]$m.Groups["ts"].Value,
+                "yyyy-MM-dd HH:mm:ss,fff",
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )
+        } catch {
+            continue
+        }
+    }
+    if ($null -eq $lastTs) { return $null }
+    return [double]((Get-Date) - $lastTs).TotalSeconds
+}
+
+function Wait-RuntimeReady {
+    param(
+        [string]$RuntimeRoot,
+        [ValidateSet("full", "safety_only")]
+        [string]$Profile = "safety_only",
+        [int]$TimeoutSec = 120,
+        [int]$PollSec = 3
+    )
+    $sc = Join-Path $RuntimeRoot "TOOLS\SYSTEM_CONTROL.ps1"
+    $statusPath = Join-Path $RuntimeRoot "RUN\system_control_last.json"
+    $safetyLogPath = Join-Path $RuntimeRoot "LOGS\safetybot.log"
+
+    $timeout = [Math]::Max(10, [int]$TimeoutSec)
+    $startedAt = Get-Date
+    $deadline = $startedAt.AddSeconds($timeout)
+    $lastStatusOut = ""
+    $lastError = ""
+    $lastHeartbeatAge = $null
+    $lastRunningByPid = $false
+    $lastDuplicatePids = $false
+    $lastStatusPass = $false
+    $poll = [Math]::Max(2, [int]$PollSec)
+
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $statusOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action status -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
+            $lastStatusOut = [string]$statusOut
+            $lastStatusPass = ($statusOut -match "status=PASS")
+
+            $statusObj = Read-JsonFileSafe -Path $statusPath
+            $comp = $null
+            if ($null -ne $statusObj -and $null -ne $statusObj.components) {
+                foreach ($r in @($statusObj.components)) {
+                    if ([string]$r.name -eq "SafetyBot") { $comp = $r; break }
+                }
+            }
+            $lastRunningByPid = [bool]($null -ne $comp -and [bool]$comp.running_by_pid)
+            $lastDuplicatePids = [bool]($null -ne $comp -and [bool]$comp.duplicate_pids)
+            $lastHeartbeatAge = Get-BridgeHeartbeatOkAgeSec -LogPath $safetyLogPath -TailLines 500
+            $heartbeatOk = ($null -ne $lastHeartbeatAge) -and ([double]$lastHeartbeatAge -le 45.0)
+
+            if ($lastStatusPass -and $lastRunningByPid -and (-not $lastDuplicatePids) -and $heartbeatOk) {
+                return [ordered]@{
+                    ok = $true
+                    status_out = $lastStatusOut
+                    running_by_pid = [bool]$lastRunningByPid
+                    duplicate_pids = [bool]$lastDuplicatePids
+                    bridge_heartbeat_ok_age_sec = $lastHeartbeatAge
+                    waited_sec = [double]([Math]::Round(((Get-Date) - $startedAt).TotalSeconds, 3))
+                }
+            }
+        } catch {
+            $lastError = [string]$_.Exception.Message
+        }
+        Start-Sleep -Seconds $poll
+    }
+
+    return [ordered]@{
+        ok = $false
+        status_out = $lastStatusOut
+        running_by_pid = [bool]$lastRunningByPid
+        duplicate_pids = [bool]$lastDuplicatePids
+        bridge_heartbeat_ok_age_sec = $lastHeartbeatAge
+        error = $lastError
+    }
+}
+
 function Start-RiskPopupGuard {
     param([string]$RuntimeRoot)
     $scriptPath = Join-Path $RuntimeRoot "TOOLS\mt5_risk_popup_guard.ps1"
@@ -941,6 +1042,25 @@ if ($rc -eq 0) {
         Write-Output ("START_WITH_OANDAKEY WARN: mt5 session guard failed status={0}" -f [string]$sessionGuard.status)
     } else {
         Write-Output ("START_WITH_OANDAKEY MT5_SESSION_GUARD status={0} pid={1}" -f [string]$sessionGuard.status, [string]$sessionGuard.pid)
+    }
+    if ($DryRun) {
+        $status.runtime_ready = [ordered]@{
+            ok = $true
+            status = "dry_run_skip"
+        }
+        $status.status = "PASS_READY_DRYRUN"
+        [void](Write-JsonAtomic -Path $statusPath -Object $status)
+    } else {
+        $ready = Wait-RuntimeReady -RuntimeRoot $runtimeRoot -Profile $Profile -TimeoutSec 120 -PollSec 3
+        $status.runtime_ready = $ready
+        if (-not [bool]$ready.ok) {
+            $status.status = "FAIL_RUNTIME_NOT_READY"
+            [void](Write-JsonAtomic -Path $statusPath -Object $status)
+            Write-Output ("START_WITH_OANDAKEY FAIL_RUNTIME_NOT_READY status_out={0} running_by_pid={1} duplicate_pids={2} hb_ok_age_sec={3}" -f [string]$ready.status_out, [int]([bool]$ready.running_by_pid), [int]([bool]$ready.duplicate_pids), [string]$ready.bridge_heartbeat_ok_age_sec)
+            exit 10
+        }
+        $status.status = "PASS_READY"
+        [void](Write-JsonAtomic -Path $statusPath -Object $status)
     }
     $reportedDrive = [string]$status.detected_drive
     if ([string]::IsNullOrWhiteSpace($reportedDrive)) {

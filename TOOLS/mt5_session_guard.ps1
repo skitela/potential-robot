@@ -15,9 +15,9 @@ param(
     [int]$FailSafeActivatedThreshold = 8,
     [int]$VirtualHostWarnWindowSec = 3600,
     [int]$VirtualHostWarnAlertThreshold = 5,
-    [int]$NoActivePeerWindowSec = 180,
-    [int]$NoActivePeerThreshold = 4,
-    [int]$NoActivePeerGraceSec = 90,
+    [int]$NoActivePeerWindowSec = 300,
+    [int]$NoActivePeerThreshold = 12,
+    [int]$NoActivePeerGraceSec = 180,
     [switch]$DryRun
 )
 
@@ -292,6 +292,7 @@ $noActivePeerEvents = New-Object System.Collections.ArrayList
 
 $lastLostAt = $null
 $lastAuthAt = $null
+$lastBridgeOkAt = $null
 $lastRestartAt = $null
 $connectedState = "UNKNOWN"
 $lastReason = "NONE"
@@ -305,6 +306,7 @@ $severeRx = [regex]'(?i)\b(POLICY_RUNTIME_FAILSAFE|ZMQ_INIT_FAIL)\b'
 $failSafeActivatedRx = [regex]'(?i)\bFAIL-SAFE ACTIVATED\b'
 $virtualHostWarnRx = [regex]'(?i)\bVirtual Hosting\b.*failed to get list of virtual hosts\b'
 $noActivePeerRx = [regex]'(?i)\b(NO_ACTIVE_PEER|COMMAND_SEND_TIMEOUT)\b'
+$bridgeOkRx = [regex]'(?i)\bBRIDGE_DIAG\b.*\baction=HEARTBEAT\b.*\bstatus=OK\b'
 
 Write-Output ("MT5_SESSION_GUARD start root={0} mt5_dir={1} profile={2} poll={3}s cooldown={4}s" -f $runtimeRoot, $mt5DataDirResolved, $Profile, [int]$PollSec, [int]$RestartCooldownSec)
 
@@ -393,6 +395,9 @@ while ($true) {
             foreach ($line in $safetyLines) {
                 $msg = [string]$line
                 if ([string]::IsNullOrWhiteSpace($msg)) { continue }
+                if ($bridgeOkRx.IsMatch($msg)) {
+                    $lastBridgeOkAt = $now
+                }
                 if ($noActivePeerRx.IsMatch($msg)) {
                     if (-not $isSafetyBootstrapRead) {
                         [void]$noActivePeerEvents.Add($now)
@@ -427,6 +432,7 @@ while ($true) {
 
         $shouldRepair = $false
         $repairReason = ""
+        $bridgeOkRecently = $false
         if (($severeEvents.Count -gt 0) -and $repairWindowOpen) {
             $shouldRepair = $true
             $repairReason = "SEVERE_MT5_EVENT"
@@ -471,7 +477,10 @@ while ($true) {
 
         if (-not $shouldRepair) {
             $noActivePeerReady = ((($now - $scriptStartedAt).TotalSeconds) -ge [double]([Math]::Max(0, [int]$NoActivePeerGraceSec)))
-            if ($noActivePeerReady -and ($noActivePeerEvents.Count -ge [int]([Math]::Max(1, [int]$NoActivePeerThreshold))) -and $repairWindowOpen) {
+            if ($null -ne $lastBridgeOkAt) {
+                $bridgeOkRecently = ((($now - $lastBridgeOkAt).TotalSeconds) -le [double]([Math]::Max(30, [int]$NoActivePeerGraceSec)))
+            }
+            if ($noActivePeerReady -and (-not $bridgeOkRecently) -and ($noActivePeerEvents.Count -ge [int]([Math]::Max(1, [int]$NoActivePeerThreshold))) -and $repairWindowOpen) {
                 $shouldRepair = $true
                 $repairReason = "NO_ACTIVE_PEER_BURST"
             }
@@ -535,6 +544,8 @@ while ($true) {
             virtual_hosting_warning_window = [int]$virtualHostWarnEvents.Count
             virtual_hosting_warning_alert = [bool]$virtualHostWarnAlert
             no_active_peer_window = [int]$noActivePeerEvents.Count
+            last_bridge_ok_utc = $(if ($null -eq $lastBridgeOkAt) { "" } else { $lastBridgeOkAt.ToUniversalTime().ToString("o") })
+            no_active_peer_bridge_ok_recent = [bool]$bridgeOkRecently
             last_restart_utc = $(if ($null -eq $lastRestartAt) { "" } else { $lastRestartAt.ToUniversalTime().ToString("o") })
             last_restart_reason = $lastReason
             cooldown_ok = [bool]$cooldownOk

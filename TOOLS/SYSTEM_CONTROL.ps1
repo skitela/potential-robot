@@ -187,6 +187,50 @@ function Get-ComponentLogTtlSec {
     }
 }
 
+function Get-SafetyBotHeartbeatOkAgeSec {
+    param(
+        [string]$LogPath,
+        [int]$TailLines = 500
+    )
+    if ([string]::IsNullOrWhiteSpace($LogPath)) {
+        return $null
+    }
+    if (-not (Test-Path $LogPath)) {
+        return $null
+    }
+    $lines = @()
+    try {
+        $lines = @(Get-Content -Path $LogPath -Tail ([Math]::Max(50, [int]$TailLines)) -ErrorAction Stop)
+    } catch {
+        return $null
+    }
+    if (@($lines).Count -eq 0) {
+        return $null
+    }
+    $rx = [regex]'^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}).*\bBRIDGE_DIAG\b.*\baction=HEARTBEAT\b.*\bstatus=OK\b'
+    $lastTs = $null
+    foreach ($ln in $lines) {
+        $msg = [string]$ln
+        if ([string]::IsNullOrWhiteSpace($msg)) { continue }
+        $m = $rx.Match($msg)
+        if (-not $m.Success) { continue }
+        try {
+            $parsed = [datetime]::ParseExact(
+                [string]$m.Groups["ts"].Value,
+                "yyyy-MM-dd HH:mm:ss,fff",
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )
+            $lastTs = $parsed
+        } catch {
+            continue
+        }
+    }
+    if ($null -eq $lastTs) {
+        return $null
+    }
+    return [double]((Get-Date) - $lastTs).TotalSeconds
+}
+
 function Stop-PidSafely {
     param(
         [int]$ProcessId,
@@ -569,6 +613,44 @@ function Start-Component {
                 lock_cleanup = $lockInfo.status
             }
         }
+        if ([string]$Comp.Name -eq "SafetyBot") {
+            $lockStable = $false
+            $lockProbePid = $null
+            $probeDeadline = (Get-Date).AddSeconds(6)
+            while ((Get-Date) -lt $probeDeadline) {
+                $proc.Refresh()
+                if ($proc.HasExited) {
+                    return @{
+                        status = "start_failed_exited"
+                        pid = [int]$proc.Id
+                        exit_code = [int]$proc.ExitCode
+                        stdout_log = $outLog
+                        stderr_log = $errLog
+                        lock = $LockPath
+                        lock_cleanup = $lockInfo.status
+                    }
+                }
+                if ($LockPath -and (Test-Path $LockPath)) {
+                    $lockProbePid = Get-LockPid -LockPath $LockPath
+                    if (($null -ne $lockProbePid) -and ([int]$lockProbePid -gt 0) -and (Test-PidRunning -ProcessId ([int]$lockProbePid))) {
+                        $lockStable = $true
+                        break
+                    }
+                }
+                Start-Sleep -Milliseconds 400
+            }
+            if (-not $lockStable) {
+                return @{
+                    status = "start_failed_no_lock"
+                    pid = [int]$proc.Id
+                    stdout_log = $outLog
+                    stderr_log = $errLog
+                    lock = $LockPath
+                    lock_pid = $lockProbePid
+                    lock_cleanup = $lockInfo.status
+                }
+            }
+        }
         return @{
             status = "started"
             pid = [int]$proc.Id
@@ -796,12 +878,24 @@ try {
                     $logFresh = ([double]$logAgeSec -le [double]$ttl)
                 }
                 $runningByPid = [bool]((@($ids).Count -gt 0) -or $lockPidRunning)
-                # WMI can be restricted on some hosts; lock+fresh-log is accepted heartbeat fallback.
+                $duplicatePids = [bool](([string]$c.Name -eq "SafetyBot") -and (@($ids).Count -gt 1))
+                # WMI can be restricted on some hosts; for SafetyBot heartbeat fallback is accepted
+                # only with an existing lock and fresh HEARTBEAT=OK evidence in log.
                 $runningByHeartbeat = $false
-                if ($lockPath) {
-                    $runningByHeartbeat = [bool]$logFresh
+                $heartbeatOkAgeSec = $null
+                $heartbeatOkRecent = $false
+                if ([string]$c.Name -eq "SafetyBot") {
+                    $heartbeatOkAgeSec = Get-SafetyBotHeartbeatOkAgeSec -LogPath $logPath -TailLines 500
+                    if ($null -ne $heartbeatOkAgeSec) {
+                        $heartbeatOkRecent = ([double]$heartbeatOkAgeSec -le [double]([Math]::Min([int]$ttl, 45)))
+                    }
+                    $runningByHeartbeat = ([bool]$lockExists -and [bool]$logFresh -and [bool]$heartbeatOkRecent -and (-not [bool]$runningByPid))
                 } else {
                     $runningByHeartbeat = [bool]$logFresh
+                }
+                $bridgePeerReady = $true
+                if ([string]$c.Name -eq "SafetyBot") {
+                    $bridgePeerReady = [bool]$heartbeatOkRecent
                 }
                 $result.components += [ordered]@{
                     name = [string]$c.Name
@@ -809,6 +903,7 @@ try {
                     running = ([bool]$runningByPid -or [bool]$runningByHeartbeat)
                     running_by_pid = [bool]$runningByPid
                     running_by_heartbeat = [bool]$runningByHeartbeat
+                    duplicate_pids = [bool]$duplicatePids
                     pids = @($ids)
                     lock = $lockPath
                     lock_exists = [bool]$lockExists
@@ -817,9 +912,18 @@ try {
                     log_path = $logPath
                     log_age_sec = $logAgeSec
                     log_ttl_sec = [int]$ttl
+                    heartbeat_ok_age_sec = $heartbeatOkAgeSec
+                    heartbeat_ok_recent = [bool]$heartbeatOkRecent
+                    bridge_peer_ready = [bool]$bridgePeerReady
                     runtime_hint = $runtimeHint
                 }
                 if (-not ([bool]$runningByPid -or [bool]$runningByHeartbeat)) {
+                    $hasError = $true
+                }
+                if ($duplicatePids) {
+                    $hasError = $true
+                }
+                if (([string]$c.Name -eq "SafetyBot") -and [bool]$runningByPid -and (-not [bool]$heartbeatOkRecent)) {
                     $hasError = $true
                 }
             }
@@ -833,7 +937,7 @@ try {
                     script = [string]$c.Script
                     result = $item
                 }
-                if (@("start_failed", "start_failed_exited", "missing_script", "blocked_active_lock", "blocked_stale_lock", "duplicate_running") -contains [string]$item.status) {
+                if (@("start_failed", "start_failed_exited", "start_failed_no_lock", "missing_script", "blocked_active_lock", "blocked_stale_lock", "duplicate_running") -contains [string]$item.status) {
                     $hasError = $true
                 }
                 $result.components += $row
