@@ -15030,25 +15030,14 @@ class SafetyBot:
                 float(heartbeat_fail_safe_until),
             )
 
-        hb_reply = self.zmq_bridge.send_command(
-            {
-                "action": "HEARTBEAT",
-                "loop_id": int(loop_id),
-                "hb_loop_lag_ms": int(heartbeat_loop_lag_ms),
-                "hb_market_data_stale_ms": int(market_data_stale_ms),
-            },
-            timeout_ms=int(heartbeat_timeout_budget_ms),
-            max_retries=int(heartbeat_retries_budget),
-            loop_id=str(int(loop_id)),
-            queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
-            reconnect_on_timeout=bool(
-                getattr(CFG, "bridge_heartbeat_reconnect_on_timeout", False)
-            ),
+        hb_reply, hb_diag, hb_reason, hb_subreason = self._runtime_send_heartbeat(
+            loop_id=int(loop_id),
+            heartbeat_loop_lag_ms=int(heartbeat_loop_lag_ms),
+            market_data_stale_ms=int(market_data_stale_ms),
+            heartbeat_timeout_budget_ms=int(heartbeat_timeout_budget_ms),
+            heartbeat_retries_budget=int(heartbeat_retries_budget),
+            heartbeat_queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
         )
-        hb_diag: Dict[str, Any] = self.zmq_bridge.get_last_command_diag()
-        self._record_bridge_diag(hb_diag, action="HEARTBEAT")
-        hb_reason = str((hb_diag.get("bridge_timeout_reason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
-        hb_subreason = str((hb_diag.get("bridge_timeout_subreason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
         hb_skipped_lock = bool(hb_reason == "QUEUE_LOCK_TIMEOUT")
         hb_timeout_nonfatal = self._runtime_is_heartbeat_timeout_nonfatal(
             hb_reason=hb_reason,
@@ -15174,6 +15163,37 @@ class SafetyBot:
             and str(hb_reply.get("status") or "").upper() == "OK"
             and bool(hb_hash_ok)
         )
+
+    def _runtime_send_heartbeat(
+        self,
+        *,
+        loop_id: int,
+        heartbeat_loop_lag_ms: int,
+        market_data_stale_ms: int,
+        heartbeat_timeout_budget_ms: int,
+        heartbeat_retries_budget: int,
+        heartbeat_queue_lock_timeout_ms: int,
+    ) -> Tuple[Any, Dict[str, Any], str, str]:
+        hb_reply = self.zmq_bridge.send_command(
+            {
+                "action": "HEARTBEAT",
+                "loop_id": int(loop_id),
+                "hb_loop_lag_ms": int(heartbeat_loop_lag_ms),
+                "hb_market_data_stale_ms": int(market_data_stale_ms),
+            },
+            timeout_ms=int(heartbeat_timeout_budget_ms),
+            max_retries=int(heartbeat_retries_budget),
+            loop_id=str(int(loop_id)),
+            queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
+            reconnect_on_timeout=bool(
+                getattr(CFG, "bridge_heartbeat_reconnect_on_timeout", False)
+            ),
+        )
+        hb_diag: Dict[str, Any] = self.zmq_bridge.get_last_command_diag()
+        self._record_bridge_diag(hb_diag, action="HEARTBEAT")
+        hb_reason = str((hb_diag.get("bridge_timeout_reason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
+        hb_subreason = str((hb_diag.get("bridge_timeout_subreason") if isinstance(hb_diag, dict) else "") or "").strip().upper()
+        return hb_reply, hb_diag, hb_reason, hb_subreason
 
     def _runtime_heartbeat_step_from_state(
         self,
