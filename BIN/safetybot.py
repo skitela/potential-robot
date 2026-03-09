@@ -16602,6 +16602,103 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+    def _build_symbol_info_snapshot_from_tick(
+        self,
+        *,
+        data: Dict[str, Any],
+        now_ts: float,
+        point: float,
+        bid: float,
+        ask: float,
+    ) -> Dict[str, Any]:
+        spread_pts = float(data.get("spread_points", 0.0) or 0.0)
+        if spread_pts <= 0.0 and point > 0.0:
+            spread_pts = max(0.0, float((ask - bid) / point))
+        return {
+            "recv_ts": now_ts,
+            "point": point,
+            "digits": int(data.get("digits", 0) or 0),
+            "spread": spread_pts,
+            "trade_tick_size": float(data.get("trade_tick_size", 0.0) or 0.0),
+            "trade_tick_value": float(data.get("trade_tick_value", 0.0) or 0.0),
+            "volume_min": float(data.get("volume_min", 0.0) or 0.0),
+            "volume_max": float(data.get("volume_max", 0.0) or 0.0),
+            "volume_step": float(data.get("volume_step", 0.0) or 0.0),
+            "trade_stops_level": int(data.get("trade_stops_level", 0) or 0),
+            "trade_freeze_level": int(data.get("trade_freeze_level", 0) or 0),
+        }
+
+    def _build_micro_tick_state_from_tick(
+        self,
+        *,
+        base_symbol: str,
+        data: Dict[str, Any],
+        now_ts: float,
+        bid: float,
+        ask: float,
+        point: float,
+    ) -> Dict[str, Any]:
+        prev = dict(self._micro_tick_state.get(base_symbol) or {})
+        prev_ts = float(prev.get("recv_ts", 0.0) or 0.0)
+        prev_mid = float(prev.get("mid", 0.0) or 0.0)
+        mql5_tick_gap_sec: Optional[float] = None
+        mql5_price_jump_points: Optional[float] = None
+        mql5_ask_lt_bid: Optional[bool] = None
+        try:
+            if data.get("tick_gap_sec") is not None:
+                mql5_tick_gap_sec = max(0.0, float(data.get("tick_gap_sec") or 0.0))
+        except Exception:
+            mql5_tick_gap_sec = None
+        try:
+            if data.get("price_jump_points") is not None:
+                mql5_price_jump_points = max(0.0, float(data.get("price_jump_points") or 0.0))
+        except Exception:
+            mql5_price_jump_points = None
+        try:
+            if data.get("ask_lt_bid") is not None:
+                mql5_ask_lt_bid = bool(data.get("ask_lt_bid"))
+        except Exception:
+            mql5_ask_lt_bid = None
+        tick_gap_sec = None
+        if prev_ts > 0.0:
+            tick_gap_sec = max(0.0, float(now_ts) - float(prev_ts))
+        mid = 0.0
+        if bid > 0.0 and ask > 0.0:
+            mid = (bid + ask) * 0.5
+        price_jump_points = None
+        if point > 0.0 and prev_mid > 0.0 and mid > 0.0:
+            price_jump_points = abs(float(mid) - float(prev_mid)) / float(point)
+        if mql5_tick_gap_sec is not None:
+            tick_gap_sec = float(mql5_tick_gap_sec)
+        if mql5_price_jump_points is not None:
+            price_jump_points = float(mql5_price_jump_points)
+        ask_lt_bid_flag = bool((ask > 0.0 and bid > 0.0) and (ask < bid))
+        if mql5_ask_lt_bid is not None:
+            ask_lt_bid_flag = bool(mql5_ask_lt_bid)
+        return {
+            "recv_ts": float(now_ts),
+            "mid": float(mid),
+            "tick_gap_sec": tick_gap_sec,
+            "price_jump_points": price_jump_points,
+            "ask_lt_bid": bool(ask_lt_bid_flag),
+            "tick_rate_1s": (
+                None if data.get("tick_rate_1s") is None else int(max(0, int(data.get("tick_rate_1s") or 0)))
+            ),
+            "spread_roll_mean_points": (
+                None
+                if data.get("spread_roll_mean_points") is None
+                else float(max(0.0, float(data.get("spread_roll_mean_points") or 0.0)))
+            ),
+            "spread_roll_p95_points": (
+                None
+                if data.get("spread_roll_p95_points") is None
+                else float(max(0.0, float(data.get("spread_roll_p95_points") or 0.0)))
+            ),
+            "stale_tick_flag": bool(data.get("stale_tick_flag", False)),
+            "burst_flag": bool(data.get("burst_flag", False)),
+            "quality_flags": str(data.get("quality_flags") or "UNKNOWN"),
+        }
+
     def _handle_tick_snapshot(self, *, symbol: str, base_symbol: str, data: Dict[str, Any], now_ts: float) -> None:
         if hasattr(self.execution_engine, "_zmq_tick_cache"):
             self.execution_engine._zmq_tick_cache[symbol] = data
@@ -16613,82 +16710,21 @@ class SafetyBot:
             point = float(data.get("point", 0.0) or 0.0)
             bid = float(data.get("bid", 0.0) or 0.0)
             ask = float(data.get("ask", 0.0) or 0.0)
-            spread_pts = float(data.get("spread_points", 0.0) or 0.0)
-            if spread_pts <= 0.0 and point > 0.0:
-                spread_pts = max(0.0, float((ask - bid) / point))
-            self._zmq_symbol_info_cache[base_symbol] = {
-                "recv_ts": now_ts,
-                "point": point,
-                "digits": int(data.get("digits", 0) or 0),
-                "spread": spread_pts,
-                "trade_tick_size": float(data.get("trade_tick_size", 0.0) or 0.0),
-                "trade_tick_value": float(data.get("trade_tick_value", 0.0) or 0.0),
-                "volume_min": float(data.get("volume_min", 0.0) or 0.0),
-                "volume_max": float(data.get("volume_max", 0.0) or 0.0),
-                "volume_step": float(data.get("volume_step", 0.0) or 0.0),
-                "trade_stops_level": int(data.get("trade_stops_level", 0) or 0),
-                "trade_freeze_level": int(data.get("trade_freeze_level", 0) or 0),
-            }
-            prev = dict(self._micro_tick_state.get(base_symbol) or {})
-            prev_ts = float(prev.get("recv_ts", 0.0) or 0.0)
-            prev_mid = float(prev.get("mid", 0.0) or 0.0)
-            mql5_tick_gap_sec: Optional[float] = None
-            mql5_price_jump_points: Optional[float] = None
-            mql5_ask_lt_bid: Optional[bool] = None
-            try:
-                if data.get("tick_gap_sec") is not None:
-                    mql5_tick_gap_sec = max(0.0, float(data.get("tick_gap_sec") or 0.0))
-            except Exception:
-                mql5_tick_gap_sec = None
-            try:
-                if data.get("price_jump_points") is not None:
-                    mql5_price_jump_points = max(0.0, float(data.get("price_jump_points") or 0.0))
-            except Exception:
-                mql5_price_jump_points = None
-            try:
-                if data.get("ask_lt_bid") is not None:
-                    mql5_ask_lt_bid = bool(data.get("ask_lt_bid"))
-            except Exception:
-                mql5_ask_lt_bid = None
-            tick_gap_sec = None
-            if prev_ts > 0.0:
-                tick_gap_sec = max(0.0, float(now_ts) - float(prev_ts))
-            mid = 0.0
-            if bid > 0.0 and ask > 0.0:
-                mid = (bid + ask) * 0.5
-            price_jump_points = None
-            if point > 0.0 and prev_mid > 0.0 and mid > 0.0:
-                price_jump_points = abs(float(mid) - float(prev_mid)) / float(point)
-            if mql5_tick_gap_sec is not None:
-                tick_gap_sec = float(mql5_tick_gap_sec)
-            if mql5_price_jump_points is not None:
-                price_jump_points = float(mql5_price_jump_points)
-            ask_lt_bid_flag = bool((ask > 0.0 and bid > 0.0) and (ask < bid))
-            if mql5_ask_lt_bid is not None:
-                ask_lt_bid_flag = bool(mql5_ask_lt_bid)
-            self._micro_tick_state[base_symbol] = {
-                "recv_ts": float(now_ts),
-                "mid": float(mid),
-                "tick_gap_sec": tick_gap_sec,
-                "price_jump_points": price_jump_points,
-                "ask_lt_bid": bool(ask_lt_bid_flag),
-                "tick_rate_1s": (
-                    None if data.get("tick_rate_1s") is None else int(max(0, int(data.get("tick_rate_1s") or 0)))
-                ),
-                "spread_roll_mean_points": (
-                    None
-                    if data.get("spread_roll_mean_points") is None
-                    else float(max(0.0, float(data.get("spread_roll_mean_points") or 0.0)))
-                ),
-                "spread_roll_p95_points": (
-                    None
-                    if data.get("spread_roll_p95_points") is None
-                    else float(max(0.0, float(data.get("spread_roll_p95_points") or 0.0)))
-                ),
-                "stale_tick_flag": bool(data.get("stale_tick_flag", False)),
-                "burst_flag": bool(data.get("burst_flag", False)),
-                "quality_flags": str(data.get("quality_flags") or "UNKNOWN"),
-            }
+            self._zmq_symbol_info_cache[base_symbol] = self._build_symbol_info_snapshot_from_tick(
+                data=data,
+                now_ts=now_ts,
+                point=point,
+                bid=bid,
+                ask=ask,
+            )
+            self._micro_tick_state[base_symbol] = self._build_micro_tick_state_from_tick(
+                base_symbol=base_symbol,
+                data=data,
+                now_ts=now_ts,
+                bid=bid,
+                ask=ask,
+                point=point,
+            )
             if bool(getattr(CFG, "renko_tick_store_enabled", True)) and getattr(self, "tick_store", None) is not None:
                 tick_persisted = bool(self.tick_store.upsert_tick_snapshot(base_symbol, data, recv_ts=now_ts))
         except Exception as e:
@@ -16701,34 +16737,53 @@ class SafetyBot:
             int(bool(tick_persisted)),
         )
 
+    def _persist_bar_snapshot(self, *, base_symbol: str, data: Dict[str, Any]) -> bool:
+        if getattr(self, "bars_store", None) is None:
+            return False
+        return bool(self.bars_store.upsert_bar_snapshot(base_symbol, data))
+
+    def _maybe_update_feature_cache_from_bar(
+        self,
+        *,
+        base_symbol: str,
+        data: Dict[str, Any],
+        now_ts: float,
+    ) -> None:
+        if not all(k in data for k in ("open", "close", "sma_fast", "adx", "atr", "time")):
+            return
+        ts = int(data.get("time") or 0)
+        if ts <= 0:
+            return
+        _maybe_update_mt5_server_epoch_offset(
+            int(ts),
+            source="zmq_feature_bar",
+            max_age_s=max(300, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900))),
+        )
+        bar_ts_pl = pd.Timestamp(mt5_epoch_to_utc_dt(int(ts)).astimezone(TZ_PL))
+        self._zmq_m5_feature_cache[base_symbol] = {
+            "recv_ts": now_ts,
+            "bar_time_pl": bar_ts_pl,
+            "open": float(data.get("open")),
+            "close": float(data.get("close")),
+            "sma_fast": float(data.get("sma_fast")),
+            "adx": float(data.get("adx")),
+            "atr": float(data.get("atr")),
+        }
+
     def _handle_bar_snapshot(self, *, symbol: str, base_symbol: str, data: Dict[str, Any], now_ts: float) -> None:
         self._zmq_last_bar_ts[base_symbol] = now_ts
         persisted = False
         try:
-            if getattr(self, "bars_store", None) is not None:
-                persisted = bool(self.bars_store.upsert_bar_snapshot(base_symbol, data))
+            persisted = self._persist_bar_snapshot(base_symbol=base_symbol, data=data)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         try:
-            if all(k in data for k in ("open", "close", "sma_fast", "adx", "atr", "time")):
-                ts = int(data.get("time") or 0)
-                if ts > 0:
-                    _maybe_update_mt5_server_epoch_offset(
-                        int(ts),
-                        source="zmq_feature_bar",
-                        max_age_s=max(300, int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900))),
-                    )
-                    bar_ts_pl = pd.Timestamp(mt5_epoch_to_utc_dt(int(ts)).astimezone(TZ_PL))
-                    self._zmq_m5_feature_cache[base_symbol] = {
-                        "recv_ts": now_ts,
-                        "bar_time_pl": bar_ts_pl,
-                        "open": float(data.get("open")),
-                        "close": float(data.get("close")),
-                        "sma_fast": float(data.get("sma_fast")),
-                        "adx": float(data.get("adx")),
-                        "atr": float(data.get("atr")),
-                    }
+            self._maybe_update_feature_cache_from_bar(
+                base_symbol=base_symbol,
+                data=data,
+                now_ts=now_ts,
+            )
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
