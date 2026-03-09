@@ -443,6 +443,33 @@ class TestHybridExecution(unittest.TestCase):
         self.assertEqual((100.0, 2, True, 130.0), out)
         self.assertEqual(1, int(bot._loop_heartbeat_fail_total))
 
+    def test_runtime_heartbeat_step_from_state_maps_cfg_and_state(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_heartbeat_step = MagicMock(return_value=(10.0, 1, False, 0.0))
+        loop_cfg = SimpleNamespace(
+            heartbeat_interval=15,
+            heartbeat_fail_threshold=3,
+            heartbeat_fail_safe_cooldown=30,
+            heartbeat_fail_log_interval=15,
+            heartbeat_timeout_budget_ms=800,
+            heartbeat_retries_budget=1,
+            heartbeat_queue_lock_timeout_ms=25,
+            heartbeat_worker_stale_sec=120,
+        )
+        loop_state = {
+            "loop_id": 7,
+            "last_heartbeat_ts": 1.0,
+            "last_market_data_ts": 2.0,
+            "heartbeat_fail_safe_active": True,
+            "heartbeat_failures": 5,
+            "heartbeat_fail_safe_until": 3.0,
+        }
+
+        out = bot._runtime_heartbeat_step_from_state(now=9.0, loop_cfg=loop_cfg, loop_state=loop_state)
+        self.assertEqual((10.0, 1, False, 0.0), out)
+        bot._runtime_heartbeat_step.assert_called_once()
+
     def test_runtime_ingest_step_updates_timestamp_on_market_data(self):
         with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
             bot = SafetyBot()

@@ -14810,22 +14810,10 @@ class SafetyBot:
             next_heartbeat_failures,
             next_heartbeat_fail_safe_active,
             next_heartbeat_fail_safe_until,
-        ) = self._runtime_heartbeat_step(
+        ) = self._runtime_heartbeat_step_from_state(
             now=float(now),
-            loop_id=int(loop_state["loop_id"]),
-            last_heartbeat_ts=float(loop_state.get("last_heartbeat_ts", 0.0) or 0.0),
-            last_market_data_ts=float(loop_state.get("last_market_data_ts", 0.0) or 0.0),
-            heartbeat_interval=int(loop_cfg.heartbeat_interval),
-            heartbeat_fail_safe_active=bool(loop_state.get("heartbeat_fail_safe_active", False)),
-            heartbeat_failures=int(loop_state.get("heartbeat_failures", 0) or 0),
-            heartbeat_fail_safe_until=float(loop_state.get("heartbeat_fail_safe_until", 0.0) or 0.0),
-            heartbeat_fail_threshold=int(loop_cfg.heartbeat_fail_threshold),
-            heartbeat_fail_safe_cooldown=int(loop_cfg.heartbeat_fail_safe_cooldown),
-            heartbeat_fail_log_interval=int(loop_cfg.heartbeat_fail_log_interval),
-            heartbeat_timeout_budget_ms=int(loop_cfg.heartbeat_timeout_budget_ms),
-            heartbeat_retries_budget=int(loop_cfg.heartbeat_retries_budget),
-            heartbeat_queue_lock_timeout_ms=int(loop_cfg.heartbeat_queue_lock_timeout_ms),
-            heartbeat_worker_stale_sec=int(loop_cfg.heartbeat_worker_stale_sec),
+            loop_cfg=loop_cfg,
+            loop_state=loop_state,
         )
         loop_state["last_heartbeat_ts"] = float(next_last_heartbeat_ts)
         loop_state["heartbeat_failures"] = int(next_heartbeat_failures)
@@ -15097,6 +15085,31 @@ class SafetyBot:
             int(heartbeat_failures),
             bool(heartbeat_fail_safe_active),
             float(heartbeat_fail_safe_until),
+        )
+
+    def _runtime_heartbeat_step_from_state(
+        self,
+        *,
+        now: float,
+        loop_cfg: Any,
+        loop_state: Dict[str, Any],
+    ) -> Tuple[float, int, bool, float]:
+        return self._runtime_heartbeat_step(
+            now=float(now),
+            loop_id=int(loop_state.get("loop_id", 0) or 0),
+            last_heartbeat_ts=float(loop_state.get("last_heartbeat_ts", 0.0) or 0.0),
+            last_market_data_ts=float(loop_state.get("last_market_data_ts", 0.0) or 0.0),
+            heartbeat_interval=int(loop_cfg.heartbeat_interval),
+            heartbeat_fail_safe_active=bool(loop_state.get("heartbeat_fail_safe_active", False)),
+            heartbeat_failures=int(loop_state.get("heartbeat_failures", 0) or 0),
+            heartbeat_fail_safe_until=float(loop_state.get("heartbeat_fail_safe_until", 0.0) or 0.0),
+            heartbeat_fail_threshold=int(loop_cfg.heartbeat_fail_threshold),
+            heartbeat_fail_safe_cooldown=int(loop_cfg.heartbeat_fail_safe_cooldown),
+            heartbeat_fail_log_interval=int(loop_cfg.heartbeat_fail_log_interval),
+            heartbeat_timeout_budget_ms=int(loop_cfg.heartbeat_timeout_budget_ms),
+            heartbeat_retries_budget=int(loop_cfg.heartbeat_retries_budget),
+            heartbeat_queue_lock_timeout_ms=int(loop_cfg.heartbeat_queue_lock_timeout_ms),
+            heartbeat_worker_stale_sec=int(loop_cfg.heartbeat_worker_stale_sec),
         )
 
     def _runtime_trade_probe_step(
