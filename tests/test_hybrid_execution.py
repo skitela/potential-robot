@@ -1,6 +1,7 @@
 ﻿import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -471,6 +472,118 @@ class TestHybridExecution(unittest.TestCase):
         self.assertEqual(50.0, float(ts))
         bot._handle_market_data.assert_not_called()
         bot._record_section_duration.assert_called_once()
+
+    def test_runtime_loop_step_updates_state_and_calls_substeps(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_ingest_step = MagicMock(return_value=({"type": "TICK"}, 200.0))
+        bot._runtime_heartbeat_step = MagicMock(return_value=(201.0, 2, True, 230.0))
+        bot._runtime_trade_probe_step = MagicMock(return_value=(202.0, 3))
+        bot._runtime_scan_step = MagicMock(return_value=203.0)
+        bot._runtime_maintenance_step = MagicMock(return_value=True)
+        bot._runtime_idle_step = MagicMock()
+
+        loop_cfg = SimpleNamespace(
+            heartbeat_interval=15,
+            heartbeat_fail_threshold=3,
+            heartbeat_fail_safe_cooldown=30,
+            heartbeat_fail_log_interval=15,
+            heartbeat_timeout_budget_ms=800,
+            heartbeat_retries_budget=1,
+            heartbeat_queue_lock_timeout_ms=25,
+            heartbeat_worker_stale_sec=120,
+            trade_probe_enabled=True,
+            trade_probe_interval_sec=15,
+            trade_probe_max_per_run=120,
+            trade_probe_signal="BUY",
+            trade_probe_symbol="__TRADE_PROBE_INVALID__",
+            trade_probe_volume=0.01,
+            trade_probe_deviation_points=10,
+            trade_probe_comment="TRADE_PROBE_SAFE_NO_LIVE",
+            trade_probe_group="FX",
+            scan_interval=60,
+            scan_suppressed_log_interval=60,
+            scan_slow_warn_ms=1500,
+            run_loop_idle_sleep=0.01,
+        )
+        loop_state = {
+            "last_scan_ts": 0.0,
+            "last_heartbeat_ts": 0.0,
+            "last_market_data_ts": 0.0,
+            "heartbeat_failures": 0,
+            "heartbeat_fail_safe_active": False,
+            "heartbeat_fail_safe_until": 0.0,
+            "last_trade_probe_ts": 0.0,
+            "trade_probe_sent": 0,
+            "loop_id": 0,
+        }
+
+        with patch("BIN.safetybot.time.time", return_value=200.0):
+            ok = bot._runtime_loop_step(loop_cfg=loop_cfg, loop_state=loop_state)
+
+        self.assertTrue(ok)
+        self.assertEqual(1, int(loop_state["loop_id"]))
+        self.assertEqual(200.0, float(loop_state["last_market_data_ts"]))
+        self.assertEqual(201.0, float(loop_state["last_heartbeat_ts"]))
+        self.assertEqual(2, int(loop_state["heartbeat_failures"]))
+        self.assertTrue(bool(loop_state["heartbeat_fail_safe_active"]))
+        self.assertEqual(230.0, float(loop_state["heartbeat_fail_safe_until"]))
+        self.assertEqual(202.0, float(loop_state["last_trade_probe_ts"]))
+        self.assertEqual(3, int(loop_state["trade_probe_sent"]))
+        self.assertEqual(203.0, float(loop_state["last_scan_ts"]))
+        bot._runtime_maintenance_step.assert_called_once()
+        bot._runtime_idle_step.assert_called_once()
+
+    def test_runtime_loop_step_stops_on_maintenance_false(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_ingest_step = MagicMock(return_value=(None, 50.0))
+        bot._runtime_heartbeat_step = MagicMock(return_value=(51.0, 0, False, 0.0))
+        bot._runtime_trade_probe_step = MagicMock(return_value=(52.0, 1))
+        bot._runtime_scan_step = MagicMock(return_value=53.0)
+        bot._runtime_maintenance_step = MagicMock(return_value=False)
+        bot._runtime_idle_step = MagicMock()
+
+        loop_cfg = SimpleNamespace(
+            heartbeat_interval=15,
+            heartbeat_fail_threshold=3,
+            heartbeat_fail_safe_cooldown=30,
+            heartbeat_fail_log_interval=15,
+            heartbeat_timeout_budget_ms=800,
+            heartbeat_retries_budget=1,
+            heartbeat_queue_lock_timeout_ms=25,
+            heartbeat_worker_stale_sec=120,
+            trade_probe_enabled=False,
+            trade_probe_interval_sec=15,
+            trade_probe_max_per_run=120,
+            trade_probe_signal="BUY",
+            trade_probe_symbol="__TRADE_PROBE_INVALID__",
+            trade_probe_volume=0.01,
+            trade_probe_deviation_points=10,
+            trade_probe_comment="TRADE_PROBE_SAFE_NO_LIVE",
+            trade_probe_group="FX",
+            scan_interval=60,
+            scan_suppressed_log_interval=60,
+            scan_slow_warn_ms=1500,
+            run_loop_idle_sleep=0.01,
+        )
+        loop_state = {
+            "last_scan_ts": 0.0,
+            "last_heartbeat_ts": 0.0,
+            "last_market_data_ts": 0.0,
+            "heartbeat_failures": 0,
+            "heartbeat_fail_safe_active": False,
+            "heartbeat_fail_safe_until": 0.0,
+            "last_trade_probe_ts": 0.0,
+            "trade_probe_sent": 0,
+            "loop_id": 0,
+        }
+
+        with patch("BIN.safetybot.time.time", return_value=50.0):
+            ok = bot._runtime_loop_step(loop_cfg=loop_cfg, loop_state=loop_state)
+
+        self.assertFalse(ok)
+        bot._runtime_idle_step.assert_not_called()
 
 
 if __name__ == "__main__":

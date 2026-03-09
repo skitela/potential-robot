@@ -14791,6 +14791,80 @@ class SafetyBot:
         self._record_section_duration("tick_ingest", int((time.perf_counter() - tick_ingest_t0) * 1000.0))
         return market_data, float(next_market_data_ts)
 
+    def _runtime_loop_step(self, *, loop_cfg: Any, loop_state: Dict[str, Any]) -> bool:
+        now = float(time.time())
+        loop_state["loop_id"] = int(loop_state.get("loop_id", 0) or 0) + 1
+        self._runtime_loop_id = int(loop_state["loop_id"])
+
+        market_data, next_market_data_ts = self._runtime_ingest_step(
+            now=float(now),
+            last_market_data_ts=float(loop_state.get("last_market_data_ts", 0.0) or 0.0),
+            receive_timeout_ms=100,
+        )
+        loop_state["last_market_data_ts"] = float(next_market_data_ts)
+
+        (
+            next_last_heartbeat_ts,
+            next_heartbeat_failures,
+            next_heartbeat_fail_safe_active,
+            next_heartbeat_fail_safe_until,
+        ) = self._runtime_heartbeat_step(
+            now=float(now),
+            loop_id=int(loop_state["loop_id"]),
+            last_heartbeat_ts=float(loop_state.get("last_heartbeat_ts", 0.0) or 0.0),
+            last_market_data_ts=float(loop_state.get("last_market_data_ts", 0.0) or 0.0),
+            heartbeat_interval=int(loop_cfg.heartbeat_interval),
+            heartbeat_fail_safe_active=bool(loop_state.get("heartbeat_fail_safe_active", False)),
+            heartbeat_failures=int(loop_state.get("heartbeat_failures", 0) or 0),
+            heartbeat_fail_safe_until=float(loop_state.get("heartbeat_fail_safe_until", 0.0) or 0.0),
+            heartbeat_fail_threshold=int(loop_cfg.heartbeat_fail_threshold),
+            heartbeat_fail_safe_cooldown=int(loop_cfg.heartbeat_fail_safe_cooldown),
+            heartbeat_fail_log_interval=int(loop_cfg.heartbeat_fail_log_interval),
+            heartbeat_timeout_budget_ms=int(loop_cfg.heartbeat_timeout_budget_ms),
+            heartbeat_retries_budget=int(loop_cfg.heartbeat_retries_budget),
+            heartbeat_queue_lock_timeout_ms=int(loop_cfg.heartbeat_queue_lock_timeout_ms),
+            heartbeat_worker_stale_sec=int(loop_cfg.heartbeat_worker_stale_sec),
+        )
+        loop_state["last_heartbeat_ts"] = float(next_last_heartbeat_ts)
+        loop_state["heartbeat_failures"] = int(next_heartbeat_failures)
+        loop_state["heartbeat_fail_safe_active"] = bool(next_heartbeat_fail_safe_active)
+        loop_state["heartbeat_fail_safe_until"] = float(next_heartbeat_fail_safe_until)
+
+        next_probe_ts, next_probe_sent = self._runtime_trade_probe_step(
+            now=float(now),
+            heartbeat_fail_safe_active=bool(loop_state["heartbeat_fail_safe_active"]),
+            trade_probe_enabled=bool(loop_cfg.trade_probe_enabled),
+            trade_probe_interval_sec=int(loop_cfg.trade_probe_interval_sec),
+            trade_probe_max_per_run=int(loop_cfg.trade_probe_max_per_run),
+            trade_probe_sent=int(loop_state.get("trade_probe_sent", 0) or 0),
+            last_trade_probe_ts=float(loop_state.get("last_trade_probe_ts", 0.0) or 0.0),
+            trade_probe_signal=str(loop_cfg.trade_probe_signal),
+            trade_probe_symbol=str(loop_cfg.trade_probe_symbol),
+            trade_probe_volume=float(loop_cfg.trade_probe_volume),
+            trade_probe_deviation_points=int(loop_cfg.trade_probe_deviation_points),
+            trade_probe_comment=str(loop_cfg.trade_probe_comment),
+            trade_probe_group=str(loop_cfg.trade_probe_group),
+        )
+        loop_state["last_trade_probe_ts"] = float(next_probe_ts)
+        loop_state["trade_probe_sent"] = int(next_probe_sent)
+
+        next_scan_ts = self._runtime_scan_step(
+            now=float(now),
+            last_scan_ts=float(loop_state.get("last_scan_ts", 0.0) or 0.0),
+            scan_interval=int(loop_cfg.scan_interval),
+            heartbeat_fail_safe_active=bool(loop_state["heartbeat_fail_safe_active"]),
+            heartbeat_failures=int(loop_state["heartbeat_failures"]),
+            heartbeat_fail_safe_until=float(loop_state["heartbeat_fail_safe_until"]),
+            scan_suppressed_log_interval=int(loop_cfg.scan_suppressed_log_interval),
+            scan_slow_warn_ms=int(loop_cfg.scan_slow_warn_ms),
+        )
+        loop_state["last_scan_ts"] = float(next_scan_ts)
+
+        if not self._runtime_maintenance_step():
+            return False
+        self._runtime_idle_step(bool(market_data), float(loop_cfg.run_loop_idle_sleep))
+        return True
+
     def _runtime_scan_step(
         self,
         *,
@@ -16662,122 +16736,31 @@ class SafetyBot:
             )
         logging.info("TRADE_TRIGGER_MODE mode=%s", effective_trigger_mode)
 
-        last_scan_ts = 0.0
         loop_cfg = build_runtime_loop_settings(CFG)
-        scan_interval = int(loop_cfg.scan_interval)
-        heartbeat_interval = int(loop_cfg.heartbeat_interval)
-        heartbeat_fail_threshold = int(loop_cfg.heartbeat_fail_threshold)
-        heartbeat_fail_safe_cooldown = int(loop_cfg.heartbeat_fail_safe_cooldown)
-        heartbeat_fail_log_interval = int(loop_cfg.heartbeat_fail_log_interval)
-        scan_suppressed_log_interval = int(loop_cfg.scan_suppressed_log_interval)
-        trade_timeout_budget_ms = int(loop_cfg.trade_timeout_budget_ms)
-        trade_retries_budget = int(loop_cfg.trade_retries_budget)
-        heartbeat_timeout_budget_ms = int(loop_cfg.heartbeat_timeout_budget_ms)
-        heartbeat_retries_budget = int(loop_cfg.heartbeat_retries_budget)
-        heartbeat_queue_lock_timeout_ms = int(loop_cfg.heartbeat_queue_lock_timeout_ms)
-        run_loop_idle_sleep = float(loop_cfg.run_loop_idle_sleep)
-        scan_slow_warn_ms = int(loop_cfg.scan_slow_warn_ms)
-        heartbeat_worker_stale_sec = int(loop_cfg.heartbeat_worker_stale_sec)
-        trade_probe_enabled = bool(loop_cfg.trade_probe_enabled)
-        trade_probe_interval_sec = int(loop_cfg.trade_probe_interval_sec)
-        trade_probe_max_per_run = int(loop_cfg.trade_probe_max_per_run)
-        trade_probe_signal = str(loop_cfg.trade_probe_signal)
-        trade_probe_symbol = str(loop_cfg.trade_probe_symbol)
-        trade_probe_group = str(loop_cfg.trade_probe_group)
-        trade_probe_volume = float(loop_cfg.trade_probe_volume)
-        trade_probe_deviation_points = int(loop_cfg.trade_probe_deviation_points)
-        trade_probe_comment = str(loop_cfg.trade_probe_comment)
-        last_heartbeat_ts = 0.0
-        last_market_data_ts = 0.0
-        heartbeat_failures = 0
-        heartbeat_fail_safe_active = False
-        heartbeat_fail_safe_until = 0.0
-        last_trade_probe_ts = 0.0
-        trade_probe_sent = 0
-        loop_id = 0
+        loop_state: Dict[str, Any] = {
+            "last_scan_ts": 0.0,
+            "last_heartbeat_ts": 0.0,
+            "last_market_data_ts": 0.0,
+            "heartbeat_failures": 0,
+            "heartbeat_fail_safe_active": False,
+            "heartbeat_fail_safe_until": 0.0,
+            "last_trade_probe_ts": 0.0,
+            "trade_probe_sent": 0,
+            "loop_id": 0,
+        }
         logging.info(
             "BRIDGE_BUDGETS trade_timeout_ms=%s trade_retries=%s heartbeat_timeout_ms=%s heartbeat_retries=%s hb_lock_timeout_ms=%s",
-            int(trade_timeout_budget_ms),
-            int(trade_retries_budget),
-            int(heartbeat_timeout_budget_ms),
-            int(heartbeat_retries_budget),
-            int(heartbeat_queue_lock_timeout_ms),
+            int(loop_cfg.trade_timeout_budget_ms),
+            int(loop_cfg.trade_retries_budget),
+            int(loop_cfg.heartbeat_timeout_budget_ms),
+            int(loop_cfg.heartbeat_retries_budget),
+            int(loop_cfg.heartbeat_queue_lock_timeout_ms),
         )
 
         try:
             while True:
-                now = time.time()
-                loop_id = int(loop_id) + 1
-                self._runtime_loop_id = int(loop_id)
-
-                # 1. Receive ZMQ data (non-blocking, short timeout)
-                market_data, last_market_data_ts = self._runtime_ingest_step(
-                    now=float(now),
-                    last_market_data_ts=float(last_market_data_ts),
-                    receive_timeout_ms=100,
-                )
-
-                # 2. Synchronous heartbeat over REQ/REP
-                (
-                    last_heartbeat_ts,
-                    heartbeat_failures,
-                    heartbeat_fail_safe_active,
-                    heartbeat_fail_safe_until,
-                ) = self._runtime_heartbeat_step(
-                    now=float(now),
-                    loop_id=int(loop_id),
-                    last_heartbeat_ts=float(last_heartbeat_ts),
-                    last_market_data_ts=float(last_market_data_ts),
-                    heartbeat_interval=int(heartbeat_interval),
-                    heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-                    heartbeat_failures=int(heartbeat_failures),
-                    heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
-                    heartbeat_fail_threshold=int(heartbeat_fail_threshold),
-                    heartbeat_fail_safe_cooldown=int(heartbeat_fail_safe_cooldown),
-                    heartbeat_fail_log_interval=int(heartbeat_fail_log_interval),
-                    heartbeat_timeout_budget_ms=int(heartbeat_timeout_budget_ms),
-                    heartbeat_retries_budget=int(heartbeat_retries_budget),
-                    heartbeat_queue_lock_timeout_ms=int(heartbeat_queue_lock_timeout_ms),
-                    heartbeat_worker_stale_sec=int(heartbeat_worker_stale_sec),
-                )
-
-                # 2b. Controlled TRADE-path probe (disabled by default).
-                # Sends synthetic TRADE command with intentionally invalid symbol.
-                # This provides TRADE samples for bridge latency audits without live order execution.
-                last_trade_probe_ts, trade_probe_sent = self._runtime_trade_probe_step(
-                    now=float(now),
-                    heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-                    trade_probe_enabled=bool(trade_probe_enabled),
-                    trade_probe_interval_sec=int(trade_probe_interval_sec),
-                    trade_probe_max_per_run=int(trade_probe_max_per_run),
-                    trade_probe_sent=int(trade_probe_sent),
-                    last_trade_probe_ts=float(last_trade_probe_ts),
-                    trade_probe_signal=str(trade_probe_signal),
-                    trade_probe_symbol=str(trade_probe_symbol),
-                    trade_probe_volume=float(trade_probe_volume),
-                    trade_probe_deviation_points=int(trade_probe_deviation_points),
-                    trade_probe_comment=str(trade_probe_comment),
-                    trade_probe_group=str(trade_probe_group),
-                )
-
-                # 3. Cykliczny skan logiki (wstrzymany, gdy heartbeat fail-safe aktywny)
-                last_scan_ts = self._runtime_scan_step(
-                    now=float(now),
-                    last_scan_ts=float(last_scan_ts),
-                    scan_interval=int(scan_interval),
-                    heartbeat_fail_safe_active=bool(heartbeat_fail_safe_active),
-                    heartbeat_failures=int(heartbeat_failures),
-                    heartbeat_fail_safe_until=float(heartbeat_fail_safe_until),
-                    scan_suppressed_log_interval=int(scan_suppressed_log_interval),
-                    scan_slow_warn_ms=int(scan_slow_warn_ms),
-                )
-
-                # 4. Control-plane maintenance outside decision hot section.
-                if not self._runtime_maintenance_step():
+                if not self._runtime_loop_step(loop_cfg=loop_cfg, loop_state=loop_state):
                     break
-
-                # 5. Krótki odpoczynek dla CPU, jeśli nie było danych
-                self._runtime_idle_step(bool(market_data), float(run_loop_idle_sleep))
 
         except KeyboardInterrupt:
             logging.info("BOT STOP | manual (Ctrl+C)")
