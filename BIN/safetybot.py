@@ -139,6 +139,7 @@ try:
         KERNEL_CONFIG_POLICY_VERSION,
     )
     from .runtime_supervisor import (
+        build_runtime_loop_state,
         build_runtime_loop_settings,
         build_mt5_common_file_path,
         resolve_trade_trigger_mode,
@@ -199,6 +200,7 @@ except Exception:  # pragma: no cover
         KERNEL_CONFIG_POLICY_VERSION,
     )
     from runtime_supervisor import (
+        build_runtime_loop_state,
         build_runtime_loop_settings,
         build_mt5_common_file_path,
         resolve_trade_trigger_mode,
@@ -16737,17 +16739,7 @@ class SafetyBot:
         logging.info("TRADE_TRIGGER_MODE mode=%s", effective_trigger_mode)
 
         loop_cfg = build_runtime_loop_settings(CFG)
-        loop_state: Dict[str, Any] = {
-            "last_scan_ts": 0.0,
-            "last_heartbeat_ts": 0.0,
-            "last_market_data_ts": 0.0,
-            "heartbeat_failures": 0,
-            "heartbeat_fail_safe_active": False,
-            "heartbeat_fail_safe_until": 0.0,
-            "last_trade_probe_ts": 0.0,
-            "trade_probe_sent": 0,
-            "loop_id": 0,
-        }
+        loop_state: Dict[str, Any] = build_runtime_loop_state()
         logging.info(
             "BRIDGE_BUDGETS trade_timeout_ms=%s trade_retries=%s heartbeat_timeout_ms=%s heartbeat_retries=%s hb_lock_timeout_ms=%s",
             int(loop_cfg.trade_timeout_budget_ms),

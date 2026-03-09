@@ -12,6 +12,7 @@ if str(BIN_DIR) not in sys.path:
 
 from deployment_plane import build_kernel_symbol_rows, build_policy_runtime_payload
 from runtime_supervisor import (
+    build_runtime_loop_state,
     build_mt5_common_file_path,
     build_runtime_loop_settings,
     resolve_trade_trigger_mode,
@@ -134,6 +135,18 @@ class TestRuntimeSupervisorDeploymentPlane(unittest.TestCase):
         self.assertEqual(0.0, got.trade_probe_volume)
         self.assertEqual(10, got.trade_probe_deviation_points)
         self.assertEqual("test-comment", got.trade_probe_comment)
+
+    def test_build_runtime_loop_state_defaults(self) -> None:
+        st = build_runtime_loop_state()
+        self.assertEqual(0.0, float(st["last_scan_ts"]))
+        self.assertEqual(0.0, float(st["last_heartbeat_ts"]))
+        self.assertEqual(0.0, float(st["last_market_data_ts"]))
+        self.assertEqual(0, int(st["heartbeat_failures"]))
+        self.assertFalse(bool(st["heartbeat_fail_safe_active"]))
+        self.assertEqual(0.0, float(st["heartbeat_fail_safe_until"]))
+        self.assertEqual(0.0, float(st["last_trade_probe_ts"]))
+        self.assertEqual(0, int(st["trade_probe_sent"]))
+        self.assertEqual(0, int(st["loop_id"]))
 
 
 if __name__ == "__main__":

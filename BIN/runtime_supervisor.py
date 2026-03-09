@@ -173,3 +173,17 @@ def build_runtime_loop_settings(cfg: Any) -> RuntimeLoopSettings:
         trade_probe_deviation_points=trade_probe_deviation_points,
         trade_probe_comment=trade_probe_comment,
     )
+
+
+def build_runtime_loop_state() -> dict[str, Any]:
+    return {
+        "last_scan_ts": 0.0,
+        "last_heartbeat_ts": 0.0,
+        "last_market_data_ts": 0.0,
+        "heartbeat_failures": 0,
+        "heartbeat_fail_safe_active": False,
+        "heartbeat_fail_safe_until": 0.0,
+        "last_trade_probe_ts": 0.0,
+        "trade_probe_sent": 0,
+        "loop_id": 0,
+    }
