@@ -14758,6 +14758,11 @@ class SafetyBot:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _runtime_maintenance_step(self) -> bool:
+        self._runtime_emit_control_plane()
+        self._runtime_reload_stage1_config()
+        return self._runtime_check_kill_switch()
+
+    def _runtime_emit_control_plane(self) -> None:
         try:
             # Control-plane emit poza sekcją decyzyjną scan_once (mniej I/O w decision core).
             group_arb = dict(getattr(self, "_runtime_cached_group_arb", {}) or {})
@@ -14767,11 +14772,13 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+    def _runtime_reload_stage1_config(self) -> None:
         try:
             self._reload_stage1_live_config(force=False)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+    def _runtime_check_kill_switch(self) -> bool:
         if self.manual_kill_switch_path.exists():
             logging.info("BOT STOP | Wykryto plik kill_switch.")
             return False
