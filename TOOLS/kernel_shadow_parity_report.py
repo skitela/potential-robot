@@ -356,13 +356,16 @@ def build_report(
         },
         "counts": {
             "state_by_action": dict(state_by_action),
+            "state_by_window": {k: int(v) for k, v in state_by_window.items()},
             "state_by_reason_top10": [{"reason": k, "count": int(v)} for k, v in state_by_reason.most_common(10)],
             "state_by_window_top10": [{"window": k, "count": int(v)} for k, v in state_by_window.most_common(10)],
             "state_by_symbol_top10": [
                 {"symbol": sym, "actions": dict(cnt)}
                 for sym, cnt in sorted(state_by_symbol.items(), key=lambda kv: sum(kv[1].values()), reverse=True)[:10]
             ],
+            "parity_by_window": {k: int(v) for k, v in parity_by_window.items()},
             "parity_by_window_top10": [{"window": k, "count": int(v)} for k, v in parity_by_window.most_common(10)],
+            "parity_mismatch_by_window": {k: int(v) for k, v in parity_mismatch_by_window.items()},
             "parity_mismatch_by_window_top10": [
                 {"window": k, "count": int(v)} for k, v in parity_mismatch_by_window.most_common(10)
             ],
