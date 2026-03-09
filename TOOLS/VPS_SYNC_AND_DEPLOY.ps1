@@ -6,6 +6,8 @@ param(
     [string]$Profile = "safety_only",
     [switch]$StartAfterSync,
     [switch]$RunEaDeploy,
+    [switch]$SkipBootstrap,
+    [switch]$SkipRemoteStatus,
     [switch]$DryRun
 )
 
@@ -148,8 +150,10 @@ try {
             Copy-Item -ToSession $session -Path $bundlePath -Destination $remoteZip -Force
             Add-Step -Name "upload_bundle" -Status "OK" -Info $remoteZip
 
-            $remoteAction = Invoke-Command -Session $session -ArgumentList $remoteZip, "C:\OANDA_MT5_SYSTEM", [bool]$StartAfterSync, [bool]$RunEaDeploy, $Profile -ScriptBlock {
-                param($ZipPath, $RemoteRoot, $DoStart, $DoEaDeploy, $RuntimeProfile)
+            $remoteErrors = @()
+            $remoteAction = Invoke-Command -Session $session -ErrorAction Continue -ErrorVariable remoteErrors -ArgumentList $remoteZip, "C:\OANDA_MT5_SYSTEM", [bool]$StartAfterSync, [bool]$RunEaDeploy, [bool]$SkipBootstrap, [bool]$SkipRemoteStatus, $Profile -ScriptBlock {
+                param($ZipPath, $RemoteRoot, $DoStart, $DoEaDeploy, $DoSkipBootstrap, $DoSkipRemoteStatus, $RuntimeProfile)
+                $ErrorActionPreference = "Continue"
                 $out = [ordered]@{
                     unzip = "INIT"
                     sync = "INIT"
@@ -173,10 +177,12 @@ try {
                     }
                     $out.sync = "OK"
 
-                    $bootstrap = Join-Path $RemoteRoot "TOOLS\vps_bootstrap_windows.ps1"
-                    if (Test-Path -LiteralPath $bootstrap) {
-                        & powershell -NoProfile -ExecutionPolicy Bypass -File $bootstrap -ProjectRoot $RemoteRoot -LabDataRoot "C:\OANDA_MT5_LAB_DATA" | Out-Null
-                        $out.bootstrap = "OK"
+                    if (-not [bool]$DoSkipBootstrap) {
+                        $bootstrap = Join-Path $RemoteRoot "TOOLS\vps_bootstrap_windows.ps1"
+                        if (Test-Path -LiteralPath $bootstrap) {
+                            & powershell -NoProfile -ExecutionPolicy Bypass -File $bootstrap -ProjectRoot $RemoteRoot -LabDataRoot "C:\OANDA_MT5_LAB_DATA" | Out-Null
+                            $out.bootstrap = "OK"
+                        }
                     }
 
                     if ($DoEaDeploy) {
@@ -197,18 +203,32 @@ try {
                         }
                     }
 
-                    $statusScript = Join-Path $RemoteRoot "TOOLS\SYSTEM_CONTROL.ps1"
-                    if (Test-Path -LiteralPath $statusScript) {
-                        $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $statusScript -Action status -Root $RemoteRoot 2>&1 | Out-String
-                        $out.status = "STATUS_DONE"
-                        $out.status_output = $raw
+                    if (-not [bool]$DoSkipRemoteStatus) {
+                        $statusScript = Join-Path $RemoteRoot "TOOLS\SYSTEM_CONTROL.ps1"
+                        if (Test-Path -LiteralPath $statusScript) {
+                            $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $statusScript -Action status -Root $RemoteRoot 2>&1 | Out-String
+                            $out.status = "STATUS_DONE"
+                            $out.status_output = $raw
+                        } else {
+                            $out.status = "NO_STATUS_SCRIPT"
+                        }
                     } else {
-                        $out.status = "NO_STATUS_SCRIPT"
+                        $out.status = "STATUS_SKIPPED"
                     }
                 } finally {
                     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
                 }
                 return ($out | ConvertTo-Json -Depth 8)
+            }
+            if ($remoteErrors.Count -gt 0) {
+                $msgs = @($remoteErrors | ForEach-Object { [string]$_.Exception.Message })
+                $critical = @($msgs | Where-Object { $_ -notmatch "Input redirection is not supported" })
+                if ($critical.Count -gt 0) {
+                    throw ($critical -join " | ")
+                }
+                if ($msgs.Count -gt 0) {
+                    Add-Step -Name "remote_warning" -Status "WARN" -Info ($msgs -join " | ")
+                }
             }
             Add-Step -Name "remote_apply" -Status "OK" -Info ([string]$remoteAction)
             $result.status = "PASS"
@@ -232,7 +252,7 @@ $result | ConvertTo-Json -Depth 8 | Set-Content -Path $syncReport -Encoding UTF8
 $latest = Join-Path $syncDir "vps_sync_report_latest.json"
 $result | ConvertTo-Json -Depth 8 | Set-Content -Path $latest -Encoding UTF8
 Write-Output ("VPS_SYNC_AND_DEPLOY status={0} report={1}" -f [string]$result.status, $syncReport)
-if ($result.error) {
+if ($result.Contains("error") -and -not [string]::IsNullOrWhiteSpace([string]$result.error)) {
     Write-Output ("DETAILS: " + [string]$result.error)
 }
 
