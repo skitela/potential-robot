@@ -14969,7 +14969,7 @@ class SafetyBot:
         return float(now)
 
     def _runtime_scan_due(self, *, now: float, last_scan_ts: float, scan_interval: int) -> bool:
-        return bool((float(now) - float(last_scan_ts)) >= float(scan_interval))
+        return bool((now - last_scan_ts) >= scan_interval)
 
     def _runtime_is_scan_suppressed(
         self,
@@ -14982,12 +14982,12 @@ class SafetyBot:
     ) -> bool:
         if not bool(heartbeat_fail_safe_active):
             return False
-        if (float(now) - float(self._last_scan_suppressed_log_ts or 0.0)) >= float(scan_suppressed_log_interval):
-            self._last_scan_suppressed_log_ts = float(now)
+        if (now - float(self._last_scan_suppressed_log_ts or 0.0)) >= scan_suppressed_log_interval:
+            self._last_scan_suppressed_log_ts = now
             logging.warning(
                 "SCAN_SUPPRESSED | reason=heartbeat_fail_safe failures=%s cooldown_remain_s=%s",
                 int(heartbeat_failures),
-                int(max(0, round(float(heartbeat_fail_safe_until) - float(now)))),
+                int(max(0, round(heartbeat_fail_safe_until - now))),
             )
         return True
 
@@ -15003,11 +15003,11 @@ class SafetyBot:
             scan_ms = int((time.perf_counter() - scan_start_ts) * 1000.0)
             self._record_scan_duration(scan_ms)
             self._record_section_duration("decision_core", scan_ms)
-            if scan_ms >= int(scan_slow_warn_ms):
+            if scan_ms >= scan_slow_warn_ms:
                 logging.warning(
                     "SCAN_SLOW scan_ms=%s threshold_ms=%s",
-                    int(scan_ms),
-                    int(scan_slow_warn_ms),
+                    scan_ms,
+                    scan_slow_warn_ms,
                 )
 
     def _runtime_heartbeat_step(
@@ -15129,19 +15129,19 @@ class SafetyBot:
         heartbeat_fail_safe_active: bool,
         heartbeat_fail_safe_until: float,
     ) -> Optional[Tuple[float, int, bool, float]]:
-        if (float(now) - float(last_heartbeat_ts)) < float(heartbeat_interval):
+        if (now - last_heartbeat_ts) < heartbeat_interval:
             return (
-                float(last_heartbeat_ts),
-                int(heartbeat_failures),
-                bool(heartbeat_fail_safe_active),
-                float(heartbeat_fail_safe_until),
+                last_heartbeat_ts,
+                heartbeat_failures,
+                heartbeat_fail_safe_active,
+                heartbeat_fail_safe_until,
             )
-        if bool(heartbeat_fail_safe_active) and float(now) < float(heartbeat_fail_safe_until):
+        if heartbeat_fail_safe_active and now < heartbeat_fail_safe_until:
             return (
-                float(now),
-                int(heartbeat_failures),
-                bool(heartbeat_fail_safe_active),
-                float(heartbeat_fail_safe_until),
+                now,
+                heartbeat_failures,
+                heartbeat_fail_safe_active,
+                heartbeat_fail_safe_until,
             )
         return None
 
@@ -15152,9 +15152,9 @@ class SafetyBot:
         last_heartbeat_ts: float,
         heartbeat_interval: int,
     ) -> int:
-        if float(last_heartbeat_ts) <= 0:
+        if last_heartbeat_ts <= 0:
             return 0
-        return int(max(0.0, (float(now) - float(last_heartbeat_ts) - float(heartbeat_interval)) * 1000.0))
+        return int(max(0.0, (now - last_heartbeat_ts - heartbeat_interval) * 1000.0))
 
     def _runtime_heartbeat_suppressed_result(
         self,
@@ -15166,19 +15166,19 @@ class SafetyBot:
         heartbeat_fail_log_interval: int,
         market_data_stale_ms: int,
     ) -> Tuple[float, int, bool, float]:
-        heartbeat_fail_safe_until = float(now) + float(heartbeat_fail_safe_cooldown)
-        if (float(now) - float(self._last_heartbeat_fail_log_ts or 0.0)) >= float(heartbeat_fail_log_interval):
-            self._last_heartbeat_fail_log_ts = float(now)
+        heartbeat_fail_safe_until = now + heartbeat_fail_safe_cooldown
+        if (now - float(self._last_heartbeat_fail_log_ts or 0.0)) >= heartbeat_fail_log_interval:
+            self._last_heartbeat_fail_log_ts = now
             logging.warning(
                 "HEARTBEAT_SUPPRESSED reason=HB_NO_WORKER_RESPONSE stale_ms=%s cooldown_s=%s",
                 int(market_data_stale_ms),
                 int(heartbeat_fail_safe_cooldown),
             )
         return (
-            float(now),
-            int(heartbeat_failures),
-            bool(heartbeat_fail_safe_active),
-            float(heartbeat_fail_safe_until),
+            now,
+            heartbeat_failures,
+            heartbeat_fail_safe_active,
+            heartbeat_fail_safe_until,
         )
 
     def _runtime_heartbeat_skip_lock_result(
@@ -15488,11 +15488,11 @@ class SafetyBot:
         trade_probe_interval_sec: int,
         last_trade_probe_ts: float,
     ) -> bool:
-        if not bool(trade_probe_enabled):
+        if not trade_probe_enabled:
             return False
-        if bool(heartbeat_fail_safe_active):
+        if heartbeat_fail_safe_active:
             return False
-        if (float(now) - float(last_trade_probe_ts)) < float(trade_probe_interval_sec):
+        if (now - last_trade_probe_ts) < trade_probe_interval_sec:
             return False
         return True
 
@@ -15529,7 +15529,7 @@ class SafetyBot:
 
     def _runtime_idle_step(self, had_market_data: bool, idle_sleep_sec: float) -> None:
         if not had_market_data:
-            time.sleep(float(idle_sleep_sec))
+            time.sleep(idle_sleep_sec)
 
     def scan_once(self):
         st = self.gov.day_state()
