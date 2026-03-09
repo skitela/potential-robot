@@ -14844,6 +14844,16 @@ class SafetyBot:
         )
         loop_state["last_market_data_ts"] = float(next_market_data_ts)
 
+        self._runtime_run_heartbeat(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
+        self._runtime_run_trade_probe(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
+        self._runtime_run_scan(loop_cfg=loop_cfg, loop_state=loop_state, now=float(now))
+
+        if not self._runtime_maintenance_step():
+            return False
+        self._runtime_idle_step(bool(market_data), float(loop_cfg.run_loop_idle_sleep))
+        return True
+
+    def _runtime_run_heartbeat(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
         (
             next_last_heartbeat_ts,
             next_heartbeat_failures,
@@ -14862,6 +14872,7 @@ class SafetyBot:
             heartbeat_fail_safe_until=float(next_heartbeat_fail_safe_until),
         )
 
+    def _runtime_run_trade_probe(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
         next_probe_ts, next_probe_sent = self._runtime_trade_probe_step(
             now=float(now),
             heartbeat_fail_safe_active=bool(loop_state["heartbeat_fail_safe_active"]),
@@ -14883,6 +14894,7 @@ class SafetyBot:
             trade_probe_sent=int(next_probe_sent),
         )
 
+    def _runtime_run_scan(self, *, loop_cfg: Any, loop_state: Dict[str, Any], now: float) -> None:
         next_scan_ts = self._runtime_scan_step(
             now=float(now),
             last_scan_ts=float(loop_state.get("last_scan_ts", 0.0) or 0.0),
@@ -14897,11 +14909,6 @@ class SafetyBot:
             loop_state=loop_state,
             last_scan_ts=float(next_scan_ts),
         )
-
-        if not self._runtime_maintenance_step():
-            return False
-        self._runtime_idle_step(bool(market_data), float(loop_cfg.run_loop_idle_sleep))
-        return True
 
     def _runtime_scan_step(
         self,
