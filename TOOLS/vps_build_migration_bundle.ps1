@@ -29,7 +29,12 @@ try {
         robocopy $src $dst /E /NFL /NDL /NJH /NJS /NP /XF "*.pyc" "*.pyo" "*.log" "*.tmp" /XD "__pycache__" ".pytest_cache" ".git" "EVIDENCE" "DB" "venv" ".venv" | Out-Null
     }
 
-    foreach ($f in @("requirements.txt","AGENTS.md","README.md")) {
+    foreach ($f in @(
+        "requirements.txt",
+        "requirements.live.lock",
+        "AGENTS.md",
+        "README.md"
+    )) {
         $src = Join-Path $Root $f
         if (Test-Path -LiteralPath $src) {
             Copy-Item -LiteralPath $src -Destination (Join-Path $stage $f) -Force
