@@ -35,3 +35,13 @@ def test_mt5_session_guard_handles_large_log_offsets_without_int32_overflow() ->
     )
     for token in required_tokens:
         assert token in script, f"Missing large-log safety token: {token}"
+
+
+def test_mt5_session_guard_does_not_stop_itself_during_repair_cycle() -> None:
+    script = Path("TOOLS/mt5_session_guard.ps1").read_text(encoding="utf-8", errors="ignore")
+    required_tokens = (
+        "Invoke-SystemRepair",
+        "-SkipBackgroundGuards",
+    )
+    for token in required_tokens:
+        assert token in script, f"Missing self-preserving repair token: {token}"

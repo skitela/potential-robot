@@ -243,7 +243,8 @@ function Invoke-SystemRepair {
         }
     }
     try {
-        $stopOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action stop -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
+        # Guard naprawia runtime i nie powinien ubić samego siebie podczas stop.
+        $stopOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action stop -Root $RuntimeRoot -Profile $Profile -SkipBackgroundGuards 2>&1 | Out-String).Trim()
         Start-Sleep -Seconds 3
         $startOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action start -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
         Start-Sleep -Seconds 2

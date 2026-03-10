@@ -4,6 +4,7 @@ param(
     [string]$Action,
     [string]$Root = "",
     [switch]$DryRun,
+    [switch]$SkipBackgroundGuards,
     [ValidateSet("full", "safety_only")]
     [string]$Profile = "safety_only"
 )
@@ -1135,16 +1136,21 @@ try {
                     lock_cleanup = $lockState
                 }
             }
-            $guards = @(
-                @{ name = "MT5RiskGuard"; pid_rel = "RUN\mt5_risk_guard.pid" },
-                @{ name = "MT5SessionGuard"; pid_rel = "RUN\mt5_session_guard.pid" }
-            )
-            $result.guards = @()
-            foreach ($g in $guards) {
-                $gstop = Stop-BackgroundGuard -RuntimeRoot $runtimeRoot -Name ([string]$g.name) -PidFileRel ([string]$g.pid_rel) -Dry:$DryRun
-                $result.guards += $gstop
-                if (([string]$gstop.stop_state) -eq "force_failed" -or ([string]$gstop.pid_cleanup) -eq "remove_failed") {
-                    $hasError = $true
+            if ($SkipBackgroundGuards) {
+                $result.guards = @()
+                $result.guards_skipped = $true
+            } else {
+                $guards = @(
+                    @{ name = "MT5RiskGuard"; pid_rel = "RUN\mt5_risk_guard.pid" },
+                    @{ name = "MT5SessionGuard"; pid_rel = "RUN\mt5_session_guard.pid" }
+                )
+                $result.guards = @()
+                foreach ($g in $guards) {
+                    $gstop = Stop-BackgroundGuard -RuntimeRoot $runtimeRoot -Name ([string]$g.name) -PidFileRel ([string]$g.pid_rel) -Dry:$DryRun
+                    $result.guards += $gstop
+                    if (([string]$gstop.stop_state) -eq "force_failed" -or ([string]$gstop.pid_cleanup) -eq "remove_failed") {
+                        $hasError = $true
+                    }
                 }
             }
         }
