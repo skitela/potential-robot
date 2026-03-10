@@ -48,3 +48,15 @@ def test_start_with_oandakey_has_single_instance_lock_contract() -> None:
     )
     for token in required_tokens:
         assert token in script, f"Missing start-lock token: {token}"
+
+
+def test_start_with_oandakey_profile_setup_has_retry_and_nonfatal_stderr_contract() -> None:
+    script = Path("RUN/START_WITH_OANDAKEY.ps1").read_text(encoding="utf-8", errors="ignore")
+    required_tokens = (
+        "$profileMaxAttempts = 2",
+        '$ErrorActionPreference = "Continue"',
+        "attempts = [int]$profileAttempt",
+        "last_error = [string]$profileLastError",
+    )
+    for token in required_tokens:
+        assert token in script, f"Missing profile-setup resilience token: {token}"

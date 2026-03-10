@@ -1378,14 +1378,32 @@ if (Test-Path $profileSetupScript) {
     $profileRc = 0
     $profileOut = ""
     $profileOk = $false
-    try {
-        $profileOut = (& $pythonExe @profileArgs 2>&1 | Out-String)
-        $profileRc = [int]$LASTEXITCODE
-        $profileOk = ($profileRc -eq 0)
-    } catch {
-        $profileRc = 7
-        $profileOut = ("MT5 profile setup launch failed: " + $_.Exception.Message)
-        $profileOk = $false
+    $profileAttempt = 0
+    $profileMaxAttempts = 2
+    $profileLastError = ""
+    while ($profileAttempt -lt $profileMaxAttempts) {
+        $profileAttempt += 1
+        $prevErrorPreference = $ErrorActionPreference
+        try {
+            # Python może pisać na stderr (np. ostrzeżenia kodowania) mimo rc=0.
+            # Nie traktujemy tego jako wyjątek transportowy.
+            $ErrorActionPreference = "Continue"
+            $profileOut = (& $pythonExe @profileArgs 2>&1 | Out-String)
+            $profileRc = [int]$LASTEXITCODE
+            $profileOk = ($profileRc -eq 0)
+            if ($profileOk) { break }
+            $profileLastError = ("profile_setup_exit_code_{0}" -f [int]$profileRc)
+        } catch {
+            $profileRc = 7
+            $profileOut = ("MT5 profile setup launch failed: " + $_.Exception.Message)
+            $profileLastError = [string]$_.Exception.Message
+            $profileOk = $false
+        } finally {
+            $ErrorActionPreference = $prevErrorPreference
+        }
+        if ($profileAttempt -lt $profileMaxAttempts) {
+            Start-Sleep -Seconds 2
+        }
     }
     $status.mt5_profile_setup = [ordered]@{
         ok = [bool]$profileOk
@@ -1393,6 +1411,8 @@ if (Test-Path $profileSetupScript) {
         output = [string]$profileOut
         profile = "OANDA_HYBRID_AUTO"
         python = [string]$pythonExe
+        attempts = [int]$profileAttempt
+        last_error = [string]$profileLastError
     }
     if (-not $profileOk) {
         $status.status = "FAIL"
