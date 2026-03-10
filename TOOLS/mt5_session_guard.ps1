@@ -65,6 +65,88 @@ function Resolve-Mt5DataDir {
     return $bestDir
 }
 
+function Get-PythonPath {
+    param([string]$RuntimeRoot)
+    $candidates = @(
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        (Join-Path $RuntimeRoot ".venv\Scripts\python.exe"),
+        "C:\Program Files\Python312\python.exe"
+    )
+    foreach ($c in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$c) -and (Test-Path $c)) {
+            return [string]$c
+        }
+    }
+    try {
+        $py312 = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0) {
+            $py312Path = [string]($py312 | Select-Object -First 1)
+            if (-not [string]::IsNullOrWhiteSpace($py312Path) -and (Test-Path $py312Path.Trim())) {
+                return $py312Path.Trim()
+            }
+        }
+    } catch {
+        # fallback below
+    }
+    return "python"
+}
+
+function Invoke-Mt5ProfileRefresh {
+    param(
+        [string]$RuntimeRoot,
+        [switch]$Dry
+    )
+    $script = Join-Path $RuntimeRoot "TOOLS\setup_mt5_hybrid_profile.py"
+    if (-not (Test-Path $script)) {
+        return [ordered]@{
+            ok = $false
+            status = "missing_profile_setup_script"
+            script = $script
+        }
+    }
+
+    $pythonPath = Get-PythonPath -RuntimeRoot $RuntimeRoot
+    $interactive = [bool][Environment]::UserInteractive
+    $args = @(
+        "-B",
+        $script,
+        "--root", $RuntimeRoot,
+        "--profile", "OANDA_HYBRID_AUTO"
+    )
+    if (-not $interactive) {
+        $args += "--no-launch"
+    }
+    if ($Dry) {
+        return [ordered]@{
+            ok = $true
+            status = "dry_run"
+            python = $pythonPath
+            launch_mode = if ($interactive) { "interactive_launch" } else { "no_launch_noninteractive" }
+            args = @($args)
+        }
+    }
+
+    try {
+        $output = (& $pythonPath @args 2>&1 | Out-String).Trim()
+        $rc = [int]$LASTEXITCODE
+        return [ordered]@{
+            ok = ($rc -eq 0)
+            status = if ($rc -eq 0) { "profile_refreshed" } else { "profile_refresh_failed" }
+            exit_code = [int]$rc
+            output = $output
+            python = $pythonPath
+            launch_mode = if ($interactive) { "interactive_launch" } else { "no_launch_noninteractive" }
+        }
+    } catch {
+        return [ordered]@{
+            ok = $false
+            status = "profile_refresh_exception"
+            error = [string]$_.Exception.Message
+            python = $pythonPath
+        }
+    }
+}
+
 function Read-AppendedLines {
     param(
         [string]$Path,
@@ -235,11 +317,14 @@ function Invoke-SystemRepair {
             error = "missing_system_control"
         }
     }
+    $profileRefresh = Invoke-Mt5ProfileRefresh -RuntimeRoot $RuntimeRoot -Dry:$Dry
+
     if ($Dry) {
         return @{
             ok = $true
             reason = $Reason
             mode = "dry_run"
+            profile_refresh = $profileRefresh
         }
     }
     try {
@@ -254,6 +339,7 @@ function Invoke-SystemRepair {
             ok = [bool]$ok
             reason = $Reason
             profile = $Profile
+            profile_refresh = $profileRefresh
             stop = $stopOut
             start = $startOut
             status = $statusOut
@@ -262,6 +348,7 @@ function Invoke-SystemRepair {
         return @{
             ok = $false
             reason = $Reason
+            profile_refresh = $profileRefresh
             error = [string]$_.Exception.Message
         }
     }

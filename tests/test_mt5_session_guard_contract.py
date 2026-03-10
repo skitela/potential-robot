@@ -45,3 +45,16 @@ def test_mt5_session_guard_does_not_stop_itself_during_repair_cycle() -> None:
     )
     for token in required_tokens:
         assert token in script, f"Missing self-preserving repair token: {token}"
+
+
+def test_mt5_session_guard_refreshes_mt5_profile_before_runtime_repair() -> None:
+    script = Path("TOOLS/mt5_session_guard.ps1").read_text(encoding="utf-8", errors="ignore")
+    required_tokens = (
+        "function Invoke-Mt5ProfileRefresh",
+        "$profileRefresh = Invoke-Mt5ProfileRefresh -RuntimeRoot $RuntimeRoot -Dry:$Dry",
+        "profile_refresh = $profileRefresh",
+        "--profile\", \"OANDA_HYBRID_AUTO\"",
+        "--no-launch",
+    )
+    for token in required_tokens:
+        assert token in script, f"Missing MT5 profile-refresh token: {token}"
