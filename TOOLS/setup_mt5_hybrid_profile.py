@@ -214,6 +214,13 @@ def _chart_template_score(chart_path: Path, require_hybrid: bool = True) -> Opti
     if require_hybrid and not has_hybrid:
         return None
     score = len(txt)
+    obj_counts = [int(v) for v in re.findall(r"(?mi)^objects=(\d+)$", txt)]
+    if obj_counts:
+        # Templates with huge object payloads are fragile and significantly slower to load.
+        score -= min(200_000, sum(obj_counts) * 40)
+    if len(txt) > 80_000:
+        # Prefer lean templates when possible.
+        score -= min(100_000, (len(txt) - 80_000))
     if has_hybrid:
         score += 5000
     return score
@@ -262,13 +269,7 @@ def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
         if best is not None:
             return best
 
-    # 3) Fallback to current profile if nothing else is available.
-    if preferred_profile.exists():
-        best = _pick_best_template(sorted(preferred_profile.glob("*.chr")), require_hybrid=True)
-        if best is not None:
-            return best
-
-    # 4) Last-resort fallback to backup profiles.
+    # 3) Fallback to backup profiles (preferred profile is generated and can be stale/corrupted).
     if charts_root.exists():
         backup_candidates: List[Path] = []
         for profile_dir in sorted(charts_root.iterdir()):
@@ -280,29 +281,35 @@ def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
         if best is not None:
             return best
 
+    # 4) Fallback to current profile only when nothing else exists.
+    if preferred_profile.exists():
+        best = _pick_best_template(sorted(preferred_profile.glob("*.chr")), require_hybrid=True)
+        if best is not None:
+            return best
+
     # 5) Final fallback: accept plain chart templates and inject HybridAgent block.
     if charts_root.exists():
         stable_candidates: List[Path] = []
-        preferred_candidates: List[Path] = []
         backup_candidates: List[Path] = []
+        preferred_candidates: List[Path] = []
         for profile_dir in sorted(charts_root.iterdir()):
             if not profile_dir.is_dir():
                 continue
             names = sorted(profile_dir.glob("*.chr"))
-            if profile_dir == preferred_profile:
-                preferred_candidates.extend(names)
-            elif "_backup_" in profile_dir.name.lower():
+            if "_backup_" in profile_dir.name.lower():
                 backup_candidates.extend(names)
+            elif profile_dir == preferred_profile:
+                preferred_candidates.extend(names)
             else:
                 stable_candidates.extend(names)
 
         best = _pick_best_template(stable_candidates, require_hybrid=False)
         if best is not None:
             return best
-        best = _pick_best_template(preferred_candidates, require_hybrid=False)
+        best = _pick_best_template(backup_candidates, require_hybrid=False)
         if best is not None:
             return best
-        best = _pick_best_template(backup_candidates, require_hybrid=False)
+        best = _pick_best_template(preferred_candidates, require_hybrid=False)
         if best is not None:
             return best
 
@@ -326,6 +333,10 @@ def _build_chart_text(template_text: str, symbol: str, description: str, chart_i
     # Force M5 scalp chart.
     out = _replace_line(out, "period_type", "0")
     out = _replace_line(out, "period_size", "5")
+    # Old chart templates may contain hundreds of UI/news objects that bloat payload
+    # and can destabilize profile loading on constrained VPS sessions.
+    out = re.sub(r"(?is)\s*<object>.*?</object>\s*", "\r\n", out)
+    out = re.sub(r"(?mi)^objects=\d+\s*$", "objects=0", out)
     return out
 
 

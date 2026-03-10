@@ -62,6 +62,17 @@ def test_start_with_oandakey_profile_setup_has_retry_and_nonfatal_stderr_contrac
         assert token in script, f"Missing profile-setup resilience token: {token}"
 
 
+def test_start_with_oandakey_profile_launch_is_interactive_only_contract() -> None:
+    script = Path("RUN/START_WITH_OANDAKEY.ps1").read_text(encoding="utf-8", errors="ignore")
+    required_tokens = (
+        "$profileNoLaunch = [bool]$DryRun -or (-not [bool]$isInteractiveSession)",
+        '$profileArgs += "--no-launch"',
+        "no_launch = [bool]$profileNoLaunch",
+    )
+    for token in required_tokens:
+        assert token in script, f"Missing interactive launch contract token: {token}"
+
+
 def test_start_with_oandakey_requires_interactive_session_by_default() -> None:
     script = Path("RUN/START_WITH_OANDAKEY.ps1").read_text(encoding="utf-8", errors="ignore")
     required_tokens = (

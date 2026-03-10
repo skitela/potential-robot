@@ -1387,9 +1387,14 @@ if (Test-Path $profileSetupScript) {
         "-B",
         $profileSetupScript,
         "--root", $runtimeRoot,
-        "--profile", "OANDA_HYBRID_AUTO",
-        "--no-launch"
+        "--profile", "OANDA_HYBRID_AUTO"
     )
+    # Launch MT5 profile only in interactive sessions.
+    # For non-interactive runs (WinRM/scheduled tasks) keep no-launch to avoid headless UI failures.
+    $profileNoLaunch = [bool]$DryRun -or (-not [bool]$isInteractiveSession)
+    if ($profileNoLaunch) {
+        $profileArgs += "--no-launch"
+    }
     $profileRc = 0
     $profileOut = ""
     $profileOk = $false
@@ -1426,6 +1431,7 @@ if (Test-Path $profileSetupScript) {
         output = [string]$profileOut
         profile = "OANDA_HYBRID_AUTO"
         python = [string]$pythonExe
+        no_launch = [bool]$profileNoLaunch
         attempts = [int]$profileAttempt
         last_error = [string]$profileLastError
     }

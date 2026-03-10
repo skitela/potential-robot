@@ -107,6 +107,30 @@ def test_pick_source_chart_prefers_stable_profiles_over_backups(tmp_path: Path) 
     assert picked.parent.name == "Default"
 
 
+def test_pick_source_chart_prefers_backup_over_generated_profile(tmp_path: Path) -> None:
+    mod = _load_setup_module()
+    data_dir = tmp_path / "data"
+    charts_root = data_dir / "MQL5" / "Profiles" / "Charts"
+    backup_dir = charts_root / "OANDA_HYBRID_AUTO_backup_1700000000"
+    preferred_dir = charts_root / "OANDA_HYBRID_AUTO"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    preferred_dir.mkdir(parents=True, exist_ok=True)
+
+    # Prefer lean backup chart instead of reusing generated profile as source template.
+    (backup_dir / "chart01.chr").write_text(
+        _valid_template("456", extra="objects=0\r\n"),
+        encoding="utf-16le",
+    )
+    (preferred_dir / "chart01.chr").write_text(
+        _valid_template("789", extra=("objects=300\r\n" + ("<object>\r\nname=x\r\n</object>\r\n" * 3))),
+        encoding="utf-16le",
+    )
+
+    picked = mod._pick_source_chart(data_dir=data_dir, profile_name="OANDA_HYBRID_AUTO")
+    assert picked is not None
+    assert "backup" in picked.parent.name.lower()
+
+
 def test_pick_source_chart_falls_back_to_plain_chart_template_when_hybrid_missing(tmp_path: Path) -> None:
     mod = _load_setup_module()
     data_dir = tmp_path / "data"
@@ -128,3 +152,24 @@ def test_pick_source_chart_falls_back_to_plain_chart_template_when_hybrid_missin
     assert "name=HybridAgent" in built
     assert r"path=Experts\HybridAgent.ex5" in built
     assert "InpPolicyRuntimeRequireFile=true" in built
+
+
+def test_build_chart_text_strips_ui_objects_noise(tmp_path: Path) -> None:
+    mod = _load_setup_module()
+    template = _valid_template(
+        "111",
+        extra=(
+            "objects=3\r\n"
+            "<object>\r\nname=a\r\n</object>\r\n"
+            "<object>\r\nname=b\r\n</object>\r\n"
+            "<object>\r\nname=c\r\n</object>\r\n"
+        ),
+    )
+    built = mod._build_chart_text(
+        template_text=template,
+        symbol="EURUSD.pro",
+        description="EUR/USD",
+        chart_id="222",
+    )
+    assert "objects=0" in built
+    assert "<object>" not in built
