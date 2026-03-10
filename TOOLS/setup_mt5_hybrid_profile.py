@@ -504,6 +504,10 @@ def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool, focus_grou
     if data_dir is None:
         return SetupResult(False, "Nie znaleziono katalogu danych MT5 z HybridAgent.mq5.")
 
+    if launch:
+        # Ensure terminal does not overwrite profile charts while we rebuild them.
+        _close_mt5_processes()
+
     template = _pick_source_chart(data_dir, profile_name)
     if template is None:
         return SetupResult(False, "Brak źródłowego pliku .chr z HybridAgent (expertmode=5) w Profiles/deleted ani w istniejących profilach wykresow.")
@@ -528,7 +532,6 @@ def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool, focus_grou
 
     launched = False
     if launch:
-        _close_mt5_processes()
         launched = _launch_mt5(mt5_exe, profile_name)
 
     report = {

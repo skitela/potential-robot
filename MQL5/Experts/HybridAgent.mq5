@@ -799,10 +799,14 @@ void EvaluateKernelShadowForCurrentSymbol(const string source_tag)
   CircuitBreakerStateV2 breaker;
   CircuitBreakerEvaluateV2(breaker);
 
+  string kernel_group = profile.group_name;
+  if(kernel_group == "")
+    kernel_group = GuessGroupForSymbol(G_SymbolUpper);
+
   KernelRuntimeSnapshotV1 snapshot;
   StateCacheBuildSnapshotV1(
     G_SymbolUpper,
-    (profile.group_name == "" ? GuessGroupForSymbol(G_SymbolUpper) : profile.group_name),
+    kernel_group,
     HasOpenPositionForCurrentSymbol(),
     G_KernelStateCache,
     snapshot
