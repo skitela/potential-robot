@@ -38,6 +38,34 @@ DEFAULT_BASE_SYMBOLS = [
 ]
 GROUP_CHOICES = ("ANY", "FX", "METAL", "INDEX", "CRYPTO", "EQUITY")
 
+HYBRID_INPUT_DEFAULTS: List[Tuple[str, str]] = [
+    ("InpPythonHost", "127.0.0.1"),
+    ("InpDataPort", "5555"),
+    ("InpCmdPort", "5556"),
+    ("InpTimerSec", "1"),
+    ("InpPythonTimeoutSec", "180"),
+    ("InpEnablePythonTimeoutWatchdog", "true"),
+    ("InpAutoRecoverFromTimeout", "true"),
+    ("InpAccountPulseSec", "5"),
+    ("InpReplyCacheSize", "64"),
+    ("InpPolicyRuntimeEnabled", "true"),
+    ("InpPolicyRuntimeRequireFile", "true"),
+    ("InpPolicyRuntimeEnforceEntry", "true"),
+    ("InpPolicyRuntimeAllowAmbiguousReasonNone", "true"),
+    ("InpPolicyRuntimeReloadSec", "15"),
+    ("InpPolicyRuntimeOpenFailLogThrottleSec", "30"),
+    ("InpPolicyRuntimeRelativePath", r"OANDA_MT5_SYSTEM\policy_runtime.json"),
+    ("InpSmaFastPeriod", "20"),
+    ("InpAdxPeriod", "14"),
+    ("InpAtrPeriod", "14"),
+    ("InpP0MicroWindowSize", "32"),
+    ("InpP0TickStaleMs", "1500"),
+    ("InpP0BurstGapMs", "120"),
+    ("InpP0BurstCountThreshold", "8"),
+    ("InpTimerMs", "200"),
+    ("InpTelemetryPulseMs", "1000"),
+]
+
 
 @dataclass
 class SetupResult:
@@ -171,22 +199,30 @@ def _description_for_symbol(symbol: str) -> str:
     return base
 
 
-def _chart_template_score(chart_path: Path) -> Optional[int]:
+def _chart_template_score(chart_path: Path, require_hybrid: bool = True) -> Optional[int]:
     try:
         txt = chart_path.read_text(encoding="utf-16le")
     except Exception:
         return None
-    if "name=HybridAgent" not in txt or "path=Experts\\HybridAgent.ex5" not in txt:
+    if "<chart>" not in txt or "</chart>" not in txt:
         return None
-    if "expertmode=5" not in txt:
+    if "symbol=" not in txt:
         return None
-    return len(txt)
+    if "<window>" not in txt:
+        return None
+    has_hybrid = ("name=HybridAgent" in txt and "path=Experts\\HybridAgent.ex5" in txt and "expertmode=5" in txt)
+    if require_hybrid and not has_hybrid:
+        return None
+    score = len(txt)
+    if has_hybrid:
+        score += 5000
+    return score
 
 
-def _pick_best_template(candidates: List[Path]) -> Optional[Path]:
+def _pick_best_template(candidates: List[Path], require_hybrid: bool = True) -> Optional[Path]:
     best: Optional[Tuple[int, Path]] = None
     for p in candidates:
-        score = _chart_template_score(p)
+        score = _chart_template_score(p, require_hybrid=require_hybrid)
         if score is None:
             continue
         # Prefer richer templates (more complete chart payload).
@@ -202,7 +238,7 @@ def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
 
     # 1) Prefer templates in deleted/ (usually last known-good chart snapshots).
     if deleted.exists():
-        best = _pick_best_template(sorted(deleted.glob("*.chr")))
+        best = _pick_best_template(sorted(deleted.glob("*.chr")), require_hybrid=True)
         if best is not None:
             return best
 
@@ -222,13 +258,13 @@ def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
         stable_candidates: List[Path] = []
         for profile_dir in stable_profiles:
             stable_candidates.extend(sorted(profile_dir.glob("*.chr")))
-        best = _pick_best_template(stable_candidates)
+        best = _pick_best_template(stable_candidates, require_hybrid=True)
         if best is not None:
             return best
 
     # 3) Fallback to current profile if nothing else is available.
     if preferred_profile.exists():
-        best = _pick_best_template(sorted(preferred_profile.glob("*.chr")))
+        best = _pick_best_template(sorted(preferred_profile.glob("*.chr")), require_hybrid=True)
         if best is not None:
             return best
 
@@ -240,7 +276,33 @@ def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
                 continue
             if "_backup_" in profile_dir.name.lower():
                 backup_candidates.extend(sorted(profile_dir.glob("*.chr")))
-        best = _pick_best_template(backup_candidates)
+        best = _pick_best_template(backup_candidates, require_hybrid=True)
+        if best is not None:
+            return best
+
+    # 5) Final fallback: accept plain chart templates and inject HybridAgent block.
+    if charts_root.exists():
+        stable_candidates: List[Path] = []
+        preferred_candidates: List[Path] = []
+        backup_candidates: List[Path] = []
+        for profile_dir in sorted(charts_root.iterdir()):
+            if not profile_dir.is_dir():
+                continue
+            names = sorted(profile_dir.glob("*.chr"))
+            if profile_dir == preferred_profile:
+                preferred_candidates.extend(names)
+            elif "_backup_" in profile_dir.name.lower():
+                backup_candidates.extend(names)
+            else:
+                stable_candidates.extend(names)
+
+        best = _pick_best_template(stable_candidates, require_hybrid=False)
+        if best is not None:
+            return best
+        best = _pick_best_template(preferred_candidates, require_hybrid=False)
+        if best is not None:
+            return best
+        best = _pick_best_template(backup_candidates, require_hybrid=False)
         if best is not None:
             return best
 
@@ -250,24 +312,20 @@ def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
 def _replace_line(txt: str, key: str, value: str) -> str:
     pat = re.compile(rf"(?mi)^{re.escape(key)}=.*$")
     if pat.search(txt):
-        return pat.sub(f"{key}={value}", txt, count=1)
+        line = f"{key}={value}"
+        return pat.sub(lambda _: line, txt, count=1)
     # insert after <chart> if key missing
     return txt.replace("<chart>\r\n", f"<chart>\r\n{key}={value}\r\n", 1)
 
 
 def _build_chart_text(template_text: str, symbol: str, description: str, chart_id: str) -> str:
-    out = template_text
+    out = _upsert_hybrid_expert_block(template_text)
     out = _replace_line(out, "id", chart_id)
     out = _replace_line(out, "symbol", symbol)
     out = _replace_line(out, "description", description)
     # Force M5 scalp chart.
     out = _replace_line(out, "period_type", "0")
     out = _replace_line(out, "period_size", "5")
-    # Ensure agent block still active.
-    out = _replace_line(out, "expertmode", "5")
-    out = _replace_input(out, "InpEnablePythonTimeoutWatchdog", "true")
-    out = _replace_input(out, "InpPolicyRuntimeReloadSec", "15")
-    out = _replace_input(out, "InpPolicyRuntimeRequireFile", "true")
     return out
 
 
@@ -279,11 +337,42 @@ def _replace_input(chart_text: str, input_key: str, input_value: str) -> str:
     line = f"{input_key}={input_value}"
     pat = re.compile(rf"(?mi)^{re.escape(input_key)}=.*$")
     if pat.search(body):
-        body_new = pat.sub(line, body, count=1)
+        body_new = pat.sub(lambda _: line, body, count=1)
     else:
         suffix = "" if body.endswith(("\n", "\r")) else "\r\n"
         body_new = f"{body}{suffix}{line}"
     return chart_text[: m.start(1)] + body_new + chart_text[m.end(1) :]
+
+
+def _render_hybrid_expert_block() -> str:
+    lines = [
+        "<expert>",
+        "name=HybridAgent",
+        r"path=Experts\HybridAgent.ex5",
+        "expertmode=5",
+        "<inputs>",
+    ]
+    for key, value in HYBRID_INPUT_DEFAULTS:
+        lines.append(f"{key}={value}")
+    lines.extend(["</inputs>", "</expert>"])
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _upsert_hybrid_expert_block(chart_text: str) -> str:
+    out = chart_text
+    has_hybrid = ("name=HybridAgent" in out and r"path=Experts\HybridAgent.ex5" in out)
+    if has_hybrid:
+        out = _replace_line(out, "expertmode", "5")
+        for key, value in HYBRID_INPUT_DEFAULTS:
+            out = _replace_input(out, key, value)
+        return out
+
+    out = re.sub(r"(?is)<expert>.*?</expert>\s*", "", out, count=1)
+    block = _render_hybrid_expert_block()
+    insert_at = out.lower().find("<window>")
+    if insert_at >= 0:
+        return out[:insert_at] + block + "\r\n" + out[insert_at:]
+    return out.rstrip() + "\r\n\r\n" + block
 
 
 def _normalize_chart_template_text(text: str) -> str:
@@ -302,13 +391,13 @@ def _write_chart_text(path: Path, text: str) -> None:
 def _write_profile(data_dir: Path, profile_name: str, symbols: List[str], template_path: Path) -> Path:
     charts_dir = data_dir / "MQL5" / "Profiles" / "Charts" / profile_name
     backup_dir = data_dir / "MQL5" / "Profiles" / "Charts" / f"{profile_name}_backup_{int(time.time())}"
+    template_text = _normalize_chart_template_text(template_path.read_text(encoding="utf-16le"))
 
     if charts_dir.exists():
         shutil.copytree(charts_dir, backup_dir)
         shutil.rmtree(charts_dir)
     charts_dir.mkdir(parents=True, exist_ok=True)
 
-    template_text = _normalize_chart_template_text(template_path.read_text(encoding="utf-16le"))
     id_seed = max(int(time.time_ns() % 9_000_000_000_000_000_000), 1)
     for idx, sym in enumerate(symbols, start=1):
         chart_id = str(id_seed + idx)

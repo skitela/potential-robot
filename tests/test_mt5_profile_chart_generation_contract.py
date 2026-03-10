@@ -32,7 +32,25 @@ def _valid_template(chart_id: str, extra: str = "") -> str:
         "InpPolicyRuntimeReloadSec=15\r\n"
         "</inputs>\r\n"
         "</expert>\r\n"
+        "<window>\r\n"
+        "height=100\r\n"
+        "</window>\r\n"
         f"{extra}"
+        "</chart>\r\n"
+    )
+
+
+def _base_template_without_expert(chart_id: str) -> str:
+    return (
+        "<chart>\r\n"
+        f"id={chart_id}\r\n"
+        "symbol=EURUSD\r\n"
+        "description=EUR/USD\r\n"
+        "period_type=1\r\n"
+        "period_size=1\r\n"
+        "<window>\r\n"
+        "height=100\r\n"
+        "</window>\r\n"
         "</chart>\r\n"
     )
 
@@ -88,3 +106,25 @@ def test_pick_source_chart_prefers_stable_profiles_over_backups(tmp_path: Path) 
     assert picked is not None
     assert picked.parent.name == "Default"
 
+
+def test_pick_source_chart_falls_back_to_plain_chart_template_when_hybrid_missing(tmp_path: Path) -> None:
+    mod = _load_setup_module()
+    data_dir = tmp_path / "data"
+    charts_root = data_dir / "MQL5" / "Profiles" / "Charts"
+    stable_dir = charts_root / "Default"
+    stable_dir.mkdir(parents=True, exist_ok=True)
+    (stable_dir / "chart01.chr").write_text(_base_template_without_expert("101"), encoding="utf-16le")
+
+    picked = mod._pick_source_chart(data_dir=data_dir, profile_name="OANDA_HYBRID_AUTO")
+    assert picked is not None
+    assert picked.parent.name == "Default"
+
+    built = mod._build_chart_text(
+        template_text=(stable_dir / "chart01.chr").read_text(encoding="utf-16le"),
+        symbol="EURUSD.pro",
+        description="EUR/USD",
+        chart_id="999",
+    )
+    assert "name=HybridAgent" in built
+    assert r"path=Experts\HybridAgent.ex5" in built
+    assert "InpPolicyRuntimeRequireFile=true" in built
