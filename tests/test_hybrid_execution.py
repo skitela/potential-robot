@@ -1,4 +1,5 @@
-﻿import sys
+import datetime as dt
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -617,10 +618,14 @@ class TestHybridExecution(unittest.TestCase):
             bot = SafetyBot()
         bot._runtime_cached_tw_ctx = {"phase": "ACTIVE", "window_id": "TEST"}
         bot._runtime_cached_day_state = {"day_ny": "2026-03-10", "utc_day": "2026-03-10"}
+        bot._runtime_cached_group_arb = {}
+        bot._runtime_cached_group_risk = {}
+        bot._last_group_policy_refresh_ts = 0.0
         bot._last_live_module_refresh_ts = 0.0
         bot._last_no_live_drift_refresh_ts = 0.0
         bot._last_cost_guard_refresh_ts = 0.0
         bot._last_time_anchor_refresh_ts = 0.0
+        bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._refresh_live_module_states = MagicMock()
         bot._refresh_no_live_drift_check = MagicMock()
         bot._refresh_cost_guard_auto_relax_state = MagicMock()
@@ -634,6 +639,7 @@ class TestHybridExecution(unittest.TestCase):
         finally:
             CFG.scan_interval_sec = scan_prev
 
+        bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._refresh_live_module_states.assert_called_once_with(
             tw_ctx=bot._runtime_cached_tw_ctx,
             st=bot._runtime_cached_day_state,
@@ -651,10 +657,14 @@ class TestHybridExecution(unittest.TestCase):
             bot = SafetyBot()
         bot._runtime_cached_tw_ctx = {"phase": "ACTIVE", "window_id": "TEST"}
         bot._runtime_cached_day_state = {"day_ny": "2026-03-10", "utc_day": "2026-03-10"}
+        bot._runtime_cached_group_arb = {"FX": {"priority_factor": 1.0}}
+        bot._runtime_cached_group_risk = {"FX": {"entry_allowed": True}}
+        bot._last_group_policy_refresh_ts = 95.0
         bot._last_live_module_refresh_ts = 95.0
         bot._last_no_live_drift_refresh_ts = 95.0
         bot._last_cost_guard_refresh_ts = 95.0
         bot._last_time_anchor_refresh_ts = 95.0
+        bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._refresh_live_module_states = MagicMock()
         bot._refresh_no_live_drift_check = MagicMock()
         bot._refresh_cost_guard_auto_relax_state = MagicMock()
@@ -668,10 +678,59 @@ class TestHybridExecution(unittest.TestCase):
         finally:
             CFG.scan_interval_sec = scan_prev
 
+        bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._refresh_live_module_states.assert_not_called()
         bot._refresh_no_live_drift_check.assert_not_called()
         bot._refresh_cost_guard_auto_relax_state.assert_not_called()
         bot._time_anchor_sync_if_due.assert_not_called()
+
+    def test_runtime_refresh_group_policy_cache_builds_snapshot_when_missing(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_cached_group_arb = {}
+        bot._runtime_cached_group_risk = {}
+        bot._last_group_policy_refresh_ts = 0.0
+        bot._compute_group_policy_snapshot = MagicMock(return_value=({"FX": {"priority_factor": 1.0}}, {"FX": {"entry_allowed": True}}))
+        bot._cache_group_policy_snapshot = MagicMock()
+        bot._emit_group_policy_snapshot_log = MagicMock()
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        CFG.scan_interval_sec = 30
+        try:
+            fake_now = 100.0
+            with patch("BIN.safetybot.time.time", return_value=fake_now), patch("BIN.safetybot.now_utc") as now_utc_mock:
+                now_arb = dt.datetime(2026, 3, 10, 21, 0, 0, tzinfo=dt.timezone.utc)
+                now_utc_mock.return_value = now_arb
+                bot._runtime_refresh_group_policy_cache()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+
+        bot._compute_group_policy_snapshot.assert_called_once()
+        bot._cache_group_policy_snapshot.assert_called_once()
+        bot._emit_group_policy_snapshot_log.assert_called_once_with(group_arb={"FX": {"priority_factor": 1.0}})
+        self.assertEqual(bot._last_group_policy_refresh_ts, fake_now)
+
+    def test_runtime_refresh_group_policy_cache_skips_when_cache_is_fresh(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_cached_group_arb = {"FX": {"priority_factor": 1.0}}
+        bot._runtime_cached_group_risk = {"FX": {"entry_allowed": True}}
+        bot._last_group_policy_refresh_ts = 95.0
+        bot._compute_group_policy_snapshot = MagicMock()
+        bot._cache_group_policy_snapshot = MagicMock()
+        bot._emit_group_policy_snapshot_log = MagicMock()
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        CFG.scan_interval_sec = 30
+        try:
+            with patch("BIN.safetybot.time.time", return_value=100.0):
+                bot._runtime_refresh_group_policy_cache()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+
+        bot._compute_group_policy_snapshot.assert_not_called()
+        bot._cache_group_policy_snapshot.assert_not_called()
+        bot._emit_group_policy_snapshot_log.assert_not_called()
 
     def test_handle_market_data_dispatches_account(self):
         with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):

@@ -10722,6 +10722,7 @@ class SafetyBot:
         self._runtime_cached_day_state: Dict[str, Any] = {}
         self._runtime_cached_eco_active: bool = False
         self._runtime_cached_warn_active: bool = False
+        self._last_group_policy_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
         self._last_cost_guard_refresh_ts: float = 0.0
@@ -14835,6 +14836,97 @@ class SafetyBot:
         self._runtime_cached_eco_active = bool(eco_active)
         self._runtime_cached_warn_active = bool(warn_active)
 
+    def _compute_group_policy_snapshot(
+        self,
+        *,
+        now_arb: Optional[dt.datetime] = None,
+    ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        group_arb: Dict[str, Dict[str, Any]] = {}
+        group_risk: Dict[str, Dict[str, Any]] = {}
+        now_arb = now_arb or now_utc()
+        groups_cfg = sorted(
+            {
+                _group_key(str(g))
+                for g in (getattr(CFG, "group_price_shares", {}) or {}).keys()
+                if str(g).strip()
+            }
+        )
+        for g in groups_cfg:
+            st_g = self.gov.group_budget_state(g, now_dt=now_arb)
+            st_g["priority_factor"] = float(self.gov.group_priority_factor(g, now_dt=now_arb))
+            group_arb[g] = st_g
+            group_risk[g] = group_market_risk_state(g, now_dt=now_arb)
+        return group_arb, group_risk
+
+    def _cache_group_policy_snapshot(
+        self,
+        *,
+        group_arb: Dict[str, Dict[str, Any]],
+        group_risk: Dict[str, Dict[str, Any]],
+        now_arb: dt.datetime,
+    ) -> None:
+        self._runtime_cached_group_arb = {
+            str(g): dict(v or {}) for g, v in (group_arb or {}).items()
+        }
+        self._runtime_cached_group_risk = {
+            str(g): dict(v or {}) for g, v in (group_risk or {}).items()
+        }
+        self._runtime_cached_group_ts_utc = now_arb.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def _emit_group_policy_snapshot_log(self, *, group_arb: Dict[str, Dict[str, Any]]) -> None:
+        if not group_arb:
+            return
+        log_interval_s = max(60, int(getattr(CFG, "scan_interval_sec", 30)) * 4)
+        now_ts = float(time.time())
+        if (now_ts - float(getattr(self, "_last_group_budget_log_ts", 0.0))) < float(log_interval_s):
+            return
+        self._last_group_budget_log_ts = now_ts
+        for g in sorted(group_arb.keys()):
+            gs = group_arb[g]
+            logging.info(
+                "GROUP_ARB grp=%s prio_factor=%.3f unlock=%.3f risk_entry=%s risk_borrow_block=%s "
+                "risk_friday=%s risk_reopen=%s reason=%s price=%s/%s+%s order=%s/%s+%s sys=%s/%s+%s",
+                g,
+                float(gs.get("priority_factor", 1.0)),
+                float(gs.get("unlock_ratio", 0.0)),
+                int(gs.get("risk_entry_allowed", 1.0)),
+                int(gs.get("risk_borrow_blocked", 0.0)),
+                int(gs.get("risk_friday", 0.0)),
+                int(gs.get("risk_reopen", 0.0)),
+                str(gs.get("risk_reason", "NONE")),
+                int(gs.get("price_used", 0.0)),
+                int(gs.get("price_cap", 0.0)),
+                int(gs.get("price_borrow", 0.0)),
+                int(gs.get("order_used", 0.0)),
+                int(gs.get("order_cap", 0.0)),
+                int(gs.get("order_borrow", 0.0)),
+                int(gs.get("sys_used", 0.0)),
+                int(gs.get("sys_cap", 0.0)),
+                int(gs.get("sys_borrow", 0.0)),
+            )
+
+    def _runtime_refresh_group_policy_cache(self) -> None:
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        refresh_interval_s = float(scan_interval_s)
+        cached_arb, cached_risk = self._runtime_get_cached_group_policy_state()
+        if (
+            cached_arb
+            and cached_risk
+            and (now_ts - float(getattr(self, "_last_group_policy_refresh_ts", 0.0) or 0.0)) < refresh_interval_s
+        ):
+            return
+
+        now_arb = now_utc()
+        group_arb, group_risk = self._compute_group_policy_snapshot(now_arb=now_arb)
+        self._cache_group_policy_snapshot(
+            group_arb=group_arb,
+            group_risk=group_risk,
+            now_arb=now_arb,
+        )
+        self._last_group_policy_refresh_ts = now_ts
+        self._emit_group_policy_snapshot_log(group_arb=group_arb)
+
     def _runtime_refresh_control_plane_state(self) -> None:
         tw_ctx = dict(getattr(self, "_runtime_cached_tw_ctx", {}) or {})
         st = dict(getattr(self, "_runtime_cached_day_state", {}) or {})
@@ -14847,6 +14939,11 @@ class SafetyBot:
         drift_refresh_interval_s = float(scan_interval_s)
         cost_guard_refresh_interval_s = float(max(30, scan_interval_s))
         time_anchor_refresh_interval_s = float(scan_interval_s)
+
+        try:
+            self._runtime_refresh_group_policy_cache()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         try:
             if (now_ts - float(getattr(self, "_last_live_module_refresh_ts", 0.0) or 0.0)) >= module_refresh_interval_s:
@@ -15723,60 +15820,23 @@ class SafetyBot:
                 f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
             )
 
-        # Group-level arbitration snapshot (budget pressure + dynamic priority factor).
-        group_arb: Dict[str, Dict[str, Any]] = {}
-        group_risk: Dict[str, Dict[str, Any]] = {}
-        try:
-            now_arb = now_utc()
-            groups_cfg = sorted(
-                {
-                    _group_key(str(g))
-                    for g in (getattr(CFG, "group_price_shares", {}) or {}).keys()
-                    if str(g).strip()
-                }
-            )
-            for g in groups_cfg:
-                st_g = self.gov.group_budget_state(g, now_dt=now_arb)
-                st_g["priority_factor"] = float(self.gov.group_priority_factor(g, now_dt=now_arb))
-                group_arb[g] = st_g
-                group_risk[g] = group_market_risk_state(g, now_dt=now_arb)
-
-            log_interval_s = max(60, int(getattr(CFG, "scan_interval_sec", 30)) * 4)
-            now_ts = float(time.time())
-            if (now_ts - float(getattr(self, "_last_group_budget_log_ts", 0.0))) >= float(log_interval_s):
-                self._last_group_budget_log_ts = now_ts
-                for g in sorted(group_arb.keys()):
-                    gs = group_arb[g]
-                    logging.info(
-                        "GROUP_ARB grp=%s prio_factor=%.3f unlock=%.3f risk_entry=%s risk_borrow_block=%s "
-                        "risk_friday=%s risk_reopen=%s reason=%s price=%s/%s+%s order=%s/%s+%s sys=%s/%s+%s",
-                        g,
-                        float(gs.get("priority_factor", 1.0)),
-                        float(gs.get("unlock_ratio", 0.0)),
-                        int(gs.get("risk_entry_allowed", 1.0)),
-                        int(gs.get("risk_borrow_blocked", 0.0)),
-                        int(gs.get("risk_friday", 0.0)),
-                        int(gs.get("risk_reopen", 0.0)),
-                        str(gs.get("risk_reason", "NONE")),
-                        int(gs.get("price_used", 0.0)),
-                        int(gs.get("price_cap", 0.0)),
-                        int(gs.get("price_borrow", 0.0)),
-                        int(gs.get("order_used", 0.0)),
-                        int(gs.get("order_cap", 0.0)),
-                        int(gs.get("order_borrow", 0.0)),
-                        int(gs.get("sys_used", 0.0)),
-                        int(gs.get("sys_cap", 0.0)),
-                        int(gs.get("sys_borrow", 0.0)),
-                    )
-            self._runtime_cached_group_arb = {
-                str(g): dict(v or {}) for g, v in (group_arb or {}).items()
-            }
-            self._runtime_cached_group_risk = {
-                str(g): dict(v or {}) for g, v in (group_risk or {}).items()
-            }
-            self._runtime_cached_group_ts_utc = now_arb.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        # Group-level arbitration snapshot jest odswiezany w maintenance i uzywany z cache.
+        group_arb, group_risk = self._runtime_get_cached_group_policy_state()
+        if not group_arb or not group_risk:
+            try:
+                now_arb = now_utc()
+                group_arb, group_risk = self._compute_group_policy_snapshot(now_arb=now_arb)
+                self._cache_group_policy_snapshot(
+                    group_arb=group_arb,
+                    group_risk=group_risk,
+                    now_arb=now_arb,
+                )
+                self._last_group_policy_refresh_ts = float(time.time())
+                self._emit_group_policy_snapshot_log(group_arb=group_arb)
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                group_arb = {}
+                group_risk = {}
 
         warn_degrade_active = False
         # OANDA warning threshold (price requests/day): emit one warning per primary day key.
