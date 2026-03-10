@@ -72,6 +72,70 @@ function Convert-SecureToPlain {
     }
 }
 
+function Set-RdpCredential {
+    param(
+        [Parameter(Mandatory = $true)][string]$Target,
+        [Parameter(Mandatory = $true)][string]$User,
+        [Parameter(Mandatory = $true)][string]$PasswordPlain
+    )
+
+    # Best effort cleanup of stale credential entry.
+    try {
+        & cmdkey "/delete:$Target" 1>$null 2>$null
+    } catch {
+    }
+
+    # Use stdin for password so special characters do not break cmdkey arguments.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "cmdkey.exe"
+    $psi.Arguments = "/generic:$Target /user:$User /pass"
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    if ($null -eq $proc) {
+        throw "Nie udalo sie uruchomic cmdkey."
+    }
+
+    $stdOut = ""
+    $stdErr = ""
+    try {
+        $proc.StandardInput.WriteLine($PasswordPlain)
+        $proc.StandardInput.Close()
+        $stdOut = $proc.StandardOutput.ReadToEnd()
+        $stdErr = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+    } finally {
+        if (-not $proc.HasExited) {
+            try { $proc.Kill() } catch {}
+        }
+        $proc.Dispose()
+    }
+
+    # cmdkey with stdin password may still report non-zero exit code in some locales.
+    # Trust explicit credential presence check first.
+    $verify = & cmdkey "/list:$Target" 2>$null
+    if (($verify -join " ") -match [Regex]::Escape("Target: $Target")) {
+        return
+    }
+
+    if ($proc.ExitCode -ne 0) {
+        $detail = ""
+        if (-not [string]::IsNullOrWhiteSpace($stdOut)) {
+            $detail = ($stdOut -replace "\s+", " ").Trim()
+        }
+        if ([string]::IsNullOrWhiteSpace($detail) -and -not [string]::IsNullOrWhiteSpace($stdErr)) {
+            $detail = ($stdErr -replace "\s+", " ").Trim()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($detail)) {
+            throw "Nie udalo sie zapisac poswiadczen RDP (cmdkey). Szczegoly: $detail"
+        }
+        throw "Nie udalo sie zapisac poswiadczen RDP (cmdkey)."
+    }
+}
+
 $runtimeRoot = (Resolve-Path -LiteralPath $Root -ErrorAction Stop).Path
 $envPath = Resolve-TokenEnvPath -ExplicitPath $TokenEnvPath -Label $UsbLabel -RuntimeRoot $runtimeRoot
 $cfg = Parse-EnvFile -Path $envPath
@@ -102,10 +166,7 @@ if ([string]::IsNullOrWhiteSpace($plain)) {
 }
 
 $target = "TERMSRV/$vpsHost"
-$null = & cmdkey /generic:$target /user:$vpsUser /pass:$plain 2>$null
-if ($LASTEXITCODE -ne 0) {
-    throw "Nie udalo sie zapisac poswiadczen RDP (cmdkey)."
-}
+Set-RdpCredential -Target $target -User $vpsUser -PasswordPlain $plain
 
 $rdpDir = Join-Path $runtimeRoot "RUN"
 New-Item -ItemType Directory -Force -Path $rdpDir | Out-Null
