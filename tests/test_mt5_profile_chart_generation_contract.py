@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -192,3 +193,58 @@ def test_build_chart_text_normalizes_window_geometry() -> None:
     assert "window_right=1280" in built
     assert "window_bottom=760" in built
     assert "windows_total=1" in built
+
+
+def test_fx_only_mode_filters_non_fx_symbols_from_profile_contract(tmp_path: Path) -> None:
+    mod = _load_setup_module()
+    root = tmp_path / "repo"
+    config_dir = root / "CONFIG"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "strategy.json").write_text(
+        json.dumps(
+            {
+                "fx_only_mode": True,
+                "symbols_to_trade": [
+                    "EURUSD",
+                    "GBPUSD",
+                    "USDJPY",
+                    "EURJPY",
+                    "AUDJPY",
+                    "NZDJPY",
+                    "USDCHF",
+                    "USDCAD",
+                    "AUDUSD",
+                    "NZDUSD",
+                    "EURGBP",
+                    "XAUUSD",
+                    "XAGUSD",
+                    "PLATIN",
+                    "PALLAD",
+                    "COPPER-US",
+                    "US500",
+                    "US100",
+                    "US30",
+                    "EU50",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    symbols, fx_only_mode = mod._load_strategy_symbols(root)
+    filtered = mod._filter_symbols_fx_only(symbols, fx_only_mode)
+
+    assert fx_only_mode is True
+    assert filtered == [
+        "EURUSD",
+        "GBPUSD",
+        "USDJPY",
+        "EURJPY",
+        "AUDJPY",
+        "NZDJPY",
+        "USDCHF",
+        "USDCAD",
+        "AUDUSD",
+        "NZDUSD",
+        "EURGBP",
+    ]
