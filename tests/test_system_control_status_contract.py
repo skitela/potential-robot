@@ -9,6 +9,7 @@ def test_system_control_status_has_strict_safetybot_heartbeat_fallback() -> None
         "function Get-SafetyBotHeartbeatOkAgeSec",
         "function Get-SafetyBotBridgeIssueHint",
         "function Get-Mt5ProfileLoadIssueHint",
+        "Get-Content -Path $latestLog.FullName -Tail",
         "heartbeat_ok_age_sec",
         "heartbeat_ok_recent",
         "bridge_peer_ready",

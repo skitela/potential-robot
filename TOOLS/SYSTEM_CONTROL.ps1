@@ -354,11 +354,9 @@ function Get-Mt5ProfileLoadIssueHint {
 
     $content = ""
     try {
-        if ([int64]$latestLog.Length -le 2MB) {
-            $content = [string](Get-Content -Path $latestLog.FullName -Raw -ErrorAction Stop)
-        } else {
-            $content = [string](Get-Content -Path $latestLog.FullName -Tail ([Math]::Max(80, [int]$TailLines)) -ErrorAction Stop | Out-String)
-        }
+        # Read only recent tail lines to avoid stale frame-failure residues
+        # from earlier terminal sessions poisoning current status checks.
+        $content = [string](Get-Content -Path $latestLog.FullName -Tail ([Math]::Max(80, [int]$TailLines)) -ErrorAction Stop | Out-String)
     } catch {
         return $null
     }

@@ -66,6 +66,45 @@ HYBRID_INPUT_DEFAULTS: List[Tuple[str, str]] = [
     ("InpTelemetryPulseMs", "1000"),
 ]
 
+SAFE_WINDOW_FIELDS = {
+    "window_left": "20",
+    "window_top": "20",
+    "window_right": "1280",
+    "window_bottom": "760",
+    "window_type": "3",
+    "floating": "0",
+    "floating_left": "0",
+    "floating_top": "0",
+    "floating_right": "0",
+    "floating_bottom": "0",
+    "floating_type": "1",
+    "floating_toolbar": "1",
+    "windows_total": "1",
+}
+
+MINIMAL_WINDOW_BLOCK = (
+    "<window>\r\n"
+    "height=100.000000\r\n"
+    "objects=0\r\n"
+    "<indicator>\r\n"
+    "name=Main\r\n"
+    "path=\r\n"
+    "apply=1\r\n"
+    "show_data=1\r\n"
+    "scale_inherit=0\r\n"
+    "scale_line=0\r\n"
+    "scale_line_percent=50\r\n"
+    "scale_line_value=0.000000\r\n"
+    "scale_fix_min=0\r\n"
+    "scale_fix_min_val=0.000000\r\n"
+    "scale_fix_max=0\r\n"
+    "scale_fix_max_val=0.000000\r\n"
+    "expertmode=0\r\n"
+    "fixed_height=-1\r\n"
+    "</indicator>\r\n"
+    "</window>\r\n"
+)
+
 
 @dataclass
 class SetupResult:
@@ -325,6 +364,14 @@ def _replace_line(txt: str, key: str, value: str) -> str:
     return txt.replace("<chart>\r\n", f"<chart>\r\n{key}={value}\r\n", 1)
 
 
+def _normalize_window_block(chart_text: str) -> str:
+    # Replace all window payload with a single lean baseline block.
+    out = re.sub(r"(?is)<window>.*?</window>\s*", "", chart_text)
+    if "</chart>" in out:
+        return out.replace("</chart>", MINIMAL_WINDOW_BLOCK + "</chart>", 1)
+    return out.rstrip() + "\r\n" + MINIMAL_WINDOW_BLOCK
+
+
 def _build_chart_text(template_text: str, symbol: str, description: str, chart_id: str) -> str:
     out = _upsert_hybrid_expert_block(template_text)
     out = _replace_line(out, "id", chart_id)
@@ -333,10 +380,13 @@ def _build_chart_text(template_text: str, symbol: str, description: str, chart_i
     # Force M5 scalp chart.
     out = _replace_line(out, "period_type", "0")
     out = _replace_line(out, "period_size", "5")
+    for k, v in SAFE_WINDOW_FIELDS.items():
+        out = _replace_line(out, k, v)
     # Old chart templates may contain hundreds of UI/news objects that bloat payload
     # and can destabilize profile loading on constrained VPS sessions.
     out = re.sub(r"(?is)\s*<object>.*?</object>\s*", "\r\n", out)
     out = re.sub(r"(?mi)^objects=\d+\s*$", "objects=0", out)
+    out = _normalize_window_block(out)
     return out
 
 

@@ -173,3 +173,22 @@ def test_build_chart_text_strips_ui_objects_noise(tmp_path: Path) -> None:
     )
     assert "objects=0" in built
     assert "<object>" not in built
+    assert built.count("<window>") == 1
+    assert "name=Main" in built
+    assert "path=" in built
+
+
+def test_build_chart_text_normalizes_window_geometry() -> None:
+    mod = _load_setup_module()
+    template = _valid_template("333")
+    built = mod._build_chart_text(
+        template_text=template,
+        symbol="GBPUSD.pro",
+        description="GBP/USD",
+        chart_id="444",
+    )
+    assert "window_left=20" in built
+    assert "window_top=20" in built
+    assert "window_right=1280" in built
+    assert "window_bottom=760" in built
+    assert "windows_total=1" in built
