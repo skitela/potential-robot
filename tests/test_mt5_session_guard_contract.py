@@ -24,3 +24,14 @@ def test_mt5_session_guard_requires_missing_heartbeat_ok_for_no_peer_repair() ->
     )
     for token in required_tokens:
         assert token in script, f"Missing bridge-ok gating token: {token}"
+
+
+def test_mt5_session_guard_handles_large_log_offsets_without_int32_overflow() -> None:
+    script = Path("TOOLS/mt5_session_guard.ps1").read_text(encoding="utf-8", errors="ignore")
+    required_tokens = (
+        "if (($len - $start) -gt [int64]$MaxReadBytes)",
+        "$remaining = [int64]($len - $start)",
+        "if ($remaining -gt [int64]2147483647)",
+    )
+    for token in required_tokens:
+        assert token in script, f"Missing large-log safety token: {token}"

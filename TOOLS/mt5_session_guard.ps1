@@ -87,8 +87,9 @@ function Read-AppendedLines {
         $Offsets[$Path] = $len
         return @()
     }
-    if (($len - $start) -gt $MaxReadBytes) {
-        $start = [Math]::Max(0, $len - $MaxReadBytes)
+    if (($len - $start) -gt [int64]$MaxReadBytes) {
+        $start = [int64]($len - [int64]$MaxReadBytes)
+        if ($start -lt 0) { $start = 0 }
     }
 
     if (-not (Get-Variable -Name EncCache -Scope Script -ErrorAction SilentlyContinue)) {
@@ -120,7 +121,12 @@ function Read-AppendedLines {
     $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
     try {
         $fs.Seek($start, [System.IO.SeekOrigin]::Begin) | Out-Null
-        $toRead = [int]([Math]::Max(0, [Math]::Min([int64]2147483647, ($len - $start))))
+        $remaining = [int64]($len - $start)
+        if ($remaining -lt 0) { $remaining = 0 }
+        if ($remaining -gt [int64]2147483647) {
+            $remaining = [int64]2147483647
+        }
+        $toRead = [int]$remaining
         if ($toRead -gt $MaxReadBytes) { $toRead = [int]$MaxReadBytes }
         if (($encUse.WebName -match "utf-16") -and (($toRead % 2) -ne 0)) { $toRead -= 1 }
         $txt = ""

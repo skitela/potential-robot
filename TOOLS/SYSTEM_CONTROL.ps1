@@ -114,6 +114,39 @@ function Get-ComponentProcessIds {
     return @($ids)
 }
 
+function Test-AcceptablePidTree {
+    param(
+        [int[]]$ProcessIds
+    )
+    $ids = @($ProcessIds | Where-Object { [int]$_ -gt 0 } | Sort-Object -Unique)
+    if (@($ids).Count -le 1) {
+        return $true
+    }
+    $idSet = @{}
+    foreach ($procIdLocal in $ids) { $idSet[[int]$procIdLocal] = $true }
+    $rows = @()
+    try {
+        foreach ($procIdLocal in $ids) {
+            $r = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [int]$procIdLocal) -OperationTimeoutSec $Script:WmiOperationTimeoutSec -ErrorAction Stop
+            if ($null -ne $r) { $rows += @($r) }
+        }
+    } catch {
+        return $false
+    }
+    if (@($rows).Count -ne @($ids).Count) {
+        return $false
+    }
+    $roots = @()
+    foreach ($row in $rows) {
+        $procIdLocal = [int]$row.ProcessId
+        $ppid = [int]$row.ParentProcessId
+        if (-not $idSet.ContainsKey($ppid)) {
+            $roots += @($procIdLocal)
+        }
+    }
+    return (@($roots | Sort-Object -Unique).Count -eq 1)
+}
+
 function Get-SafetyBotBridgePid {
     param(
         [int[]]$Ports = @(5555, 5556)
@@ -184,6 +217,20 @@ function Get-ComponentLogTtlSec {
     switch ($CompName) {
         "Learner" { return 600 }
         default { return 240 }
+    }
+}
+
+function Get-FileTailSafe {
+    param(
+        [string]$Path,
+        [int]$TailLines = 30
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) { return "" }
+    if (-not (Test-Path $Path)) { return "" }
+    try {
+        return ([string](Get-Content -Path $Path -Tail ([Math]::Max(1, [int]$TailLines)) -ErrorAction Stop | Out-String)).Trim()
+    } catch {
+        return ""
     }
 }
 
@@ -272,6 +319,33 @@ function Test-PidRunning {
         return $false
     }
     return ($null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue))
+}
+
+function Test-PidMatchesScript {
+    param(
+        [int]$ProcessId,
+        [string]$RuntimeRoot,
+        [string]$ScriptName
+    )
+    if ($ProcessId -le 0) {
+        return $false
+    }
+    if ([string]::IsNullOrWhiteSpace($ScriptName)) {
+        return $false
+    }
+    $scriptEsc = [regex]::Escape([string]$ScriptName)
+    $binPath = Join-Path $RuntimeRoot ("BIN\" + [string]$ScriptName)
+    $binPathEsc = [regex]::Escape($binPath)
+    try {
+        $row = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [int]$ProcessId) -OperationTimeoutSec $Script:WmiOperationTimeoutSec -ErrorAction Stop
+        if ($null -eq $row -or [string]::IsNullOrWhiteSpace([string]$row.CommandLine)) {
+            return $false
+        }
+        $cmd = [string]$row.CommandLine
+        return (($cmd -match $scriptEsc) -or ($cmd -match $binPathEsc))
+    } catch {
+        return $false
+    }
 }
 
 function Set-LockPid {
@@ -491,6 +565,19 @@ function Start-Component {
         [switch]$Dry
     )
     $existing = Get-ComponentProcessIds -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script)
+    $lockPidForProbe = $null
+    if ($LockPath -and (Test-Path $LockPath)) {
+        try {
+            $lockPidForProbe = Get-LockPid -LockPath $LockPath
+        } catch {
+            $lockPidForProbe = $null
+        }
+    }
+    if ((@($existing).Count -eq 0) -and ($null -ne $lockPidForProbe) -and (Test-PidRunning -ProcessId ([int]$lockPidForProbe))) {
+        if (Test-PidMatchesScript -ProcessId ([int]$lockPidForProbe) -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script)) {
+            $existing = @([int]$lockPidForProbe)
+        }
+    }
     if (([string]$Comp.Name -eq "SafetyBot") -and (@($existing).Count -eq 0)) {
         $bridgePid = Get-SafetyBotBridgePid
         if ($null -ne $bridgePid) {
@@ -506,6 +593,13 @@ function Start-Component {
             }
         }
         if (@($existing).Count -gt 1) {
+            if (([string]$Comp.Name -eq "SafetyBot") -and (Test-AcceptablePidTree -ProcessIds @($existing))) {
+                return @{
+                    status = "already_running_multi_pid_accepted"
+                    pids = @($existing)
+                    lock_repair = $lockRepairState
+                }
+            }
             $dedupe = Deduplicate-ComponentInstances -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script) -LockPath $LockPath -Dry:$Dry
             if ($dedupe.status -eq "dedupe_failed") {
                 return @{
@@ -544,26 +638,38 @@ function Start-Component {
 
     $lockInfo = Cleanup-StaleLock -LockPath $LockPath -Dry:$Dry
     if ($lockInfo.status -eq "active_lock") {
-        # Guard against stale PID reuse: lock pid is alive, but target script is not.
-        if ((@($existing).Count -eq 0) -and (Test-Path $LockPath) -and (-not $Dry)) {
-            try {
-                Remove-Item -Force $LockPath -ErrorAction Stop
-                $lockInfo = @{
-                    status = "stale_removed_pid_reuse"
-                    pid = $lockInfo.pid
-                }
-            } catch {
+        # Guard against PID reuse without creating duplicate runtimes:
+        # if lock pid is alive AND belongs to target script, treat as running.
+        if (($null -ne $lockInfo.pid) -and (Test-PidRunning -ProcessId ([int]$lockInfo.pid))) {
+            $matchesScript = Test-PidMatchesScript -ProcessId ([int]$lockInfo.pid) -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script)
+            if ($matchesScript) {
                 return @{
-                    status = "blocked_active_lock"
+                    status = "already_running_lock_pid"
+                    pids = @([int]$lockInfo.pid)
                     lock = $LockPath
-                    pid = $lockInfo.pid
-                    error = ("stale_pid_reuse_remove_failed: " + $_.Exception.Message)
                 }
             }
-        } elseif ((@($existing).Count -eq 0) -and (Test-Path $LockPath) -and $Dry) {
-            $lockInfo = @{
-                status = "dry_run_stale_pid_reuse"
-                pid = $lockInfo.pid
+            # Only here we accept lock cleanup as stale PID reuse.
+            if ((Test-Path $LockPath) -and (-not $Dry)) {
+                try {
+                    Remove-Item -Force $LockPath -ErrorAction Stop
+                    $lockInfo = @{
+                        status = "stale_removed_pid_reuse"
+                        pid = $lockInfo.pid
+                    }
+                } catch {
+                    return @{
+                        status = "blocked_active_lock"
+                        lock = $LockPath
+                        pid = $lockInfo.pid
+                        error = ("stale_pid_reuse_remove_failed: " + $_.Exception.Message)
+                    }
+                }
+            } elseif ((Test-Path $LockPath) -and $Dry) {
+                $lockInfo = @{
+                    status = "dry_run_stale_pid_reuse"
+                    pid = $lockInfo.pid
+                }
             }
         }
     }
@@ -603,12 +709,17 @@ function Start-Component {
         $proc = Start-Process -FilePath $PythonPath -ArgumentList (@($scriptPath) + $args) -WorkingDirectory $RuntimeRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru -ErrorAction Stop
         Start-Sleep -Milliseconds 700
         if ($proc.HasExited) {
+            try { [void]$proc.WaitForExit(2000) } catch {}
+            try { $proc.Refresh() } catch {}
+            $exitCode = $null
+            try { $exitCode = [int]$proc.ExitCode } catch { $exitCode = $null }
             return @{
                 status = "start_failed_exited"
                 pid = [int]$proc.Id
-                exit_code = [int]$proc.ExitCode
+                exit_code = $exitCode
                 stdout_log = $outLog
                 stderr_log = $errLog
+                stderr_tail = (Get-FileTailSafe -Path $errLog -TailLines 30)
                 lock = $LockPath
                 lock_cleanup = $lockInfo.status
             }
@@ -620,12 +731,17 @@ function Start-Component {
             while ((Get-Date) -lt $probeDeadline) {
                 $proc.Refresh()
                 if ($proc.HasExited) {
+                    try { [void]$proc.WaitForExit(2000) } catch {}
+                    try { $proc.Refresh() } catch {}
+                    $exitCode = $null
+                    try { $exitCode = [int]$proc.ExitCode } catch { $exitCode = $null }
                     return @{
                         status = "start_failed_exited"
                         pid = [int]$proc.Id
-                        exit_code = [int]$proc.ExitCode
+                        exit_code = $exitCode
                         stdout_log = $outLog
                         stderr_log = $errLog
+                        stderr_tail = (Get-FileTailSafe -Path $errLog -TailLines 30)
                         lock = $LockPath
                         lock_cleanup = $lockInfo.status
                     }
@@ -645,6 +761,7 @@ function Start-Component {
                     pid = [int]$proc.Id
                     stdout_log = $outLog
                     stderr_log = $errLog
+                    stderr_tail = (Get-FileTailSafe -Path $errLog -TailLines 30)
                     lock = $LockPath
                     lock_pid = $lockProbePid
                     lock_cleanup = $lockInfo.status
@@ -878,7 +995,11 @@ try {
                     $logFresh = ([double]$logAgeSec -le [double]$ttl)
                 }
                 $runningByPid = [bool]((@($ids).Count -gt 0) -or $lockPidRunning)
-                $duplicatePids = [bool](([string]$c.Name -eq "SafetyBot") -and (@($ids).Count -gt 1))
+                $multiPidTreeOk = $false
+                if (([string]$c.Name -eq "SafetyBot") -and (@($ids).Count -gt 1)) {
+                    $multiPidTreeOk = Test-AcceptablePidTree -ProcessIds @($ids)
+                }
+                $duplicatePids = [bool](([string]$c.Name -eq "SafetyBot") -and (@($ids).Count -gt 1) -and (-not $multiPidTreeOk))
                 # WMI can be restricted on some hosts; for SafetyBot heartbeat fallback is accepted
                 # only with an existing lock and fresh HEARTBEAT=OK evidence in log.
                 $runningByHeartbeat = $false
@@ -909,6 +1030,7 @@ try {
                     lock_exists = [bool]$lockExists
                     lock_pid = $lockPid
                     lock_pid_running = [bool]$lockPidRunning
+                    multi_pid_tree_ok = [bool]$multiPidTreeOk
                     log_path = $logPath
                     log_age_sec = $logAgeSec
                     log_ttl_sec = [int]$ttl

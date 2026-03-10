@@ -12,6 +12,12 @@ def test_system_control_status_has_strict_safetybot_heartbeat_fallback() -> None
         "bridge_peer_ready",
         "duplicate_pids",
         "start_failed_no_lock",
+        "stderr_tail",
+        "function Test-PidMatchesScript",
+        "function Test-AcceptablePidTree",
+        "already_running_lock_pid",
+        "already_running_multi_pid_accepted",
+        "multi_pid_tree_ok",
         "([bool]$lockExists -and [bool]$logFresh -and [bool]$heartbeatOkRecent -and (-not [bool]$runningByPid))",
     )
     for token in required_tokens:
