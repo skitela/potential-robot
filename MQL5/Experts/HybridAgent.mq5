@@ -826,11 +826,26 @@ void EvaluateKernelShadowForCurrentSymbol(const string source_tag)
     snapshot.tick_rate_1s
   );
 
-  bool log_now = (signature != G_LastKernelShadowSignature);
-  if(!log_now)
+  string reason_u = ToUpperAscii(G_LastKernelDecision.reason_code);
+  bool noisy_reason = (
+    reason_u == "PROFILE_NOT_LOADED" ||
+    StringFind(reason_u, "BLACK_SWAN_RUNTIME:STALE_TICK_FLAG") == 0
+  );
+
+  bool log_now = false;
+  if(noisy_reason)
+  {
+    // Noise control: for repetitive non-actionable reasons we prefer strict throttling.
     log_now = ShouldEmitLogThrottled(G_LastKernelShadowLogMs, InpKernelShadowLogThrottleSec);
+  }
   else
-    G_LastKernelShadowLogMs = (ulong)GetTickCount();
+  {
+    log_now = (signature != G_LastKernelShadowSignature);
+    if(!log_now)
+      log_now = ShouldEmitLogThrottled(G_LastKernelShadowLogMs, InpKernelShadowLogThrottleSec);
+    else
+      G_LastKernelShadowLogMs = (ulong)GetTickCount();
+  }
 
   if(log_now)
   {

@@ -18,7 +18,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 DEFAULT_MT5_EXE = Path(r"C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe")
@@ -115,19 +115,28 @@ class SetupResult:
     launched: bool = False
 
 
-def _load_strategy_symbols(root: Path) -> List[str]:
+def _load_strategy_config(root: Path) -> Dict[str, Any]:
     cfg_path = root / "CONFIG" / "strategy.json"
     if not cfg_path.exists():
-        return list(DEFAULT_BASE_SYMBOLS)
+        return {}
     try:
         data = json.loads(cfg_path.read_text(encoding="utf-8"))
-        raw = data.get("symbols_to_trade")
-        if isinstance(raw, list):
-            out = [str(x).strip().upper() for x in raw if str(x).strip()]
-            return out or list(DEFAULT_BASE_SYMBOLS)
+        if isinstance(data, dict):
+            return data
     except Exception:
-        return list(DEFAULT_BASE_SYMBOLS)
-    return list(DEFAULT_BASE_SYMBOLS)
+        return {}
+    return {}
+
+
+def _load_strategy_symbols(root: Path) -> Tuple[List[str], bool]:
+    data = _load_strategy_config(root)
+    raw = data.get("symbols_to_trade") if isinstance(data, dict) else None
+    out: List[str] = []
+    if isinstance(raw, list):
+        out = [str(x).strip().upper() for x in raw if str(x).strip()]
+    symbols = out or list(DEFAULT_BASE_SYMBOLS)
+    fx_only_mode = bool(data.get("fx_only_mode", False)) if isinstance(data, dict) else False
+    return symbols, fx_only_mode
 
 
 def _guess_group(base_symbol: str) -> str:
@@ -152,6 +161,16 @@ def _filter_symbols_for_focus(symbols: List[str], focus_group: str) -> List[str]
     out: List[str] = []
     for sym in symbols:
         if _guess_group(sym) == fg:
+            out.append(sym)
+    return out
+
+
+def _filter_symbols_fx_only(symbols: List[str], fx_only_mode: bool) -> List[str]:
+    if not bool(fx_only_mode):
+        return list(symbols)
+    out: List[str] = []
+    for sym in symbols:
+        if _guess_group(sym) == "FX":
             out.append(sym)
     return out
 
@@ -512,10 +531,12 @@ def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool, focus_grou
     if template is None:
         return SetupResult(False, "Brak źródłowego pliku .chr z HybridAgent (expertmode=5) w Profiles/deleted ani w istniejących profilach wykresow.")
 
-    symbols_base = _load_strategy_symbols(root)
+    symbols_base, fx_only_mode = _load_strategy_symbols(root)
+    symbols_base = _filter_symbols_fx_only(symbols_base, fx_only_mode)
     symbols_base = _filter_symbols_for_focus(symbols_base, focus_group)
     if not symbols_base:
-        return SetupResult(False, f"Brak symboli po filtrowaniu focus-group={focus_group}.")
+        mode_info = "fx_only_mode=true" if fx_only_mode else "fx_only_mode=false"
+        return SetupResult(False, f"Brak symboli po filtrowaniu ({mode_info}, focus-group={focus_group}).")
     available = _extract_available_symbols(root)
     resolved = [_resolve_symbol(b, available) for b in symbols_base]
     # Keep deterministic order and unique values.
@@ -541,6 +562,7 @@ def setup(root: Path, profile_name: str, mt5_exe: Path, launch: bool, focus_grou
         "profile_dir": str(profile_dir),
         "template_used": str(template),
         "symbols": symbols,
+        "fx_only_mode": bool(fx_only_mode),
         "focus_group": str(focus_group).upper(),
         "launched": launched,
         "mt5_exe": str(mt5_exe),
