@@ -3,6 +3,7 @@ param(
     [string]$Label = "OANDAKEY",
     [ValidateSet("full", "safety_only")]
     [string]$Profile = "safety_only",
+    [switch]$AllowNonInteractive,
     [switch]$DryRun
 )
 
@@ -1195,8 +1196,22 @@ $status = [ordered]@{
     root = $runtimeRoot
     expected_label = $Label
     profile = $Profile
+    allow_noninteractive = [bool]$AllowNonInteractive
     dry_run = [bool]$DryRun
     status = "FAIL"
+}
+
+$isInteractiveSession = [bool][Environment]::UserInteractive
+$status.session = [ordered]@{
+    user_interactive = $isInteractiveSession
+    session_name = [string]$env:SESSIONNAME
+    user = [string]$env:USERNAME
+}
+if ((-not $DryRun) -and (-not $AllowNonInteractive) -and (-not $isInteractiveSession)) {
+    $status.reason = "interactive_session_required"
+    [void](Write-JsonAtomic -Path $statusPath -Object $status)
+    Write-Output "START_WITH_OANDAKEY FAIL_INTERACTIVE_SESSION_REQUIRED"
+    exit 12
 }
 
 $startLockPath = Join-Path $runtimeRoot "RUN\start_with_key.lock"

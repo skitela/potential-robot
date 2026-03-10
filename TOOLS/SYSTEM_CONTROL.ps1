@@ -279,6 +279,103 @@ function Get-SafetyBotHeartbeatOkAgeSec {
     return [double]((Get-Date) - $lastTs).TotalSeconds
 }
 
+function Get-SafetyBotBridgeIssueHint {
+    param(
+        [string]$LogPath,
+        [int]$TailLines = 500
+    )
+    if ([string]::IsNullOrWhiteSpace($LogPath)) { return $null }
+    if (-not (Test-Path $LogPath)) { return $null }
+    try {
+        $tail = [string](Get-Content -Path $LogPath -Tail ([Math]::Max(50, [int]$TailLines)) -ErrorAction Stop | Out-String)
+    } catch {
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($tail)) { return $null }
+    if ($tail -match "\bNO_ACTIVE_PEER\b") { return "no_active_peer" }
+    if ($tail -match "\bSEND_TIMEOUT\b") { return "send_timeout" }
+    if ($tail -match "\bIPC send failed\b") { return "ipc_send_failed" }
+    return $null
+}
+
+function Get-Mt5ProfileLoadIssueHint {
+    param(
+        [string]$RuntimeRoot,
+        [string]$ProfileName = "OANDA_HYBRID_AUTO",
+        [int]$TailLines = 300
+    )
+    $reportPath = Join-Path $RuntimeRoot "RUN\mt5_profile_setup_report.json"
+    if (-not (Test-Path $reportPath)) { return $null }
+    $profileDir = ""
+    try {
+        $report = Get-Content -Raw -Encoding UTF8 $reportPath | ConvertFrom-Json
+        $profileDir = [string]$report.profile_dir
+    } catch {
+        $profileDir = ""
+    }
+
+    $latestLog = $null
+    if (-not [string]::IsNullOrWhiteSpace($profileDir)) {
+        $marker = "\MQL5\Profiles\Charts\"
+        $idx = $profileDir.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase)
+        if ($idx -ge 0) {
+            $dataDir = $profileDir.Substring(0, $idx)
+            if (-not [string]::IsNullOrWhiteSpace($dataDir)) {
+                $logDir = Join-Path $dataDir "logs"
+                if (Test-Path $logDir) {
+                    try {
+                        $latestLog = Get-ChildItem $logDir -Filter *.log -ErrorAction Stop | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                    } catch {
+                        $latestLog = $null
+                    }
+                }
+            }
+        }
+    }
+    if ($null -eq $latestLog) {
+        $terminalBase = Join-Path $env:APPDATA "MetaQuotes\Terminal"
+        if (Test-Path $terminalBase) {
+            try {
+                $latestLog = @(
+                    Get-ChildItem $terminalBase -Directory -ErrorAction Stop |
+                    ForEach-Object {
+                        $d = Join-Path $_.FullName "logs"
+                        if (Test-Path $d) {
+                            Get-ChildItem $d -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                        }
+                    }
+                ) | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            } catch {
+                $latestLog = $null
+            }
+        }
+    }
+    if ($null -eq $latestLog) { return $null }
+
+    $content = ""
+    try {
+        if ([int64]$latestLog.Length -le 2MB) {
+            $content = [string](Get-Content -Path $latestLog.FullName -Raw -ErrorAction Stop)
+        } else {
+            $content = [string](Get-Content -Path $latestLog.FullName -Tail ([Math]::Max(80, [int]$TailLines)) -ErrorAction Stop | Out-String)
+        }
+    } catch {
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+
+    $profilePat = [regex]::Escape([string]$ProfileName)
+    $hasFrameFail = ($content -match "(?is)create new frame .*?CHART\d+\.CHR' failed") -and ($content -match ("(?is)" + $profilePat))
+    $hasMdiFail = ($content -match "(?is)\bMDI create failed\b")
+    if ($hasFrameFail -and $hasMdiFail) {
+        return "mt5_profile_load_failed"
+    }
+    if ($hasFrameFail) {
+        return "mt5_chart_frame_create_failed"
+    }
+    return $null
+}
+
 function Stop-PidSafely {
     param(
         [int]$ProcessId,
@@ -1006,6 +1103,8 @@ try {
                 $runningByHeartbeat = $false
                 $heartbeatOkAgeSec = $null
                 $heartbeatOkRecent = $false
+                $bridgeIssueHint = $null
+                $profileIssueHint = $null
                 if ([string]$c.Name -eq "SafetyBot") {
                     $heartbeatOkAgeSec = Get-SafetyBotHeartbeatOkAgeSec -LogPath $logPath -TailLines 500
                     if ($null -ne $heartbeatOkAgeSec) {
@@ -1018,6 +1117,17 @@ try {
                 $bridgePeerReady = $true
                 if ([string]$c.Name -eq "SafetyBot") {
                     $bridgePeerReady = [bool]$heartbeatOkRecent
+                    if (-not $bridgePeerReady) {
+                        $bridgeIssueHint = Get-SafetyBotBridgeIssueHint -LogPath $logPath -TailLines 500
+                        $profileIssueHint = Get-Mt5ProfileLoadIssueHint -RuntimeRoot $runtimeRoot -ProfileName "OANDA_HYBRID_AUTO" -TailLines 320
+                        if ([string]$runtimeHint -eq "none") {
+                            if (-not [string]::IsNullOrWhiteSpace([string]$profileIssueHint)) {
+                                $runtimeHint = [string]$profileIssueHint
+                            } elseif (-not [string]::IsNullOrWhiteSpace([string]$bridgeIssueHint)) {
+                                $runtimeHint = [string]$bridgeIssueHint
+                            }
+                        }
+                    }
                 }
                 $result.components += [ordered]@{
                     name = [string]$c.Name
@@ -1038,6 +1148,8 @@ try {
                     heartbeat_ok_age_sec = $heartbeatOkAgeSec
                     heartbeat_ok_recent = [bool]$heartbeatOkRecent
                     bridge_peer_ready = [bool]$bridgePeerReady
+                    bridge_issue_hint = $bridgeIssueHint
+                    mt5_profile_issue = $profileIssueHint
                     runtime_hint = $runtimeHint
                 }
                 if (-not ([bool]$runningByPid -or [bool]$runningByHeartbeat)) {

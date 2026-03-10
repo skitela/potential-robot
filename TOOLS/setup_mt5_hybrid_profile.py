@@ -183,31 +183,68 @@ def _chart_template_score(chart_path: Path) -> Optional[int]:
     return len(txt)
 
 
-def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
-    candidates: List[Path] = []
-
-    deleted = data_dir / "MQL5" / "Profiles" / "deleted"
-    if deleted.exists():
-        candidates.extend(sorted(deleted.glob("*.chr")))
-
-    charts_root = data_dir / "MQL5" / "Profiles" / "Charts"
-    preferred_profile = charts_root / profile_name
-    if preferred_profile.exists():
-        candidates.extend(sorted(preferred_profile.glob("*.chr")))
-
-    if charts_root.exists():
-        for profile_dir in sorted(charts_root.iterdir()):
-            if profile_dir.is_dir() and profile_dir != preferred_profile:
-                candidates.extend(sorted(profile_dir.glob("*.chr")))
-
+def _pick_best_template(candidates: List[Path]) -> Optional[Path]:
     best: Optional[Tuple[int, Path]] = None
     for p in candidates:
         score = _chart_template_score(p)
         if score is None:
             continue
-        if best is None or score < best[0]:
+        # Prefer richer templates (more complete chart payload).
+        if best is None or score > best[0]:
             best = (score, p)
     return best[1] if best else None
+
+
+def _pick_source_chart(data_dir: Path, profile_name: str) -> Optional[Path]:
+    deleted = data_dir / "MQL5" / "Profiles" / "deleted"
+    charts_root = data_dir / "MQL5" / "Profiles" / "Charts"
+    preferred_profile = charts_root / profile_name
+
+    # 1) Prefer templates in deleted/ (usually last known-good chart snapshots).
+    if deleted.exists():
+        best = _pick_best_template(sorted(deleted.glob("*.chr")))
+        if best is not None:
+            return best
+
+    # 2) Prefer non-generated profiles and avoid backup recursion.
+    if charts_root.exists():
+        stable_profiles: List[Path] = []
+        backup_profiles: List[Path] = []
+        for profile_dir in sorted(charts_root.iterdir()):
+            if not profile_dir.is_dir() or profile_dir == preferred_profile:
+                continue
+            name = profile_dir.name.lower()
+            if "_backup_" in name:
+                backup_profiles.append(profile_dir)
+            else:
+                stable_profiles.append(profile_dir)
+
+        stable_candidates: List[Path] = []
+        for profile_dir in stable_profiles:
+            stable_candidates.extend(sorted(profile_dir.glob("*.chr")))
+        best = _pick_best_template(stable_candidates)
+        if best is not None:
+            return best
+
+    # 3) Fallback to current profile if nothing else is available.
+    if preferred_profile.exists():
+        best = _pick_best_template(sorted(preferred_profile.glob("*.chr")))
+        if best is not None:
+            return best
+
+    # 4) Last-resort fallback to backup profiles.
+    if charts_root.exists():
+        backup_candidates: List[Path] = []
+        for profile_dir in sorted(charts_root.iterdir()):
+            if not profile_dir.is_dir():
+                continue
+            if "_backup_" in profile_dir.name.lower():
+                backup_candidates.extend(sorted(profile_dir.glob("*.chr")))
+        best = _pick_best_template(backup_candidates)
+        if best is not None:
+            return best
+
+    return None
 
 
 def _replace_line(txt: str, key: str, value: str) -> str:
@@ -218,8 +255,9 @@ def _replace_line(txt: str, key: str, value: str) -> str:
     return txt.replace("<chart>\r\n", f"<chart>\r\n{key}={value}\r\n", 1)
 
 
-def _build_chart_text(template_text: str, symbol: str, description: str) -> str:
+def _build_chart_text(template_text: str, symbol: str, description: str, chart_id: str) -> str:
     out = template_text
+    out = _replace_line(out, "id", chart_id)
     out = _replace_line(out, "symbol", symbol)
     out = _replace_line(out, "description", description)
     # Force M5 scalp chart.
@@ -271,8 +309,10 @@ def _write_profile(data_dir: Path, profile_name: str, symbols: List[str], templa
     charts_dir.mkdir(parents=True, exist_ok=True)
 
     template_text = _normalize_chart_template_text(template_path.read_text(encoding="utf-16le"))
+    id_seed = max(int(time.time_ns() % 9_000_000_000_000_000_000), 1)
     for idx, sym in enumerate(symbols, start=1):
-        txt = _build_chart_text(template_text, sym, _description_for_symbol(sym))
+        chart_id = str(id_seed + idx)
+        txt = _build_chart_text(template_text, sym, _description_for_symbol(sym), chart_id=chart_id)
         out = charts_dir / f"chart{idx:02d}.chr"
         _write_chart_text(out, txt)
     return charts_dir

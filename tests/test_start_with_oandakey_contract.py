@@ -60,3 +60,15 @@ def test_start_with_oandakey_profile_setup_has_retry_and_nonfatal_stderr_contrac
     )
     for token in required_tokens:
         assert token in script, f"Missing profile-setup resilience token: {token}"
+
+
+def test_start_with_oandakey_requires_interactive_session_by_default() -> None:
+    script = Path("RUN/START_WITH_OANDAKEY.ps1").read_text(encoding="utf-8", errors="ignore")
+    required_tokens = (
+        "[switch]$AllowNonInteractive",
+        "[Environment]::UserInteractive",
+        "interactive_session_required",
+        "FAIL_INTERACTIVE_SESSION_REQUIRED",
+    )
+    for token in required_tokens:
+        assert token in script, f"Missing interactive-session guard token: {token}"
