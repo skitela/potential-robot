@@ -10718,6 +10718,14 @@ class SafetyBot:
         self._runtime_cached_group_arb: Dict[str, Dict[str, Any]] = {}
         self._runtime_cached_group_risk: Dict[str, Dict[str, Any]] = {}
         self._runtime_cached_group_ts_utc: str = ""
+        self._runtime_cached_tw_ctx: Dict[str, Any] = {}
+        self._runtime_cached_day_state: Dict[str, Any] = {}
+        self._runtime_cached_eco_active: bool = False
+        self._runtime_cached_warn_active: bool = False
+        self._last_live_module_refresh_ts: float = 0.0
+        self._last_no_live_drift_refresh_ts: float = 0.0
+        self._last_cost_guard_refresh_ts: float = 0.0
+        self._last_time_anchor_refresh_ts: float = 0.0
         self._last_budget_log_ts: float = 0.0
         self._last_oanda_price_breakdown_log_ts: float = 0.0
         ensure_dirs(_paths)
@@ -14803,6 +14811,7 @@ class SafetyBot:
             now_dt = now_utc()
             self._emit_policy_runtime(group_arb, group_risk, now_dt=now_dt)
             self._emit_kernel_config(group_risk, now_dt=now_dt)
+            self._runtime_refresh_control_plane_state()
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         self._runtime_reload_stage1_config()
@@ -14812,6 +14821,60 @@ class SafetyBot:
         group_arb = dict(getattr(self, "_runtime_cached_group_arb", {}) or {})
         group_risk = dict(getattr(self, "_runtime_cached_group_risk", {}) or {})
         return group_arb, group_risk
+
+    def _runtime_cache_control_plane_inputs(
+        self,
+        *,
+        tw_ctx: Dict[str, Any],
+        st: Dict[str, Any],
+        eco_active: bool,
+        warn_active: bool,
+    ) -> None:
+        self._runtime_cached_tw_ctx = dict(tw_ctx or {})
+        self._runtime_cached_day_state = dict(st or {})
+        self._runtime_cached_eco_active = bool(eco_active)
+        self._runtime_cached_warn_active = bool(warn_active)
+
+    def _runtime_refresh_control_plane_state(self) -> None:
+        tw_ctx = dict(getattr(self, "_runtime_cached_tw_ctx", {}) or {})
+        st = dict(getattr(self, "_runtime_cached_day_state", {}) or {})
+        if not tw_ctx or not st:
+            return
+
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        module_refresh_interval_s = float(scan_interval_s)
+        drift_refresh_interval_s = float(scan_interval_s)
+        cost_guard_refresh_interval_s = float(max(30, scan_interval_s))
+        time_anchor_refresh_interval_s = float(scan_interval_s)
+
+        try:
+            if (now_ts - float(getattr(self, "_last_live_module_refresh_ts", 0.0) or 0.0)) >= module_refresh_interval_s:
+                self._refresh_live_module_states(tw_ctx=tw_ctx, st=st)
+                self._last_live_module_refresh_ts = now_ts
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            if (now_ts - float(getattr(self, "_last_no_live_drift_refresh_ts", 0.0) or 0.0)) >= drift_refresh_interval_s:
+                self._refresh_no_live_drift_check(tw_ctx=tw_ctx)
+                self._last_no_live_drift_refresh_ts = now_ts
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            if (now_ts - float(getattr(self, "_last_cost_guard_refresh_ts", 0.0) or 0.0)) >= cost_guard_refresh_interval_s:
+                self._refresh_cost_guard_auto_relax_state(tw_ctx=tw_ctx)
+                self._last_cost_guard_refresh_ts = now_ts
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            if (now_ts - float(getattr(self, "_last_time_anchor_refresh_ts", 0.0) or 0.0)) >= time_anchor_refresh_interval_s:
+                self._time_anchor_sync_if_due(st)
+                self._last_time_anchor_refresh_ts = now_ts
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _runtime_reload_stage1_config(self) -> None:
         try:
@@ -15758,6 +15821,13 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+        self._runtime_cache_control_plane_inputs(
+            tw_ctx=tw_ctx,
+            st=st,
+            eco_active=bool(eco_by_budget),
+            warn_active=bool(warn_degrade_active),
+        )
+
         if eco_by_budget:
             logging.warning(
                 f"ECO_MODE reason={eco_reason} price_pct={price_pct:.3f} sys_pct={sys_pct:.3f} order_pct={order_pct:.3f} "
@@ -15771,12 +15841,6 @@ class SafetyBot:
             f"| SYS used={st['sys_used']}/{self.gov.sys_trade_budget} + em={st['sys_em_used']}/{self.gov.sys_emergency} "
             f"| price_soft={self.gov.price_soft_mode()}"
         )
-        try:
-            self._refresh_live_module_states(tw_ctx=tw_ctx, st=st)
-            self._refresh_no_live_drift_check(tw_ctx=tw_ctx)
-            self._refresh_cost_guard_auto_relax_state(tw_ctx=tw_ctx)
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         # Trade windows gate:
         # - OFF: no training/scanning and no PRICE polling; keep minimal SYS safety reconciliation.
@@ -15886,9 +15950,6 @@ class SafetyBot:
                     )
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-
-        # V1.10: okresowa synchronizacja czasu serwera (rzadko, tylko jeśli budżet pozwala)
-        self._time_anchor_sync_if_due(st)
 
         # pozycje (SYS): ECO nie może odciąć opieki nad otwartymi pozycjami
         in_force_close = self.strategy.force_close_window()

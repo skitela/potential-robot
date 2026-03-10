@@ -31,6 +31,11 @@ def test_scan_once_no_longer_emits_policy_and_kernel_config() -> None:
     called = _called_names(fn)
     assert "_emit_policy_runtime" not in called
     assert "_emit_kernel_config" not in called
+    assert "_refresh_live_module_states" not in called
+    assert "_refresh_no_live_drift_check" not in called
+    assert "_refresh_cost_guard_auto_relax_state" not in called
+    assert "_time_anchor_sync_if_due" not in called
+    assert "_runtime_cache_control_plane_inputs" in called
 
 
 def test_runtime_maintenance_step_emits_policy_and_kernel_config() -> None:
@@ -39,3 +44,4 @@ def test_runtime_maintenance_step_emits_policy_and_kernel_config() -> None:
     called = _called_names(fn)
     assert "_emit_policy_runtime" in called
     assert "_emit_kernel_config" in called
+    assert "_runtime_refresh_control_plane_state" in called

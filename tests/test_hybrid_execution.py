@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from BIN.safetybot import SafetyBot, StandardStrategy, build_response_hash
+from BIN.safetybot import CFG, SafetyBot, StandardStrategy, build_response_hash
 
 
 class TestHybridExecution(unittest.TestCase):
@@ -611,6 +611,67 @@ class TestHybridExecution(unittest.TestCase):
 
         self.assertFalse(ok)
         bot._runtime_idle_step.assert_not_called()
+
+    def test_runtime_refresh_control_plane_state_runs_cached_refreshes_on_cadence(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_cached_tw_ctx = {"phase": "ACTIVE", "window_id": "TEST"}
+        bot._runtime_cached_day_state = {"day_ny": "2026-03-10", "utc_day": "2026-03-10"}
+        bot._last_live_module_refresh_ts = 0.0
+        bot._last_no_live_drift_refresh_ts = 0.0
+        bot._last_cost_guard_refresh_ts = 0.0
+        bot._last_time_anchor_refresh_ts = 0.0
+        bot._refresh_live_module_states = MagicMock()
+        bot._refresh_no_live_drift_check = MagicMock()
+        bot._refresh_cost_guard_auto_relax_state = MagicMock()
+        bot._time_anchor_sync_if_due = MagicMock()
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        CFG.scan_interval_sec = 30
+        try:
+            with patch("BIN.safetybot.time.time", return_value=100.0):
+                bot._runtime_refresh_control_plane_state()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+
+        bot._refresh_live_module_states.assert_called_once_with(
+            tw_ctx=bot._runtime_cached_tw_ctx,
+            st=bot._runtime_cached_day_state,
+        )
+        bot._refresh_no_live_drift_check.assert_called_once_with(
+            tw_ctx=bot._runtime_cached_tw_ctx,
+        )
+        bot._refresh_cost_guard_auto_relax_state.assert_called_once_with(
+            tw_ctx=bot._runtime_cached_tw_ctx,
+        )
+        bot._time_anchor_sync_if_due.assert_called_once_with(bot._runtime_cached_day_state)
+
+    def test_runtime_refresh_control_plane_state_skips_before_next_cadence(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_cached_tw_ctx = {"phase": "ACTIVE", "window_id": "TEST"}
+        bot._runtime_cached_day_state = {"day_ny": "2026-03-10", "utc_day": "2026-03-10"}
+        bot._last_live_module_refresh_ts = 95.0
+        bot._last_no_live_drift_refresh_ts = 95.0
+        bot._last_cost_guard_refresh_ts = 95.0
+        bot._last_time_anchor_refresh_ts = 95.0
+        bot._refresh_live_module_states = MagicMock()
+        bot._refresh_no_live_drift_check = MagicMock()
+        bot._refresh_cost_guard_auto_relax_state = MagicMock()
+        bot._time_anchor_sync_if_due = MagicMock()
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        CFG.scan_interval_sec = 30
+        try:
+            with patch("BIN.safetybot.time.time", return_value=100.0):
+                bot._runtime_refresh_control_plane_state()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+
+        bot._refresh_live_module_states.assert_not_called()
+        bot._refresh_no_live_drift_check.assert_not_called()
+        bot._refresh_cost_guard_auto_relax_state.assert_not_called()
+        bot._time_anchor_sync_if_due.assert_not_called()
 
     def test_handle_market_data_dispatches_account(self):
         with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
