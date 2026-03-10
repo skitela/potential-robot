@@ -3,6 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
+import zmq
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -138,6 +139,42 @@ class TestZMQBridgeE2E(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(2, bridge.req_socket.send_string.call_count)
         self.assertEqual(0, bridge._reconnect_req_socket.call_count)
+
+    def test_send_command_send_timeout_can_skip_reconnect_for_heartbeat(self):
+        bridge = self._build_bridge(retries=2)
+        bridge.req_socket.send_string.side_effect = [zmq.Again(), zmq.Again()]
+        bridge._reconnect_req_socket = MagicMock()
+
+        result = bridge.send_command(
+            {"action": "HEARTBEAT", "msg_id": "hb-send-timeout-no-reconnect"},
+            reconnect_on_timeout=False,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(2, bridge.req_socket.send_string.call_count)
+        self.assertEqual(0, bridge._reconnect_req_socket.call_count)
+        diag = bridge.get_last_command_diag()
+        self.assertEqual("FAILED", diag.get("status"))
+        self.assertEqual("SEND_TIMEOUT", diag.get("bridge_timeout_reason"))
+        self.assertEqual("NO_ACTIVE_PEER", diag.get("bridge_timeout_subreason"))
+
+    def test_send_command_zmq_error_can_skip_reconnect_for_heartbeat(self):
+        bridge = self._build_bridge(retries=2)
+        bridge.req_socket.send_string.side_effect = [zmq.ZMQError(), zmq.ZMQError()]
+        bridge._reconnect_req_socket = MagicMock()
+
+        result = bridge.send_command(
+            {"action": "HEARTBEAT", "msg_id": "hb-zmq-error-no-reconnect"},
+            reconnect_on_timeout=False,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(2, bridge.req_socket.send_string.call_count)
+        self.assertEqual(0, bridge._reconnect_req_socket.call_count)
+        diag = bridge.get_last_command_diag()
+        self.assertEqual("FAILED", diag.get("status"))
+        self.assertEqual("ZMQ_ERROR", diag.get("bridge_timeout_reason"))
+        self.assertEqual("SOCKET_ERROR", diag.get("bridge_timeout_subreason"))
 
     def test_send_command_heartbeat_yields_to_trade_priority_window(self):
         bridge = self._build_bridge(retries=1)

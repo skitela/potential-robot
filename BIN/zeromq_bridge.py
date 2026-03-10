@@ -809,7 +809,11 @@ class ZMQBridge:
                         )
                         max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
                         if bool(reconnect_on_timeout):
-                            self._reconnect_req_socket()
+                            self._maybe_reconnect_req_socket(
+                                command_type=command_type,
+                                reconnect_on_timeout=bool(reconnect_on_timeout),
+                                reason="TIMEOUT_NO_RESPONSE",
+                            )
 
                 except (TypeError, json.JSONDecodeError) as e:
                     self._write_audit_log("COMMAND_SERIALIZATION_ERROR", msg_id, {"error": str(e)})
@@ -855,11 +859,19 @@ class ZMQBridge:
                         },
                     )
                     max_audit_lock_wait_ms = max(int(max_audit_lock_wait_ms), int(lock_wait_ms))
-                    self._reconnect_req_socket()
+                    self._maybe_reconnect_req_socket(
+                        command_type=command_type,
+                        reconnect_on_timeout=bool(reconnect_on_timeout),
+                        reason="SEND_TIMEOUT:NO_ACTIVE_PEER",
+                    )
                 except zmq.ZMQError:
                     last_reason = "ZMQ_ERROR"
                     last_subreason = "SOCKET_ERROR"
-                    self._reconnect_req_socket()
+                    self._maybe_reconnect_req_socket(
+                        command_type=command_type,
+                        reconnect_on_timeout=bool(reconnect_on_timeout),
+                        reason="ZMQ_ERROR:SOCKET_ERROR",
+                    )
 
             final_reason = str(last_reason or "COMMAND_FAILED")
             final_subreason = str(last_subreason or "UNKNOWN")
@@ -920,6 +932,25 @@ class ZMQBridge:
         self._configure_req_socket(self.req_socket)
         self.req_socket.bind(f"tcp://127.0.0.1:{self.req_port}")
         logging.info("Gniazdo REQ zostało zresetowane i ponownie powiązane.")
+
+    def _maybe_reconnect_req_socket(self, *, command_type: str, reconnect_on_timeout: bool, reason: str) -> bool:
+        """
+        Heartbeat ma działać tanio i nie destabilizować kanału REQ/REP.
+        Jeśli heartbeat dostał tylko przejściowy SEND_TIMEOUT/NO_ACTIVE_PEER i
+        reconnect_on_timeout jest wyłączony, zostawiamy gniazdo bez resetu.
+        Trade path zachowuje dotychczasowy agresywniejszy reconnect.
+        """
+        should_reconnect = bool(reconnect_on_timeout) or str(command_type or "").upper() != "HEARTBEAT"
+        if should_reconnect:
+            self._reconnect_req_socket()
+            return True
+        logging.info(
+            "REQ_RECONNECT_SKIPPED command_type=%s reason=%s reconnect_on_timeout=%s",
+            str(command_type or "UNKNOWN"),
+            str(reason or "UNKNOWN"),
+            int(bool(reconnect_on_timeout)),
+        )
+        return False
 
 
     def close(self) -> None:
