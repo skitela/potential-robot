@@ -76,6 +76,9 @@ if not exist "%SOURCE_DIR%\Experts\HybridAgent.mq5" (
   echo [ERROR] Missing source file: %SOURCE_DIR%\Experts\HybridAgent.mq5
   exit /b 1
 )
+if not exist "%SOURCE_DIR%\Experts\HybridAgent.ex5" (
+  echo [WARN] Missing source binary: %SOURCE_DIR%\Experts\HybridAgent.ex5 ^(compile fallback may be unavailable^)
+)
 if not exist "%SOURCE_DIR%\Include\zeromq_bridge.mqh" (
   echo [ERROR] Missing source include: %SOURCE_DIR%\Include\zeromq_bridge.mqh
   exit /b 2
@@ -188,6 +191,12 @@ timeout /t 2 /nobreak >nul
 echo [STEP] Copy HybridAgent source files
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Experts\HybridAgent.mq5" -Destination "%TARGET_DIR%\Experts\HybridAgent.mq5" || exit /b 20
 echo [OK] HybridAgent.mq5
+if exist "%SOURCE_DIR%\Experts\HybridAgent.ex5" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Experts\HybridAgent.ex5" -Destination "%TARGET_DIR%\Experts\HybridAgent.ex5" || exit /b 31
+  echo [OK] HybridAgent.ex5
+) else (
+  echo [WARN] HybridAgent.ex5 source missing - relying on compile output only.
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\zeromq_bridge.mqh" -Destination "%TARGET_DIR%\Include\zeromq_bridge.mqh" || exit /b 21
 echo [OK] zeromq_bridge.mqh
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\TOOLS\copy_if_needed.ps1" -Source "%SOURCE_DIR%\Include\Json\Json.mqh" -Destination "%TARGET_DIR%\Include\Json\Json.mqh" || exit /b 22
@@ -230,6 +239,14 @@ if errorlevel 1 (
 set "COMPILE_LOG=%LOG_DIR%\MT5_COMPILE_HybridAgent.log"
 set "COMPILE_OK=0"
 call :compile_hybrid_agent
+if "%COMPILE_OK%"=="0" (
+  if exist "%TARGET_DIR%\Experts\HybridAgent.ex5" (
+    echo [WARN] Compile not clean, but HybridAgent.ex5 exists and will be used.
+  ) else (
+    echo [ERROR] Compile failed and HybridAgent.ex5 is missing.
+    exit /b 32
+  )
+)
 
 set "PROFILE_LAST=Default"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command ^

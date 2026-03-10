@@ -15,6 +15,7 @@ class TestMt5DeployContract(unittest.TestCase):
             "LiveConfigLoader_v2.mqh",
             "CircuitBreaker_v2.mqh",
             "DecisionKernel_v1.mqh",
+            "HybridAgent.ex5",
             "copy_if_needed.ps1",
         )
         for token in required_tokens:
@@ -61,6 +62,8 @@ class TestMt5DeployContract(unittest.TestCase):
         script = (ROOT / "Aktualizuj_EA.bat").read_text(encoding="utf-8", errors="ignore")
         required_tokens = (
             ":compile_hybrid_agent",
+            "Compile failed and HybridAgent.ex5 is missing",
+            "Compile not clean, but HybridAgent.ex5 exists and will be used.",
             "for /L %%N in (1,1,3) do",
             "Diagnostic not ready yet",
             "MT5_FULL_DIAG_*.txt",
