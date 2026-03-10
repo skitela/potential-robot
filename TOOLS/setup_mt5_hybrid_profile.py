@@ -9,6 +9,7 @@ This script does not touch strategy logic. It only prepares MT5 workspace/profil
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
 import re
@@ -247,6 +248,19 @@ def _replace_input(chart_text: str, input_key: str, input_value: str) -> str:
     return chart_text[: m.start(1)] + body_new + chart_text[m.end(1) :]
 
 
+def _normalize_chart_template_text(text: str) -> str:
+    # MT5 CHR templates occasionally carry duplicated BOM markers from prior writes.
+    # Keep exactly one BOM in the final file payload (added at write time).
+    out = (text or "").lstrip("\ufeff")
+    return out
+
+
+def _write_chart_text(path: Path, text: str) -> None:
+    normalized = _normalize_chart_template_text(text)
+    payload = codecs.BOM_UTF16_LE + normalized.encode("utf-16le")
+    path.write_bytes(payload)
+
+
 def _write_profile(data_dir: Path, profile_name: str, symbols: List[str], template_path: Path) -> Path:
     charts_dir = data_dir / "MQL5" / "Profiles" / "Charts" / profile_name
     backup_dir = data_dir / "MQL5" / "Profiles" / "Charts" / f"{profile_name}_backup_{int(time.time())}"
@@ -256,11 +270,11 @@ def _write_profile(data_dir: Path, profile_name: str, symbols: List[str], templa
         shutil.rmtree(charts_dir)
     charts_dir.mkdir(parents=True, exist_ok=True)
 
-    template_text = template_path.read_text(encoding="utf-16le")
+    template_text = _normalize_chart_template_text(template_path.read_text(encoding="utf-16le"))
     for idx, sym in enumerate(symbols, start=1):
         txt = _build_chart_text(template_text, sym, _description_for_symbol(sym))
         out = charts_dir / f"chart{idx:02d}.chr"
-        out.write_text(txt, encoding="utf-16")
+        _write_chart_text(out, txt)
     return charts_dir
 
 
