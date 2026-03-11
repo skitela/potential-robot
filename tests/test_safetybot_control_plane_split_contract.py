@@ -70,11 +70,30 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     assert "_runtime_emit_budget_telemetry" in called
 
 
+def test_runtime_refresh_market_guard_cache_emits_snapshot_log() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "_runtime_refresh_market_guard_cache")
+    called = _called_names(fn)
+    assert "_runtime_emit_market_guard_snapshot_log" in called
+
+
 def test_scan_once_no_longer_builds_market_guards_directly() -> None:
     src = Path("BIN/safetybot.py").resolve()
     fn = _class_method_node(src, "SafetyBot", "scan_once")
     called = _called_names(fn)
     assert "_runtime_get_cached_market_guard_state" in called
+    assert "_runtime_log_black_swan_runtime_state" in called
+    assert "_runtime_log_scan_limit_state" in called
+
+
+def test_scan_once_no_longer_emits_repeated_guard_and_scan_limit_logs_directly() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "scan_once")
+    strings = _string_constants(fn)
+    assert "BLACK_SWAN_STRESS stress=%.3f threshold=%.3f => ECO/VETO_NEW_ENTRIES" not in strings
+    assert "STRESS_PRECAUTION stress=%.3f threshold=%.3f => ECO" not in strings
+    assert "BLACK_SWAN_BLOCK_NEW_ENTRIES state=%s action=%s reason=%s" not in strings
+    assert "SCAN_LIMIT global_mode=%s n_max=%s n_limit=%s canary_active=%s learner_qa=%s" not in strings
 
 
 def test_scan_once_stages_market_snapshot_instead_of_writing_it() -> None:

@@ -15132,6 +15132,117 @@ class SafetyBot:
         self._runtime_cached_snapshot_health = dict(snapshot_health or {})
         self._runtime_market_guard_cache_ready = True
         self._last_market_guard_refresh_ts = now_ts
+        self._runtime_emit_market_guard_snapshot_log(
+            black_swan_signal=black_swan_signal,
+            snapshot_health=snapshot_health,
+        )
+
+    def _runtime_emit_market_guard_snapshot_log(
+        self,
+        *,
+        black_swan_signal: BlackSwanSignal,
+        snapshot_health: Dict[str, Any],
+    ) -> None:
+        snapshot_sig = "|".join(
+            [
+                str(int(bool((snapshot_health or {}).get("critical", False)))),
+                str(int(bool((snapshot_health or {}).get("critical_raw", False)))),
+                str(int(bool((snapshot_health or {}).get("startup_grace_active", False)))),
+                str(int((snapshot_health or {}).get("stale_tick", 0) or 0)),
+                str(int((snapshot_health or {}).get("stale_bar", 0) or 0)),
+            ]
+        )
+        if snapshot_sig != str(getattr(self, "_last_snapshot_health_sig", "")):
+            self._last_snapshot_health_sig = snapshot_sig
+            logging.info(
+                "SNAPSHOT_HEALTH state=critical:%s raw:%s grace:%s stale_tick=%s/%s stale_bar=%s/%s total=%s tick_max_age_sec=%s bar_max_age_sec=%s",
+                int(bool((snapshot_health or {}).get("critical", False))),
+                int(bool((snapshot_health or {}).get("critical_raw", False))),
+                int(bool((snapshot_health or {}).get("startup_grace_active", False))),
+                int((snapshot_health or {}).get("stale_tick", 0) or 0),
+                int((snapshot_health or {}).get("seen_tick", 0) or 0),
+                int((snapshot_health or {}).get("stale_bar", 0) or 0),
+                int((snapshot_health or {}).get("seen_bar", 0) or 0),
+                int((snapshot_health or {}).get("symbols_total", 0) or 0),
+                int((snapshot_health or {}).get("max_age_sec", 0) or 0),
+                int((snapshot_health or {}).get("bar_max_age_sec", 0) or 0),
+            )
+
+        block_sig = "|".join(
+            [
+                str(int(bool(getattr(black_swan_signal, "precaution", False)))),
+                str(int(bool(getattr(black_swan_signal, "black_swan", False)))),
+                str(getattr(self, "_black_swan_v2_state", "UNKNOWN") or "UNKNOWN"),
+                str(getattr(self, "_black_swan_v2_action", "UNKNOWN") or "UNKNOWN"),
+                str(getattr(self, "_black_swan_v2_reason", "NONE") or "NONE"),
+                str(int(bool(getattr(self, "_black_swan_block_new_entries", False)))),
+            ]
+        )
+        if block_sig != str(getattr(self, "_last_black_swan_block_sig", "")):
+            self._last_black_swan_block_sig = block_sig
+            if bool(getattr(self, "_black_swan_block_new_entries", False)):
+                logging.warning(
+                    "BLACK_SWAN_BLOCK_NEW_ENTRIES state=%s action=%s reason=%s",
+                    str(getattr(self, "_black_swan_v2_state", "UNKNOWN")),
+                    str(getattr(self, "_black_swan_v2_action", "UNKNOWN")),
+                    str(getattr(self, "_black_swan_v2_reason", "NONE")),
+                )
+
+    def _runtime_log_black_swan_runtime_state(self, black_swan_signal: BlackSwanSignal) -> None:
+        runtime_sig = "|".join(
+            [
+                str(int(bool(getattr(black_swan_signal, "black_swan", False)))),
+                str(int(bool(getattr(black_swan_signal, "precaution", False)))),
+                f"{float(getattr(black_swan_signal, 'stress_index', 0.0) or 0.0):.3f}",
+                f"{float(getattr(black_swan_signal, 'threshold', 0.0) or 0.0):.3f}",
+                f"{float(getattr(black_swan_signal, 'precaution_threshold', 0.0) or 0.0):.3f}",
+            ]
+        )
+        if runtime_sig == str(getattr(self, "_last_black_swan_runtime_sig", "")):
+            return
+        self._last_black_swan_runtime_sig = runtime_sig
+        if bool(getattr(black_swan_signal, "black_swan", False)):
+            logging.warning(
+                "BLACK_SWAN_STRESS stress=%.3f threshold=%.3f => ECO/VETO_NEW_ENTRIES",
+                float(getattr(black_swan_signal, "stress_index", 0.0) or 0.0),
+                float(getattr(black_swan_signal, "threshold", 0.0) or 0.0),
+            )
+        elif bool(getattr(black_swan_signal, "precaution", False)):
+            logging.warning(
+                "STRESS_PRECAUTION stress=%.3f threshold=%.3f => ECO",
+                float(getattr(black_swan_signal, "stress_index", 0.0) or 0.0),
+                float(getattr(black_swan_signal, "precaution_threshold", 0.0) or 0.0),
+            )
+
+    def _runtime_log_scan_limit_state(
+        self,
+        *,
+        global_mode: str,
+        n_max: int,
+        n_limit: int,
+        canary_active: bool,
+        learner_qa_light: str,
+    ) -> None:
+        scan_sig = "|".join(
+            [
+                str(global_mode or "UNKNOWN"),
+                str(int(max(0, n_max))),
+                str(int(max(0, n_limit))),
+                str(int(bool(canary_active))),
+                str(learner_qa_light or "UNKNOWN"),
+            ]
+        )
+        if scan_sig == str(getattr(self, "_last_scan_limit_sig", "")):
+            return
+        self._last_scan_limit_sig = scan_sig
+        logging.info(
+            "SCAN_LIMIT global_mode=%s n_max=%s n_limit=%s canary_active=%s learner_qa=%s",
+            str(global_mode or "UNKNOWN"),
+            int(max(0, n_max)),
+            int(max(0, n_limit)),
+            int(bool(canary_active)),
+            str(learner_qa_light or "UNKNOWN"),
+        )
 
     def _runtime_stage_market_snapshot(self, snapshot: Dict[str, Any]) -> None:
         if not isinstance(snapshot, dict) or not snapshot:
@@ -16852,16 +16963,9 @@ class SafetyBot:
                     if not ok:
                         logging.critical("KILL SWITCH | FORCE FLAT incomplete.")
                 return
-            logging.warning(
-                f"BLACK_SWAN_STRESS stress={black_swan_signal.stress_index:.3f} "
-                f"threshold={threshold:.3f} => ECO/VETO_NEW_ENTRIES"
-            )
         elif black_swan_signal.precaution:
             global_mode = "ECO"
-            logging.warning(
-                f"STRESS_PRECAUTION stress={black_swan_signal.stress_index:.3f} "
-                f"threshold={black_swan_signal.precaution_threshold:.3f} => ECO"
-            )
+        self._runtime_log_black_swan_runtime_state(black_swan_signal)
 
         if self._manual_kill_switch_active():
             return
@@ -16897,13 +17001,6 @@ class SafetyBot:
                     int(snapshot_health.get("max_age_sec", 0)),
                     int(snapshot_health.get("bar_max_age_sec", 0)),
                     int(snapshot_health.get("uptime_sec", 0)),
-                )
-            if black_swan_block_new_entries:
-                logging.warning(
-                    "BLACK_SWAN_BLOCK_NEW_ENTRIES state=%s action=%s reason=%s",
-                    str(getattr(self, "_black_swan_v2_state", "UNKNOWN")),
-                    str(getattr(self, "_black_swan_v2_action", "UNKNOWN")),
-                    str(getattr(self, "_black_swan_v2_reason", "NONE")),
                 )
 
         candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
@@ -17128,9 +17225,12 @@ class SafetyBot:
                     logging.info(f"OPEN GUARD (P0/P1/P2) | {sym} | positions={cnt_pos}")
             return
 
-        logging.info(
-            f"SCAN_LIMIT global_mode={global_mode} n_max={int(n_max)} n_limit={int(n_limit)} "
-            f"canary_active={int(canary_signal.canary_active)} learner_qa={learner_qa_light}"
+        self._runtime_log_scan_limit_state(
+            global_mode=str(global_mode or "UNKNOWN"),
+            n_max=int(n_max),
+            n_limit=int(n_limit),
+            canary_active=bool(canary_signal.canary_active),
+            learner_qa_light=str(learner_qa_light or "UNKNOWN"),
         )
 
         base_topk = candidates[:n_limit]
