@@ -115,10 +115,27 @@ function Invoke-SshRemote {
         [string[]]$BaseArgs,
         [string]$CommandText
     )
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($CommandText))
-    & ssh @BaseArgs "powershell" "-NoProfile" "-EncodedCommand" $encoded
-    if ($LASTEXITCODE -ne 0) {
-        throw "Polecenie ssh nie powiodlo sie: $CommandText"
+    $maxAttempts = 3
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($CommandText))
+        $output = (& ssh @BaseArgs "powershell" "-NoProfile" "-EncodedCommand" $encoded 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        $msg = [string]$output
+        $isTransient = (
+            ($msg -match "Connection reset") -or
+            ($msg -match "kex_exchange_identification") -or
+            ($msg -match "Connection closed") -or
+            ($msg -match "subsystem request failed") -or
+            ($msg -match "Broken pipe") -or
+            ($msg -match "timed out")
+        )
+        if (($attempt -lt $maxAttempts) -and $isTransient) {
+            Start-Sleep -Seconds ([Math]::Min(10, (2 * $attempt)))
+            continue
+        }
+        throw "Polecenie ssh nie powiodlo sie: $CommandText`n$msg"
     }
 }
 
@@ -137,11 +154,63 @@ function Invoke-SshRemoteCapture {
         [string[]]$BaseArgs,
         [string]$CommandText
     )
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($CommandText))
-    $output = (& ssh @BaseArgs "powershell" "-NoProfile" "-EncodedCommand" $encoded 2>&1 | Out-String)
+    $maxAttempts = 3
+    $lastExit = 1
+    $lastOutput = ""
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($CommandText))
+        $output = (& ssh @BaseArgs "powershell" "-NoProfile" "-EncodedCommand" $encoded 2>&1 | Out-String)
+        $lastExit = [int]$LASTEXITCODE
+        $lastOutput = ([string]$output).Trim()
+        if ($lastExit -eq 0) {
+            break
+        }
+        $isTransient = (
+            ($lastOutput -match "Connection reset") -or
+            ($lastOutput -match "kex_exchange_identification") -or
+            ($lastOutput -match "Connection closed") -or
+            ($lastOutput -match "subsystem request failed") -or
+            ($lastOutput -match "Broken pipe") -or
+            ($lastOutput -match "timed out")
+        )
+        if (($attempt -lt $maxAttempts) -and $isTransient) {
+            Start-Sleep -Seconds ([Math]::Min(10, (2 * $attempt)))
+            continue
+        }
+        break
+    }
     return [ordered]@{
-        exit_code = [int]$LASTEXITCODE
-        output = ([string]$output).Trim()
+        exit_code = [int]$lastExit
+        output = $lastOutput
+    }
+}
+
+function Invoke-ScpWithRetry {
+    param(
+        [string]$SshKeyPath,
+        [string]$LocalPath,
+        [string]$RemoteTarget
+    )
+    $maxAttempts = 3
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $output = (& scp "-i" $SshKeyPath "-o" "BatchMode=yes" "-o" "StrictHostKeyChecking=accept-new" $LocalPath $RemoteTarget 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        $msg = [string]$output
+        $isTransient = (
+            ($msg -match "Connection reset") -or
+            ($msg -match "kex_exchange_identification") -or
+            ($msg -match "Connection closed") -or
+            ($msg -match "subsystem request failed") -or
+            ($msg -match "Broken pipe") -or
+            ($msg -match "timed out")
+        )
+        if (($attempt -lt $maxAttempts) -and $isTransient) {
+            Start-Sleep -Seconds ([Math]::Min(10, (2 * $attempt)))
+            continue
+        }
+        throw "scp nie powiodlo sie dla: $LocalPath`n$msg"
     }
 }
 
@@ -324,10 +393,7 @@ try {
         $localPath = (Resolve-Path -LiteralPath (Join-Path $runtimeRoot $rel) -ErrorAction Stop).Path
         $remoteScp = To-RemoteScpPath -RemoteRootPath $RemoteRoot -RelativePath $rel
         if (-not $DryRun) {
-            & scp "-i" $SshKeyPath "-o" "BatchMode=yes" "-o" "StrictHostKeyChecking=accept-new" $localPath "${vpsUser}@${vpsHost}:$remoteScp"
-            if ($LASTEXITCODE -ne 0) {
-                throw "scp nie powiodl sie dla: $rel"
-            }
+            Invoke-ScpWithRetry -SshKeyPath $SshKeyPath -LocalPath $localPath -RemoteTarget "${vpsUser}@${vpsHost}:$remoteScp"
         }
         $report.copied += $rel
     }
