@@ -114,6 +114,24 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
         self.assertAlmostEqual(1.1234, float(getattr(t, "bid", 0.0)), places=6)
         self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
 
+    def test_tick_strict_hard_uses_normalized_zmq_cache_key_without_mt5_fetch(self):
+        safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
+        engine = self._build_engine()
+        now_ms = int(time.time() * 1000)
+        engine._zmq_tick_cache["EURUSD.PRO"] = {
+            "bid": 1.2234,
+            "ask": 1.2237,
+            "timestamp_ms": now_ms,
+            "volume": 3,
+        }
+
+        t = engine.tick("EURUSD.pro", "FX", emergency=False)
+
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(1.2234, float(getattr(t, "bid", 0.0)), places=6)
+        self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
+
     def test_tick_strict_hard_blocks_mt5_fallback_when_cache_missing(self):
         safetybot.CFG.hybrid_m5_no_fetch_strict = True
         safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True

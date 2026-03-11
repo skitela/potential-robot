@@ -6825,7 +6825,20 @@ class ExecutionEngine:
 
     def tick(self, symbol: str, grp: str, emergency: bool = False):
         # 1. Sprawdź cache ZMQ (Hybrid Mode)
-        zmq_data = self._zmq_tick_cache.get(symbol) or self._zmq_tick_cache.get(symbol_base(symbol))
+        cache_keys = [
+            symbol,
+            symbol_base(symbol),
+            str(symbol).upper(),
+            str(symbol_base(symbol)).upper(),
+        ]
+        zmq_data = None
+        for key in cache_keys:
+            try:
+                zmq_data = self._zmq_tick_cache.get(key)
+            except Exception:
+                zmq_data = None
+            if zmq_data:
+                break
         if zmq_data:
             # Tworzymy stub udający strukturę MqlTick
             class TickStub:
@@ -18219,8 +18232,14 @@ class SafetyBot:
 
     def _handle_tick_snapshot(self, *, symbol: str, base_symbol: str, data: Dict[str, Any], now_ts: float) -> None:
         if hasattr(self.execution_engine, "_zmq_tick_cache"):
-            self.execution_engine._zmq_tick_cache[symbol] = data
-            self.execution_engine._zmq_tick_cache[base_symbol] = data
+            cache_keys = {
+                str(symbol),
+                str(base_symbol),
+                str(symbol).upper(),
+                str(base_symbol).upper(),
+            }
+            for cache_key in cache_keys:
+                self.execution_engine._zmq_tick_cache[cache_key] = data
         self._zmq_last_tick_ts[base_symbol] = now_ts
         tick_persisted = False
 
