@@ -15,8 +15,10 @@ New-Item -ItemType Directory -Force -Path $DesktopPath | Out-Null
 
 $controller = Join-Path $runtimeRoot "TOOLS\VPS_REMOTE_CONTROL.ps1"
 $rdp = Join-Path $runtimeRoot "TOOLS\CONNECT_VPS_RDP.ps1"
+$panel = Join-Path $runtimeRoot "TOOLS\OPEN_VPS_PROVIDER_PORTAL.ps1"
 if (-not (Test-Path -LiteralPath $controller)) { throw "Brak skryptu: $controller" }
 if (-not (Test-Path -LiteralPath $rdp)) { throw "Brak skryptu: $rdp" }
+if (-not (Test-Path -LiteralPath $panel)) { throw "Brak skryptu: $panel" }
 
 $wsh = New-Object -ComObject WScript.Shell
 
@@ -84,6 +86,22 @@ New-OrUpdateShortcut `
     -WorkingDirectory $runtimeRoot `
     -IconLocation "$env:SystemRoot\System32\mstsc.exe,0" `
     -Description "Szybkie polaczenie RDP z VPS"
+
+New-OrUpdateShortcut `
+    -Name "VPS OANDA POLACZ HASLO" `
+    -TargetPath "powershell.exe" `
+    -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$rdp`" -Root `"$runtimeRoot`" -PromptForPassword" `
+    -WorkingDirectory $runtimeRoot `
+    -IconLocation "$env:SystemRoot\System32\mstsc.exe,0" `
+    -Description "RDP z wymuszeniem recznego wpisania hasla"
+
+New-OrUpdateShortcut `
+    -Name "VPS OANDA PANEL" `
+    -TargetPath "powershell.exe" `
+    -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$panel`"" `
+    -WorkingDirectory $runtimeRoot `
+    -IconLocation "$env:SystemRoot\System32\shell32.dll,220" `
+    -Description "Panel Cyberfolks do wejscia przez VNC/noVNC i zarzadzania VPS"
 
 Write-Output ("VPS_CONTROL_SHORTCUTS_READY desktop={0}" -f $DesktopPath)
 exit 0

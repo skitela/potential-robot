@@ -1,6 +1,7 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
-    [string]$ShortcutName = "Polacz z VPS OANDA.lnk"
+    [string]$ShortcutName = "Polacz z VPS OANDA.lnk",
+    [switch]$PromptForPassword
 )
 
 Set-StrictMode -Version Latest
@@ -21,10 +22,11 @@ $shortcutPath = Join-Path $desktop $ShortcutName
 $wsh = New-Object -ComObject WScript.Shell
 $sc = $wsh.CreateShortcut($shortcutPath)
 $sc.TargetPath = "powershell.exe"
-$sc.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$connectScript`" -Root `"$runtimeRoot`""
+$extraArgs = if ($PromptForPassword) { " -PromptForPassword" } else { "" }
+$sc.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$connectScript`" -Root `"$runtimeRoot`"$extraArgs"
 $sc.WorkingDirectory = $runtimeRoot
 $sc.IconLocation = "%SystemRoot%\System32\mstsc.exe,0"
-$sc.Description = "Jednym kliknięciem łączy z VPS OANDA przez RDP"
+$sc.Description = if ($PromptForPassword) { "RDP do VPS OANDA z recznym haslem" } else { "Jednym kliknieciem laczy z VPS OANDA przez RDP" }
 $sc.Save()
 
 Write-Output ("VPS_RDP_SHORTCUT_OK path={0}" -f $shortcutPath)

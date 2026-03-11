@@ -1,7 +1,8 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
     [string]$UsbLabel = "OANDAKEY",
-    [string]$TokenEnvPath = ""
+    [string]$TokenEnvPath = "",
+    [switch]$PromptForPassword
 )
 
 Set-StrictMode -Version Latest
@@ -70,6 +71,15 @@ function Convert-SecureToPlain {
             [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
         }
     }
+}
+
+function Normalize-RdpUser {
+    param([Parameter(Mandatory = $true)][string]$UserName)
+
+    if ($UserName.Contains("\") -or $UserName.Contains("@")) {
+        return $UserName
+    }
+    return ".\$UserName"
 }
 
 function Set-RdpCredential {
@@ -166,18 +176,25 @@ if ([string]::IsNullOrWhiteSpace($plain)) {
 }
 
 $target = "TERMSRV/$vpsHost"
-Set-RdpCredential -Target $target -User $vpsUser -PasswordPlain $plain
+$rdpUser = Normalize-RdpUser -UserName $vpsUser
+if (-not $PromptForPassword) {
+    Set-RdpCredential -Target $target -User $rdpUser -PasswordPlain $plain
+}
 
 $rdpDir = Join-Path $runtimeRoot "RUN"
 New-Item -ItemType Directory -Force -Path $rdpDir | Out-Null
-$rdpPath = Join-Path $rdpDir "vps_quick_connect.rdp"
+$rdpFileName = if ($PromptForPassword) { "vps_quick_connect_prompt.rdp" } else { "vps_quick_connect.rdp" }
+$rdpPath = Join-Path $rdpDir $rdpFileName
 
 $rdpLines = @(
     "full address:s:$vpsHost",
-    "username:s:$vpsUser",
-    "prompt for credentials:i:0",
+    "username:s:$rdpUser",
+    ("prompt for credentials:i:{0}" -f $(if ($PromptForPassword) { 1 } else { 0 })),
     "administrative session:i:1",
-    "screen mode id:i:2"
+    "screen mode id:i:2",
+    "authentication level:i:2",
+    "enablecredsspsupport:i:1",
+    "negotiate security layer:i:1"
 )
 Set-Content -LiteralPath $rdpPath -Value $rdpLines -Encoding ASCII
 
@@ -187,5 +204,5 @@ Remove-Variable plain -ErrorAction SilentlyContinue
 Remove-Variable secure -ErrorAction SilentlyContinue
 
 Start-Process -FilePath "mstsc.exe" -ArgumentList "`"$rdpPath`""
-Write-Output ("VPS_RDP_CONNECT_OK host={0} user={1}" -f $vpsHost, $vpsUser)
+Write-Output ("VPS_RDP_CONNECT_OK host={0} user={1} prompt={2}" -f $vpsHost, $rdpUser, [int]$PromptForPassword)
 exit 0
