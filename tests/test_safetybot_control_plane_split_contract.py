@@ -122,3 +122,14 @@ def test_m5_indicators_if_due_uses_throttled_skip_pre_logging() -> None:
     strings = _string_constants(fn)
     assert "_log_skip_pre_throttled" in called
     assert "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=%s%s" not in strings
+
+
+def test_m5_indicators_if_due_throttles_entry_ready_logs() -> None:
+    source = Path("BIN/safetybot.py").resolve().read_text(encoding="utf-8")
+    assert 'if self._skip_log_allowed(symbol, "ENTRY_READY_ZMQ", 60):' in source
+    assert 'if self._skip_log_allowed(symbol, "ENTRY_READY", 60):' in source
+
+
+def test_try_trade_throttles_entry_score_logs() -> None:
+    source = Path("BIN/safetybot.py").resolve().read_text(encoding="utf-8")
+    assert source.count('if self._skip_log_allowed(symbol, "ENTRY_SCORE", 60):') >= 3

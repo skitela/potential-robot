@@ -4234,7 +4234,12 @@ def load_scout_advice(meta_dir: Path) -> Optional[Dict[str, Any]]:
             return None
         age = max(0.0, float(age))
         if age > ttl:
-            logging.info(f"SCOUT STALE | age_sec={int(age)} > ttl_sec={ttl}")
+            now_ts = float(time.time())
+            last_stale_log_ts = float(getattr(load_scout_advice, "_last_stale_log_ts", 0.0) or 0.0)
+            stale_log_interval_s = 300.0
+            if (now_ts - last_stale_log_ts) >= stale_log_interval_s:
+                load_scout_advice._last_stale_log_ts = now_ts
+                logging.info(f"SCOUT STALE | age_sec={int(age)} > ttl_sec={ttl}")
             return None
 
         pref = str(data.get("preferred_symbol") or data.get("preferred") or "").strip().upper()
@@ -8799,16 +8804,17 @@ class StandardStrategy:
                             "atr": float(fres.get("atr")),
                         }
                         self.last_indicators[symbol_base(symbol)] = dict(ind)
-                        logging.info(
-                            "ENTRY_READY source=ZMQ_FEATURE symbol=%s grp=%s mode=%s adx=%.2f close=%.6f sma=%.6f open=%.6f",
-                            symbol,
-                            grp,
-                            mode,
-                            float(ind["adx"]),
-                            float(ind["close"]),
-                            float(ind["sma"]),
-                            float(ind["open"]),
-                        )
+                        if self._skip_log_allowed(symbol, "ENTRY_READY_ZMQ", 60):
+                            logging.info(
+                                "ENTRY_READY source=ZMQ_FEATURE symbol=%s grp=%s mode=%s adx=%.2f close=%.6f sma=%.6f open=%.6f",
+                                symbol,
+                                grp,
+                                mode,
+                                float(ind["adx"]),
+                                float(ind["close"]),
+                                float(ind["sma"]),
+                                float(ind["open"]),
+                            )
                         return ind
                 except Exception as e:
                     cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
@@ -8948,11 +8954,12 @@ class StandardStrategy:
             self.last_indicators[symbol_base(symbol)] = dict(ind)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-        logging.info(
-            f"ENTRY_READY symbol={symbol} grp={grp} mode={mode} "
-            f"adx={float(ind['adx']):.2f} close={float(ind['close']):.6f} "
-            f"sma={float(ind['sma']):.6f} open={float(ind['open']):.6f}"
-        )
+        if self._skip_log_allowed(symbol, "ENTRY_READY", 60):
+            logging.info(
+                f"ENTRY_READY symbol={symbol} grp={grp} mode={mode} "
+                f"adx={float(ind['adx']):.2f} close={float(ind['close']):.6f} "
+                f"sma={float(ind['sma']):.6f} open={float(ind['open']):.6f}"
+            )
         return ind
 
     def try_trade(
@@ -10071,24 +10078,25 @@ class StandardStrategy:
                         entry_spread_cap_points = float(fx_parts.get("spread_cap_points", 0.0) or 0.0)
                     except Exception:
                         entry_spread_cap_points = None
-                    logging.info(
-                        "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
-                        "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f",
-                        symbol,
-                        grp,
-                        mode,
-                        int(entry_score),
-                        int(min_score),
-                        float(fx_parts.get("A_regime_direction", 0.0)),
-                        float(fx_parts.get("B_trigger", 0.0)),
-                        float(fx_parts.get("C_cost", 0.0)),
-                        float(fx_parts.get("D_volatility", 0.0)),
-                        float(fx_parts.get("E_exec_risk", 0.0)),
-                        float(fx_parts.get("spread_points", 0.0)),
-                        float(fx_parts.get("spread_p80", 0.0)),
-                        float(fx_parts.get("spread_cap_points", 0.0)),
-                        float(fx_parts.get("atr_points", -1.0)),
-                    )
+                    if self._skip_log_allowed(symbol, "ENTRY_SCORE", 60):
+                        logging.info(
+                            "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
+                            "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f",
+                            symbol,
+                            grp,
+                            mode,
+                            int(entry_score),
+                            int(min_score),
+                            float(fx_parts.get("A_regime_direction", 0.0)),
+                            float(fx_parts.get("B_trigger", 0.0)),
+                            float(fx_parts.get("C_cost", 0.0)),
+                            float(fx_parts.get("D_volatility", 0.0)),
+                            float(fx_parts.get("E_exec_risk", 0.0)),
+                            float(fx_parts.get("spread_points", 0.0)),
+                            float(fx_parts.get("spread_p80", 0.0)),
+                            float(fx_parts.get("spread_cap_points", 0.0)),
+                            float(fx_parts.get("atr_points", -1.0)),
+                        )
                     if int(entry_score) < int(min_score):
                         self._metric_inc_skip("FX_SCORE_BELOW_THRESHOLD")
                         logging.info(
@@ -10166,25 +10174,26 @@ class StandardStrategy:
                         entry_spread_cap_points = float(metal_parts.get("spread_cap_points", 0.0) or 0.0)
                     except Exception:
                         entry_spread_cap_points = None
-                    logging.info(
-                        "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
-                        "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f wick=%.2f",
-                        symbol,
-                        grp,
-                        mode,
-                        int(entry_score),
-                        int(min_score),
-                        float(metal_parts.get("A_regime_direction", 0.0)),
-                        float(metal_parts.get("B_trigger", 0.0)),
-                        float(metal_parts.get("C_cost", 0.0)),
-                        float(metal_parts.get("D_volatility", 0.0)),
-                        float(metal_parts.get("E_exec_risk", 0.0)),
-                        float(metal_parts.get("spread_points", 0.0)),
-                        float(metal_parts.get("spread_p80", 0.0)),
-                        float(metal_parts.get("spread_cap_points", 0.0)),
-                        float(metal_parts.get("atr_points", -1.0)),
-                        float(metal_parts.get("wick_ratio", 0.0)),
-                    )
+                    if self._skip_log_allowed(symbol, "ENTRY_SCORE", 60):
+                        logging.info(
+                            "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
+                            "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f wick=%.2f",
+                            symbol,
+                            grp,
+                            mode,
+                            int(entry_score),
+                            int(min_score),
+                            float(metal_parts.get("A_regime_direction", 0.0)),
+                            float(metal_parts.get("B_trigger", 0.0)),
+                            float(metal_parts.get("C_cost", 0.0)),
+                            float(metal_parts.get("D_volatility", 0.0)),
+                            float(metal_parts.get("E_exec_risk", 0.0)),
+                            float(metal_parts.get("spread_points", 0.0)),
+                            float(metal_parts.get("spread_p80", 0.0)),
+                            float(metal_parts.get("spread_cap_points", 0.0)),
+                            float(metal_parts.get("atr_points", -1.0)),
+                            float(metal_parts.get("wick_ratio", 0.0)),
+                        )
                     if int(entry_score) < int(min_score):
                         self._metric_inc_skip("METAL_SCORE_BELOW_THRESHOLD")
                         logging.info(
@@ -10244,25 +10253,26 @@ class StandardStrategy:
                         entry_spread_cap_points = float(crypto_parts.get("spread_cap_points", 0.0) or 0.0)
                     except Exception:
                         entry_spread_cap_points = None
-                    logging.info(
-                        "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
-                        "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f wick=%.2f",
-                        symbol,
-                        grp,
-                        mode,
-                        int(entry_score),
-                        int(min_score),
-                        float(crypto_parts.get("A_regime_direction", 0.0)),
-                        float(crypto_parts.get("B_trigger", 0.0)),
-                        float(crypto_parts.get("C_cost", 0.0)),
-                        float(crypto_parts.get("D_volatility", 0.0)),
-                        float(crypto_parts.get("E_exec_risk", 0.0)),
-                        float(crypto_parts.get("spread_points", 0.0)),
-                        float(crypto_parts.get("spread_p80", 0.0)),
-                        float(crypto_parts.get("spread_cap_points", 0.0)),
-                        float(crypto_parts.get("atr_points", -1.0)),
-                        float(crypto_parts.get("wick_ratio", 0.0)),
-                    )
+                    if self._skip_log_allowed(symbol, "ENTRY_SCORE", 60):
+                        logging.info(
+                            "ENTRY_SCORE symbol=%s grp=%s mode=%s score=%s min_score=%s "
+                            "A=%.1f B=%.1f C=%.1f D=%.1f E=%.1f spread=%.2f p80=%.2f cap=%.2f atr_pts=%.2f wick=%.2f",
+                            symbol,
+                            grp,
+                            mode,
+                            int(entry_score),
+                            int(min_score),
+                            float(crypto_parts.get("A_regime_direction", 0.0)),
+                            float(crypto_parts.get("B_trigger", 0.0)),
+                            float(crypto_parts.get("C_cost", 0.0)),
+                            float(crypto_parts.get("D_volatility", 0.0)),
+                            float(crypto_parts.get("E_exec_risk", 0.0)),
+                            float(crypto_parts.get("spread_points", 0.0)),
+                            float(crypto_parts.get("spread_p80", 0.0)),
+                            float(crypto_parts.get("spread_cap_points", 0.0)),
+                            float(crypto_parts.get("atr_points", -1.0)),
+                            float(crypto_parts.get("wick_ratio", 0.0)),
+                        )
                     if int(entry_score) < int(min_score):
                         self._metric_inc_skip("CRYPTO_SCORE_BELOW_THRESHOLD")
                         logging.info(
