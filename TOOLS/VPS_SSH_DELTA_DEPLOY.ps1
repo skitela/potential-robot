@@ -8,6 +8,8 @@ param(
     [string[]]$Paths = @(),
     [ValidateSet("full", "safety_only")]
     [string]$Profile = "safety_only",
+    [int]$RuntimeReadyTimeoutSec = 180,
+    [int]$RuntimeReadyPollSec = 5,
     [switch]$RunEaDeploy,
     [switch]$RunProfileSetup,
     [switch]$StartRuntime,
@@ -130,6 +132,54 @@ function Invoke-SshRemoteBestEffort {
     return $LASTEXITCODE
 }
 
+function Invoke-SshRemoteCapture {
+    param(
+        [string[]]$BaseArgs,
+        [string]$CommandText
+    )
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($CommandText))
+    $output = (& ssh @BaseArgs "powershell" "-NoProfile" "-EncodedCommand" $encoded 2>&1 | Out-String)
+    return [ordered]@{
+        exit_code = [int]$LASTEXITCODE
+        output = ([string]$output).Trim()
+    }
+}
+
+function Wait-RemoteRuntimeReady {
+    param(
+        [string[]]$BaseArgs,
+        [string]$RemoteRootPath,
+        [int]$TimeoutSec = 180,
+        [int]$PollSec = 5
+    )
+    $timeout = [Math]::Max(30, [int]$TimeoutSec)
+    $poll = [Math]::Max(2, [int]$PollSec)
+    $startedAt = Get-Date
+    $deadline = $startedAt.AddSeconds($timeout)
+    $lastStatus = ""
+
+    while ((Get-Date) -lt $deadline) {
+        $statusCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File '$RemoteRootPath\TOOLS\SYSTEM_CONTROL.ps1' -Action status -Root '$RemoteRootPath'"
+        $call = Invoke-SshRemoteCapture -BaseArgs $BaseArgs -CommandText $statusCmd
+        $lastStatus = [string]$call.output
+        if (($call.exit_code -eq 0) -and ($lastStatus -match "SYSTEM_CONTROL action=status status=PASS")) {
+            return [ordered]@{
+                ok = $true
+                exit_code = [int]$call.exit_code
+                status_out = $lastStatus
+                waited_sec = [double]([Math]::Round(((Get-Date) - $startedAt).TotalSeconds, 3))
+            }
+        }
+        Start-Sleep -Seconds $poll
+    }
+
+    return [ordered]@{
+        ok = $false
+        status_out = $lastStatus
+        waited_sec = [double]([Math]::Round(((Get-Date) - $startedAt).TotalSeconds, 3))
+    }
+}
+
 function Write-Report {
     param(
         [hashtable]$Payload,
@@ -241,11 +291,23 @@ try {
         }
         $cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File '$escapedRemoteRoot\RUN\START_WITH_OANDAKEY.ps1' -Root '$escapedRemoteRoot' -Profile '$Profile' -AllowNonInteractive"
         if (-not $DryRun) {
-            Invoke-SshRemote -BaseArgs $sshBase -CommandText $cmd
+            $startCall = Invoke-SshRemoteCapture -BaseArgs $sshBase -CommandText $cmd
+            $report.start_runtime = [ordered]@{
+                exit_code = [int]$startCall.exit_code
+                output = [string]$startCall.output
+            }
+            $runtimeReady = Wait-RemoteRuntimeReady -BaseArgs $sshBase -RemoteRootPath $escapedRemoteRoot -TimeoutSec $RuntimeReadyTimeoutSec -PollSec $RuntimeReadyPollSec
+            $report.runtime_ready = $runtimeReady
+            if (-not [bool]$runtimeReady.ok) {
+                if ($startCall.exit_code -ne 0) {
+                    throw "Zdalny start runtime nie powiodl sie: $($startCall.output)"
+                }
+                throw "Zdalny runtime nie osiagnal status=PASS w limicie czasu. Ostatni status: $($runtimeReady.status_out)"
+            }
         }
     }
 
-    if (-not $SkipRemoteStatus) {
+    if ((-not $SkipRemoteStatus) -and (-not $StartRuntime)) {
         $statusCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File '$RemoteRoot\TOOLS\SYSTEM_CONTROL.ps1' -Action status -Root '$RemoteRoot'"
         if (-not $DryRun) {
             $remoteStatus = & ssh @sshBase "powershell" "-NoProfile" "-ExecutionPolicy" "Bypass" "-File" "$RemoteRoot\TOOLS\SYSTEM_CONTROL.ps1" "-Action" "status" "-Root" "$RemoteRoot"
