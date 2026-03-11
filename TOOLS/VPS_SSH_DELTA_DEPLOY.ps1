@@ -187,59 +187,60 @@ function Repair-RemoteRuntimeControlState {
         [int]$StaleMinutes = 10
     )
     $mins = [Math]::Max(3, [int]$StaleMinutes)
-    $cmd = @"
-\$cutoff = (Get-Date).AddMinutes(-$mins)
-\$candidates = @(Get-CimInstance Win32_Process | Where-Object {
-    \$_.Name -eq 'powershell.exe' -and \$_.CommandLine -and (
-        (\$_.CommandLine -match 'SYSTEM_CONTROL\.ps1') -or
-        (\$_.CommandLine -match 'START_WITH_OANDAKEY\.ps1')
+    $cmd = @'
+$cutoff = (Get-Date).AddMinutes(-__STALE_MINUTES__)
+$candidates = @(Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -eq 'powershell.exe' -and $_.CommandLine -and (
+        ($_.CommandLine -match 'SYSTEM_CONTROL\.ps1') -or
+        ($_.CommandLine -match 'START_WITH_OANDAKEY\.ps1')
     )
 })
-\$killed = @()
-foreach (\$row in \$candidates) {
+$killed = @()
+foreach ($row in $candidates) {
     try {
-        \$proc = Get-Process -Id ([int]\$row.ProcessId) -ErrorAction Stop
+        $proc = Get-Process -Id ([int]$row.ProcessId) -ErrorAction Stop
     } catch {
-        \$proc = \$null
+        $proc = $null
     }
-    if ((\$null -ne \$proc) -and (\$proc.StartTime -lt \$cutoff)) {
+    if (($null -ne $proc) -and ($proc.StartTime -lt $cutoff)) {
         try {
-            Stop-Process -Id ([int]\$row.ProcessId) -Force -ErrorAction SilentlyContinue
-            \$killed += [int]\$row.ProcessId
+            Stop-Process -Id ([int]$row.ProcessId) -Force -ErrorAction SilentlyContinue
+            $killed += [int]$row.ProcessId
         } catch {}
     }
 }
 Start-Sleep -Milliseconds 400
-\$lockPath = '$RemoteRootPath\RUN\system_control.action.lock'
-\$lockState = 'missing'
-if (Test-Path -LiteralPath \$lockPath) {
+$lockPath = '__REMOTE_ROOT__\RUN\system_control.action.lock'
+$lockState = 'missing'
+if (Test-Path -LiteralPath $lockPath) {
     try {
-        \$raw = Get-Content -LiteralPath \$lockPath -Raw -Encoding UTF8 -ErrorAction Stop
-        \$obj = \$raw | ConvertFrom-Json
-        \$pid = \$null
-        if (\$null -ne \$obj -and \$null -ne \$obj.pid) {
-            try { \$pid = [int]\$obj.pid } catch { \$pid = \$null }
+        $raw = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 -ErrorAction Stop
+        $obj = $raw | ConvertFrom-Json
+        $pid = $null
+        if ($null -ne $obj -and $null -ne $obj.pid) {
+            try { $pid = [int]$obj.pid } catch { $pid = $null }
         }
-        if ((\$null -eq \$pid) -or (-not (Get-Process -Id \$pid -ErrorAction SilentlyContinue))) {
-            Remove-Item -LiteralPath \$lockPath -Force -ErrorAction SilentlyContinue
-            \$lockState = 'removed'
+        if (($null -eq $pid) -or (-not (Get-Process -Id $pid -ErrorAction SilentlyContinue))) {
+            Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+            $lockState = 'removed'
         } else {
-            \$lockState = 'active'
+            $lockState = 'active'
         }
     } catch {
         try {
-            Remove-Item -LiteralPath \$lockPath -Force -ErrorAction SilentlyContinue
-            \$lockState = 'removed_after_error'
+            Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+            $lockState = 'removed_after_error'
         } catch {
-            \$lockState = 'remove_failed'
+            $lockState = 'remove_failed'
         }
     }
 }
 [ordered]@{
-    killed = @(\$killed)
-    lock_state = \$lockState
+    killed = @($killed)
+    lock_state = $lockState
 } | ConvertTo-Json -Compress
-"@
+'@
+    $cmd = $cmd.Replace("__STALE_MINUTES__", [string]$mins).Replace("__REMOTE_ROOT__", $RemoteRootPath)
     return (Invoke-SshRemoteCapture -BaseArgs $BaseArgs -CommandText $cmd)
 }
 
