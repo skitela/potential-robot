@@ -29,6 +29,7 @@ RUN/*
 !RUN/AUDIT_V12_LIVE.ps1
 !RUN/AUDIT_OFFLINE_ONLINE_SIM.ps1
 !RUN/RANKING_BENCHMARK_V1.ps1
+!RUN/manual_vps_ssh_runtime_sync_once.ps1
 DATA/
 DB/
 DB_BACKUPS/
