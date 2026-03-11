@@ -8912,7 +8912,11 @@ class StandardStrategy:
             if isinstance(fres, dict):
                 try:
                     ts_msg = float(fres.get("recv_ts") or 0.0)
-                    max_age = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+                    max_age_base = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+                    max_age = max(
+                        max_age_base,
+                        int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)),
+                    )
                     age_s = max(0.0, now_ts - ts_msg)
                     if age_s <= float(max_age):
                         last_bar = pd.Timestamp(fres.get("bar_time_pl"))
