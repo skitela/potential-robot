@@ -12720,17 +12720,10 @@ class SafetyBot:
         }
 
     def _emit_runtime_metrics(self, st: Dict[str, Any], *, eco_active: bool, warn_active: bool) -> None:
-        self._metrics_roll_day()
-        if bool(eco_active):
-            self._metrics_eco_scans_day = int(self._metrics_eco_scans_day) + 1
-        if bool(warn_active):
-            self._metrics_warn_scans_day = int(self._metrics_warn_scans_day) + 1
-
         now_ts = float(time.time())
         interval_s = max(60, int(getattr(CFG, "runtime_metrics_interval_sec", 600)))
-
         if not self._metrics_10m_anchor:
-            # Lightweight anchor init: snapshot strategy/execution counters only once.
+            # Lightweight anchor init: snapshot counters only once; heavy snapshots stay outside decision core.
             strat_metrics = {}
             exec_metrics = {}
             try:
@@ -12881,6 +12874,13 @@ class SafetyBot:
             "warn_scans_day": int(self._metrics_warn_scans_day),
         }
         self._metrics_10m_last_emit_ts = now_ts
+
+    def _mark_runtime_scan_metrics(self, *, eco_active: bool, warn_active: bool) -> None:
+        self._metrics_roll_day()
+        if bool(eco_active):
+            self._metrics_eco_scans_day = int(self._metrics_eco_scans_day) + 1
+        if bool(warn_active):
+            self._metrics_warn_scans_day = int(self._metrics_warn_scans_day) + 1
 
     def _dispatch_order(self, symbol: str, grp: str, request: dict, emergency: bool = False):
         """
@@ -15015,6 +15015,15 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+        try:
+            self._emit_runtime_metrics(
+                st,
+                eco_active=bool(getattr(self, "_runtime_cached_eco_active", False)),
+                warn_active=bool(getattr(self, "_runtime_cached_warn_active", False)),
+            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
     def _runtime_reload_stage1_config(self) -> None:
         try:
             self._reload_stage1_live_config(force=False)
@@ -15935,7 +15944,10 @@ class SafetyBot:
                 f"ECO_MODE reason={eco_reason} price_pct={price_pct:.3f} sys_pct={sys_pct:.3f} order_pct={order_pct:.3f} "
                 f"thr_price={thr_price:.3f} thr_sys={thr_sys:.3f} thr_order={thr_order:.3f}"
             )
-        self._emit_runtime_metrics(st, eco_active=bool(eco_by_budget), warn_active=bool(warn_degrade_active))
+        self._mark_runtime_scan_metrics(
+            eco_active=bool(eco_by_budget),
+            warn_active=bool(warn_degrade_active),
+        )
 
 # Additional legacy line kept for continuity (informational only)
         logging.info(

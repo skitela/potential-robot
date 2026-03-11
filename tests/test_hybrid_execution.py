@@ -631,6 +631,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._refresh_no_live_drift_check = MagicMock()
         bot._refresh_cost_guard_auto_relax_state = MagicMock()
         bot._time_anchor_sync_if_due = MagicMock()
+        bot._emit_runtime_metrics = MagicMock()
 
         scan_prev = getattr(CFG, "scan_interval_sec", 30)
         CFG.scan_interval_sec = 30
@@ -653,6 +654,11 @@ class TestHybridExecution(unittest.TestCase):
             tw_ctx=bot._runtime_cached_tw_ctx,
         )
         bot._time_anchor_sync_if_due.assert_called_once_with(bot._runtime_cached_day_state)
+        bot._emit_runtime_metrics.assert_called_once_with(
+            bot._runtime_cached_day_state,
+            eco_active=False,
+            warn_active=False,
+        )
 
     def test_runtime_refresh_control_plane_state_skips_before_next_cadence(self):
         with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
@@ -672,6 +678,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._refresh_no_live_drift_check = MagicMock()
         bot._refresh_cost_guard_auto_relax_state = MagicMock()
         bot._time_anchor_sync_if_due = MagicMock()
+        bot._emit_runtime_metrics = MagicMock()
 
         scan_prev = getattr(CFG, "scan_interval_sec", 30)
         CFG.scan_interval_sec = 30
@@ -687,6 +694,11 @@ class TestHybridExecution(unittest.TestCase):
         bot._refresh_no_live_drift_check.assert_not_called()
         bot._refresh_cost_guard_auto_relax_state.assert_not_called()
         bot._time_anchor_sync_if_due.assert_not_called()
+        bot._emit_runtime_metrics.assert_called_once_with(
+            bot._runtime_cached_day_state,
+            eco_active=False,
+            warn_active=False,
+        )
 
     def test_runtime_refresh_meta_advisory_cache_loads_runtime_meta_once_per_cadence(self):
         with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
