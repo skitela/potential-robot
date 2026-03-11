@@ -8644,7 +8644,8 @@ class StandardStrategy:
         cached = self.cache.trend_cache.get(symbol)
         if cached and (now_ts - cached[0] < CFG.trend_cache_ttl_sec):
             return cached[1], cached[2], cached[3]
-        if cached and str(self.cache.trend_cache_quality.get(symbol) or "").upper() == "FULL":
+        cached_quality = str(self.cache.trend_cache_quality.get(symbol) or "").upper()
+        if cached and cached_quality in {"FULL", "FALLBACK"}:
             live_signature = self._trend_store_signature(symbol)
             cached_signature = self.cache.trend_cache_signature.get(symbol)
             if live_signature is not None and cached_signature == live_signature:
@@ -8731,7 +8732,7 @@ class StandardStrategy:
                     )
                 self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1, structure_h4)
                 self.cache.trend_cache_quality[symbol] = "FALLBACK"
-                self.cache.trend_cache_signature.pop(symbol, None)
+                self.cache.trend_cache_signature[symbol] = self._trend_signature_from_frames(df_h4, df_d1)
                 return trend_h4, trend_d1, structure_h4
             if self._skip_log_allowed(symbol, "TREND_DATA_SHORT", 120):
                 logging.info(

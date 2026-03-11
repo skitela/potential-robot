@@ -82,3 +82,43 @@ def test_get_trend_reuses_full_cache_when_h4_d1_signature_is_unchanged(monkeypat
         safetybot.CFG.trend_cache_ttl_sec = original_ttl
         safetybot.CFG.hybrid_use_zmq_m5_bars = original_use_store
         safetybot.CFG.hybrid_use_mtf_resample_from_m5_store = original_resample
+
+
+def test_get_trend_reuses_fallback_cache_when_h4_d1_signature_is_unchanged():
+    original_ttl = int(getattr(safetybot.CFG, "trend_cache_ttl_sec", 3600))
+    original_use_store = bool(getattr(safetybot.CFG, "hybrid_use_zmq_m5_bars", True))
+    original_resample = bool(getattr(safetybot.CFG, "hybrid_use_mtf_resample_from_m5_store", True))
+    try:
+        safetybot.CFG.trend_cache_ttl_sec = 1
+        safetybot.CFG.hybrid_use_zmq_m5_bars = True
+        safetybot.CFG.hybrid_use_mtf_resample_from_m5_store = True
+
+        engine = MagicMock()
+        df_h4 = _mk_rates(6, start=100.0)
+        df_d1 = _mk_rates(2, start=200.0)
+        engine.bars_store = _BarsStoreStub(df_h4, df_d1)
+        engine.copy_rates.side_effect = AssertionError(
+            "copy_rates should not be called when fallback trend signature is unchanged"
+        )
+
+        stg = safetybot.StandardStrategy(
+            engine=engine,
+            gov=MagicMock(),
+            throttle=MagicMock(),
+            db=MagicMock(),
+            config=MagicMock(),
+            risk_manager=MagicMock(),
+        )
+        symbol = "EURUSD.pro"
+        stg.cache.trend_cache[symbol] = (0.0, "BUY", "BUY", "BUY")
+        stg.cache.trend_cache_quality[symbol] = "FALLBACK"
+        stg.cache.trend_cache_signature[symbol] = stg._trend_signature_from_frames(df_h4, df_d1)
+
+        result = stg.get_trend(symbol, "FX")
+
+        assert result == ("BUY", "BUY", "BUY")
+        assert engine.copy_rates.call_count == 0
+    finally:
+        safetybot.CFG.trend_cache_ttl_sec = original_ttl
+        safetybot.CFG.hybrid_use_zmq_m5_bars = original_use_store
+        safetybot.CFG.hybrid_use_mtf_resample_from_m5_store = original_resample
