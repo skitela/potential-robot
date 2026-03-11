@@ -177,7 +177,12 @@ if ([string]::IsNullOrWhiteSpace($plain)) {
 
 $target = "TERMSRV/$vpsHost"
 $rdpUser = Normalize-RdpUser -UserName $vpsUser
-if (-not $PromptForPassword) {
+if ($PromptForPassword) {
+    try {
+        & cmdkey "/delete:$target" 1>$null 2>$null
+    } catch {
+    }
+} else {
     Set-RdpCredential -Target $target -User $rdpUser -PasswordPlain $plain
 }
 
@@ -190,6 +195,7 @@ $rdpLines = @(
     "full address:s:$vpsHost",
     "username:s:$rdpUser",
     ("prompt for credentials:i:{0}" -f $(if ($PromptForPassword) { 1 } else { 0 })),
+    "promptcredentialonce:i:1",
     "administrative session:i:1",
     "screen mode id:i:2",
     "authentication level:i:2",

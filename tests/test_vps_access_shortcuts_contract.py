@@ -10,8 +10,10 @@ def test_connect_vps_rdp_uses_local_admin_normalization_and_prompt_mode() -> Non
         "return \".\\$UserName\"",
         "[switch]$PromptForPassword",
         "prompt for credentials:i:{0}",
+        "promptcredentialonce:i:1",
         "$rdpUser = Normalize-RdpUser -UserName $vpsUser",
-        "if (-not $PromptForPassword)",
+        "if ($PromptForPassword)",
+        "& cmdkey \"/delete:$target\"",
         "vps_quick_connect_prompt.rdp",
     )
     for token in required:
