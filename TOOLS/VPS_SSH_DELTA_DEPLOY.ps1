@@ -144,9 +144,31 @@ function Invoke-SshRemoteBestEffort {
         [string[]]$BaseArgs,
         [string]$CommandText
     )
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($CommandText))
-    & ssh @BaseArgs "powershell" "-NoProfile" "-EncodedCommand" $encoded
-    return $LASTEXITCODE
+    $maxAttempts = 3
+    $lastExit = 1
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($CommandText))
+        $output = (& ssh @BaseArgs "powershell" "-NoProfile" "-EncodedCommand" $encoded 2>&1 | Out-String)
+        $lastExit = [int]$LASTEXITCODE
+        if ($lastExit -eq 0) {
+            return 0
+        }
+        $msg = [string]$output
+        $isTransient = (
+            ($msg -match "Connection reset") -or
+            ($msg -match "kex_exchange_identification") -or
+            ($msg -match "Connection closed") -or
+            ($msg -match "subsystem request failed") -or
+            ($msg -match "Broken pipe") -or
+            ($msg -match "timed out")
+        )
+        if (($attempt -lt $maxAttempts) -and $isTransient) {
+            Start-Sleep -Seconds ([Math]::Min(10, (2 * $attempt)))
+            continue
+        }
+        break
+    }
+    return $lastExit
 }
 
 function Invoke-SshRemoteCapture {
@@ -445,13 +467,12 @@ try {
     }
 
     if ((-not $SkipRemoteStatus) -and (-not $StartRuntime)) {
-        $statusCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File '$RemoteRoot\TOOLS\SYSTEM_CONTROL.ps1' -Action status -Root '$RemoteRoot'"
         if (-not $DryRun) {
-            $remoteStatus = & ssh @sshBase "powershell" "-NoProfile" "-ExecutionPolicy" "Bypass" "-File" "$RemoteRoot\TOOLS\SYSTEM_CONTROL.ps1" "-Action" "status" "-Root" "$RemoteRoot"
-            if ($LASTEXITCODE -ne 0) {
+            $remoteStatus = Invoke-SshRemoteCapture -BaseArgs $sshBase -CommandText ("powershell -NoProfile -ExecutionPolicy Bypass -File '{0}\\TOOLS\\SYSTEM_CONTROL.ps1' -Action status -Root '{0}'" -f $RemoteRoot)
+            if (($remoteStatus.exit_code -ne 0) -or [string]::IsNullOrWhiteSpace([string]$remoteStatus.output)) {
                 throw "Zdalny SYSTEM_CONTROL status nie powiodl sie."
             }
-            $report.remote_status = ($remoteStatus | Out-String).Trim()
+            $report.remote_status = ([string]$remoteStatus.output).Trim()
         }
     }
 
