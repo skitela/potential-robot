@@ -15092,6 +15092,25 @@ class SafetyBot:
         self._runtime_cached_scout_advice = dict(scout) if isinstance(scout, dict) else None
         self._runtime_meta_advisory_cache_ready = True
         self._last_meta_advisory_refresh_ts = now_ts
+        self._runtime_emit_meta_advisory_snapshot_log(learner_qa_light=self._runtime_cached_learner_qa_light)
+
+    def _runtime_emit_meta_advisory_snapshot_log(self, *, learner_qa_light: str) -> None:
+        learner_qa = str(learner_qa_light or "UNKNOWN").upper()
+        if learner_qa == str(getattr(self, "_last_meta_advisory_learner_qa_sig", "")):
+            return
+        self._last_meta_advisory_learner_qa_sig = learner_qa
+        if learner_qa == "RED":
+            logging.info("LEARNER_QA_RED telemetry_only=1 no_mode_override=1")
+            try:
+                if self.incident_journal is not None:
+                    self.incident_journal.note_guard(
+                        guard="learner_qa",
+                        reason="RED_TELEMETRY_ONLY",
+                        severity="INFO",
+                        category="model",
+                    )
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _runtime_refresh_global_guard_cache(self) -> None:
         now_ts = float(time.time())
@@ -15115,6 +15134,105 @@ class SafetyBot:
         self._runtime_cached_drift_signal = drift_signal
         self._runtime_global_guard_cache_ready = True
         self._last_global_guard_refresh_ts = now_ts
+        self._runtime_emit_global_guard_snapshot_log(
+            self_heal_signal=self_heal_signal,
+            canary_signal=canary_signal,
+            drift_signal=drift_signal,
+        )
+
+    def _runtime_emit_global_guard_snapshot_log(
+        self,
+        *,
+        self_heal_signal: SelfHealSignal,
+        canary_signal: CanarySignal,
+        drift_signal: DriftSignal,
+    ) -> None:
+        self_heal_sig = "|".join(
+            [
+                str(int(bool(getattr(self_heal_signal, "active", False)))),
+                str(int(getattr(self_heal_signal, "loss_streak", 0) or 0)),
+                f"{float(getattr(self_heal_signal, 'net_pnl', 0.0) or 0.0):.2f}",
+                ",".join(str(x) for x in (getattr(self_heal_signal, "reasons", ()) or ())) or "NONE",
+            ]
+        )
+        if self_heal_sig != str(getattr(self, "_last_self_heal_sig", "")):
+            self._last_self_heal_sig = self_heal_sig
+            if bool(getattr(self_heal_signal, "active", False)):
+                logging.warning(
+                    "SELF_HEAL_PAUSE streak=%s net_pnl=%.2f reasons=%s",
+                    int(getattr(self_heal_signal, "loss_streak", 0) or 0),
+                    float(getattr(self_heal_signal, "net_pnl", 0.0) or 0.0),
+                    ",".join(getattr(self_heal_signal, "reasons", ()) or ()),
+                )
+                try:
+                    if self.incident_journal is not None:
+                        self.incident_journal.note_guard(
+                            guard="self_heal",
+                            reason=";".join(getattr(self_heal_signal, "reasons", ()) or ()),
+                            severity="WARN",
+                            category="model",
+                        )
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        canary_sig = "|".join(
+            [
+                str(int(bool(getattr(canary_signal, "pause", False)))),
+                str(int(getattr(canary_signal, "loss_streak", 0) or 0)),
+                f"{float(getattr(canary_signal, 'net_pnl', 0.0) or 0.0):.2f}",
+                str(int(getattr(canary_signal, "error_incidents", 0) or 0)),
+                ",".join(str(x) for x in (getattr(canary_signal, "reasons", ()) or ())) or "NONE",
+            ]
+        )
+        if canary_sig != str(getattr(self, "_last_canary_guard_sig", "")):
+            self._last_canary_guard_sig = canary_sig
+            if bool(getattr(canary_signal, "pause", False)):
+                logging.warning(
+                    "CANARY_PAUSE streak=%s net_pnl=%.2f errors=%s reasons=%s",
+                    int(getattr(canary_signal, "loss_streak", 0) or 0),
+                    float(getattr(canary_signal, "net_pnl", 0.0) or 0.0),
+                    int(getattr(canary_signal, "error_incidents", 0) or 0),
+                    ",".join(getattr(canary_signal, "reasons", ()) or ()),
+                )
+                try:
+                    if self.incident_journal is not None:
+                        self.incident_journal.note_guard(
+                            guard="canary_rollout",
+                            reason=";".join(getattr(canary_signal, "reasons", ()) or ()),
+                            severity="WARN",
+                            category="model",
+                        )
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        drift_sig = "|".join(
+            [
+                str(int(bool(getattr(drift_signal, "active", False)))),
+                str(int(getattr(drift_signal, "samples", 0) or 0)),
+                f"{float(getattr(drift_signal, 'mean_drop', 0.0) or 0.0):.6f}",
+                f"{float(getattr(drift_signal, 'zscore', 0.0) or 0.0):.3f}",
+                ",".join(str(x) for x in (getattr(drift_signal, "reasons", ()) or ())) or "NONE",
+            ]
+        )
+        if drift_sig != str(getattr(self, "_last_drift_guard_sig", "")):
+            self._last_drift_guard_sig = drift_sig
+            if bool(getattr(drift_signal, "active", False)):
+                logging.warning(
+                    "DRIFT_PAUSE drop=%.6f z=%.3f reasons=%s",
+                    float(getattr(drift_signal, "mean_drop", 0.0) or 0.0),
+                    float(getattr(drift_signal, "zscore", 0.0) or 0.0),
+                    ",".join(getattr(drift_signal, "reasons", ()) or ()),
+                )
+                try:
+                    if self.incident_journal is not None:
+                        self.incident_journal.note_guard(
+                            guard="drift_guard",
+                            reason=";".join(getattr(drift_signal, "reasons", ()) or ()),
+                            severity="ERROR",
+                            category="regime",
+                        )
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _runtime_refresh_market_guard_cache(self) -> None:
         now_ts = float(time.time())
@@ -16891,66 +17009,11 @@ class SafetyBot:
             global_mode = "ECO"
         if self_heal_signal.active:
             global_mode = "ECO"
-            logging.warning(
-                f"SELF_HEAL_PAUSE streak={self_heal_signal.loss_streak} "
-                f"net_pnl={self_heal_signal.net_pnl:.2f} reasons={','.join(self_heal_signal.reasons)}"
-            )
-            try:
-                if self.incident_journal is not None:
-                    self.incident_journal.note_guard(
-                        guard="self_heal",
-                        reason=";".join(self_heal_signal.reasons),
-                        severity="WARN",
-                        category="model",
-                    )
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         if canary_signal.pause:
             global_mode = "ECO"
-            logging.warning(
-                f"CANARY_PAUSE streak={canary_signal.loss_streak} net_pnl={canary_signal.net_pnl:.2f} "
-                f"errors={canary_signal.error_incidents} reasons={','.join(canary_signal.reasons)}"
-            )
-            try:
-                if self.incident_journal is not None:
-                    self.incident_journal.note_guard(
-                        guard="canary_rollout",
-                        reason=";".join(canary_signal.reasons),
-                        # Avoid self-reinforcing INCIDENTS loop in canary gating.
-                        severity="WARN",
-                        category="model",
-                    )
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         if drift_signal.active:
             global_mode = "ECO"
-            logging.warning(
-                f"DRIFT_PAUSE drop={drift_signal.mean_drop:.6f} z={drift_signal.zscore:.3f} "
-                f"reasons={','.join(drift_signal.reasons)}"
-            )
-            try:
-                if self.incident_journal is not None:
-                    self.incident_journal.note_guard(
-                        guard="drift_guard",
-                        reason=";".join(drift_signal.reasons),
-                        severity="ERROR",
-                        category="regime",
-                    )
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-        # Learner QA is telemetry-only for trading path. It must not block or downgrade entries.
-        if learner_qa_light == "RED":
-            logging.info("LEARNER_QA_RED telemetry_only=1 no_mode_override=1")
-            try:
-                if self.incident_journal is not None:
-                    self.incident_journal.note_guard(
-                        guard="learner_qa",
-                        reason="RED_TELEMETRY_ONLY",
-                        severity="INFO",
-                        category="model",
-                    )
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        # Learner QA is telemetry-only for trading path. Its logging lives in cached advisory refresh.
 
         self._runtime_cache_control_plane_inputs(
             tw_ctx=tw_ctx,

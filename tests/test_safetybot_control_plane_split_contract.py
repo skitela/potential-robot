@@ -70,6 +70,20 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     assert "_runtime_emit_budget_telemetry" in called
 
 
+def test_runtime_refresh_global_guard_cache_emits_snapshot_log() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "_runtime_refresh_global_guard_cache")
+    called = _called_names(fn)
+    assert "_runtime_emit_global_guard_snapshot_log" in called
+
+
+def test_runtime_refresh_meta_advisory_cache_emits_snapshot_log() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "_runtime_refresh_meta_advisory_cache")
+    called = _called_names(fn)
+    assert "_runtime_emit_meta_advisory_snapshot_log" in called
+
+
 def test_runtime_refresh_market_guard_cache_emits_snapshot_log() -> None:
     src = Path("BIN/safetybot.py").resolve()
     fn = _class_method_node(src, "SafetyBot", "_runtime_refresh_market_guard_cache")
@@ -94,6 +108,10 @@ def test_scan_once_no_longer_emits_repeated_guard_and_scan_limit_logs_directly()
     assert "STRESS_PRECAUTION stress=%.3f threshold=%.3f => ECO" not in strings
     assert "BLACK_SWAN_BLOCK_NEW_ENTRIES state=%s action=%s reason=%s" not in strings
     assert "SCAN_LIMIT global_mode=%s n_max=%s n_limit=%s canary_active=%s learner_qa=%s" not in strings
+    assert "SELF_HEAL_PAUSE streak=%s net_pnl=%.2f reasons=%s" not in strings
+    assert "CANARY_PAUSE streak=%s net_pnl=%.2f errors=%s reasons=%s" not in strings
+    assert "DRIFT_PAUSE drop=%.6f z=%.3f reasons=%s" not in strings
+    assert "LEARNER_QA_RED telemetry_only=1 no_mode_override=1" not in strings
 
 
 def test_scan_once_stages_market_snapshot_instead_of_writing_it() -> None:
