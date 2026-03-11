@@ -77,6 +77,20 @@ class TestM5WaitGuard(unittest.TestCase):
             out.append({"time": t, "open": op, "high": hi, "low": lo, "close": cl})
         return safetybot.pd.DataFrame(out)
 
+    @staticmethod
+    def _short_m5_df(rows: int = 20):
+        total = max(2, int(rows))
+        base = safetybot.pd.Timestamp.now(tz=safetybot.TZ_PL).floor("5min")
+        out = []
+        for i in range(total):
+            t = base - safetybot.pd.Timedelta(minutes=5 * (total - 1 - i))
+            op = 100.0 + (i * 0.01)
+            cl = op + 0.002
+            hi = cl + 0.005
+            lo = op - 0.005
+            out.append({"time": t, "open": op, "high": hi, "low": lo, "close": cl})
+        return safetybot.pd.DataFrame(out)
+
     def test_large_next_fetch_is_guarded_and_does_not_block_indicator_calc(self):
         old_guard = safetybot.CFG.m5_wait_new_bar_max_sec
         old_use_features = safetybot.CFG.hybrid_use_zmq_m5_features
@@ -241,6 +255,85 @@ class TestM5WaitGuard(unittest.TestCase):
             safetybot.CFG.paper_trading = old_paper
             safetybot.CFG.paper_m5_wait_reuse_enabled = old_reuse
             safetybot.CFG.paper_m5_indicator_reuse_max_age_sec = old_reuse_age
+            safetybot.CFG.m5_pull_sec_eco = old_pull
+
+    def test_paper_reuses_recent_cached_indicators_on_m5_data_short(self):
+        old_paper = safetybot.CFG.paper_trading
+        old_reuse = getattr(safetybot.CFG, "paper_m5_data_short_reuse_enabled", True)
+        old_reuse_age = safetybot.CFG.paper_m5_indicator_reuse_max_age_sec
+        old_use_features = safetybot.CFG.hybrid_use_zmq_m5_features
+        old_pull = safetybot.CFG.m5_pull_sec_eco
+        try:
+            safetybot.CFG.paper_trading = True
+            safetybot.CFG.paper_m5_data_short_reuse_enabled = True
+            safetybot.CFG.paper_m5_indicator_reuse_max_age_sec = 300
+            safetybot.CFG.hybrid_use_zmq_m5_features = False
+            safetybot.CFG.m5_pull_sec_eco = 1
+
+            now_ts = safetybot.time.time()
+            bot = _BotStub(now_ts=now_ts, df=self._short_m5_df(20))
+            bot.cache.last_m5_calc_ts["USDJPY.pro"] = float(now_ts - 5.0)
+            bot.cache.next_m5_fetch_ts["USDJPY.pro"] = float(now_ts)
+            bot.last_indicators["USDJPY"] = {
+                "close": 158.0,
+                "open": 157.0,
+                "high": 158.2,
+                "low": 156.9,
+                "sma": 157.5,
+                "adx": 28.0,
+                "atr": 0.12,
+            }
+
+            ind = safetybot.StandardStrategy.m5_indicators_if_due(bot, "USDJPY.pro", "FX", "ECO")
+
+            self.assertIsNotNone(ind)
+            self.assertEqual(1, bot.engine.calls)
+            self.assertEqual(158.0, float(ind["close"]))
+            self.assertNotIn("M5_DATA_SHORT", bot.skips)
+        finally:
+            safetybot.CFG.paper_trading = old_paper
+            safetybot.CFG.paper_m5_data_short_reuse_enabled = old_reuse
+            safetybot.CFG.paper_m5_indicator_reuse_max_age_sec = old_reuse_age
+            safetybot.CFG.hybrid_use_zmq_m5_features = old_use_features
+            safetybot.CFG.m5_pull_sec_eco = old_pull
+
+    def test_live_mode_does_not_reuse_cached_indicators_on_m5_data_short(self):
+        old_paper = safetybot.CFG.paper_trading
+        old_reuse = getattr(safetybot.CFG, "paper_m5_data_short_reuse_enabled", True)
+        old_reuse_age = safetybot.CFG.paper_m5_indicator_reuse_max_age_sec
+        old_use_features = safetybot.CFG.hybrid_use_zmq_m5_features
+        old_pull = safetybot.CFG.m5_pull_sec_eco
+        try:
+            safetybot.CFG.paper_trading = False
+            safetybot.CFG.paper_m5_data_short_reuse_enabled = True
+            safetybot.CFG.paper_m5_indicator_reuse_max_age_sec = 300
+            safetybot.CFG.hybrid_use_zmq_m5_features = False
+            safetybot.CFG.m5_pull_sec_eco = 1
+
+            now_ts = safetybot.time.time()
+            bot = _BotStub(now_ts=now_ts, df=self._short_m5_df(20))
+            bot.cache.last_m5_calc_ts["USDJPY.pro"] = float(now_ts - 5.0)
+            bot.cache.next_m5_fetch_ts["USDJPY.pro"] = float(now_ts)
+            bot.last_indicators["USDJPY"] = {
+                "close": 158.0,
+                "open": 157.0,
+                "high": 158.2,
+                "low": 156.9,
+                "sma": 157.5,
+                "adx": 28.0,
+                "atr": 0.12,
+            }
+
+            ind = safetybot.StandardStrategy.m5_indicators_if_due(bot, "USDJPY.pro", "FX", "ECO")
+
+            self.assertIsNone(ind)
+            self.assertEqual(1, bot.engine.calls)
+            self.assertIn("M5_DATA_SHORT", bot.skips)
+        finally:
+            safetybot.CFG.paper_trading = old_paper
+            safetybot.CFG.paper_m5_data_short_reuse_enabled = old_reuse
+            safetybot.CFG.paper_m5_indicator_reuse_max_age_sec = old_reuse_age
+            safetybot.CFG.hybrid_use_zmq_m5_features = old_use_features
             safetybot.CFG.m5_pull_sec_eco = old_pull
 
     def test_zmq_bar_snapshot_applies_epoch_offset_correction(self):

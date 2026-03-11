@@ -352,6 +352,7 @@ class CFG:
     # wait windows so the bot can collect more learning examples without touching
     # hard risk locks or stale-data paths.
     paper_m5_wait_reuse_enabled: bool = True
+    paper_m5_data_short_reuse_enabled: bool = True
     paper_m5_indicator_reuse_max_age_sec: int = 300
     # If ECO limits collapse to zero while flat, keep at least minimal market probing alive.
     eco_probe_symbols_when_flat: int = 1
@@ -5281,17 +5282,22 @@ def maybe_reuse_paper_m5_indicators(
 
     We deliberately keep this narrow:
     - enabled only in paper mode,
-    - only for M5_PULL_WAIT / M5_WAIT_NEW_BAR,
+    - only for soft paper-only reasons:
+      M5_PULL_WAIT / M5_WAIT_NEW_BAR / M5_DATA_SHORT,
     - only when a recent indicator snapshot for the same symbol exists.
 
     This raises learning sample count without weakening hard stale-data guards.
     """
     reason_u = str(reason or "").upper()
-    if reason_u not in {"M5_PULL_WAIT", "M5_WAIT_NEW_BAR"}:
+    if reason_u in {"M5_PULL_WAIT", "M5_WAIT_NEW_BAR"}:
+        if not bool(getattr(CFG, "paper_m5_wait_reuse_enabled", True)):
+            return None
+    elif reason_u == "M5_DATA_SHORT":
+        if not bool(getattr(CFG, "paper_m5_data_short_reuse_enabled", True)):
+            return None
+    else:
         return None
     if not bool(getattr(CFG, "paper_trading", False)):
-        return None
-    if not bool(getattr(CFG, "paper_m5_wait_reuse_enabled", True)):
         return None
 
     try:
@@ -9131,6 +9137,18 @@ class StandardStrategy:
             reason = "M5_DATA_SHORT"
             if strict_no_fetch and int(store_state.get("rows") or 0) > 0 and bool(store_state.get("stale")):
                 reason = "M5_STORE_STALE"
+            if reason == "M5_DATA_SHORT":
+                reused = maybe_reuse_paper_m5_indicators(
+                    self,
+                    symbol,
+                    grp,
+                    mode,
+                    "M5_DATA_SHORT",
+                    now_ts,
+                    timeframe_min=tf_min,
+                )
+                if reused is not None:
+                    return reused
             self._metric_inc_skip(reason)
             if reason == "M5_STORE_STALE":
                 self._log_skip_pre_throttled(
@@ -18724,6 +18742,10 @@ if __name__ == "__main__":
         CFG.paper_m5_wait_reuse_enabled = _cfg_bool(
             "paper_m5_wait_reuse_enabled",
             CFG.paper_m5_wait_reuse_enabled,
+        )
+        CFG.paper_m5_data_short_reuse_enabled = _cfg_bool(
+            "paper_m5_data_short_reuse_enabled",
+            CFG.paper_m5_data_short_reuse_enabled,
         )
         CFG.paper_m5_indicator_reuse_max_age_sec = _cfg_int(
             "paper_m5_indicator_reuse_max_age_sec",
