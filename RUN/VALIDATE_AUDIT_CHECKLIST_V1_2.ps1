@@ -7,11 +7,31 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-PythonExe {
+    param([string]$RuntimeRoot)
+    $candidates = @(
+        (Join-Path $RuntimeRoot ".venv\Scripts\python.exe"),
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        "C:\Program Files\Python312\python.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+        }
+    }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+        return $cmd.Source
+    }
+    throw "Python executable not found for VALIDATE_AUDIT_CHECKLIST_V1_2."
+}
+
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 } else {
     $Root = (Resolve-Path $Root).Path
 }
+$pythonExe = Resolve-PythonExe -RuntimeRoot $Root
 
 if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
     $preferred = Join-Path $Root "EVIDENCE\audit_v12_live"
@@ -75,8 +95,9 @@ if (-not [string]::IsNullOrWhiteSpace($outDir)) {
 Write-Host "[VALIDATE_AUDIT_CHECKLIST_V1_2] Root=$Root"
 Write-Host "[VALIDATE_AUDIT_CHECKLIST_V1_2] Report=$Report"
 Write-Host "[VALIDATE_AUDIT_CHECKLIST_V1_2] Out=$Out"
+Write-Host "[VALIDATE_AUDIT_CHECKLIST_V1_2] Python=$pythonExe"
 
-& python $validator --report $Report --out $Out
+& $pythonExe $validator --report $Report --out $Out
 $rc = [int]$LASTEXITCODE
 
 Write-Host "[VALIDATE_AUDIT_CHECKLIST_V1_2] ExitCode=$rc"

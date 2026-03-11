@@ -9,11 +9,31 @@
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-PythonExe {
+    param([string]$RuntimeRoot)
+    $candidates = @(
+        (Join-Path $RuntimeRoot ".venv\Scripts\python.exe"),
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        "C:\Program Files\Python312\python.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+        }
+    }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+        return $cmd.Source
+    }
+    throw "Python executable not found for AUDIT_OFFLINE."
+}
+
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 } else {
     $Root = (Resolve-Path $Root).Path
 }
+$pythonExe = Resolve-PythonExe -RuntimeRoot $Root
 
 if ([string]::IsNullOrWhiteSpace($Evidence)) {
     $runId = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -69,15 +89,17 @@ if ($PrintSummary) {
 Write-Host "[AUDIT_OFFLINE] Root=$Root"
 Write-Host "[AUDIT_OFFLINE] Evidence=$Evidence"
 Write-Host "[AUDIT_OFFLINE] Mode=OFFLINE"
+Write-Host "[AUDIT_OFFLINE] Python=$pythonExe"
 Append-RunLog -Event "audit_offline_start" -Fields @{
     root = $Root
     evidence = $Evidence
     mode = "OFFLINE"
+    python = $pythonExe
 }
 
 if (-not $SkipHousekeeping) {
     $housekeepingReport = Join-Path $Evidence "housekeeping_report.json"
-    & python (Join-Path $Root "TOOLS\runtime_housekeeping.py") --root $Root --evidence $housekeepingReport --apply --keep-runs 10 --keep-audit-v12-runs 8 --keep-gates 200 --max-single-log-mb 8
+    & $pythonExe (Join-Path $Root "TOOLS\runtime_housekeeping.py") --root $Root --evidence $housekeepingReport --apply --keep-runs 10 --keep-audit-v12-runs 8 --keep-gates 200 --max-single-log-mb 8
     $hkExit = $LASTEXITCODE
     Append-RunLog -Event "housekeeping_done" -Fields @{ exit_code = $hkExit; report = $housekeepingReport }
     if ($hkExit -ne 0) {
@@ -85,7 +107,7 @@ if (-not $SkipHousekeeping) {
     }
 }
 
-& python @args
+& $pythonExe @args
 $exitCode = $LASTEXITCODE
 Append-RunLog -Event "dyrygent_finished" -Fields @{ exit_code = $exitCode }
 

@@ -8,11 +8,31 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-PythonExe {
+    param([string]$RuntimeRoot)
+    $candidates = @(
+        (Join-Path $RuntimeRoot ".venv\Scripts\python.exe"),
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        "C:\Program Files\Python312\python.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+        }
+    }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+        return $cmd.Source
+    }
+    throw "Python executable not found for GENERATE_AUDIT_REPORT_V1_2."
+}
+
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 } else {
     $Root = (Resolve-Path $Root).Path
 }
+$pythonExe = Resolve-PythonExe -RuntimeRoot $Root
 
 if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
     $EvidenceRoot = Join-Path $Root "EVIDENCE\audit_v12_live"
@@ -56,6 +76,7 @@ if (-not $NoValidate) {
 
 Write-Host "[GENERATE_AUDIT_REPORT_V1_2] Root=$Root"
 Write-Host "[GENERATE_AUDIT_REPORT_V1_2] EvidenceRoot=$EvidenceRoot"
+Write-Host "[GENERATE_AUDIT_REPORT_V1_2] Python=$pythonExe"
 if (-not [string]::IsNullOrWhiteSpace($RunId)) {
     Write-Host "[GENERATE_AUDIT_REPORT_V1_2] RunId=$RunId"
 }
@@ -64,7 +85,7 @@ if (-not [string]::IsNullOrWhiteSpace($Out)) {
 }
 Write-Host "[GENERATE_AUDIT_REPORT_V1_2] Validate=$([bool](-not $NoValidate))"
 
-& python @argsList
+& $pythonExe @argsList
 $rc = [int]$LASTEXITCODE
 
 Write-Host "[GENERATE_AUDIT_REPORT_V1_2] ExitCode=$rc"
