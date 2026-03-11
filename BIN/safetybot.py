@@ -7729,6 +7729,8 @@ except Exception:  # pragma: no cover
 class StrategyCache:
     def __init__(self):
         self.trend_cache: Dict[str, Tuple[float, str, str, str]] = {}
+        self.trend_cache_signature: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+        self.trend_cache_quality: Dict[str, str] = {}
         self.last_m5_calc_ts: Dict[str, float] = {}
         self.last_m5_bar_time: Dict[str, pd.Timestamp] = {}
         self.next_m5_fetch_ts: Dict[str, float] = {}
@@ -8570,6 +8572,12 @@ class StandardStrategy:
         cached = self.cache.trend_cache.get(symbol)
         if cached and (now_ts - cached[0] < CFG.trend_cache_ttl_sec):
             return cached[1], cached[2], cached[3]
+        if cached and str(self.cache.trend_cache_quality.get(symbol) or "").upper() == "FULL":
+            live_signature = self._trend_store_signature(symbol)
+            cached_signature = self.cache.trend_cache_signature.get(symbol)
+            if live_signature is not None and cached_signature == live_signature:
+                self.cache.trend_cache[symbol] = (now_ts, cached[1], cached[2], cached[3])
+                return cached[1], cached[2], cached[3]
 
         sma_trend_win = max(2, _cfg_group_int(grp, "sma_trend", int(getattr(CFG, "sma_trend", 200)), symbol=symbol))
         sma_struct_fast_win = max(
@@ -8650,6 +8658,8 @@ class StandardStrategy:
                         structure_h4,
                     )
                 self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1, structure_h4)
+                self.cache.trend_cache_quality[symbol] = "FALLBACK"
+                self.cache.trend_cache_signature.pop(symbol, None)
                 return trend_h4, trend_d1, structure_h4
             if self._skip_log_allowed(symbol, "TREND_DATA_SHORT", 120):
                 logging.info(
@@ -8708,7 +8718,49 @@ class StandardStrategy:
         else:
             structure_h4 = "NEUTRAL"
         self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1, structure_h4)
+        self.cache.trend_cache_quality[symbol] = "FULL"
+        self.cache.trend_cache_signature[symbol] = self._trend_signature_from_frames(df_h4, df_d1)
         return trend_h4, trend_d1, structure_h4
+
+    def _trend_store_signature(self, symbol: str) -> Optional[Tuple[Optional[str], Optional[str]]]:
+        if not bool(getattr(CFG, "hybrid_use_zmq_m5_bars", True)):
+            return None
+        if not bool(getattr(CFG, "hybrid_use_mtf_resample_from_m5_store", True)):
+            return None
+        store = getattr(self.engine, "bars_store", None)
+        if store is None:
+            return None
+        try:
+            df_h4 = store.read_resampled_df(symbol_base(symbol), 240, 2)
+            df_d1 = store.read_resampled_df(symbol_base(symbol), 1440, 2)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return None
+        return self._trend_signature_from_frames(df_h4, df_d1)
+
+    def _trend_signature_from_frames(
+        self,
+        df_h4: Optional["pd.DataFrame"],
+        df_d1: Optional["pd.DataFrame"],
+    ) -> Optional[Tuple[Optional[str], Optional[str]]]:
+        if df_h4 is None or len(df_h4) == 0 or df_d1 is None or len(df_d1) == 0:
+            return None
+
+        def _norm_bar_key(ts_value: Any) -> Optional[str]:
+            try:
+                ts = pd.Timestamp(ts_value)
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize(TZ_PL)
+                else:
+                    ts = ts.tz_convert(TZ_PL)
+                return ts.tz_convert(UTC).replace(microsecond=0).isoformat()
+            except Exception:
+                return None
+
+        return (
+            _norm_bar_key(df_h4["time"].iloc[-1]),
+            _norm_bar_key(df_d1["time"].iloc[-1]),
+        )
 
     def m5_indicators_if_due(self, symbol: str, grp: str, mode: str) -> Optional[Dict]:
         now_ts = time.time()
