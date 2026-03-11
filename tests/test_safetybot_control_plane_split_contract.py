@@ -33,6 +33,17 @@ def _string_constants(fn: ast.FunctionDef) -> List[str]:
     return values
 
 
+def _method_source_text(source_path: Path, class_name: str, method_name: str) -> str:
+    source = source_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for method in node.body:
+                if isinstance(method, ast.FunctionDef) and method.name == method_name:
+                    return ast.get_source_segment(source, method) or ""
+    raise AssertionError(f"Method source not found: {class_name}.{method_name}")
+
+
 def test_scan_once_no_longer_emits_policy_and_kernel_config() -> None:
     src = Path("BIN/safetybot.py").resolve()
     fn = _class_method_node(src, "SafetyBot", "scan_once")
@@ -233,3 +244,33 @@ def test_execution_engine_copy_rates_throttles_strict_nofetch_logs() -> None:
     fn = _class_method_node(src, "ExecutionEngine", "copy_rates")
     called = _called_names(fn)
     assert "_copy_rates_log_allowed" in called
+
+
+def test_evaluate_symbol_checks_duplicate_signal_before_advisory_contexts() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    method_src = _method_source_text(src, "StandardStrategy", "evaluate_symbol")
+    dedup_idx = method_src.find('signal_id = self._signal_id(symbol, signal, signal_reason, regime)')
+    candle_idx = method_src.find("candle_ctx = self._evaluate_candle_context(")
+    renko_idx = method_src.find("renko_ctx = self._evaluate_renko_context(")
+    assert dedup_idx != -1
+    assert candle_idx != -1
+    assert renko_idx != -1
+    assert dedup_idx < candle_idx
+    assert dedup_idx < renko_idx
+
+
+def test_evaluate_symbol_checks_fx_budget_pacing_before_advisory_contexts() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    method_src = _method_source_text(src, "StandardStrategy", "evaluate_symbol")
+    fx_branch_start = method_src.find('if grp_u == "FX":')
+    fx_branch_end = method_src.find('elif grp_u == "METAL":', fx_branch_start)
+    fx_branch = method_src[fx_branch_start:fx_branch_end]
+    fx_pace_idx = fx_branch.find(
+        'pace_ok, pace_meta = fx_budget_pacing_allows_entry(self.gov, self.db, now_dt=now_utc())'
+    )
+    ensure_idx = fx_branch.find("ensure_advisory_contexts()")
+    assert fx_branch_start != -1
+    assert fx_branch_end != -1
+    assert fx_pace_idx != -1
+    assert ensure_idx != -1
+    assert fx_pace_idx < ensure_idx

@@ -10080,81 +10080,96 @@ class StandardStrategy:
 
         if signal:
             grp_u = str(grp).upper()
-            exec_err_recent = 0
-            try:
-                lookback = max(1.0, float(getattr(CFG, "execution_burst_lookback_sec", 120) or 120))
-                ts_now = float(time.time())
-                src = list(getattr(self.engine, "_exec_error_ts", []) or [])
-                exec_err_recent = int(sum(1 for t in src if (ts_now - float(t)) <= lookback))
-            except Exception:
-                exec_err_recent = 0
+            signal_id = self._signal_id(symbol, signal, signal_reason, regime)
+            if self._signal_dedup_block(signal_id):
+                self._metric_inc_skip("SIGNAL_DUPLICATE")
+                logging.info(
+                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=SIGNAL_DUPLICATE signal_id=%s",
+                    symbol,
+                    grp,
+                    mode,
+                    signal_id,
+                )
+                return
+
             entry_score = None
             entry_min_score = None
             entry_spread_cap_points = None
             unified_learning_adj: Dict[str, Any] = {}
-            candle_ctx = self._evaluate_candle_context(
-                symbol=symbol,
-                grp=grp,
-                signal=signal,
-                trend_h4=trend_h4,
-                regime=regime,
-                ind=ind,
-            )
-            renko_ctx = self._evaluate_renko_context(
-                symbol=symbol,
-                grp=grp,
-                signal=signal,
-                point=float(getattr(info, "point", 0.0) or 0.0),
-            )
-            try:
-                self._scan_meta.setdefault("candle_context", {})[symbol_base(symbol)] = dict(candle_ctx)
-                self._scan_meta.setdefault("renko_context", {})[symbol_base(symbol)] = dict(renko_ctx)
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-            strategy_family = infer_runtime_strategy_family(
-                mode=mode,
-                signal=signal,
-                signal_reason=signal_reason,
-                candle_ctx=candle_ctx,
-                renko_ctx=renko_ctx,
-            )
-            self.update_skip_capture_context(strategy_family=strategy_family)
-            if bool(getattr(CFG, "candle_adapter_emit_event", True)):
-                if self._skip_log_allowed(symbol, "CANDLE_ADAPTER", 60):
-                    c_patterns = ",".join([str(x) for x in (candle_ctx.get("candle_patterns") or [])]) or "NONE"
-                    logging.info(
-                        "CANDLE_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s long=%.3f short=%.3f patterns=%s",
-                        symbol,
-                        grp_u,
-                        str(candle_ctx.get("mode") or "SHADOW_ONLY"),
-                        int(bool(candle_ctx.get("ready", False))),
-                        str(candle_ctx.get("candle_bias") or "NONE"),
-                        str(candle_ctx.get("candle_quality_grade") or "UNKNOWN"),
-                        str(candle_ctx.get("reason_code") or "NONE"),
-                        float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
-                        float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
-                        c_patterns,
-                    )
-            if bool(getattr(CFG, "renko_adapter_emit_event", True)):
-                if self._skip_log_allowed(symbol, "RENKO_ADAPTER", 60):
-                    logging.info(
-                        "RENKO_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s "
-                        "long=%.3f short=%.3f run=%s rev=%s bricks=%s brick_pts=%.2f eval_ms=%s",
-                        symbol,
-                        grp_u,
-                        str(renko_ctx.get("mode") or "SHADOW_ONLY"),
-                        int(bool(renko_ctx.get("ready", False))),
-                        str(renko_ctx.get("renko_bias") or "NONE"),
-                        str(renko_ctx.get("renko_quality_grade") or "UNKNOWN"),
-                        str(renko_ctx.get("reason_code") or "NONE"),
-                        float(renko_ctx.get("renko_score_long", 0.0) or 0.0),
-                        float(renko_ctx.get("renko_score_short", 0.0) or 0.0),
-                        int(renko_ctx.get("run_length", 0) or 0),
-                        int(bool(renko_ctx.get("reversal_flag", False))),
-                        int(renko_ctx.get("bricks_count", 0) or 0),
-                        float(renko_ctx.get("brick_size_points", 0.0) or 0.0),
-                        int(renko_ctx.get("renko_eval_ms", 0) or 0),
-                    )
+            exec_err_recent = 0
+            candle_ctx: Dict[str, Any] = {}
+            renko_ctx: Dict[str, Any] = {}
+            strategy_family = "UNKNOWN"
+            advisory_ready = False
+
+            def ensure_advisory_contexts() -> None:
+                nonlocal advisory_ready, candle_ctx, renko_ctx, strategy_family
+                if advisory_ready:
+                    return
+                candle_ctx = self._evaluate_candle_context(
+                    symbol=symbol,
+                    grp=grp,
+                    signal=signal,
+                    trend_h4=trend_h4,
+                    regime=regime,
+                    ind=ind,
+                )
+                renko_ctx = self._evaluate_renko_context(
+                    symbol=symbol,
+                    grp=grp,
+                    signal=signal,
+                    point=float(getattr(info, "point", 0.0) or 0.0),
+                )
+                try:
+                    self._scan_meta.setdefault("candle_context", {})[symbol_base(symbol)] = dict(candle_ctx)
+                    self._scan_meta.setdefault("renko_context", {})[symbol_base(symbol)] = dict(renko_ctx)
+                except Exception as e:
+                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                strategy_family = infer_runtime_strategy_family(
+                    mode=mode,
+                    signal=signal,
+                    signal_reason=signal_reason,
+                    candle_ctx=candle_ctx,
+                    renko_ctx=renko_ctx,
+                )
+                self.update_skip_capture_context(strategy_family=strategy_family)
+                if bool(getattr(CFG, "candle_adapter_emit_event", True)):
+                    if self._skip_log_allowed(symbol, "CANDLE_ADAPTER", 60):
+                        c_patterns = ",".join([str(x) for x in (candle_ctx.get("candle_patterns") or [])]) or "NONE"
+                        logging.info(
+                            "CANDLE_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s long=%.3f short=%.3f patterns=%s",
+                            symbol,
+                            grp_u,
+                            str(candle_ctx.get("mode") or "SHADOW_ONLY"),
+                            int(bool(candle_ctx.get("ready", False))),
+                            str(candle_ctx.get("candle_bias") or "NONE"),
+                            str(candle_ctx.get("candle_quality_grade") or "UNKNOWN"),
+                            str(candle_ctx.get("reason_code") or "NONE"),
+                            float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
+                            float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
+                            c_patterns,
+                        )
+                if bool(getattr(CFG, "renko_adapter_emit_event", True)):
+                    if self._skip_log_allowed(symbol, "RENKO_ADAPTER", 60):
+                        logging.info(
+                            "RENKO_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s "
+                            "long=%.3f short=%.3f run=%s rev=%s bricks=%s brick_pts=%.2f eval_ms=%s",
+                            symbol,
+                            grp_u,
+                            str(renko_ctx.get("mode") or "SHADOW_ONLY"),
+                            int(bool(renko_ctx.get("ready", False))),
+                            str(renko_ctx.get("renko_bias") or "NONE"),
+                            str(renko_ctx.get("renko_quality_grade") or "UNKNOWN"),
+                            str(renko_ctx.get("reason_code") or "NONE"),
+                            float(renko_ctx.get("renko_score_long", 0.0) or 0.0),
+                            float(renko_ctx.get("renko_score_short", 0.0) or 0.0),
+                            int(renko_ctx.get("run_length", 0) or 0),
+                            int(bool(renko_ctx.get("reversal_flag", False))),
+                            int(renko_ctx.get("bricks_count", 0) or 0),
+                            float(renko_ctx.get("brick_size_points", 0.0) or 0.0),
+                            int(renko_ctx.get("renko_eval_ms", 0) or 0),
+                        )
+                advisory_ready = True
 
             if grp_u == "FX":
                 pace_ok, pace_meta = fx_budget_pacing_allows_entry(self.gov, self.db, now_dt=now_utc())
@@ -10176,6 +10191,14 @@ class StandardStrategy:
                     return
 
                 if bool(getattr(CFG, "fx_signal_score_enabled", True)):
+                    try:
+                        lookback = max(1.0, float(getattr(CFG, "execution_burst_lookback_sec", 120) or 120))
+                        ts_now = float(time.time())
+                        src = list(getattr(self.engine, "_exec_error_ts", []) or [])
+                        exec_err_recent = int(sum(1 for t in src if (ts_now - float(t)) <= lookback))
+                    except Exception:
+                        exec_err_recent = 0
+                    ensure_advisory_contexts()
                     spread_hint = float(getattr(info, "spread", 0.0) or 0.0)
                     spread_p80 = float(self.db.get_p80_spread(symbol) or 0.0)
                     fx_score, fx_parts = score_fx_entry_signal(
@@ -10272,6 +10295,14 @@ class StandardStrategy:
                     return
 
                 if bool(getattr(CFG, "metal_signal_score_enabled", True)):
+                    try:
+                        lookback = max(1.0, float(getattr(CFG, "execution_burst_lookback_sec", 120) or 120))
+                        ts_now = float(time.time())
+                        src = list(getattr(self.engine, "_exec_error_ts", []) or [])
+                        exec_err_recent = int(sum(1 for t in src if (ts_now - float(t)) <= lookback))
+                    except Exception:
+                        exec_err_recent = 0
+                    ensure_advisory_contexts()
                     spread_hint = float(getattr(info, "spread", 0.0) or 0.0)
                     spread_p80 = float(self.db.get_p80_spread(symbol) or 0.0)
                     metal_score, metal_parts = score_metal_entry_signal(
@@ -10351,6 +10382,14 @@ class StandardStrategy:
 
             elif grp_u == "CRYPTO":
                 if bool(getattr(CFG, "crypto_signal_score_enabled", True)):
+                    try:
+                        lookback = max(1.0, float(getattr(CFG, "execution_burst_lookback_sec", 120) or 120))
+                        ts_now = float(time.time())
+                        src = list(getattr(self.engine, "_exec_error_ts", []) or [])
+                        exec_err_recent = int(sum(1 for t in src if (ts_now - float(t)) <= lookback))
+                    except Exception:
+                        exec_err_recent = 0
+                    ensure_advisory_contexts()
                     spread_hint = float(getattr(info, "spread", 0.0) or 0.0)
                     spread_p80 = float(self.db.get_p80_spread(symbol) or 0.0)
                     crypto_score, crypto_parts = score_metal_entry_signal(
@@ -10428,17 +10467,8 @@ class StandardStrategy:
                         )
                         return
 
-            signal_id = self._signal_id(symbol, signal, signal_reason, regime)
-            if self._signal_dedup_block(signal_id):
-                self._metric_inc_skip("SIGNAL_DUPLICATE")
-                logging.info(
-                    "ENTRY_SKIP symbol=%s grp=%s mode=%s reason=SIGNAL_DUPLICATE signal_id=%s",
-                    symbol,
-                    grp,
-                    mode,
-                    signal_id,
-                )
-                return
+            if not advisory_ready:
+                ensure_advisory_contexts()
             if self._skip_log_allowed(symbol, "ENTRY_SIGNAL", 60):
                 logging.info(
                     f"ENTRY_SIGNAL symbol={symbol} grp={grp} mode={mode} trend_h4={trend_h4} "
