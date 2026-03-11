@@ -320,6 +320,8 @@ class CFG:
     hybrid_no_mt5_data_fetch_hard: bool = True
     # Maximum accepted age of incoming market snapshots in decision path.
     hybrid_snapshot_max_age_sec: int = 180
+    # Maximum accepted age of live ZMQ tick snapshots in direct tick cache.
+    hybrid_tick_snapshot_max_age_sec: float = 2.5
     # If live ZMQ tick cache is temporarily empty, allow a very fresh persisted
     # snapshot tick as transport fallback before touching MT5 API.
     hybrid_tick_store_fallback_enabled: bool = True
@@ -6906,20 +6908,7 @@ class ExecutionEngine:
 
     def tick(self, symbol: str, grp: str, emergency: bool = False):
         # 1. Sprawdź cache ZMQ (Hybrid Mode)
-        cache_keys = [
-            symbol,
-            symbol_base(symbol),
-            str(symbol).upper(),
-            str(symbol_base(symbol)).upper(),
-        ]
-        zmq_data = None
-        for key in cache_keys:
-            try:
-                zmq_data = self._zmq_tick_cache.get(key)
-            except Exception:
-                zmq_data = None
-            if zmq_data:
-                break
+        zmq_data = self._get_fresh_zmq_tick_snapshot(symbol)
         if zmq_data:
             t = self._tick_stub_from_snapshot(zmq_data)
             logging.debug(f"TICK_FROM_ZMQ_CACHE symbol={symbol}")
@@ -6966,6 +6955,41 @@ class ExecutionEngine:
 
         return TickStub(snapshot)
 
+    def _get_fresh_zmq_tick_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+        cache_keys = [
+            symbol,
+            symbol_base(symbol),
+            str(symbol).upper(),
+            str(symbol_base(symbol)).upper(),
+        ]
+        try:
+            max_age = max(0.2, float(getattr(CFG, "hybrid_tick_snapshot_max_age_sec", 2.5)))
+        except Exception:
+            max_age = 2.5
+        now_ts = float(time.time())
+        for key in cache_keys:
+            try:
+                rec = self._zmq_tick_cache.get(key)
+            except Exception:
+                rec = None
+            if not isinstance(rec, dict):
+                continue
+            try:
+                recv_ts = float(rec.get("recv_ts") or 0.0)
+            except Exception:
+                recv_ts = 0.0
+            if recv_ts <= 0.0:
+                try:
+                    recv_ts = float(int(rec.get("timestamp_ms") or 0) / 1000.0)
+                except Exception:
+                    recv_ts = 0.0
+            if recv_ts <= 0.0:
+                continue
+            if (now_ts - recv_ts) > float(max_age):
+                continue
+            return rec
+        return None
+
     def _load_recent_tick_store_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
         if not bool(getattr(CFG, "hybrid_tick_store_fallback_enabled", True)):
             return None
@@ -6993,6 +7017,7 @@ class ExecutionEngine:
                 "bid": float(row.get("bid", 0.0) or 0.0),
                 "ask": float(row.get("ask", 0.0) or 0.0),
                 "timestamp_ms": int(row.get("ts_msc") or 0),
+                "recv_ts": float(recv_ts),
                 "volume": 0,
                 "point": (None if row.get("point") is None else float(row.get("point") or 0.0)),
                 "digits": (None if row.get("digits") is None else int(row.get("digits") or 0)),
@@ -18447,6 +18472,8 @@ class SafetyBot:
 
     def _handle_tick_snapshot(self, *, symbol: str, base_symbol: str, data: Dict[str, Any], now_ts: float) -> None:
         if hasattr(self.execution_engine, "_zmq_tick_cache"):
+            cache_payload = dict(data or {})
+            cache_payload["recv_ts"] = float(now_ts)
             cache_keys = {
                 str(symbol),
                 str(base_symbol),
@@ -18454,7 +18481,7 @@ class SafetyBot:
                 str(base_symbol).upper(),
             }
             for cache_key in cache_keys:
-                self.execution_engine._zmq_tick_cache[cache_key] = data
+                self.execution_engine._zmq_tick_cache[cache_key] = cache_payload
         self._zmq_last_tick_ts[base_symbol] = now_ts
         tick_persisted = False
 
@@ -18933,6 +18960,10 @@ if __name__ == "__main__":
         CFG.hybrid_no_mt5_data_fetch_hard,
     )
     CFG.hybrid_snapshot_max_age_sec = _cfg_int("hybrid_snapshot_max_age_sec", CFG.hybrid_snapshot_max_age_sec)
+    CFG.hybrid_tick_snapshot_max_age_sec = _cfg_float(
+        "hybrid_tick_snapshot_max_age_sec",
+        CFG.hybrid_tick_snapshot_max_age_sec,
+    )
     CFG.hybrid_tick_store_fallback_enabled = _cfg_bool(
         "hybrid_tick_store_fallback_enabled",
         CFG.hybrid_tick_store_fallback_enabled,
