@@ -10734,6 +10734,8 @@ class SafetyBot:
         self._runtime_cached_black_swan_signal: Optional[BlackSwanSignal] = None
         self._runtime_cached_snapshot_health: Dict[str, Any] = {}
         self._runtime_market_guard_cache_ready: bool = False
+        self._runtime_pending_market_snapshot: Optional[Dict[str, Any]] = None
+        self._runtime_market_snapshot_dirty: bool = False
         self._last_group_policy_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
@@ -10744,6 +10746,7 @@ class SafetyBot:
         self._last_meta_advisory_refresh_ts: float = 0.0
         self._last_global_guard_refresh_ts: float = 0.0
         self._last_market_guard_refresh_ts: float = 0.0
+        self._last_market_snapshot_flush_ts: float = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -14828,6 +14831,7 @@ class SafetyBot:
             self._emit_policy_runtime(group_arb, group_risk, now_dt=now_dt)
             self._emit_kernel_config(group_risk, now_dt=now_dt)
             self._runtime_refresh_control_plane_state()
+            self._runtime_flush_market_snapshot()
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         self._runtime_reload_stage1_config()
@@ -15035,6 +15039,25 @@ class SafetyBot:
         self._runtime_cached_snapshot_health = dict(snapshot_health or {})
         self._runtime_market_guard_cache_ready = True
         self._last_market_guard_refresh_ts = now_ts
+
+    def _runtime_stage_market_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        if not isinstance(snapshot, dict) or not snapshot:
+            return
+        self._runtime_pending_market_snapshot = dict(snapshot)
+        self._runtime_market_snapshot_dirty = True
+
+    def _runtime_flush_market_snapshot(self) -> None:
+        if not bool(getattr(self, "_runtime_market_snapshot_dirty", False)):
+            return
+        snapshot = getattr(self, "_runtime_pending_market_snapshot", None)
+        if not isinstance(snapshot, dict) or not snapshot:
+            self._runtime_market_snapshot_dirty = False
+            self._runtime_pending_market_snapshot = None
+            return
+        atomic_write_json(self.meta_dir / MARKET_SNAPSHOT_FILE_NAME, snapshot)
+        self._runtime_market_snapshot_dirty = False
+        self._runtime_pending_market_snapshot = None
+        self._last_market_snapshot_flush_ts = float(time.time())
 
     def _compute_group_policy_snapshot(
         self,
@@ -17045,7 +17068,7 @@ class SafetyBot:
                     cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
                     snapshot['topk'] = []
             
-            atomic_write_json(self.meta_dir / MARKET_SNAPSHOT_FILE_NAME, snapshot)
+            self._runtime_stage_market_snapshot(snapshot)
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
