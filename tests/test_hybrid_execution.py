@@ -730,6 +730,7 @@ class TestHybridExecution(unittest.TestCase):
         self.assertEqual(bot._runtime_cached_learner_qa_light, "YELLOW")
         self.assertEqual(bot._runtime_cached_verdict, {"light": "GREEN"})
         self.assertEqual(bot._runtime_cached_scout_advice, {"preferred_symbol": "EURUSD"})
+        self.assertTrue(bot._runtime_meta_advisory_cache_ready)
         self.assertEqual(bot._last_meta_advisory_refresh_ts, 100.0)
 
     def test_runtime_refresh_meta_advisory_cache_skips_when_fresh(self):
