@@ -16811,14 +16811,6 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
-        self._runtime_cache_control_plane_inputs(
-            tw_ctx=tw_ctx,
-            st=st,
-            eco_active=bool(eco_by_budget),
-            warn_active=bool(warn_degrade_active),
-            global_mode=str(global_mode or "ECO"),
-        )
-
         if eco_by_budget:
             logging.warning(
                 f"ECO_MODE reason={eco_reason} price_pct={price_pct:.3f} sys_pct={sys_pct:.3f} order_pct={order_pct:.3f} "
@@ -16959,6 +16951,14 @@ class SafetyBot:
                     )
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        self._runtime_cache_control_plane_inputs(
+            tw_ctx=tw_ctx,
+            st=st,
+            eco_active=bool(eco_by_budget),
+            warn_active=bool(warn_degrade_active),
+            global_mode=str(global_mode or "ECO"),
+        )
 
         # pozycje (SYS): ECO nie może odciąć opieki nad otwartymi pozycjami
         in_force_close = self.strategy.force_close_window()
