@@ -55,6 +55,7 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     called = _called_names(fn)
     assert "poll_deals" in called
     assert "_runtime_refresh_group_policy_cache" in called
+    assert "_runtime_refresh_window_routing_cache" in called
     assert "_runtime_refresh_global_guard_cache" in called
     assert "_runtime_refresh_market_guard_cache" in called
 
@@ -72,3 +73,15 @@ def test_scan_once_stages_market_snapshot_instead_of_writing_it() -> None:
     called = _called_names(fn)
     assert "_runtime_stage_market_snapshot" in called
     assert "atomic_write_json" not in called
+
+
+def test_scan_once_uses_cached_window_routing_policy() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "scan_once")
+    called = _called_names(fn)
+    assert "_runtime_get_cached_window_routing_state" in called
+    assert "_runtime_window_routing_cache_matches" in called
+    assert "_runtime_materialize_window_routing_state" in called
+    assert "_compute_window_routing_policy" in called
+    assert "trade_window_next_ctx" not in called
+    assert "_resolve_intents_to_canonical" not in called

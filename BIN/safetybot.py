@@ -84,7 +84,7 @@ import logging
 import traceback
 from types import SimpleNamespace
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple, Any, Callable, Set
+from typing import Dict, Optional, List, Tuple, Any, Callable, Set, Iterable
 try:
     from . import common_guards as cg
     from . import common_contract as cc
@@ -10734,9 +10734,12 @@ class SafetyBot:
         self._runtime_cached_black_swan_signal: Optional[BlackSwanSignal] = None
         self._runtime_cached_snapshot_health: Dict[str, Any] = {}
         self._runtime_market_guard_cache_ready: bool = False
+        self._runtime_cached_window_routing: Dict[str, Any] = {}
+        self._runtime_window_routing_cache_ready: bool = False
         self._runtime_pending_market_snapshot: Optional[Dict[str, Any]] = None
         self._runtime_market_snapshot_dirty: bool = False
         self._last_group_policy_refresh_ts: float = 0.0
+        self._last_window_routing_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
         self._last_cost_guard_refresh_ts: float = 0.0
@@ -15059,6 +15062,321 @@ class SafetyBot:
         self._runtime_pending_market_snapshot = None
         self._last_market_snapshot_flush_ts = float(time.time())
 
+    @staticmethod
+    def _runtime_window_routing_signature(
+        *,
+        tw_window_id: str,
+        tw_group: str,
+        tw_strict_group: bool,
+        policy_shadow: bool,
+        open_syms: Iterable[str],
+    ) -> str:
+        open_sig = ",".join(
+            sorted(
+                {
+                    canonical_symbol(str(sym))
+                    for sym in (open_syms or ())
+                    if str(sym).strip()
+                }
+            )
+        )
+        return (
+            f"{str(tw_window_id or 'NONE')}|{_group_key(str(tw_group or 'NONE'))}|"
+            f"{int(bool(tw_strict_group))}|{int(bool(policy_shadow))}|{open_sig}"
+        )
+
+    def _runtime_get_cached_window_routing_state(self) -> Tuple[bool, Dict[str, Any]]:
+        state = dict(getattr(self, "_runtime_cached_window_routing", {}) or {})
+        allowed_groups = state.get("allowed_groups")
+        if allowed_groups is not None:
+            state["allowed_groups"] = {str(x) for x in (allowed_groups or set()) if str(x).strip()}
+        allowed_symbols_by_group = state.get("allowed_symbols_by_group", {}) or {}
+        state["allowed_symbols_by_group"] = {
+            str(g): {str(s) for s in (symbols or set()) if str(s).strip()}
+            for g, symbols in allowed_symbols_by_group.items()
+            if str(g).strip()
+        }
+        return bool(getattr(self, "_runtime_window_routing_cache_ready", False)), state
+
+    @staticmethod
+    def _runtime_window_routing_cache_matches(state: Dict[str, Any], signature: str) -> bool:
+        return bool(str((state or {}).get("signature") or "") == str(signature or ""))
+
+    @staticmethod
+    def _runtime_materialize_window_routing_state(
+        state: Dict[str, Any],
+    ) -> Tuple[Optional[set[str]], Dict[str, set[str]], int]:
+        routing = dict(state or {})
+        allowed_groups_raw = routing.get("allowed_groups")
+        allowed_groups = None
+        if allowed_groups_raw is not None:
+            allowed_groups = {str(x) for x in (allowed_groups_raw or set()) if str(x).strip()}
+        allowed_symbols_by_group = {
+            str(g): {str(s) for s in (symbols or set()) if str(s).strip()}
+            for g, symbols in (routing.get("allowed_symbols_by_group", {}) or {}).items()
+            if str(g).strip()
+        }
+        carryover_active = int(routing.get("carryover_active", 0) or 0)
+        return allowed_groups, allowed_symbols_by_group, carryover_active
+
+    def _cache_window_routing_state(self, state: Dict[str, Any]) -> None:
+        routing = dict(state or {})
+        allowed_groups = routing.get("allowed_groups")
+        if allowed_groups is not None:
+            routing["allowed_groups"] = {str(x) for x in (allowed_groups or set()) if str(x).strip()}
+        routing["allowed_symbols_by_group"] = {
+            str(g): {str(s) for s in (symbols or set()) if str(s).strip()}
+            for g, symbols in (routing.get("allowed_symbols_by_group", {}) or {}).items()
+            if str(g).strip()
+        }
+        self._runtime_cached_window_routing = routing
+        self._runtime_window_routing_cache_ready = True
+
+    def _compute_window_routing_policy(
+        self,
+        *,
+        tw_ctx: Dict[str, Any],
+        open_syms: Iterable[str],
+        group_arb: Dict[str, Dict[str, Any]],
+        policy_shadow: bool,
+        now_prio: Optional[dt.datetime] = None,
+    ) -> Dict[str, Any]:
+        tw_window_id = str((tw_ctx or {}).get("window_id") or "")
+        tw_group = _group_key(str((tw_ctx or {}).get("group") or ""))
+        tw_strict_group = bool(getattr(CFG, "trade_window_strict_group_routing", True))
+        use_windows_v2_hard = bool(getattr(CFG, "policy_windows_v2_enabled", True)) and (not policy_shadow)
+        use_group_arb_hard = bool(getattr(CFG, "policy_group_arbitration_enabled", True)) and (not policy_shadow)
+        now_prio = now_prio or now_utc()
+        open_syms_set = {str(sym) for sym in (open_syms or ()) if str(sym).strip()}
+
+        allowed_groups: Optional[set[str]] = None
+        if tw_strict_group and tw_group:
+            allowed_groups = {str(tw_group).upper()}
+        allowed_symbols_by_group: Dict[str, set[str]] = {}
+        carryover_active = 0
+
+        try:
+            carry_enabled = bool(getattr(CFG, "trade_window_carryover_enabled", False))
+            carry_trade = bool(getattr(CFG, "trade_window_carryover_trade_enabled", False))
+            carry_min = max(0, int(getattr(CFG, "trade_window_carryover_minutes", 0)))
+            carry_max = max(0, int(getattr(CFG, "trade_window_carryover_max_symbols", 0)))
+            carry_groups = tuple(getattr(CFG, "trade_window_carryover_groups", ()) or ())
+            carry_prev_grp = str(getattr(self, "_tw_prev_group", "") or "").upper()
+            carry_prev_wid = str(getattr(self, "_tw_prev_window_id", "") or "")
+            carry_age_min = 9999.0
+            carry_syms: List[str] = []
+            if carry_enabled and carry_prev_grp and carry_prev_grp != str(tw_group).upper() and carry_min > 0 and carry_max > 0:
+                sw_ts = float(getattr(self, "_tw_switch_ts", 0.0) or 0.0)
+                if sw_ts > 0:
+                    carry_age_min = max(0.0, (time.time() - sw_ts) / 60.0)
+                if carry_age_min <= float(carry_min):
+                    carryover_active = 1
+                    if (not carry_groups) or (_group_key(carry_prev_grp) in {_group_key(x) for x in carry_groups}):
+                        carry_rank: List[Tuple[float, str]] = []
+                        for _raw2, _sym2, _grp2 in self.universe:
+                            if _group_key(_grp2) != _group_key(carry_prev_grp):
+                                continue
+                            try:
+                                if use_group_arb_hard:
+                                    gf = float(
+                                        group_arb.get(_group_key(_grp2), {}).get(
+                                            "priority_factor", effective_group_priority_factor(_group_key(_grp2), now_dt=now_prio)
+                                        )
+                                    )
+                                else:
+                                    gf = float(
+                                        group_arb.get(_group_key(_grp2), {}).get(
+                                            "priority_factor", self.gov.group_priority_factor(_group_key(_grp2))
+                                        )
+                                    )
+                            except Exception:
+                                gf = 1.0
+                            try:
+                                twt = (
+                                    float(group_window_weight(_grp2, _sym2, now_dt=now_prio))
+                                    if use_windows_v2_hard
+                                    else float(self.ctrl.time_weight(_grp2, _sym2))
+                                )
+                            except Exception:
+                                twt = 1.0
+                            try:
+                                sf = float(self.ctrl.score_factor(_grp2, _sym2))
+                            except Exception:
+                                sf = 1.0
+                            carry_rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
+                        carry_rank.sort(reverse=True, key=lambda x: x[0])
+                        carry_syms = [s for (_p, s) in carry_rank[:carry_max]]
+
+                    sig = f"{tw_window_id}:{carry_prev_wid}:{carry_prev_grp}:{int(carry_trade)}:{','.join(carry_syms)}"
+                    if sig != str(getattr(self, "_last_carryover_sig", "")):
+                        setattr(self, "_last_carryover_sig", sig)
+                        logging.info(
+                            "WINDOW_CARRYOVER window=%s group=%s prev_window=%s prev_group=%s age_min=%.2f trade=%s symbols=%s",
+                            tw_window_id or "NONE",
+                            tw_group or "NONE",
+                            carry_prev_wid or "NONE",
+                            carry_prev_grp or "NONE",
+                            float(carry_age_min),
+                            int(bool(carry_trade)),
+                            ",".join(carry_syms) if carry_syms else "NONE",
+                        )
+
+                    if carry_trade and carry_syms:
+                        if allowed_groups is None:
+                            allowed_groups = {str(tw_group).upper()}
+                        allowed_groups.add(_group_key(carry_prev_grp))
+                        allowed_symbols_by_group[_group_key(carry_prev_grp)] = {
+                            canonical_symbol(s) for s in carry_syms if str(s).strip()
+                        }
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            prefetch_enabled = bool(getattr(CFG, "trade_window_prefetch_enabled", False))
+            prefetch_lead = max(0, int(getattr(CFG, "trade_window_prefetch_lead_min", 15)))
+            prefetch_max = max(0, int(getattr(CFG, "trade_window_prefetch_max_symbols", 4)))
+            prefetch_warm = bool(getattr(CFG, "trade_window_prefetch_warm_store_indicators", False))
+            if prefetch_enabled and prefetch_lead > 0 and prefetch_max > 0:
+                nxt = trade_window_next_ctx(now_prio)
+                if isinstance(nxt, dict):
+                    t_minus = float(nxt.get("minutes_to_start", 9999.0))
+                    nxt_wid = str(nxt.get("window_id") or "")
+                    nxt_grp = _group_key(str(nxt.get("group") or ""))
+                    nxt_start = nxt.get("start_utc")
+                    if nxt_wid and nxt_grp and isinstance(nxt_start, dt.datetime) and 0.0 <= t_minus <= float(prefetch_lead):
+                        rank: List[Tuple[float, str]] = []
+                        for _raw2, _sym2, _grp2 in self.universe:
+                            if _group_key(_grp2) != nxt_grp:
+                                continue
+                            try:
+                                if use_group_arb_hard:
+                                    gf = float(effective_group_priority_factor(nxt_grp, now_dt=nxt_start))
+                                else:
+                                    gf = float(self.gov.group_priority_factor(nxt_grp))
+                            except Exception:
+                                gf = 1.0
+                            try:
+                                twt = float(group_window_weight(_grp2, _sym2, now_dt=nxt_start))
+                            except Exception:
+                                twt = 1.0
+                            try:
+                                sf = float(self.ctrl.score_factor(_grp2, _sym2))
+                            except Exception:
+                                sf = 1.0
+                            rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
+                        rank.sort(reverse=True, key=lambda x: x[0])
+                        pre_syms = [s for (_p, s) in rank[:prefetch_max]]
+
+                        warm_ok = False
+                        if pre_syms and prefetch_warm and getattr(self.execution_engine, "bars_store", None) is not None:
+                            warmed = 0
+                            for s in pre_syms:
+                                try:
+                                    df_store = self.execution_engine.bars_store.read_recent_df(symbol_base(s), 120)
+                                    if df_store is None or len(df_store) < 60:
+                                        continue
+                                    sma_fast_win = max(
+                                        2, _cfg_group_int(nxt_grp, "sma_fast", int(getattr(CFG, "sma_fast", 20)), symbol=s)
+                                    )
+                                    adx_period = max(
+                                        2, _cfg_group_int(nxt_grp, "adx_period", int(getattr(CFG, "adx_period", 14)), symbol=s)
+                                    )
+                                    atr_period = max(
+                                        2, _cfg_group_int(nxt_grp, "atr_period", int(getattr(CFG, "atr_period", 14)), symbol=s)
+                                    )
+                                    df_store = df_store.copy()
+                                    df_store["sma_fast"] = ta.trend.sma_indicator(df_store["close"], window=sma_fast_win)
+                                    adx = ta.trend.ADXIndicator(df_store["high"], df_store["low"], df_store["close"], window=adx_period)
+                                    df_store["adx"] = adx.adx()
+                                    atr_val = None
+                                    try:
+                                        tr1 = (df_store["high"] - df_store["low"]).abs()
+                                        tr2 = (df_store["high"] - df_store["close"].shift(1)).abs()
+                                        tr3 = (df_store["low"] - df_store["close"].shift(1)).abs()
+                                        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                                        atr_val = float(tr.rolling(window=atr_period, min_periods=atr_period).mean().iloc[-1])
+                                    except Exception:
+                                        atr_val = None
+                                    ind = {
+                                        "close": float(df_store["close"].iloc[-1]),
+                                        "open": float(df_store["open"].iloc[-1]),
+                                        "high": float(df_store["high"].iloc[-1]),
+                                        "low": float(df_store["low"].iloc[-1]),
+                                        "sma": float(df_store["sma_fast"].iloc[-1]),
+                                        "adx": float(df_store["adx"].iloc[-1]),
+                                        "atr": float(atr_val) if atr_val is not None else None,
+                                    }
+                                    self.strategy.last_indicators[symbol_base(s)] = dict(ind)
+                                    warmed += 1
+                                except Exception:
+                                    continue
+                            warm_ok = bool(warmed > 0)
+
+                        sig = f"{tw_window_id}->{nxt_wid}:{','.join(pre_syms)}:{int(bool(prefetch_warm))}:{int(bool(warm_ok))}"
+                        if sig != str(getattr(self, "_last_prefetch_sig", "")):
+                            setattr(self, "_last_prefetch_sig", sig)
+                            logging.info(
+                                "WINDOW_PREFETCH active_window=%s active_group=%s next_window=%s next_group=%s t_minus_min=%.1f selected=%s warm_store=%s",
+                                tw_window_id or "NONE",
+                                tw_group or "NONE",
+                                nxt_wid,
+                                nxt_grp,
+                                float(t_minus),
+                                ",".join(pre_syms) if pre_syms else "NONE",
+                                int(bool(warm_ok)) if prefetch_warm else 0,
+                            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            if bool(getattr(CFG, "trade_window_symbol_filter_enabled", False)):
+                wid = str(tw_window_id or "")
+                if wid:
+                    tw_map_raw = getattr(CFG, "trade_window_symbol_intents", {}) or {}
+                    intents = tuple(tw_map_raw.get(wid) or ())
+                    if intents:
+                        resolved = self._resolve_intents_to_canonical(tuple(intents))
+                        gk = _group_key(str(tw_group or ""))
+                        if gk and resolved:
+                            current = allowed_symbols_by_group.get(gk)
+                            if current is None:
+                                allowed_symbols_by_group[gk] = set(resolved)
+                            else:
+                                allowed_symbols_by_group[gk] = {s for s in current if s in resolved}
+                            allowed_symbols_by_group[gk].update(
+                                {
+                                    canonical_symbol(s)
+                                    for s in open_syms_set
+                                    if str(s).strip() and _group_key(guess_group(str(s))) == gk
+                                }
+                            )
+                            sig = f"{wid}:{gk}:{','.join(sorted(intents))}:{','.join(sorted(allowed_symbols_by_group[gk]))}"
+                            if sig != str(getattr(self, "_last_window_symbol_filter_sig", "")):
+                                setattr(self, "_last_window_symbol_filter_sig", sig)
+                                logging.info(
+                                    "WINDOW_SYMBOL_FILTER window=%s group=%s intents=%s resolved=%s",
+                                    wid,
+                                    gk,
+                                    ",".join(intents),
+                                    ",".join(sorted(allowed_symbols_by_group[gk])) if allowed_symbols_by_group[gk] else "NONE",
+                                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        signature = self._runtime_window_routing_signature(
+            tw_window_id=tw_window_id,
+            tw_group=tw_group,
+            tw_strict_group=tw_strict_group,
+            policy_shadow=policy_shadow,
+            open_syms=open_syms_set,
+        )
+        return {
+            "signature": str(signature),
+            "allowed_groups": allowed_groups,
+            "allowed_symbols_by_group": allowed_symbols_by_group,
+            "carryover_active": int(carryover_active),
+        }
+
     def _compute_group_policy_snapshot(
         self,
         *,
@@ -15150,6 +15468,49 @@ class SafetyBot:
         self._last_group_policy_refresh_ts = now_ts
         self._emit_group_policy_snapshot_log(group_arb=group_arb)
 
+    def _runtime_refresh_window_routing_cache(self) -> None:
+        tw_ctx = dict(getattr(self, "_runtime_cached_tw_ctx", {}) or {})
+        if not tw_ctx:
+            return
+
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        refresh_interval_s = float(scan_interval_s)
+        policy_shadow = bool(getattr(CFG, "policy_shadow_mode_enabled", True))
+        tw_window_id = str(tw_ctx.get("window_id") or "")
+        tw_group = str(tw_ctx.get("group") or "")
+        tw_strict_group = bool(getattr(CFG, "trade_window_strict_group_routing", True))
+        open_syms = set((getattr(self, "_positions_cache", {}) or {}).keys())
+        desired_sig = self._runtime_window_routing_signature(
+            tw_window_id=tw_window_id,
+            tw_group=tw_group,
+            tw_strict_group=tw_strict_group,
+            policy_shadow=policy_shadow,
+            open_syms=open_syms,
+        )
+
+        cache_ready, cached_state = self._runtime_get_cached_window_routing_state()
+        if (
+            cache_ready
+            and self._runtime_window_routing_cache_matches(cached_state, desired_sig)
+            and (now_ts - float(getattr(self, "_last_window_routing_refresh_ts", 0.0) or 0.0)) < refresh_interval_s
+        ):
+            return
+
+        group_arb, _group_risk = self._runtime_get_cached_group_policy_state()
+        now_prio = now_utc()
+        if not group_arb:
+            group_arb, _group_risk = self._compute_group_policy_snapshot(now_arb=now_prio)
+        state = self._compute_window_routing_policy(
+            tw_ctx=tw_ctx,
+            open_syms=open_syms,
+            group_arb=group_arb,
+            policy_shadow=policy_shadow,
+            now_prio=now_prio,
+        )
+        self._cache_window_routing_state(state)
+        self._last_window_routing_refresh_ts = now_ts
+
     def _runtime_refresh_control_plane_state(self) -> None:
         self._runtime_refresh_meta_advisory_cache()
         try:
@@ -15171,6 +15532,11 @@ class SafetyBot:
 
         try:
             self._runtime_refresh_group_policy_cache()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            self._runtime_refresh_window_routing_cache()
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -16402,84 +16768,33 @@ class SafetyBot:
         now_prio = now_utc()
 
         # --- Trade-window extensions (P0 deterministic; defaults = no behavior change) ---
-        allowed_groups: Optional[set[str]] = None
-        if tw_strict_group and tw_group:
-            allowed_groups = {str(tw_group).upper()}
-        allowed_symbols_by_group: Dict[str, set[str]] = {}
-        # Exposed to scan_meta (for DB/telemetry), even when trade is disabled.
-        carryover_active = 0
+        routing_sig = self._runtime_window_routing_signature(
+            tw_window_id=str(tw_window_id or ""),
+            tw_group=str(tw_group or ""),
+            tw_strict_group=bool(tw_strict_group),
+            policy_shadow=bool(policy_shadow),
+            open_syms=open_syms,
+        )
+        routing_cache_ready, routing_state = self._runtime_get_cached_window_routing_state()
+        if routing_cache_ready and self._runtime_window_routing_cache_matches(routing_state, routing_sig):
+            allowed_groups, allowed_symbols_by_group, carryover_active = (
+                self._runtime_materialize_window_routing_state(routing_state)
+            )
+        else:
+            routing_state = self._compute_window_routing_policy(
+                tw_ctx=tw_ctx,
+                open_syms=open_syms,
+                group_arb=group_arb,
+                policy_shadow=policy_shadow,
+                now_prio=now_prio,
+            )
+            self._cache_window_routing_state(routing_state)
+            self._last_window_routing_refresh_ts = float(time.time())
+            allowed_groups, allowed_symbols_by_group, carryover_active = (
+                self._runtime_materialize_window_routing_state(routing_state)
+            )
         fx_bucket_idx = 0       # 1-based when active, else 0
         fx_bucket_count = 0
-
-        # Carryover: grace window after switch (optional limited cross-group entries).
-        try:
-            carry_enabled = bool(getattr(CFG, "trade_window_carryover_enabled", False))
-            carry_trade = bool(getattr(CFG, "trade_window_carryover_trade_enabled", False))
-            carry_min = max(0, int(getattr(CFG, "trade_window_carryover_minutes", 0)))
-            carry_max = max(0, int(getattr(CFG, "trade_window_carryover_max_symbols", 0)))
-            carry_groups = tuple(getattr(CFG, "trade_window_carryover_groups", ()) or ())
-            carry_prev_grp = str(getattr(self, "_tw_prev_group", "") or "").upper()
-            carry_prev_wid = str(getattr(self, "_tw_prev_window_id", "") or "")
-            carry_age_min = 9999.0
-            carry_syms: List[str] = []
-            if carry_enabled and carry_prev_grp and carry_prev_grp != str(tw_group).upper() and carry_min > 0 and carry_max > 0:
-                sw_ts = float(getattr(self, "_tw_switch_ts", 0.0) or 0.0)
-                if sw_ts > 0:
-                    carry_age_min = max(0.0, (time.time() - sw_ts) / 60.0)
-                if carry_age_min <= float(carry_min):
-                    carryover_active = 1
-                    if (not carry_groups) or (_group_key(carry_prev_grp) in {_group_key(x) for x in carry_groups}):
-                        # Select a small, deterministic shortlist from the previous group.
-                        carry_rank: List[Tuple[float, str]] = []
-                        for _raw2, _sym2, _grp2 in self.universe:
-                            if _group_key(_grp2) != _group_key(carry_prev_grp):
-                                continue
-                            try:
-                                if use_group_arb_hard:
-                                    gf = float(
-                                        group_arb.get(_group_key(_grp2), {}).get(
-                                            "priority_factor", effective_group_priority_factor(_group_key(_grp2), now_dt=now_prio)
-                                        )
-                                    )
-                                else:
-                                    gf = float(group_arb.get(_group_key(_grp2), {}).get("priority_factor", self.gov.group_priority_factor(_group_key(_grp2))))
-                            except Exception:
-                                gf = 1.0
-                            try:
-                                twt = float(group_window_weight(_grp2, _sym2, now_dt=now_prio)) if use_windows_v2_hard else float(self.ctrl.time_weight(_grp2, _sym2))
-                            except Exception:
-                                twt = 1.0
-                            try:
-                                sf = float(self.ctrl.score_factor(_grp2, _sym2))
-                            except Exception:
-                                sf = 1.0
-                            carry_rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
-                        carry_rank.sort(reverse=True, key=lambda x: x[0])
-                        carry_syms = [s for (_p, s) in carry_rank[:carry_max]]
-
-                    sig = f"{tw_window_id}:{carry_prev_wid}:{carry_prev_grp}:{int(carry_trade)}:{','.join(carry_syms)}"
-                    if sig != str(getattr(self, "_last_carryover_sig", "")):
-                        setattr(self, "_last_carryover_sig", sig)
-                        logging.info(
-                            "WINDOW_CARRYOVER window=%s group=%s prev_window=%s prev_group=%s age_min=%.2f trade=%s symbols=%s",
-                            tw_window_id or "NONE",
-                            tw_group or "NONE",
-                            carry_prev_wid or "NONE",
-                            carry_prev_grp or "NONE",
-                            float(carry_age_min),
-                            int(bool(carry_trade)),
-                            ",".join(carry_syms) if carry_syms else "NONE",
-                        )
-
-                    if carry_trade and carry_syms:
-                        if allowed_groups is None:
-                            allowed_groups = {str(tw_group).upper()}
-                        allowed_groups.add(_group_key(carry_prev_grp))
-                        allowed_symbols_by_group[_group_key(carry_prev_grp)] = {
-                            canonical_symbol(s) for s in carry_syms if str(s).strip()
-                        }
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         # FX rotation: only when FX is over scan capacity (unless overridden).
         try:
@@ -16520,144 +16835,6 @@ class SafetyBot:
                             int(len(fx_syms_all)),
                             ",".join(sorted(bucket_syms)) if bucket_syms else "NONE",
                         )
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-
-        # Prefetch: compute (and optionally warm) next window shortlist (observation-only).
-        try:
-            prefetch_enabled = bool(getattr(CFG, "trade_window_prefetch_enabled", False))
-            prefetch_lead = max(0, int(getattr(CFG, "trade_window_prefetch_lead_min", 15)))
-            prefetch_max = max(0, int(getattr(CFG, "trade_window_prefetch_max_symbols", 4)))
-            prefetch_warm = bool(getattr(CFG, "trade_window_prefetch_warm_store_indicators", False))
-            if prefetch_enabled and prefetch_lead > 0 and prefetch_max > 0:
-                nxt = trade_window_next_ctx(now_prio)
-                if isinstance(nxt, dict):
-                    t_minus = float(nxt.get("minutes_to_start", 9999.0))
-                    nxt_wid = str(nxt.get("window_id") or "")
-                    nxt_grp = _group_key(str(nxt.get("group") or ""))
-                    nxt_start = nxt.get("start_utc")
-                    if nxt_wid and nxt_grp and isinstance(nxt_start, dt.datetime) and 0.0 <= t_minus <= float(prefetch_lead):
-                        # Priority for prefetch uses the *next window start time* (future time-weight).
-                        rank: List[Tuple[float, str]] = []
-                        for _raw2, _sym2, _grp2 in self.universe:
-                            if _group_key(_grp2) != nxt_grp:
-                                continue
-                            try:
-                                if use_group_arb_hard:
-                                    gf = float(effective_group_priority_factor(nxt_grp, now_dt=nxt_start))
-                                else:
-                                    gf = float(self.gov.group_priority_factor(nxt_grp))
-                            except Exception:
-                                gf = 1.0
-                            try:
-                                twt = float(group_window_weight(_grp2, _sym2, now_dt=nxt_start))
-                            except Exception:
-                                twt = 1.0
-                            try:
-                                sf = float(self.ctrl.score_factor(_grp2, _sym2))
-                            except Exception:
-                                sf = 1.0
-                            rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
-                        rank.sort(reverse=True, key=lambda x: x[0])
-                        pre_syms = [s for (_p, s) in rank[:prefetch_max]]
-
-                        # Best-effort store-only indicator warmup (no MT5 fetch).
-                        warm_ok = False
-                        if pre_syms and prefetch_warm and getattr(self.execution_engine, "bars_store", None) is not None:
-                            warmed = 0
-                            for s in pre_syms:
-                                try:
-                                    df_store = self.execution_engine.bars_store.read_recent_df(symbol_base(s), 120)
-                                    if df_store is None or len(df_store) < 60:
-                                        continue
-                                    # Compute minimal M5 indicators for warm-start (same as m5_indicators_if_due()).
-                                    sma_fast_win = max(
-                                        2, _cfg_group_int(nxt_grp, "sma_fast", int(getattr(CFG, "sma_fast", 20)), symbol=s)
-                                    )
-                                    adx_period = max(
-                                        2, _cfg_group_int(nxt_grp, "adx_period", int(getattr(CFG, "adx_period", 14)), symbol=s)
-                                    )
-                                    atr_period = max(
-                                        2, _cfg_group_int(nxt_grp, "atr_period", int(getattr(CFG, "atr_period", 14)), symbol=s)
-                                    )
-                                    df_store = df_store.copy()
-                                    df_store["sma_fast"] = ta.trend.sma_indicator(df_store["close"], window=sma_fast_win)
-                                    adx = ta.trend.ADXIndicator(df_store["high"], df_store["low"], df_store["close"], window=adx_period)
-                                    df_store["adx"] = adx.adx()
-                                    atr_val = None
-                                    try:
-                                        tr1 = (df_store["high"] - df_store["low"]).abs()
-                                        tr2 = (df_store["high"] - df_store["close"].shift(1)).abs()
-                                        tr3 = (df_store["low"] - df_store["close"].shift(1)).abs()
-                                        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                                        atr_val = float(tr.rolling(window=atr_period, min_periods=atr_period).mean().iloc[-1])
-                                    except Exception:
-                                        atr_val = None
-                                    ind = {
-                                        "close": float(df_store["close"].iloc[-1]),
-                                        "open": float(df_store["open"].iloc[-1]),
-                                        "high": float(df_store["high"].iloc[-1]),
-                                        "low": float(df_store["low"].iloc[-1]),
-                                        "sma": float(df_store["sma_fast"].iloc[-1]),
-                                        "adx": float(df_store["adx"].iloc[-1]),
-                                        "atr": float(atr_val) if atr_val is not None else None,
-                                    }
-                                    self.strategy.last_indicators[symbol_base(s)] = dict(ind)
-                                    warmed += 1
-                                except Exception:
-                                    continue
-                            warm_ok = bool(warmed > 0)
-
-                        sig = f"{tw_window_id}->{nxt_wid}:{','.join(pre_syms)}:{int(bool(prefetch_warm))}:{int(bool(warm_ok))}"
-                        if sig != str(getattr(self, "_last_prefetch_sig", "")):
-                            setattr(self, "_last_prefetch_sig", sig)
-                            logging.info(
-                                "WINDOW_PREFETCH active_window=%s active_group=%s next_window=%s next_group=%s t_minus_min=%.1f selected=%s warm_store=%s",
-                                tw_window_id or "NONE",
-                                tw_group or "NONE",
-                                nxt_wid,
-                                nxt_grp,
-                                float(t_minus),
-                                ",".join(pre_syms) if pre_syms else "NONE",
-                                int(bool(warm_ok)) if prefetch_warm else 0,
-                            )
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-
-        # Optional per-window symbol routing (policy-only): e.g. JPY set for Asia window.
-        try:
-            if bool(getattr(CFG, "trade_window_symbol_filter_enabled", False)):
-                wid = str(tw_window_id or "")
-                if wid:
-                    tw_map_raw = getattr(CFG, "trade_window_symbol_intents", {}) or {}
-                    intents = tuple(tw_map_raw.get(wid) or ())
-                    if intents:
-                        resolved = self._resolve_intents_to_canonical(tuple(intents))
-                        gk = _group_key(str(tw_group or ""))
-                        if gk and resolved:
-                            current = allowed_symbols_by_group.get(gk)
-                            if current is None:
-                                allowed_symbols_by_group[gk] = set(resolved)
-                            else:
-                                allowed_symbols_by_group[gk] = {s for s in current if s in resolved}
-                            # Keep open symbols visible to policy telemetry and closes.
-                            allowed_symbols_by_group[gk].update(
-                                {
-                                    canonical_symbol(s)
-                                    for s in open_syms
-                                    if str(s).strip() and _group_key(guess_group(str(s))) == gk
-                                }
-                            )
-                            sig = f"{wid}:{gk}:{','.join(sorted(intents))}:{','.join(sorted(allowed_symbols_by_group[gk]))}"
-                            if sig != str(getattr(self, "_last_window_symbol_filter_sig", "")):
-                                setattr(self, "_last_window_symbol_filter_sig", sig)
-                                logging.info(
-                                    "WINDOW_SYMBOL_FILTER window=%s group=%s intents=%s resolved=%s",
-                                    wid,
-                                    gk,
-                                    ",".join(intents),
-                                    ",".join(sorted(allowed_symbols_by_group[gk])) if allowed_symbols_by_group[gk] else "NONE",
-                                )
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
