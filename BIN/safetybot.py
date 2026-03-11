@@ -7916,6 +7916,31 @@ class StandardStrategy:
         self.cache.skip_log_throttle_ts[key] = now_ts
         return True
 
+    def _log_skip_pre_throttled(
+        self,
+        symbol: str,
+        grp: str,
+        mode: str,
+        reason: str,
+        *,
+        interval_sec: int,
+        level: str = "info",
+        extra: str = "",
+    ) -> None:
+        log_key = f"ENTRY_SKIP_PRE_{str(reason or 'UNKNOWN').upper()}"
+        if not self._skip_log_allowed(symbol, log_key, interval_sec):
+            return
+        log_fn = getattr(logging, str(level).lower(), logging.info)
+        suffix = f" {extra.strip()}" if str(extra).strip() else ""
+        log_fn(
+            "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=%s%s",
+            symbol,
+            grp,
+            mode,
+            reason,
+            suffix,
+        )
+
     def metrics_snapshot(self) -> Dict[str, Any]:
         self._metrics_roll_day()
         avg_spread = 0.0
@@ -8694,7 +8719,14 @@ class StandardStrategy:
         if now_ts - last < pull:
             wait_s = int(max(0, float(pull) - (now_ts - last)))
             self._metric_inc_skip("M5_PULL_WAIT")
-            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_PULL_WAIT wait_s={wait_s}")
+            self._log_skip_pre_throttled(
+                symbol,
+                grp,
+                mode,
+                "M5_PULL_WAIT",
+                interval_sec=30,
+                extra=f"wait_s={wait_s}",
+            )
             return None
 
         next_fetch_ts = float(self.cache.next_m5_fetch_ts.get(symbol, 0.0) or 0.0)
@@ -8717,8 +8749,13 @@ class StandardStrategy:
             else:
                 wait_s = int(max(0, wait_raw_s))
                 self._metric_inc_skip("M5_WAIT_NEW_BAR")
-                logging.info(
-                    f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_WAIT_NEW_BAR wait_s={wait_s}"
+                self._log_skip_pre_throttled(
+                    symbol,
+                    grp,
+                    mode,
+                    "M5_WAIT_NEW_BAR",
+                    interval_sec=30,
+                    extra=f"wait_s={wait_s}",
                 )
                 return None
 
@@ -8737,7 +8774,13 @@ class StandardStrategy:
                         prev_bar = self.cache.last_m5_bar_time.get(symbol)
                         if prev_bar is not None and last_bar == prev_bar:
                             self._metric_inc_skip("M5_SAME_BAR")
-                            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_SAME_BAR")
+                            self._log_skip_pre_throttled(
+                                symbol,
+                                grp,
+                                mode,
+                                "M5_SAME_BAR",
+                                interval_sec=45,
+                            )
                             return None
                         self.cache.last_m5_calc_ts[symbol] = now_ts
                         self.cache.last_m5_bar_time[symbol] = last_bar
@@ -8779,15 +8822,18 @@ class StandardStrategy:
         if strict_no_fetch and bool(store_state.get("stale")) and int(store_state.get("rows") or 0) > 0:
             self.cache.last_m5_calc_ts[symbol] = now_ts
             self._metric_inc_skip("M5_STORE_STALE")
-            logging.info(
-                "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=M5_STORE_STALE rows=%s age_s=%s max_age=%s last_bar_utc=%s",
+            self._log_skip_pre_throttled(
                 symbol,
                 grp,
                 mode,
-                int(store_state.get("rows") or 0),
-                int(float(store_state.get("age_s") or 0.0)),
-                int(store_state.get("max_age_sec") or 0),
-                store_state.get("last_bar_utc"),
+                "M5_STORE_STALE",
+                interval_sec=60,
+                extra=(
+                    f"rows={int(store_state.get('rows') or 0)} "
+                    f"age_s={int(float(store_state.get('age_s') or 0.0))} "
+                    f"max_age={int(store_state.get('max_age_sec') or 0)} "
+                    f"last_bar_utc={store_state.get('last_bar_utc')}"
+                ),
             )
             return None
 
@@ -8800,18 +8846,28 @@ class StandardStrategy:
                 reason = "M5_STORE_STALE"
             self._metric_inc_skip(reason)
             if reason == "M5_STORE_STALE":
-                logging.info(
-                    "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=M5_STORE_STALE rows=%s age_s=%s max_age=%s last_bar_utc=%s",
+                self._log_skip_pre_throttled(
                     symbol,
                     grp,
                     mode,
-                    rows,
-                    int(float(store_state.get('age_s') or 0.0)),
-                    int(store_state.get('max_age_sec') or 0),
-                    store_state.get('last_bar_utc'),
+                    "M5_STORE_STALE",
+                    interval_sec=60,
+                    extra=(
+                        f"rows={rows} "
+                        f"age_s={int(float(store_state.get('age_s') or 0.0))} "
+                        f"max_age={int(store_state.get('max_age_sec') or 0)} "
+                        f"last_bar_utc={store_state.get('last_bar_utc')}"
+                    ),
                 )
             else:
-                logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_DATA_SHORT rows={rows}")
+                self._log_skip_pre_throttled(
+                    symbol,
+                    grp,
+                    mode,
+                    "M5_DATA_SHORT",
+                    interval_sec=60,
+                    extra=f"rows={rows}",
+                )
             return None
 
         self.cache.last_m5_calc_ts[symbol] = now_ts
@@ -8841,7 +8897,13 @@ class StandardStrategy:
         prev_bar = self.cache.last_m5_bar_time.get(symbol)
         if prev_bar is not None and last_bar == prev_bar :
             self._metric_inc_skip("M5_SAME_BAR")
-            logging.info(f"ENTRY_SKIP_PRE symbol={symbol} grp={grp} mode={mode} reason=M5_SAME_BAR")
+            self._log_skip_pre_throttled(
+                symbol,
+                grp,
+                mode,
+                "M5_SAME_BAR",
+                interval_sec=45,
+            )
             return None
         self.cache.last_m5_bar_time[symbol] = last_bar
 

@@ -25,6 +25,14 @@ def _called_names(fn: ast.FunctionDef) -> List[str]:
     return names
 
 
+def _string_constants(fn: ast.FunctionDef) -> List[str]:
+    values: List[str] = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            values.append(node.value)
+    return values
+
+
 def test_scan_once_no_longer_emits_policy_and_kernel_config() -> None:
     src = Path("BIN/safetybot.py").resolve()
     fn = _class_method_node(src, "SafetyBot", "scan_once")
@@ -105,3 +113,12 @@ def test_runtime_refresh_window_prefetch_owns_prefetch_logic() -> None:
     called = _called_names(fn)
     assert "trade_window_next_ctx" in called
     assert "read_recent_df" in called
+
+
+def test_m5_indicators_if_due_uses_throttled_skip_pre_logging() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "StandardStrategy", "m5_indicators_if_due")
+    called = _called_names(fn)
+    strings = _string_constants(fn)
+    assert "_log_skip_pre_throttled" in called
+    assert "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=%s%s" not in strings
