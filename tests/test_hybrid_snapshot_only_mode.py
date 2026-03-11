@@ -288,6 +288,21 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
         self.assertIsNone(t)
         self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
 
+    def test_mt5_tick_fallback_seeds_in_memory_snapshot_cache_for_next_read(self):
+        safetybot.CFG.hybrid_m5_no_fetch_strict = False
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = False
+        engine = self._build_engine()
+
+        first = engine.tick("EURUSD.pro", "FX", emergency=False)
+        second = engine.tick("EURUSD.pro", "FX", emergency=False)
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(1, safetybot.mt5.symbol_info_tick_calls)
+        self.assertAlmostEqual(float(first.bid), float(second.bid), places=6)
+        self.assertIn("EURUSD.pro", engine._zmq_tick_cache)
+        self.assertIn("EURUSD.PRO", engine._zmq_tick_cache)
+
     def test_account_info_strict_hard_uses_snapshot_without_mt5_fetch(self):
         safetybot.CFG.hybrid_m5_no_fetch_strict = True
         safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True

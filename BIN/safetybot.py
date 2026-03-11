@@ -6950,6 +6950,31 @@ class ExecutionEngine:
                 _TIME_ANCHOR.update(mt5_epoch_to_utc_dt(int(t.time)))
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+        if t is not None:
+            try:
+                recv_ts = float(time.time())
+                ts_msc = int(getattr(t, "time_msc", 0) or 0)
+                if ts_msc <= 0:
+                    ts_msc = int(int(getattr(t, "time", 0) or 0) * 1000)
+                if ts_msc > 0 and float(getattr(t, "bid", 0.0) or 0.0) > 0.0 and float(getattr(t, "ask", 0.0) or 0.0) > 0.0:
+                    payload = {
+                        "symbol": str(symbol_base(symbol)).upper(),
+                        "bid": float(getattr(t, "bid", 0.0) or 0.0),
+                        "ask": float(getattr(t, "ask", 0.0) or 0.0),
+                        "timestamp_ms": int(ts_msc),
+                        "recv_ts": float(recv_ts),
+                        "volume": int(getattr(t, "volume", 0) or 0),
+                    }
+                    cache_keys = {
+                        str(symbol),
+                        str(symbol_base(symbol)),
+                        str(symbol).upper(),
+                        str(symbol_base(symbol)).upper(),
+                    }
+                    for cache_key in cache_keys:
+                        self._zmq_tick_cache[cache_key] = payload
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return t
 
     @staticmethod
