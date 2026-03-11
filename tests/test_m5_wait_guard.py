@@ -161,6 +161,39 @@ class TestM5WaitGuard(unittest.TestCase):
             safetybot.CFG.hybrid_snapshot_bar_max_age_sec = old_bar_age
             safetybot.CFG.timeframe_trade = old_tf
 
+    def test_full_copy_rates_path_skips_store_readiness_probe(self):
+        old_use_features = safetybot.CFG.hybrid_use_zmq_m5_features
+        old_strict = safetybot.CFG.hybrid_m5_no_fetch_strict
+        old_no_fetch = getattr(safetybot.CFG, "hybrid_no_mt5_data_fetch_hard", False)
+        old_atr = safetybot.CFG.atr_period
+        calls = {"n": 0}
+        original = safetybot.inspect_m5_store_readiness
+        try:
+            safetybot.CFG.hybrid_use_zmq_m5_features = False
+            safetybot.CFG.hybrid_m5_no_fetch_strict = False
+            safetybot.CFG.hybrid_no_mt5_data_fetch_hard = False
+            safetybot.CFG.atr_period = 14
+
+            def _probe(*args, **kwargs):  # noqa: ANN001
+                calls["n"] += 1
+                return original(*args, **kwargs)
+
+            safetybot.inspect_m5_store_readiness = _probe
+
+            now_ts = safetybot.time.time()
+            bot = _BotStub(now_ts=now_ts, df=self._m5_df())
+            ind = safetybot.StandardStrategy.m5_indicators_if_due(bot, "USDJPY.pro", "FX", "ECO")
+
+            self.assertIsNotNone(ind)
+            self.assertEqual(1, bot.engine.calls)
+            self.assertEqual(0, calls["n"])
+        finally:
+            safetybot.inspect_m5_store_readiness = original
+            safetybot.CFG.hybrid_use_zmq_m5_features = old_use_features
+            safetybot.CFG.hybrid_m5_no_fetch_strict = old_strict
+            safetybot.CFG.hybrid_no_mt5_data_fetch_hard = old_no_fetch
+            safetybot.CFG.atr_period = old_atr
+
     def test_paper_reuses_recent_cached_indicators_on_pull_wait(self):
         old_paper = safetybot.CFG.paper_trading
         old_reuse = safetybot.CFG.paper_m5_wait_reuse_enabled

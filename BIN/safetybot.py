@@ -9146,13 +9146,26 @@ class StandardStrategy:
         strict_no_fetch = bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)) or bool(
             getattr(CFG, "hybrid_no_mt5_data_fetch_hard", False)
         )
-        store_state = inspect_m5_store_readiness(
-            getattr(self.engine, "bars_store", None),
-            symbol_base(symbol),
-            120,
-            now_ts,
-            timeframe_min=tf_min,
-        )
+        df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
+        rows = 0 if df is None else int(len(df))
+        copy_rows = int(rows)
+        store_state: Dict[str, Any] = {
+            "rows": 0,
+            "fresh_ok": False,
+            "stale": False,
+            "age_s": None,
+            "max_age_sec": None,
+            "last_bar_utc": None,
+            "df": None,
+        }
+        if strict_no_fetch or rows < 60:
+            store_state = inspect_m5_store_readiness(
+                getattr(self.engine, "bars_store", None),
+                symbol_base(symbol),
+                120,
+                now_ts,
+                timeframe_min=tf_min,
+            )
         if strict_no_fetch and bool(store_state.get("stale")) and int(store_state.get("rows") or 0) > 0:
             self.cache.last_m5_calc_ts[symbol] = now_ts
             self._metric_inc_skip("M5_STORE_STALE")
@@ -9170,10 +9183,6 @@ class StandardStrategy:
                 ),
             )
             return None
-
-        df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
-        rows = 0 if df is None else int(len(df))
-        copy_rows = int(rows)
         if (df is None or rows < 60) and bool(store_state.get("fresh_ok")) and int(store_state.get("rows") or 0) >= 60:
             df_store = store_state.get("df")
             if isinstance(df_store, pd.DataFrame) and len(df_store) >= 60:
