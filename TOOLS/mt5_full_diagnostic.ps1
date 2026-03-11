@@ -96,6 +96,31 @@ function Find-PythonExe {
     return ""
 }
 
+function Get-StrategyModeFlags {
+    param([string]$RepoRoot)
+
+    $strategyPath = Join-Path $RepoRoot "CONFIG\\strategy.json"
+    $result = [ordered]@{
+        strategy_path = $strategyPath
+        strategy_loaded = $false
+        paper_trading = $true
+    }
+    if (-not (Test-Path $strategyPath)) {
+        return [pscustomobject]$result
+    }
+
+    try {
+        $raw = Get-Content $strategyPath -Raw -Encoding UTF8
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        $result.strategy_loaded = $true
+        $result.paper_trading = [bool]$obj.paper_trading
+    } catch {
+        $result.strategy_loaded = $false
+        $result.paper_trading = $true
+    }
+    return [pscustomobject]$result
+}
+
 function Invoke-Mt5Probe {
     param(
         [string]$TerminalExePath,
@@ -364,6 +389,8 @@ $pythonExeUse = Find-PythonExe -ExplicitPythonExe $PythonExe
 
 $probe = Invoke-Mt5Probe -TerminalExePath $terminalExeUse -PythonExePath $pythonExeUse
 $logs = Get-LogSummary -DataDir $dataDir
+$strategyMode = Get-StrategyModeFlags -RepoRoot $repoRoot
+$paperTradingMode = [bool]$strategyMode.paper_trading
 
 $localSettingsOk = (
     $experts.Enabled -eq "1" -and
@@ -403,10 +430,15 @@ if (-not $termConnected) {
     [void]$nextSteps.Add("Zaloguj konto handlowe do serwera LIVE i potwierdz stabilne polaczenie w prawym dolnym rogu MT5.")
 }
 if ((-not $accAllowed) -or (-not $accExpert) -or (-not $termAllowed)) {
-    if ($verdict -eq "PASS") { $verdict = "FAIL_TRADE_DISABLED" }
-    [void]$nextSteps.Add("Konto/serwer blokuje trading. Sprawdz login haslem glownym (nie inwestorskim) i skontaktuj OANDA TMS ws. flagi trade_allowed.")
+    if ($paperTradingMode) {
+        if ($verdict -eq "PASS") { $verdict = "WARN_TRADE_DISABLED_PAPER_MODE" }
+        [void]$nextSteps.Add("Trading jest zablokowany, ale CONFIG\\strategy.json wskazuje paper_trading=true. To nie blokuje paper runtime, ale live wymaga odblokowania flag trade_allowed/trade_expert.")
+    } else {
+        if ($verdict -eq "PASS") { $verdict = "FAIL_TRADE_DISABLED" }
+        [void]$nextSteps.Add("Konto/serwer blokuje trading. Sprawdz login haslem glownym (nie inwestorskim) i skontaktuj OANDA TMS ws. flagi trade_allowed.")
+    }
 }
-if (($verdict -eq "PASS") -and ([int]$logs.hits["retcode=10017"] -gt 0 -or [int]$logs.hits["TRADE_RETCODE_TRADE_DISABLED"] -gt 0)) {
+if ((($verdict -eq "PASS") -or ($verdict -eq "WARN_TRADE_DISABLED_PAPER_MODE")) -and ([int]$logs.hits["retcode=10017"] -gt 0 -or [int]$logs.hits["TRADE_RETCODE_TRADE_DISABLED"] -gt 0)) {
     $verdict = "WARN_RECENT_TRADE_DISABLED_IN_LOGS"
     [void]$nextSteps.Add("W logach sa ostatnie odrzucenia 10017. Jesli to stare wpisy, wyczysc/odswiez i testuj ponownie po odblokowaniu konta.")
 }
@@ -422,6 +454,8 @@ $summary = [ordered]@{
     terminal_exe = $terminalExeUse
     common_ini = $commonIni
     experts_settings = $experts
+    strategy_mode = $strategyMode
+    paper_trading_mode = $paperTradingMode
     local_settings_ok = $localSettingsOk
     mt5_probe = $probe
     log_summary = $logs
@@ -440,6 +474,7 @@ $txt = New-Object System.Collections.Generic.List[string]
 [void]$txt.Add("")
 [void]$txt.Add("[Experts settings]")
 [void]$txt.Add("Enabled=$($experts.Enabled) AllowDllImport=$($experts.AllowDllImport) Account=$($experts.Account) Profile=$($experts.Profile) Chart=$($experts.Chart) Api=$($experts.Api)")
+[void]$txt.Add("paper_trading_mode=$paperTradingMode strategy_loaded=$($strategyMode.strategy_loaded) strategy_path=$($strategyMode.strategy_path)")
 [void]$txt.Add("local_settings_ok=$localSettingsOk")
 [void]$txt.Add("")
 [void]$txt.Add("[MT5 probe]")
