@@ -239,7 +239,7 @@ try {
         if (-not $DryRun) {
             [void](Invoke-SshRemoteBestEffort -BaseArgs $sshBase -CommandText $stopCmd)
         }
-        $cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File '$escapedRemoteRoot\TOOLS\SYSTEM_CONTROL.ps1' -Action start -Root '$escapedRemoteRoot' -Profile '$Profile'"
+        $cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File '$escapedRemoteRoot\RUN\START_WITH_OANDAKEY.ps1' -Root '$escapedRemoteRoot' -Profile '$Profile' -AllowNonInteractive"
         if (-not $DryRun) {
             Invoke-SshRemote -BaseArgs $sshBase -CommandText $cmd
         }
