@@ -503,6 +503,95 @@ function Test-PidMatchesScript {
     }
 }
 
+function Get-ProcessCommandLine {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) {
+        return ""
+    }
+    try {
+        $row = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [int]$ProcessId) -OperationTimeoutSec $Script:WmiOperationTimeoutSec -ErrorAction Stop
+        if ($null -eq $row) {
+            return ""
+        }
+        return [string]$row.CommandLine
+    } catch {
+        return ""
+    }
+}
+
+function Try-Reap-StaleControlLockOwner {
+    param(
+        [string]$LockPath,
+        [int]$LockPid = 0,
+        [int]$MaxAgeSec = 180
+    )
+    $age = Get-FileAgeSec -Path $LockPath
+    if (($null -ne $age) -and ([double]$age -le [double]([Math]::Max(30, [int]$MaxAgeSec)))) {
+        return @{
+            status = "too_fresh"
+            age_sec = $age
+        }
+    }
+
+    if ($LockPid -le 0) {
+        try {
+            Remove-Item -Force $LockPath -ErrorAction Stop
+            return @{
+                status = "removed_no_pid"
+                age_sec = $age
+            }
+        } catch {
+            return @{
+                status = "remove_failed_no_pid"
+                age_sec = $age
+                error = $_.Exception.Message
+            }
+        }
+    }
+
+    $cmd = Get-ProcessCommandLine -ProcessId $LockPid
+    $isControlOwner = (-not [string]::IsNullOrWhiteSpace($cmd)) -and (
+        ($cmd -match "SYSTEM_CONTROL\.ps1") -or
+        ($cmd -match "START_WITH_OANDAKEY\.ps1")
+    )
+    if (-not $isControlOwner) {
+        return @{
+            status = "skip_non_control_owner"
+            age_sec = $age
+            pid = [int]$LockPid
+        }
+    }
+
+    try {
+        Stop-Process -Id $LockPid -Force -ErrorAction SilentlyContinue
+    } catch {
+        # final verification below
+    }
+    Start-Sleep -Milliseconds 400
+    if (Test-PidRunning -ProcessId $LockPid) {
+        return @{
+            status = "kill_failed"
+            age_sec = $age
+            pid = [int]$LockPid
+        }
+    }
+    try {
+        Remove-Item -Force $LockPath -ErrorAction Stop
+        return @{
+            status = "reaped_control_owner"
+            age_sec = $age
+            pid = [int]$LockPid
+        }
+    } catch {
+        return @{
+            status = "remove_failed_after_kill"
+            age_sec = $age
+            pid = [int]$LockPid
+            error = $_.Exception.Message
+        }
+    }
+}
+
 function Set-LockPid {
     param(
         [string]$LockPath,
@@ -553,6 +642,11 @@ function Acquire-ControlLock {
                 if (Test-Path $lockPath) {
                     $lockPid = Get-LockPid -LockPath $lockPath
                     if ($null -ne $lockPid) {
+                        $reap = Try-Reap-StaleControlLockOwner -LockPath $lockPath -LockPid ([int]$lockPid) -MaxAgeSec 180
+                        if (@("reaped_control_owner", "removed_no_pid") -contains [string]$reap.status) {
+                            Start-Sleep -Milliseconds 120
+                            continue
+                        }
                         if (-not (Test-PidRunning -ProcessId ([int]$lockPid))) {
                             Remove-Item -Force $lockPath -ErrorAction SilentlyContinue
                             Start-Sleep -Milliseconds 120
