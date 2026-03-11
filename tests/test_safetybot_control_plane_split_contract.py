@@ -55,3 +55,11 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     assert "poll_deals" in called
     assert "_runtime_refresh_group_policy_cache" in called
     assert "_runtime_refresh_global_guard_cache" in called
+    assert "_runtime_refresh_market_guard_cache" in called
+
+
+def test_scan_once_no_longer_builds_market_guards_directly() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "scan_once")
+    called = _called_names(fn)
+    assert "_runtime_get_cached_market_guard_state" in called

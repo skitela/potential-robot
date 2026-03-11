@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from BIN.safetybot import CFG, SafetyBot, StandardStrategy, build_response_hash
+from BIN.black_swan_guard import BlackSwanSignal
 from BIN.self_heal_guard import SelfHealSignal
 from BIN.canary_rollout_guard import CanarySignal
 from BIN.drift_guard import DriftSignal
@@ -632,6 +633,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._runtime_refresh_meta_advisory_cache = MagicMock()
         bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._runtime_refresh_global_guard_cache = MagicMock()
+        bot._runtime_refresh_market_guard_cache = MagicMock()
         bot._refresh_live_module_states = MagicMock()
         bot._refresh_no_live_drift_check = MagicMock()
         bot._refresh_cost_guard_auto_relax_state = MagicMock()
@@ -650,6 +652,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._runtime_refresh_meta_advisory_cache.assert_called_once_with()
         bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._runtime_refresh_global_guard_cache.assert_called_once_with()
+        bot._runtime_refresh_market_guard_cache.assert_called_once_with()
         bot._refresh_live_module_states.assert_called_once_with(
             tw_ctx=bot._runtime_cached_tw_ctx,
             st=bot._runtime_cached_day_state,
@@ -683,6 +686,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._runtime_refresh_meta_advisory_cache = MagicMock()
         bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._runtime_refresh_global_guard_cache = MagicMock()
+        bot._runtime_refresh_market_guard_cache = MagicMock()
         bot._refresh_live_module_states = MagicMock()
         bot._refresh_no_live_drift_check = MagicMock()
         bot._refresh_cost_guard_auto_relax_state = MagicMock()
@@ -701,6 +705,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._runtime_refresh_meta_advisory_cache.assert_called_once_with()
         bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._runtime_refresh_global_guard_cache.assert_called_once_with()
+        bot._runtime_refresh_market_guard_cache.assert_called_once_with()
         bot._refresh_live_module_states.assert_not_called()
         bot._refresh_no_live_drift_check.assert_not_called()
         bot._refresh_cost_guard_auto_relax_state.assert_not_called()
@@ -882,6 +887,83 @@ class TestHybridExecution(unittest.TestCase):
         bot._evaluate_self_heal.assert_not_called()
         bot._evaluate_canary_rollout.assert_not_called()
         bot._evaluate_drift.assert_not_called()
+
+    def test_runtime_refresh_market_guard_cache_builds_when_missing(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_cached_black_swan_signal = None
+        bot._runtime_cached_snapshot_health = {}
+        bot._runtime_market_guard_cache_ready = False
+        bot._last_market_guard_refresh_ts = 0.0
+        bot.universe = [("EURUSD", "EURUSD.pro", "FX")]
+        bot._evaluate_black_swan = MagicMock(
+            return_value=BlackSwanSignal(
+                stress_index=0.0,
+                threshold=6.0,
+                precaution_threshold=5.4,
+                precaution=False,
+                black_swan=False,
+                reasons=("OK",),
+            )
+        )
+        bot._hybrid_snapshot_health = MagicMock(
+            return_value={"critical": False, "critical_raw": False, "symbols_total": 1}
+        )
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        CFG.scan_interval_sec = 30
+        try:
+            with patch("BIN.safetybot.time.time", return_value=100.0):
+                bot._runtime_refresh_market_guard_cache()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+
+        bot._evaluate_black_swan.assert_called_once_with()
+        bot._hybrid_snapshot_health.assert_called_once_with(["EURUSD.pro"])
+        self.assertTrue(bot._runtime_market_guard_cache_ready)
+        self.assertEqual(bot._last_market_guard_refresh_ts, 100.0)
+
+    def test_runtime_refresh_market_guard_cache_skips_when_fresh(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot._runtime_cached_black_swan_signal = BlackSwanSignal(
+            stress_index=0.0,
+            threshold=6.0,
+            precaution_threshold=5.4,
+            precaution=False,
+            black_swan=False,
+            reasons=("OK",),
+        )
+        bot._runtime_cached_snapshot_health = {"critical": False, "critical_raw": False, "symbols_total": 1}
+        bot._runtime_market_guard_cache_ready = True
+        bot._last_market_guard_refresh_ts = 95.0
+        bot._runtime_get_cached_market_guard_state = MagicMock(
+            return_value=(
+                True,
+                BlackSwanSignal(
+                    stress_index=0.0,
+                    threshold=6.0,
+                    precaution_threshold=5.4,
+                    precaution=False,
+                    black_swan=False,
+                    reasons=("OK",),
+                ),
+                {"critical": False, "critical_raw": False, "symbols_total": 1},
+            )
+        )
+        bot._evaluate_black_swan = MagicMock()
+        bot._hybrid_snapshot_health = MagicMock()
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        CFG.scan_interval_sec = 30
+        try:
+            with patch("BIN.safetybot.time.time", return_value=100.0):
+                bot._runtime_refresh_market_guard_cache()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+
+        bot._evaluate_black_swan.assert_not_called()
+        bot._hybrid_snapshot_health.assert_not_called()
 
     def test_handle_market_data_dispatches_account(self):
         with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):

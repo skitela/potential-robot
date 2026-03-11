@@ -10731,6 +10731,9 @@ class SafetyBot:
         self._runtime_cached_canary_signal: Optional[CanarySignal] = None
         self._runtime_cached_drift_signal: Optional[DriftSignal] = None
         self._runtime_global_guard_cache_ready: bool = False
+        self._runtime_cached_black_swan_signal: Optional[BlackSwanSignal] = None
+        self._runtime_cached_snapshot_health: Dict[str, Any] = {}
+        self._runtime_market_guard_cache_ready: bool = False
         self._last_group_policy_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
@@ -10740,6 +10743,7 @@ class SafetyBot:
         self._last_oanda_price_breakdown_log_ts: float = 0.0
         self._last_meta_advisory_refresh_ts: float = 0.0
         self._last_global_guard_refresh_ts: float = 0.0
+        self._last_market_guard_refresh_ts: float = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -14899,6 +14903,42 @@ class SafetyBot:
             backoff_seconds=0,
         )
 
+    @staticmethod
+    def _runtime_default_black_swan_signal() -> BlackSwanSignal:
+        threshold = max(0.0, float(getattr(CFG, "black_swan_threshold", 0.0)))
+        precaution_fraction = float(getattr(CFG, "black_swan_precaution_fraction", 0.8))
+        precaution_threshold = max(0.0, float(threshold * precaution_fraction))
+        return BlackSwanSignal(
+            stress_index=0.0,
+            threshold=float(threshold),
+            precaution_threshold=float(precaution_threshold),
+            precaution=False,
+            black_swan=False,
+            reasons=("CACHE_NOT_READY",),
+        )
+
+    @staticmethod
+    def _runtime_default_snapshot_health() -> Dict[str, Any]:
+        return {
+            "max_age_sec": int(max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))),
+            "bar_max_age_sec": int(
+                max(
+                    max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180))),
+                    int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)),
+                )
+            ),
+            "startup_grace_sec": int(max(0, int(getattr(CFG, "hybrid_snapshot_startup_grace_sec", 120)))),
+            "startup_grace_active": True,
+            "uptime_sec": 0,
+            "symbols_total": 0,
+            "seen_tick": 0,
+            "seen_bar": 0,
+            "stale_tick": 0,
+            "stale_bar": 0,
+            "critical_raw": False,
+            "critical": False,
+        }
+
     def _runtime_get_cached_global_guard_state(
         self,
     ) -> Tuple[bool, SelfHealSignal, CanarySignal, DriftSignal]:
@@ -14913,6 +14953,18 @@ class SafetyBot:
         if not isinstance(drift_signal, DriftSignal):
             drift_signal = self._runtime_default_drift_signal()
         return cache_ready, self_heal_signal, canary_signal, drift_signal
+
+    def _runtime_get_cached_market_guard_state(
+        self,
+    ) -> Tuple[bool, BlackSwanSignal, Dict[str, Any]]:
+        cache_ready = bool(getattr(self, "_runtime_market_guard_cache_ready", False))
+        black_swan_signal = getattr(self, "_runtime_cached_black_swan_signal", None)
+        if not isinstance(black_swan_signal, BlackSwanSignal):
+            black_swan_signal = self._runtime_default_black_swan_signal()
+        snapshot_health = dict(getattr(self, "_runtime_cached_snapshot_health", {}) or {})
+        if not snapshot_health:
+            snapshot_health = self._runtime_default_snapshot_health()
+        return cache_ready, black_swan_signal, snapshot_health
 
     def _runtime_refresh_meta_advisory_cache(self) -> None:
         now_ts = float(time.time())
@@ -14963,6 +15015,26 @@ class SafetyBot:
         self._runtime_cached_drift_signal = drift_signal
         self._runtime_global_guard_cache_ready = True
         self._last_global_guard_refresh_ts = now_ts
+
+    def _runtime_refresh_market_guard_cache(self) -> None:
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        refresh_interval_s = float(scan_interval_s)
+        cache_ready, cached_black_swan, cached_snapshot_health = self._runtime_get_cached_market_guard_state()
+        if (
+            cache_ready
+            and isinstance(cached_black_swan, BlackSwanSignal)
+            and bool(cached_snapshot_health)
+            and (now_ts - float(getattr(self, "_last_market_guard_refresh_ts", 0.0) or 0.0)) < refresh_interval_s
+        ):
+            return
+
+        black_swan_signal = self._evaluate_black_swan()
+        snapshot_health = self._hybrid_snapshot_health([sym for (_raw, sym, _grp) in (self.universe or [])])
+        self._runtime_cached_black_swan_signal = black_swan_signal
+        self._runtime_cached_snapshot_health = dict(snapshot_health or {})
+        self._runtime_market_guard_cache_ready = True
+        self._last_market_guard_refresh_ts = now_ts
 
     def _compute_group_policy_snapshot(
         self,
@@ -15081,6 +15153,11 @@ class SafetyBot:
 
         try:
             self._runtime_refresh_global_guard_cache()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            self._runtime_refresh_market_guard_cache()
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -16075,6 +16152,16 @@ class SafetyBot:
             self._runtime_cached_drift_signal = drift_signal
             self._runtime_global_guard_cache_ready = True
             self._last_global_guard_refresh_ts = float(time.time())
+        market_guard_cache_ready, black_swan_signal, snapshot_health = (
+            self._runtime_get_cached_market_guard_state()
+        )
+        if not market_guard_cache_ready:
+            black_swan_signal = self._evaluate_black_swan()
+            snapshot_health = self._hybrid_snapshot_health([sym for (_raw, sym, _grp) in self.universe])
+            self._runtime_cached_black_swan_signal = black_swan_signal
+            self._runtime_cached_snapshot_health = dict(snapshot_health or {})
+            self._runtime_market_guard_cache_ready = True
+            self._last_market_guard_refresh_ts = float(time.time())
         # If canary is disabled in config, do not keep stale canary backoff from prior runs.
         if not bool(getattr(CFG, "canary_rollout_enabled", True)):
             try:
@@ -16211,7 +16298,6 @@ class SafetyBot:
         # Position time-stop guard (scalp discipline): close stale positions deterministically.
         self._close_stale_positions(positions_map, global_mode=global_mode, rollover_safe=rollover_safe)
 
-        black_swan_signal = self._evaluate_black_swan()
         if black_swan_signal.black_swan:
             global_mode = "ECO"
             threshold = float(getattr(CFG, "black_swan_threshold", black_swan_signal.threshold))
@@ -16244,7 +16330,6 @@ class SafetyBot:
         if self._manual_kill_switch_active():
             return
 
-        snapshot_health = self._hybrid_snapshot_health([sym for (_raw, sym, _grp) in self.universe])
         black_swan_block_new_entries = bool(getattr(self, "_black_swan_block_new_entries", False))
         snapshot_block_new_entries = bool(snapshot_health.get("critical")) or bool(black_swan_block_new_entries)
         now_ts = float(time.time())
