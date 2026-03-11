@@ -8619,29 +8619,31 @@ class StandardStrategy:
                 struct_ref = float(df_h4["close"].tail(struct_span).mean())
                 structure_h4 = "BUY" if close_h4_last >= struct_ref else "SELL"
 
-                logging.warning(
-                    "TREND_DATA_SHORT_FALLBACK symbol=%s grp=%s rows_h4=%s rows_d1=%s min_h4=%s min_d1=%s trend_h4=%s trend_d1=%s structure_h4=%s",
+                if self._skip_log_allowed(symbol, "TREND_DATA_SHORT_FALLBACK", 120):
+                    logging.warning(
+                        "TREND_DATA_SHORT_FALLBACK symbol=%s grp=%s rows_h4=%s rows_d1=%s min_h4=%s min_d1=%s trend_h4=%s trend_d1=%s structure_h4=%s",
+                        symbol,
+                        grp,
+                        rows_h4,
+                        rows_d1,
+                        min_h4_rows,
+                        min_d1_rows,
+                        trend_h4,
+                        trend_d1,
+                        structure_h4,
+                    )
+                self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1, structure_h4)
+                return trend_h4, trend_d1, structure_h4
+            if self._skip_log_allowed(symbol, "TREND_DATA_SHORT", 120):
+                logging.info(
+                    "TREND_DATA_SHORT symbol=%s grp=%s rows_h4=%s rows_d1=%s min_h4=%s min_d1=%s",
                     symbol,
                     grp,
                     rows_h4,
                     rows_d1,
                     min_h4_rows,
                     min_d1_rows,
-                    trend_h4,
-                    trend_d1,
-                    structure_h4,
                 )
-                self.cache.trend_cache[symbol] = (now_ts, trend_h4, trend_d1, structure_h4)
-                return trend_h4, trend_d1, structure_h4
-            logging.info(
-                "TREND_DATA_SHORT symbol=%s grp=%s rows_h4=%s rows_d1=%s min_h4=%s min_d1=%s",
-                symbol,
-                grp,
-                rows_h4,
-                rows_d1,
-                min_h4_rows,
-                min_d1_rows,
-            )
             return "NEUTRAL", "NEUTRAL", "NEUTRAL"
 
         trend_win_h4 = min(int(sma_trend_win), max(20, rows_h4 - 5))
@@ -8657,20 +8659,21 @@ class StandardStrategy:
             or struct_fast_eff != int(sma_struct_fast_win)
             or struct_slow_eff != int(sma_struct_slow_win)
         ):
-            logging.info(
-                "TREND_WARMUP_ADAPT symbol=%s grp=%s trend_cfg=%s trend_h4=%s trend_d1=%s struct_fast_cfg=%s struct_fast=%s struct_slow_cfg=%s struct_slow=%s rows_h4=%s rows_d1=%s",
-                symbol,
-                grp,
-                int(sma_trend_win),
-                int(trend_win_h4),
-                int(trend_win_d1),
-                int(sma_struct_fast_win),
-                int(struct_fast_eff),
-                int(sma_struct_slow_win),
-                int(struct_slow_eff),
-                rows_h4,
-                rows_d1,
-            )
+            if self._skip_log_allowed(symbol, "TREND_WARMUP_ADAPT", 300):
+                logging.info(
+                    "TREND_WARMUP_ADAPT symbol=%s grp=%s trend_cfg=%s trend_h4=%s trend_d1=%s struct_fast_cfg=%s struct_fast=%s struct_slow_cfg=%s struct_slow=%s rows_h4=%s rows_d1=%s",
+                    symbol,
+                    grp,
+                    int(sma_trend_win),
+                    int(trend_win_h4),
+                    int(trend_win_d1),
+                    int(sma_struct_fast_win),
+                    int(struct_fast_eff),
+                    int(sma_struct_slow_win),
+                    int(struct_slow_eff),
+                    rows_h4,
+                    rows_d1,
+                )
 
         df_h4["sma_trend"] = ta.trend.sma_indicator(df_h4["close"], window=trend_win_h4)
         df_d1["sma_trend"] = ta.trend.sma_indicator(df_d1["close"], window=trend_win_d1)
@@ -8734,17 +8737,18 @@ class StandardStrategy:
             wait_raw_s = float(next_fetch_ts - now_ts)
             if wait_raw_s > float(wait_new_bar_max):
                 # Defensive reset: do not freeze scans for ~hour due to future-shifted bar clocks.
-                logging.warning(
-                    "M5_WAIT_NEW_BAR_GUARD_RESET symbol=%s grp=%s mode=%s wait_raw_s=%s max_wait_s=%s tf_min=%s next_fetch_ts=%s now_ts=%s",
-                    symbol,
-                    grp,
-                    mode,
-                    int(wait_raw_s),
-                    int(wait_new_bar_max),
-                    int(tf_min),
-                    int(next_fetch_ts),
-                    int(now_ts),
-                )
+                if self._skip_log_allowed(symbol, "M5_WAIT_NEW_BAR_GUARD_RESET", 120):
+                    logging.warning(
+                        "M5_WAIT_NEW_BAR_GUARD_RESET symbol=%s grp=%s mode=%s wait_raw_s=%s max_wait_s=%s tf_min=%s next_fetch_ts=%s now_ts=%s",
+                        symbol,
+                        grp,
+                        mode,
+                        int(wait_raw_s),
+                        int(wait_new_bar_max),
+                        int(tf_min),
+                        int(next_fetch_ts),
+                        int(now_ts),
+                    )
                 self.cache.next_m5_fetch_ts[symbol] = float(now_ts)
             else:
                 wait_s = int(max(0, wait_raw_s))
@@ -8880,16 +8884,17 @@ class StandardStrategy:
             next_fetch = float(ts_utc.timestamp()) + float(tf_min * 60)
             wait_raw_s = float(next_fetch - now_ts)
             if wait_raw_s > float(wait_new_bar_max):
-                logging.warning(
-                    "M5_NEXT_FETCH_CLAMP symbol=%s grp=%s mode=%s wait_raw_s=%s max_wait_s=%s tf_min=%s bar_ts_utc=%s",
-                    symbol,
-                    grp,
-                    mode,
-                    int(wait_raw_s),
-                    int(wait_new_bar_max),
-                    int(tf_min),
-                    ts_utc.replace(microsecond=0).isoformat(),
-                )
+                if self._skip_log_allowed(symbol, "M5_NEXT_FETCH_CLAMP", 120):
+                    logging.warning(
+                        "M5_NEXT_FETCH_CLAMP symbol=%s grp=%s mode=%s wait_raw_s=%s max_wait_s=%s tf_min=%s bar_ts_utc=%s",
+                        symbol,
+                        grp,
+                        mode,
+                        int(wait_raw_s),
+                        int(wait_new_bar_max),
+                        int(tf_min),
+                        ts_utc.replace(microsecond=0).isoformat(),
+                    )
                 next_fetch = float(now_ts) + float(tf_min * 60)
             self.cache.next_m5_fetch_ts[symbol] = float(next_fetch)
         except Exception as e:
