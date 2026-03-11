@@ -322,10 +322,12 @@ class CFG:
     hybrid_snapshot_max_age_sec: int = 180
     # Maximum accepted age of live ZMQ tick snapshots in direct tick cache.
     hybrid_tick_snapshot_max_age_sec: float = 2.5
+    paper_tick_snapshot_relaxed_age_sec: float = 5.0
     # If live ZMQ tick cache is temporarily empty, allow a very fresh persisted
     # snapshot tick as transport fallback before touching MT5 API.
     hybrid_tick_store_fallback_enabled: bool = True
     hybrid_tick_store_fallback_max_age_sec: float = 2.5
+    paper_tick_store_fallback_max_age_sec: float = 5.0
     # BAR snapshots are M5-based and naturally older than tick stream; keep a wider age budget.
     hybrid_snapshot_bar_max_age_sec: int = 900
     # If False, stale BAR stream alone does not hard-block new entries while tick stream is fresh.
@@ -6912,16 +6914,16 @@ class ExecutionEngine:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return df
 
-    def tick(self, symbol: str, grp: str, emergency: bool = False):
+    def tick(self, symbol: str, grp: str, emergency: bool = False, paper_relaxed: bool = False):
         # 1. Sprawdź cache ZMQ (Hybrid Mode)
-        zmq_data = self._get_fresh_zmq_tick_snapshot(symbol)
+        zmq_data = self._get_fresh_zmq_tick_snapshot(symbol, paper_relaxed=paper_relaxed)
         if zmq_data:
             t = self._tick_stub_from_snapshot(zmq_data)
             logging.debug(f"TICK_FROM_ZMQ_CACHE symbol={symbol}")
             # Przy danych z ZMQ nie konsumujemy budżetu PRICE (oszczędność!)
             return t
 
-        snapshot_tick = self._load_recent_tick_store_snapshot(symbol)
+        snapshot_tick = self._load_recent_tick_store_snapshot(symbol, paper_relaxed=paper_relaxed)
         if snapshot_tick:
             logging.debug("TICK_FROM_TICK_STORE_CACHE symbol=%s", symbol)
             return self._tick_stub_from_snapshot(snapshot_tick)
@@ -6961,7 +6963,7 @@ class ExecutionEngine:
 
         return TickStub(snapshot)
 
-    def _get_fresh_zmq_tick_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def _get_fresh_zmq_tick_snapshot(self, symbol: str, paper_relaxed: bool = False) -> Optional[Dict[str, Any]]:
         cache_keys = [
             symbol,
             symbol_base(symbol),
@@ -6972,6 +6974,11 @@ class ExecutionEngine:
             max_age = max(0.2, float(getattr(CFG, "hybrid_tick_snapshot_max_age_sec", 2.5)))
         except Exception:
             max_age = 2.5
+        if paper_relaxed and bool(getattr(CFG, "paper_trading", False)):
+            try:
+                max_age = max(max_age, float(getattr(CFG, "paper_tick_snapshot_relaxed_age_sec", 5.0)))
+            except Exception:
+                pass
         now_ts = float(time.time())
         for key in cache_keys:
             try:
@@ -6996,7 +7003,7 @@ class ExecutionEngine:
             return rec
         return None
 
-    def _load_recent_tick_store_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def _load_recent_tick_store_snapshot(self, symbol: str, paper_relaxed: bool = False) -> Optional[Dict[str, Any]]:
         if not bool(getattr(CFG, "hybrid_tick_store_fallback_enabled", True)):
             return None
         tick_store = getattr(self, "tick_store", None)
@@ -7016,6 +7023,11 @@ class ExecutionEngine:
             if recv_ts <= 0.0:
                 return None
             max_age = max(0.5, float(getattr(CFG, "hybrid_tick_store_fallback_max_age_sec", 2.5)))
+            if paper_relaxed and bool(getattr(CFG, "paper_trading", False)):
+                try:
+                    max_age = max(max_age, float(getattr(CFG, "paper_tick_store_fallback_max_age_sec", 5.0)))
+                except Exception:
+                    pass
             if (time.time() - float(recv_ts)) > float(max_age):
                 return None
             payload = {
@@ -9269,11 +9281,11 @@ class StandardStrategy:
     ):
         self.update_skip_capture_context(stage="TRADE_PATH", signal=str(signal or ""))
         # tick na żądanie: spread + cena wykonania
-        tick = self.engine.tick(symbol, grp, emergency=False)
+        tick = self.engine.tick(symbol, grp, emergency=False, paper_relaxed=bool(is_paper))
         if not tick:
             # Signals are rare relative to scan loop; allow one emergency tick fetch as fallback
             # when snapshot tick stream is temporarily missing.
-            tick = self.engine.tick(symbol, grp, emergency=True)
+            tick = self.engine.tick(symbol, grp, emergency=True, paper_relaxed=bool(is_paper))
             if tick:
                 logging.warning("ENTRY_TICK_FALLBACK symbol=%s grp=%s mode=%s source=MT5_EMERGENCY", symbol, grp, mode)
         if not tick:
@@ -18986,6 +18998,10 @@ if __name__ == "__main__":
         "hybrid_tick_snapshot_max_age_sec",
         CFG.hybrid_tick_snapshot_max_age_sec,
     )
+    CFG.paper_tick_snapshot_relaxed_age_sec = _cfg_float(
+        "paper_tick_snapshot_relaxed_age_sec",
+        CFG.paper_tick_snapshot_relaxed_age_sec,
+    )
     CFG.hybrid_tick_store_fallback_enabled = _cfg_bool(
         "hybrid_tick_store_fallback_enabled",
         CFG.hybrid_tick_store_fallback_enabled,
@@ -18993,6 +19009,10 @@ if __name__ == "__main__":
     CFG.hybrid_tick_store_fallback_max_age_sec = _cfg_float(
         "hybrid_tick_store_fallback_max_age_sec",
         CFG.hybrid_tick_store_fallback_max_age_sec,
+    )
+    CFG.paper_tick_store_fallback_max_age_sec = _cfg_float(
+        "paper_tick_store_fallback_max_age_sec",
+        CFG.paper_tick_store_fallback_max_age_sec,
     )
     CFG.hybrid_snapshot_bar_max_age_sec = _cfg_int(
         "hybrid_snapshot_bar_max_age_sec",

@@ -62,8 +62,15 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
         self._orig_account_age = getattr(safetybot.CFG, "hybrid_account_snapshot_max_age_sec", 30)
         self._orig_symbol_age = getattr(safetybot.CFG, "hybrid_symbol_snapshot_max_age_sec", 300)
         self._orig_tick_snapshot_age = getattr(safetybot.CFG, "hybrid_tick_snapshot_max_age_sec", 2.5)
+        self._orig_paper_tick_snapshot_relaxed_age = getattr(
+            safetybot.CFG, "paper_tick_snapshot_relaxed_age_sec", 5.0
+        )
         self._orig_tick_store_fallback_enabled = getattr(safetybot.CFG, "hybrid_tick_store_fallback_enabled", True)
         self._orig_tick_store_fallback_max_age_sec = getattr(safetybot.CFG, "hybrid_tick_store_fallback_max_age_sec", 2.5)
+        self._orig_paper_tick_store_fallback_max_age_sec = getattr(
+            safetybot.CFG, "paper_tick_store_fallback_max_age_sec", 5.0
+        )
+        self._orig_paper_trading = getattr(safetybot.CFG, "paper_trading", True)
 
         safetybot.mt5 = _StubMT5()
 
@@ -80,8 +87,11 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
         safetybot.CFG.hybrid_account_snapshot_max_age_sec = self._orig_account_age
         safetybot.CFG.hybrid_symbol_snapshot_max_age_sec = self._orig_symbol_age
         safetybot.CFG.hybrid_tick_snapshot_max_age_sec = self._orig_tick_snapshot_age
+        safetybot.CFG.paper_tick_snapshot_relaxed_age_sec = self._orig_paper_tick_snapshot_relaxed_age
         safetybot.CFG.hybrid_tick_store_fallback_enabled = self._orig_tick_store_fallback_enabled
         safetybot.CFG.hybrid_tick_store_fallback_max_age_sec = self._orig_tick_store_fallback_max_age_sec
+        safetybot.CFG.paper_tick_store_fallback_max_age_sec = self._orig_paper_tick_store_fallback_max_age_sec
+        safetybot.CFG.paper_trading = self._orig_paper_trading
 
     def _tmpdir(self) -> Path:
         base = ROOT / "TMP_AUDIT_IO" / "test_hybrid_snapshot_only_mode"
@@ -164,6 +174,28 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
         self.assertIsNone(t)
         self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
 
+    def test_tick_paper_relaxed_accepts_recent_zmq_cache_without_mt5_fetch(self):
+        safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
+        safetybot.CFG.paper_trading = True
+        safetybot.CFG.hybrid_tick_snapshot_max_age_sec = 1.0
+        safetybot.CFG.paper_tick_snapshot_relaxed_age_sec = 5.0
+        engine = self._build_engine()
+        stale_for_normal = time.time() - 3.0
+        engine._zmq_tick_cache["EURUSD"] = {
+            "bid": 1.5234,
+            "ask": 1.5237,
+            "timestamp_ms": int(stale_for_normal * 1000),
+            "recv_ts": stale_for_normal,
+            "volume": 1,
+        }
+
+        t = engine.tick("EURUSD", "FX", emergency=False, paper_relaxed=True)
+
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(1.5234, float(getattr(t, "bid", 0.0)), places=6)
+        self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
+
     def test_tick_strict_hard_uses_recent_tick_store_snapshot_without_mt5_fetch(self):
         safetybot.CFG.hybrid_m5_no_fetch_strict = True
         safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
@@ -215,6 +247,35 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertIsNone(t)
+        self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
+
+    def test_tick_paper_relaxed_accepts_recent_tick_store_snapshot_without_mt5_fetch(self):
+        safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
+        safetybot.CFG.paper_trading = True
+        safetybot.CFG.hybrid_tick_store_fallback_enabled = True
+        safetybot.CFG.hybrid_tick_store_fallback_max_age_sec = 1.0
+        safetybot.CFG.paper_tick_store_fallback_max_age_sec = 5.0
+        engine = self._build_engine()
+        store = self._attach_tick_store(engine)
+        recv_ts = time.time() - 3.0
+        ok = store.upsert_tick_snapshot(
+            "EURUSD",
+            {
+                "timestamp_ms": int(recv_ts * 1000),
+                "bid": 1.4441,
+                "ask": 1.4445,
+                "point": 0.0001,
+                "digits": 5,
+            },
+            recv_ts=recv_ts,
+        )
+
+        t = engine.tick("EURUSD", "FX", emergency=False, paper_relaxed=True)
+
+        self.assertTrue(ok)
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(1.4441, float(getattr(t, "bid", 0.0)), places=6)
         self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
 
     def test_tick_strict_hard_blocks_mt5_fallback_when_cache_missing(self):
