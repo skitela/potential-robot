@@ -99,6 +99,29 @@ def test_scan_once_no_longer_builds_market_guards_directly() -> None:
     assert "_runtime_get_cached_market_guard_state" in called
     assert "_runtime_log_black_swan_runtime_state" in called
     assert "_runtime_log_scan_limit_state" in called
+    assert "_evaluate_black_swan" not in called
+    assert "_hybrid_snapshot_health" not in called
+
+
+def test_scan_once_no_longer_builds_global_guards_directly() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "scan_once")
+    called = _called_names(fn)
+    assert "_runtime_get_cached_global_guard_state" in called
+    assert "_evaluate_self_heal" not in called
+    assert "_evaluate_canary_rollout" not in called
+    assert "_evaluate_drift" not in called
+
+
+def test_scan_once_no_longer_reads_meta_advisory_files_directly() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "scan_once")
+    called = _called_names(fn)
+    assert "_runtime_get_cached_meta_advisory_state" in called
+    assert "_read_learner_qa_light" not in called
+    assert "load_unified_learning_advice" not in called
+    assert "load_verdict" not in called
+    assert "load_scout_advice" not in called
 
 
 def test_scan_once_no_longer_emits_repeated_guard_and_scan_limit_logs_directly() -> None:

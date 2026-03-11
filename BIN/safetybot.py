@@ -17248,28 +17248,12 @@ class SafetyBot:
             self._trade_window_closeout(reason="closeout_buffer", ctx=tw_ctx)
             return
 
-        global_guard_cache_ready, self_heal_signal, canary_signal, drift_signal = (
+        _global_guard_cache_ready, self_heal_signal, canary_signal, drift_signal = (
             self._runtime_get_cached_global_guard_state()
         )
-        if not global_guard_cache_ready:
-            self_heal_signal = self._evaluate_self_heal()
-            canary_signal = self._evaluate_canary_rollout()
-            drift_signal = self._evaluate_drift()
-            self._runtime_cached_self_heal_signal = self_heal_signal
-            self._runtime_cached_canary_signal = canary_signal
-            self._runtime_cached_drift_signal = drift_signal
-            self._runtime_global_guard_cache_ready = True
-            self._last_global_guard_refresh_ts = float(time.time())
-        market_guard_cache_ready, black_swan_signal, snapshot_health = (
+        _market_guard_cache_ready, black_swan_signal, snapshot_health = (
             self._runtime_get_cached_market_guard_state()
         )
-        if not market_guard_cache_ready:
-            black_swan_signal = self._evaluate_black_swan()
-            snapshot_health = self._hybrid_snapshot_health([sym for (_raw, sym, _grp) in self.universe])
-            self._runtime_cached_black_swan_signal = black_swan_signal
-            self._runtime_cached_snapshot_health = dict(snapshot_health or {})
-            self._runtime_market_guard_cache_ready = True
-            self._last_market_guard_refresh_ts = float(time.time())
         # If canary is disabled in config, do not keep stale canary backoff from prior runs.
         if not bool(getattr(CFG, "canary_rollout_enabled", True)):
             try:
@@ -17285,14 +17269,6 @@ class SafetyBot:
         meta_cache_ready, learner_qa_light, unified_learning, cached_verdict, cached_scout = (
             self._runtime_get_cached_meta_advisory_state()
         )
-        if (not meta_cache_ready) or learner_qa_light == "UNKNOWN":
-            learner_qa_light = self._read_learner_qa_light()
-        if (
-            unified_learning is None
-            and (not meta_cache_ready)
-            and bool(getattr(CFG, "unified_learning_runtime_enabled", True))
-        ):
-            unified_learning = load_unified_learning_advice(self.meta_dir)
 
         # rollover global
         rollover_safe = self.strategy.rollover_safe()
@@ -17527,18 +17503,10 @@ class SafetyBot:
 
         # Query SCUD/tie-break path only on real near-tie cases.
         if has_near_tie_in_topk(candidates, n_limit):
-            verdict = (
-                cached_verdict
-                if meta_cache_ready
-                else load_verdict(self.meta_dir)
-            )
+            verdict = cached_verdict if meta_cache_ready else None
             verdict_light = (verdict.get("light") if verdict else "INSUFFICIENT_DATA")
             if verdict_light == "GREEN":
-                scout = (
-                    cached_scout
-                    if meta_cache_ready
-                    else load_scout_advice(self.meta_dir)
-                )
+                scout = cached_scout if meta_cache_ready else None
                 # Tie-break (mode B): only for GREEN + near-tie (also in LIVE).
                 candidates = apply_scout_tiebreak(
                     candidates=candidates,
