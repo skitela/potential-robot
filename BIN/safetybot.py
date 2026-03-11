@@ -346,6 +346,11 @@ class CFG:
     m5_pull_sec_eco: int = 300
     # Guardrail for stale/future next-bar deadlines caused by clock/epoch drift.
     m5_wait_new_bar_max_sec: int = 900
+    # Paper-only soft fallback: reuse recent M5 indicator snapshot during benign
+    # wait windows so the bot can collect more learning examples without touching
+    # hard risk locks or stale-data paths.
+    paper_m5_wait_reuse_enabled: bool = True
+    paper_m5_indicator_reuse_max_age_sec: int = 300
     # If ECO limits collapse to zero while flat, keep at least minimal market probing alive.
     eco_probe_symbols_when_flat: int = 1
 
@@ -5260,6 +5265,77 @@ def inspect_m5_store_readiness(
     return state
 
 
+def maybe_reuse_paper_m5_indicators(
+    strategy: Any,
+    symbol: str,
+    grp: str,
+    mode: str,
+    reason: str,
+    now_ts: float,
+    *,
+    timeframe_min: int,
+) -> Optional[Dict[str, Any]]:
+    """Paper-only fallback for benign M5 wait gates.
+
+    We deliberately keep this narrow:
+    - enabled only in paper mode,
+    - only for M5_PULL_WAIT / M5_WAIT_NEW_BAR,
+    - only when a recent indicator snapshot for the same symbol exists.
+
+    This raises learning sample count without weakening hard stale-data guards.
+    """
+    reason_u = str(reason or "").upper()
+    if reason_u not in {"M5_PULL_WAIT", "M5_WAIT_NEW_BAR"}:
+        return None
+    if not bool(getattr(CFG, "paper_trading", False)):
+        return None
+    if not bool(getattr(CFG, "paper_m5_wait_reuse_enabled", True)):
+        return None
+
+    try:
+        cache = getattr(strategy, "cache", None)
+        last_calc_ts = float(getattr(cache, "last_m5_calc_ts", {}).get(symbol, 0.0) or 0.0)
+    except Exception:
+        last_calc_ts = 0.0
+    if last_calc_ts <= 0.0:
+        return None
+
+    base = symbol_base(symbol)
+    try:
+        last_indicators = getattr(strategy, "last_indicators", {}) or {}
+        cached = last_indicators.get(base)
+    except Exception:
+        cached = None
+    if not isinstance(cached, dict):
+        return None
+
+    try:
+        configured_max_age = int(getattr(CFG, "paper_m5_indicator_reuse_max_age_sec", 300) or 300)
+    except Exception:
+        configured_max_age = 300
+    max_age = max(15, min(int(max(1, timeframe_min) * 60), configured_max_age))
+    age_s = max(0.0, float(now_ts) - float(last_calc_ts))
+    if age_s > float(max_age):
+        return None
+
+    try:
+        skip_log_allowed = getattr(strategy, "_skip_log_allowed", None)
+        allow_log = bool(callable(skip_log_allowed) and skip_log_allowed(symbol, f"{reason_u}_REUSE_CACHE", 45))
+    except Exception:
+        allow_log = False
+    if allow_log:
+        logging.info(
+            "M5_CACHE_REUSE symbol=%s grp=%s mode=%s reason=%s age_s=%s max_age_s=%s",
+            symbol,
+            grp,
+            mode,
+            reason_u,
+            int(age_s),
+            int(max_age),
+        )
+    return dict(cached)
+
+
 class TickSnapshotsStore:
     """SQLite tick snapshot store for Renko/offline analytics and fresh transport fallback."""
 
@@ -8876,6 +8952,17 @@ class StandardStrategy:
         last = self.cache.last_m5_calc_ts.get(symbol, 0.0)
         if now_ts - last < pull:
             wait_s = int(max(0, float(pull) - (now_ts - last)))
+            reused = maybe_reuse_paper_m5_indicators(
+                self,
+                symbol,
+                grp,
+                mode,
+                "M5_PULL_WAIT",
+                now_ts,
+                timeframe_min=tf_min,
+            )
+            if reused is not None:
+                return reused
             self._metric_inc_skip("M5_PULL_WAIT")
             self._log_skip_pre_throttled(
                 symbol,
@@ -8907,6 +8994,17 @@ class StandardStrategy:
                 self.cache.next_m5_fetch_ts[symbol] = float(now_ts)
             else:
                 wait_s = int(max(0, wait_raw_s))
+                reused = maybe_reuse_paper_m5_indicators(
+                    self,
+                    symbol,
+                    grp,
+                    mode,
+                    "M5_WAIT_NEW_BAR",
+                    now_ts,
+                    timeframe_min=tf_min,
+                )
+                if reused is not None:
+                    return reused
                 self._metric_inc_skip("M5_WAIT_NEW_BAR")
                 self._log_skip_pre_throttled(
                     symbol,
@@ -18595,6 +18693,14 @@ if __name__ == "__main__":
         CFG.m5_wait_new_bar_max_sec = _cfg_int(
             "m5_wait_new_bar_max_sec",
             CFG.m5_wait_new_bar_max_sec,
+        )
+        CFG.paper_m5_wait_reuse_enabled = _cfg_bool(
+            "paper_m5_wait_reuse_enabled",
+            CFG.paper_m5_wait_reuse_enabled,
+        )
+        CFG.paper_m5_indicator_reuse_max_age_sec = _cfg_int(
+            "paper_m5_indicator_reuse_max_age_sec",
+            CFG.paper_m5_indicator_reuse_max_age_sec,
         )
         CFG.zmq_heartbeat_interval_sec = _cfg_int(
             "zmq_heartbeat_interval_sec", CFG.zmq_heartbeat_interval_sec
