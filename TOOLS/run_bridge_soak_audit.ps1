@@ -19,6 +19,25 @@ if (-not (Test-Path $safetyPath)) {
     throw "Missing safetybot log: $safetyPath"
 }
 
+function Find-AuditPythonExe {
+    param([string]$RuntimeRoot)
+    $candidates = @(
+        (Join-Path $RuntimeRoot ".venv\\Scripts\\python.exe"),
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        "C:\Program Files\Python312\python.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+        }
+    }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+        return $cmd.Source
+    }
+    throw "Python executable for soak audit not found."
+}
+
 function Test-RuntimeHealthy {
     param([string]$RuntimeRoot)
     $statusPath = Join-Path $RuntimeRoot "RUN\system_control_last.json"
@@ -79,8 +98,10 @@ Write-Host "SOAK_MARKER=$markerPath"
 
 Start-Sleep -Seconds $DurationSec
 
-& python (Join-Path $Root "TOOLS\latency_stage2_section_profile.py") --per-section-sample-limit 5000 | Out-Host
-& python (Join-Path $Root "TOOLS\bridge_soak_compare.py") --start-marker $markerPath | Out-Host
+$pythonExe = Find-AuditPythonExe -RuntimeRoot $Root
+Write-Host "SOAK_PYTHON=$pythonExe"
+& $pythonExe (Join-Path $Root "TOOLS\latency_stage2_section_profile.py") --per-section-sample-limit 5000 | Out-Host
+& $pythonExe (Join-Path $Root "TOOLS\bridge_soak_compare.py") --start-marker $markerPath | Out-Host
 
 $latestCompare = Get-ChildItem (Join-Path $Root "EVIDENCE\bridge_audit") -Filter "bridge_soak_compare_*.json" |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
