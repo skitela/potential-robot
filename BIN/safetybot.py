@@ -10740,6 +10740,7 @@ class SafetyBot:
         self._runtime_market_snapshot_dirty: bool = False
         self._last_group_policy_refresh_ts: float = 0.0
         self._last_window_routing_refresh_ts: float = 0.0
+        self._last_window_prefetch_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
         self._last_cost_guard_refresh_ts: float = 0.0
@@ -15232,103 +15233,6 @@ class SafetyBot:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         try:
-            prefetch_enabled = bool(getattr(CFG, "trade_window_prefetch_enabled", False))
-            prefetch_lead = max(0, int(getattr(CFG, "trade_window_prefetch_lead_min", 15)))
-            prefetch_max = max(0, int(getattr(CFG, "trade_window_prefetch_max_symbols", 4)))
-            prefetch_warm = bool(getattr(CFG, "trade_window_prefetch_warm_store_indicators", False))
-            if prefetch_enabled and prefetch_lead > 0 and prefetch_max > 0:
-                nxt = trade_window_next_ctx(now_prio)
-                if isinstance(nxt, dict):
-                    t_minus = float(nxt.get("minutes_to_start", 9999.0))
-                    nxt_wid = str(nxt.get("window_id") or "")
-                    nxt_grp = _group_key(str(nxt.get("group") or ""))
-                    nxt_start = nxt.get("start_utc")
-                    if nxt_wid and nxt_grp and isinstance(nxt_start, dt.datetime) and 0.0 <= t_minus <= float(prefetch_lead):
-                        rank: List[Tuple[float, str]] = []
-                        for _raw2, _sym2, _grp2 in self.universe:
-                            if _group_key(_grp2) != nxt_grp:
-                                continue
-                            try:
-                                if use_group_arb_hard:
-                                    gf = float(effective_group_priority_factor(nxt_grp, now_dt=nxt_start))
-                                else:
-                                    gf = float(self.gov.group_priority_factor(nxt_grp))
-                            except Exception:
-                                gf = 1.0
-                            try:
-                                twt = float(group_window_weight(_grp2, _sym2, now_dt=nxt_start))
-                            except Exception:
-                                twt = 1.0
-                            try:
-                                sf = float(self.ctrl.score_factor(_grp2, _sym2))
-                            except Exception:
-                                sf = 1.0
-                            rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
-                        rank.sort(reverse=True, key=lambda x: x[0])
-                        pre_syms = [s for (_p, s) in rank[:prefetch_max]]
-
-                        warm_ok = False
-                        if pre_syms and prefetch_warm and getattr(self.execution_engine, "bars_store", None) is not None:
-                            warmed = 0
-                            for s in pre_syms:
-                                try:
-                                    df_store = self.execution_engine.bars_store.read_recent_df(symbol_base(s), 120)
-                                    if df_store is None or len(df_store) < 60:
-                                        continue
-                                    sma_fast_win = max(
-                                        2, _cfg_group_int(nxt_grp, "sma_fast", int(getattr(CFG, "sma_fast", 20)), symbol=s)
-                                    )
-                                    adx_period = max(
-                                        2, _cfg_group_int(nxt_grp, "adx_period", int(getattr(CFG, "adx_period", 14)), symbol=s)
-                                    )
-                                    atr_period = max(
-                                        2, _cfg_group_int(nxt_grp, "atr_period", int(getattr(CFG, "atr_period", 14)), symbol=s)
-                                    )
-                                    df_store = df_store.copy()
-                                    df_store["sma_fast"] = ta.trend.sma_indicator(df_store["close"], window=sma_fast_win)
-                                    adx = ta.trend.ADXIndicator(df_store["high"], df_store["low"], df_store["close"], window=adx_period)
-                                    df_store["adx"] = adx.adx()
-                                    atr_val = None
-                                    try:
-                                        tr1 = (df_store["high"] - df_store["low"]).abs()
-                                        tr2 = (df_store["high"] - df_store["close"].shift(1)).abs()
-                                        tr3 = (df_store["low"] - df_store["close"].shift(1)).abs()
-                                        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                                        atr_val = float(tr.rolling(window=atr_period, min_periods=atr_period).mean().iloc[-1])
-                                    except Exception:
-                                        atr_val = None
-                                    ind = {
-                                        "close": float(df_store["close"].iloc[-1]),
-                                        "open": float(df_store["open"].iloc[-1]),
-                                        "high": float(df_store["high"].iloc[-1]),
-                                        "low": float(df_store["low"].iloc[-1]),
-                                        "sma": float(df_store["sma_fast"].iloc[-1]),
-                                        "adx": float(df_store["adx"].iloc[-1]),
-                                        "atr": float(atr_val) if atr_val is not None else None,
-                                    }
-                                    self.strategy.last_indicators[symbol_base(s)] = dict(ind)
-                                    warmed += 1
-                                except Exception:
-                                    continue
-                            warm_ok = bool(warmed > 0)
-
-                        sig = f"{tw_window_id}->{nxt_wid}:{','.join(pre_syms)}:{int(bool(prefetch_warm))}:{int(bool(warm_ok))}"
-                        if sig != str(getattr(self, "_last_prefetch_sig", "")):
-                            setattr(self, "_last_prefetch_sig", sig)
-                            logging.info(
-                                "WINDOW_PREFETCH active_window=%s active_group=%s next_window=%s next_group=%s t_minus_min=%.1f selected=%s warm_store=%s",
-                                tw_window_id or "NONE",
-                                tw_group or "NONE",
-                                nxt_wid,
-                                nxt_grp,
-                                float(t_minus),
-                                ",".join(pre_syms) if pre_syms else "NONE",
-                                int(bool(warm_ok)) if prefetch_warm else 0,
-                            )
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-
-        try:
             if bool(getattr(CFG, "trade_window_symbol_filter_enabled", False)):
                 wid = str(tw_window_id or "")
                 if wid:
@@ -15376,6 +15280,131 @@ class SafetyBot:
             "allowed_symbols_by_group": allowed_symbols_by_group,
             "carryover_active": int(carryover_active),
         }
+
+    def _runtime_refresh_window_prefetch(self) -> None:
+        tw_ctx = dict(getattr(self, "_runtime_cached_tw_ctx", {}) or {})
+        if not tw_ctx:
+            return
+
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        refresh_interval_s = float(scan_interval_s)
+        if (now_ts - float(getattr(self, "_last_window_prefetch_refresh_ts", 0.0) or 0.0)) < refresh_interval_s:
+            return
+
+        self._last_window_prefetch_refresh_ts = now_ts
+
+        prefetch_enabled = bool(getattr(CFG, "trade_window_prefetch_enabled", False))
+        prefetch_lead = max(0, int(getattr(CFG, "trade_window_prefetch_lead_min", 15)))
+        prefetch_max = max(0, int(getattr(CFG, "trade_window_prefetch_max_symbols", 4)))
+        prefetch_warm = bool(getattr(CFG, "trade_window_prefetch_warm_store_indicators", False))
+        if not (prefetch_enabled and prefetch_lead > 0 and prefetch_max > 0):
+            return
+
+        tw_window_id = str((tw_ctx or {}).get("window_id") or "")
+        tw_group = _group_key(str((tw_ctx or {}).get("group") or ""))
+        policy_shadow = bool(getattr(CFG, "policy_shadow_mode_enabled", True))
+        use_group_arb_hard = bool(getattr(CFG, "policy_group_arbitration_enabled", True)) and (not policy_shadow)
+        now_prio = now_utc()
+
+        try:
+            nxt = trade_window_next_ctx(now_prio)
+            if not isinstance(nxt, dict):
+                return
+            t_minus = float(nxt.get("minutes_to_start", 9999.0))
+            nxt_wid = str(nxt.get("window_id") or "")
+            nxt_grp = _group_key(str(nxt.get("group") or ""))
+            nxt_start = nxt.get("start_utc")
+            if not (nxt_wid and nxt_grp and isinstance(nxt_start, dt.datetime) and 0.0 <= t_minus <= float(prefetch_lead)):
+                return
+
+            group_arb, _group_risk = self._runtime_get_cached_group_policy_state()
+            if not group_arb:
+                group_arb, _group_risk = self._compute_group_policy_snapshot(now_arb=now_prio)
+
+            rank: List[Tuple[float, str]] = []
+            for _raw2, _sym2, _grp2 in self.universe:
+                if _group_key(_grp2) != nxt_grp:
+                    continue
+                try:
+                    if use_group_arb_hard:
+                        gf = float(effective_group_priority_factor(nxt_grp, now_dt=nxt_start))
+                    else:
+                        gf = float(group_arb.get(nxt_grp, {}).get("priority_factor", self.gov.group_priority_factor(nxt_grp)))
+                except Exception:
+                    gf = 1.0
+                try:
+                    twt = float(group_window_weight(_grp2, _sym2, now_dt=nxt_start))
+                except Exception:
+                    twt = 1.0
+                try:
+                    sf = float(self.ctrl.score_factor(_grp2, _sym2))
+                except Exception:
+                    sf = 1.0
+                rank.append((float(twt) * float(sf) * float(gf), str(_sym2)))
+            rank.sort(reverse=True, key=lambda x: x[0])
+            pre_syms = [s for (_p, s) in rank[:prefetch_max]]
+
+            warm_ok = False
+            if pre_syms and prefetch_warm and getattr(self.execution_engine, "bars_store", None) is not None:
+                warmed = 0
+                for s in pre_syms:
+                    try:
+                        df_store = self.execution_engine.bars_store.read_recent_df(symbol_base(s), 120)
+                        if df_store is None or len(df_store) < 60:
+                            continue
+                        sma_fast_win = max(
+                            2, _cfg_group_int(nxt_grp, "sma_fast", int(getattr(CFG, "sma_fast", 20)), symbol=s)
+                        )
+                        adx_period = max(
+                            2, _cfg_group_int(nxt_grp, "adx_period", int(getattr(CFG, "adx_period", 14)), symbol=s)
+                        )
+                        atr_period = max(
+                            2, _cfg_group_int(nxt_grp, "atr_period", int(getattr(CFG, "atr_period", 14)), symbol=s)
+                        )
+                        df_store = df_store.copy()
+                        df_store["sma_fast"] = ta.trend.sma_indicator(df_store["close"], window=sma_fast_win)
+                        adx = ta.trend.ADXIndicator(df_store["high"], df_store["low"], df_store["close"], window=adx_period)
+                        df_store["adx"] = adx.adx()
+                        atr_val = None
+                        try:
+                            tr1 = (df_store["high"] - df_store["low"]).abs()
+                            tr2 = (df_store["high"] - df_store["close"].shift(1)).abs()
+                            tr3 = (df_store["low"] - df_store["close"].shift(1)).abs()
+                            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                            atr_val = float(tr.rolling(window=atr_period, min_periods=atr_period).mean().iloc[-1])
+                        except Exception:
+                            atr_val = None
+                        ind = {
+                            "close": float(df_store["close"].iloc[-1]),
+                            "open": float(df_store["open"].iloc[-1]),
+                            "high": float(df_store["high"].iloc[-1]),
+                            "low": float(df_store["low"].iloc[-1]),
+                            "sma": float(df_store["sma_fast"].iloc[-1]),
+                            "adx": float(df_store["adx"].iloc[-1]),
+                            "atr": float(atr_val) if atr_val is not None else None,
+                        }
+                        self.strategy.last_indicators[symbol_base(s)] = dict(ind)
+                        warmed += 1
+                    except Exception:
+                        continue
+                warm_ok = bool(warmed > 0)
+
+            sig = f"{tw_window_id}->{nxt_wid}:{','.join(pre_syms)}:{int(bool(prefetch_warm))}:{int(bool(warm_ok))}"
+            if sig != str(getattr(self, "_last_prefetch_sig", "")):
+                setattr(self, "_last_prefetch_sig", sig)
+                logging.info(
+                    "WINDOW_PREFETCH active_window=%s active_group=%s next_window=%s next_group=%s t_minus_min=%.1f selected=%s warm_store=%s",
+                    tw_window_id or "NONE",
+                    tw_group or "NONE",
+                    nxt_wid,
+                    nxt_grp,
+                    float(t_minus),
+                    ",".join(pre_syms) if pre_syms else "NONE",
+                    int(bool(warm_ok)) if prefetch_warm else 0,
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
     def _compute_group_policy_snapshot(
         self,
@@ -15537,6 +15566,11 @@ class SafetyBot:
 
         try:
             self._runtime_refresh_window_routing_cache()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            self._runtime_refresh_window_prefetch()
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
