@@ -221,6 +221,13 @@ def test_try_trade_throttles_entry_score_logs() -> None:
     assert source.count('if self._skip_log_allowed(symbol, "ENTRY_SCORE", 60):') >= 3
 
 
+def test_try_trade_throttles_adapter_and_entry_signal_logs() -> None:
+    source = Path("BIN/safetybot.py").resolve().read_text(encoding="utf-8")
+    assert 'if self._skip_log_allowed(symbol, "CANDLE_ADAPTER", 60):' in source
+    assert 'if self._skip_log_allowed(symbol, "RENKO_ADAPTER", 60):' in source
+    assert 'if self._skip_log_allowed(symbol, "ENTRY_SIGNAL", 60):' in source
+
+
 def test_execution_engine_copy_rates_throttles_strict_nofetch_logs() -> None:
     src = Path("BIN/safetybot.py").resolve()
     fn = _class_method_node(src, "ExecutionEngine", "copy_rates")

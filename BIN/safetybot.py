@@ -9991,39 +9991,41 @@ class StandardStrategy:
             )
             self.update_skip_capture_context(strategy_family=strategy_family)
             if bool(getattr(CFG, "candle_adapter_emit_event", True)):
-                c_patterns = ",".join([str(x) for x in (candle_ctx.get("candle_patterns") or [])]) or "NONE"
-                logging.info(
-                    "CANDLE_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s long=%.3f short=%.3f patterns=%s",
-                    symbol,
-                    grp_u,
-                    str(candle_ctx.get("mode") or "SHADOW_ONLY"),
-                    int(bool(candle_ctx.get("ready", False))),
-                    str(candle_ctx.get("candle_bias") or "NONE"),
-                    str(candle_ctx.get("candle_quality_grade") or "UNKNOWN"),
-                    str(candle_ctx.get("reason_code") or "NONE"),
-                    float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
-                    float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
-                    c_patterns,
-                )
+                if self._skip_log_allowed(symbol, "CANDLE_ADAPTER", 60):
+                    c_patterns = ",".join([str(x) for x in (candle_ctx.get("candle_patterns") or [])]) or "NONE"
+                    logging.info(
+                        "CANDLE_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s long=%.3f short=%.3f patterns=%s",
+                        symbol,
+                        grp_u,
+                        str(candle_ctx.get("mode") or "SHADOW_ONLY"),
+                        int(bool(candle_ctx.get("ready", False))),
+                        str(candle_ctx.get("candle_bias") or "NONE"),
+                        str(candle_ctx.get("candle_quality_grade") or "UNKNOWN"),
+                        str(candle_ctx.get("reason_code") or "NONE"),
+                        float(candle_ctx.get("candle_score_long", 0.0) or 0.0),
+                        float(candle_ctx.get("candle_score_short", 0.0) or 0.0),
+                        c_patterns,
+                    )
             if bool(getattr(CFG, "renko_adapter_emit_event", True)):
-                logging.info(
-                    "RENKO_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s "
-                    "long=%.3f short=%.3f run=%s rev=%s bricks=%s brick_pts=%.2f eval_ms=%s",
-                    symbol,
-                    grp_u,
-                    str(renko_ctx.get("mode") or "SHADOW_ONLY"),
-                    int(bool(renko_ctx.get("ready", False))),
-                    str(renko_ctx.get("renko_bias") or "NONE"),
-                    str(renko_ctx.get("renko_quality_grade") or "UNKNOWN"),
-                    str(renko_ctx.get("reason_code") or "NONE"),
-                    float(renko_ctx.get("renko_score_long", 0.0) or 0.0),
-                    float(renko_ctx.get("renko_score_short", 0.0) or 0.0),
-                    int(renko_ctx.get("run_length", 0) or 0),
-                    int(bool(renko_ctx.get("reversal_flag", False))),
-                    int(renko_ctx.get("bricks_count", 0) or 0),
-                    float(renko_ctx.get("brick_size_points", 0.0) or 0.0),
-                    int(renko_ctx.get("renko_eval_ms", 0) or 0),
-                )
+                if self._skip_log_allowed(symbol, "RENKO_ADAPTER", 60):
+                    logging.info(
+                        "RENKO_ADAPTER symbol=%s grp=%s mode=%s ready=%s bias=%s quality=%s reason=%s "
+                        "long=%.3f short=%.3f run=%s rev=%s bricks=%s brick_pts=%.2f eval_ms=%s",
+                        symbol,
+                        grp_u,
+                        str(renko_ctx.get("mode") or "SHADOW_ONLY"),
+                        int(bool(renko_ctx.get("ready", False))),
+                        str(renko_ctx.get("renko_bias") or "NONE"),
+                        str(renko_ctx.get("renko_quality_grade") or "UNKNOWN"),
+                        str(renko_ctx.get("reason_code") or "NONE"),
+                        float(renko_ctx.get("renko_score_long", 0.0) or 0.0),
+                        float(renko_ctx.get("renko_score_short", 0.0) or 0.0),
+                        int(renko_ctx.get("run_length", 0) or 0),
+                        int(bool(renko_ctx.get("reversal_flag", False))),
+                        int(renko_ctx.get("bricks_count", 0) or 0),
+                        float(renko_ctx.get("brick_size_points", 0.0) or 0.0),
+                        int(renko_ctx.get("renko_eval_ms", 0) or 0),
+                    )
 
             if grp_u == "FX":
                 pace_ok, pace_meta = fx_budget_pacing_allows_entry(self.gov, self.db, now_dt=now_utc())
@@ -10308,12 +10310,13 @@ class StandardStrategy:
                     signal_id,
                 )
                 return
-            logging.info(
-                f"ENTRY_SIGNAL symbol={symbol} grp={grp} mode={mode} trend_h4={trend_h4} "
-                f"structure_h4={structure_h4} regime={regime} reason={signal_reason} "
-                f"signal={signal} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} "
-                f"open={float(ind['open']):.6f} adx={adx_value:.2f}"
-            )
+            if self._skip_log_allowed(symbol, "ENTRY_SIGNAL", 60):
+                logging.info(
+                    f"ENTRY_SIGNAL symbol={symbol} grp={grp} mode={mode} trend_h4={trend_h4} "
+                    f"structure_h4={structure_h4} regime={regime} reason={signal_reason} "
+                    f"signal={signal} close={float(ind['close']):.6f} sma={float(ind['sma']):.6f} "
+                    f"open={float(ind['open']):.6f} adx={adx_value:.2f}"
+                )
             self._metric_note_entry_signal()
             try:
                 base = symbol_base(symbol)
