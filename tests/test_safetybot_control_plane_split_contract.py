@@ -114,6 +114,7 @@ def test_scan_once_uses_cached_window_routing_policy() -> None:
     assert "_compute_window_routing_policy" in called
     assert "trade_window_next_ctx" not in called
     assert "_resolve_intents_to_canonical" not in called
+    assert "fx_rotation_bucket" not in called
     assert "get_price_breakdown" not in called
     assert "warn_level_reached" in called
 
@@ -124,6 +125,7 @@ def test_compute_window_routing_policy_no_longer_runs_prefetch() -> None:
     called = _called_names(fn)
     assert "trade_window_next_ctx" not in called
     assert "read_recent_df" not in called
+    assert "fx_rotation_bucket" in called
 
 
 def test_runtime_refresh_window_prefetch_owns_prefetch_logic() -> None:

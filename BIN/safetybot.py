@@ -10811,6 +10811,7 @@ class SafetyBot:
         self._runtime_cached_day_state: Dict[str, Any] = {}
         self._runtime_cached_eco_active: bool = False
         self._runtime_cached_warn_active: bool = False
+        self._runtime_cached_global_mode: str = "ECO"
         self._runtime_cached_learner_qa_light: str = "UNKNOWN"
         self._runtime_cached_unified_learning: Optional[Dict[str, Any]] = None
         self._runtime_cached_verdict: Optional[Dict[str, Any]] = None
@@ -14942,11 +14943,13 @@ class SafetyBot:
         st: Dict[str, Any],
         eco_active: bool,
         warn_active: bool,
+        global_mode: str,
     ) -> None:
         self._runtime_cached_tw_ctx = dict(tw_ctx or {})
         self._runtime_cached_day_state = dict(st or {})
         self._runtime_cached_eco_active = bool(eco_active)
         self._runtime_cached_warn_active = bool(warn_active)
+        self._runtime_cached_global_mode = str(global_mode or "ECO").upper()
 
     def _runtime_get_cached_meta_advisory_state(
         self,
@@ -15306,7 +15309,7 @@ class SafetyBot:
     @staticmethod
     def _runtime_materialize_window_routing_state(
         state: Dict[str, Any],
-    ) -> Tuple[Optional[set[str]], Dict[str, set[str]], int]:
+    ) -> Tuple[Optional[set[str]], Dict[str, set[str]], int, int, int]:
         routing = dict(state or {})
         allowed_groups_raw = routing.get("allowed_groups")
         allowed_groups = None
@@ -15318,7 +15321,9 @@ class SafetyBot:
             if str(g).strip()
         }
         carryover_active = int(routing.get("carryover_active", 0) or 0)
-        return allowed_groups, allowed_symbols_by_group, carryover_active
+        fx_bucket_idx = int(routing.get("fx_bucket_idx", 0) or 0)
+        fx_bucket_count = int(routing.get("fx_bucket_count", 0) or 0)
+        return allowed_groups, allowed_symbols_by_group, carryover_active, fx_bucket_idx, fx_bucket_count
 
     def _cache_window_routing_state(self, state: Dict[str, Any]) -> None:
         routing = dict(state or {})
@@ -15340,6 +15345,7 @@ class SafetyBot:
         open_syms: Iterable[str],
         group_arb: Dict[str, Dict[str, Any]],
         policy_shadow: bool,
+        global_mode: str,
         now_prio: Optional[dt.datetime] = None,
     ) -> Dict[str, Any]:
         tw_window_id = str((tw_ctx or {}).get("window_id") or "")
@@ -15355,6 +15361,8 @@ class SafetyBot:
             allowed_groups = {str(tw_group).upper()}
         allowed_symbols_by_group: Dict[str, set[str]] = {}
         carryover_active = 0
+        fx_bucket_idx = 0
+        fx_bucket_count = 0
 
         try:
             carry_enabled = bool(getattr(CFG, "trade_window_carryover_enabled", False))
@@ -15467,6 +15475,46 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+        try:
+            fx_rot_enabled = bool(getattr(CFG, "trade_window_fx_rotation_enabled", False))
+            fx_bucket_size = max(1, int(getattr(CFG, "trade_window_fx_rotation_bucket_size", 4)))
+            fx_period = max(1, int(getattr(CFG, "trade_window_fx_rotation_period_sec", 180)))
+            fx_only_over = bool(getattr(CFG, "trade_window_fx_rotation_only_when_over_capacity", True))
+            if fx_rot_enabled and _group_key(tw_group) == "FX":
+                fx_syms_all = [str(s) for (_raw2, s, g) in self.universe if _group_key(g) == "FX"]
+                fx_cap = max(1, int(self.ctrl.max_symbols_per_iter(str(global_mode or "ECO").upper())))
+                if (not fx_only_over) or (len(fx_syms_all) > int(fx_cap)):
+                    bidx, bucket_syms, bcount = fx_rotation_bucket(
+                        fx_syms_all,
+                        now_ts=time.time(),
+                        bucket_size=int(fx_bucket_size),
+                        period_sec=int(fx_period),
+                    )
+                    fx_bucket_idx = int(bidx) + 1
+                    fx_bucket_count = int(bcount)
+                    allowed_symbols_by_group["FX"] = {
+                        canonical_symbol(s) for s in bucket_syms if str(s).strip()
+                    }
+                    allowed_symbols_by_group["FX"].update(
+                        {canonical_symbol(s) for s in open_syms_set if str(s).strip() and _group_key(guess_group(str(s))) == "FX"}
+                    )
+                    fx_sig = f"{bidx}/{bcount}:{','.join(sorted(bucket_syms))}"
+                    if fx_sig != str(getattr(self, "_last_fx_rot_sig", "")):
+                        setattr(self, "_last_fx_rot_sig", fx_sig)
+                        logging.info(
+                            "FX_ROTATION window=%s group=FX bucket=%s/%s period_sec=%s bucket_size=%s cap=%s total=%s symbols=%s",
+                            tw_window_id or "NONE",
+                            int(bidx) + 1,
+                            int(bcount),
+                            int(fx_period),
+                            int(fx_bucket_size),
+                            int(fx_cap),
+                            int(len(fx_syms_all)),
+                            ",".join(sorted(bucket_syms)) if bucket_syms else "NONE",
+                        )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
         signature = self._runtime_window_routing_signature(
             tw_window_id=tw_window_id,
             tw_group=tw_group,
@@ -15479,6 +15527,8 @@ class SafetyBot:
             "allowed_groups": allowed_groups,
             "allowed_symbols_by_group": allowed_symbols_by_group,
             "carryover_active": int(carryover_active),
+            "fx_bucket_idx": int(fx_bucket_idx),
+            "fx_bucket_count": int(fx_bucket_count),
         }
 
     def _runtime_refresh_window_prefetch(self) -> None:
@@ -15802,6 +15852,7 @@ class SafetyBot:
             open_syms=open_syms,
             group_arb=group_arb,
             policy_shadow=policy_shadow,
+            global_mode=str(getattr(self, "_runtime_cached_global_mode", "ECO") or "ECO"),
             now_prio=now_prio,
         )
         self._cache_window_routing_state(state)
@@ -16765,6 +16816,7 @@ class SafetyBot:
             st=st,
             eco_active=bool(eco_by_budget),
             warn_active=bool(warn_degrade_active),
+            global_mode=str(global_mode or "ECO"),
         )
 
         if eco_by_budget:
@@ -17021,7 +17073,7 @@ class SafetyBot:
         )
         routing_cache_ready, routing_state = self._runtime_get_cached_window_routing_state()
         if routing_cache_ready and self._runtime_window_routing_cache_matches(routing_state, routing_sig):
-            allowed_groups, allowed_symbols_by_group, carryover_active = (
+            allowed_groups, allowed_symbols_by_group, carryover_active, fx_bucket_idx, fx_bucket_count = (
                 self._runtime_materialize_window_routing_state(routing_state)
             )
         else:
@@ -17030,57 +17082,14 @@ class SafetyBot:
                 open_syms=open_syms,
                 group_arb=group_arb,
                 policy_shadow=policy_shadow,
+                global_mode=str(global_mode or "ECO"),
                 now_prio=now_prio,
             )
             self._cache_window_routing_state(routing_state)
             self._last_window_routing_refresh_ts = float(time.time())
-            allowed_groups, allowed_symbols_by_group, carryover_active = (
+            allowed_groups, allowed_symbols_by_group, carryover_active, fx_bucket_idx, fx_bucket_count = (
                 self._runtime_materialize_window_routing_state(routing_state)
             )
-        fx_bucket_idx = 0       # 1-based when active, else 0
-        fx_bucket_count = 0
-
-        # FX rotation: only when FX is over scan capacity (unless overridden).
-        try:
-            fx_rot_enabled = bool(getattr(CFG, "trade_window_fx_rotation_enabled", False))
-            fx_bucket_size = max(1, int(getattr(CFG, "trade_window_fx_rotation_bucket_size", 4)))
-            fx_period = max(1, int(getattr(CFG, "trade_window_fx_rotation_period_sec", 180)))
-            fx_only_over = bool(getattr(CFG, "trade_window_fx_rotation_only_when_over_capacity", True))
-            if fx_rot_enabled and _group_key(tw_group) == "FX":
-                fx_syms_all = [str(s) for (_r, s, g) in self.universe if _group_key(g) == "FX"]
-                fx_cap = max(1, int(self.ctrl.max_symbols_per_iter(global_mode)))
-                if (not fx_only_over) or (len(fx_syms_all) > int(fx_cap)):
-                    bidx, bucket_syms, bcount = fx_rotation_bucket(
-                        fx_syms_all,
-                        now_ts=time.time(),
-                        bucket_size=int(fx_bucket_size),
-                        period_sec=int(fx_period),
-                    )
-                    fx_bucket_idx = int(bidx) + 1
-                    fx_bucket_count = int(bcount)
-                    allowed_symbols_by_group["FX"] = {
-                        canonical_symbol(s) for s in bucket_syms if str(s).strip()
-                    }
-                    # Always keep open symbols visible to policy telemetry.
-                    allowed_symbols_by_group["FX"].update(
-                        {canonical_symbol(s) for s in open_syms if str(s).strip()}
-                    )
-                    fx_sig = f"{bidx}/{bcount}:{','.join(sorted(bucket_syms))}"
-                    if fx_sig != str(getattr(self, "_last_fx_rot_sig", "")):
-                        setattr(self, "_last_fx_rot_sig", fx_sig)
-                        logging.info(
-                            "FX_ROTATION window=%s group=FX bucket=%s/%s period_sec=%s bucket_size=%s cap=%s total=%s symbols=%s",
-                            tw_window_id or "NONE",
-                            int(bidx) + 1,
-                            int(bcount),
-                            int(fx_period),
-                            int(fx_bucket_size),
-                            int(fx_cap),
-                            int(len(fx_syms_all)),
-                            ",".join(sorted(bucket_syms)) if bucket_syms else "NONE",
-                        )
-        except Exception as e:
-            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         for raw, sym, grp in self.universe:
             grp_u = _group_key(grp)
