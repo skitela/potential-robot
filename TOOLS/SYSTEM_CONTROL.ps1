@@ -148,6 +148,65 @@ function Test-AcceptablePidTree {
     return (@($roots | Sort-Object -Unique).Count -eq 1)
 }
 
+function Get-ProcessExecutablePath {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) {
+        return ""
+    }
+    try {
+        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
+        return [string]$proc.Path
+    } catch {
+        return ""
+    }
+}
+
+function Select-PreferredComponentKeepPid {
+    param(
+        [string]$RuntimeRoot,
+        [string]$ScriptName,
+        [int[]]$ProcessIds,
+        [string]$PreferredPythonPath = "",
+        [string]$LockPath = ""
+    )
+    $uniq = @($ProcessIds | Where-Object { [int]$_ -gt 0 } | Sort-Object -Unique)
+    if (@($uniq).Count -eq 0) {
+        return $null
+    }
+
+    $preferredPath = [string]$PreferredPythonPath
+    if (-not [string]::IsNullOrWhiteSpace($preferredPath) -and ($preferredPath -ne "python")) {
+        $preferredMatches = @()
+        $rows = @(Get-ComponentProcessRows -RuntimeRoot $RuntimeRoot -ScriptName $ScriptName)
+        foreach ($row in $rows) {
+            $procId = [int]$row.ProcessId
+            if (@($uniq) -notcontains $procId) {
+                continue
+            }
+            $cmd = [string]$row.CommandLine
+            $exePath = Get-ProcessExecutablePath -ProcessId $procId
+            $cmdMatches = (-not [string]::IsNullOrWhiteSpace($cmd)) -and ($cmd.IndexOf($preferredPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+            $exeMatches = (-not [string]::IsNullOrWhiteSpace($exePath)) -and ($exePath.Equals($preferredPath, [System.StringComparison]::OrdinalIgnoreCase))
+            if ($cmdMatches -or $exeMatches) {
+                $preferredMatches += [int]$procId
+            }
+        }
+        if (@($preferredMatches).Count -gt 0) {
+            return [int]((@($preferredMatches | Sort-Object -Descending))[0])
+        }
+    }
+
+    $lockPid = $null
+    if ($LockPath -and (Test-Path $LockPath)) {
+        $lockPid = Get-LockPid -LockPath $LockPath
+    }
+    if (($null -ne $lockPid) -and ((@($uniq) -contains [int]$lockPid)) -and (Test-PidRunning -ProcessId ([int]$lockPid))) {
+        return [int]$lockPid
+    }
+
+    return [int]((@($uniq | Sort-Object -Descending))[0])
+}
+
 function Get-SafetyBotBridgePid {
     param(
         [int[]]$Ports = @(5555, 5556)
@@ -546,6 +605,7 @@ function Deduplicate-ComponentInstances {
         [string]$RuntimeRoot,
         [string]$ScriptName,
         [string]$LockPath = "",
+        [string]$PreferredPythonPath = "",
         [switch]$Dry
     )
     $ids = Get-ComponentProcessIds -RuntimeRoot $RuntimeRoot -ScriptName $ScriptName
@@ -561,16 +621,7 @@ function Deduplicate-ComponentInstances {
         }
     }
 
-    $keepPid = $null
-    $lockPid = $null
-    if ($LockPath -and (Test-Path $LockPath)) {
-        $lockPid = Get-LockPid -LockPath $LockPath
-    }
-    if ($null -ne $lockPid -and ((@($uniq) -contains [int]$lockPid)) -and (Test-PidRunning -ProcessId ([int]$lockPid))) {
-        $keepPid = [int]$lockPid
-    } else {
-        $keepPid = [int]((@($uniq | Sort-Object -Descending))[0])
-    }
+    $keepPid = Select-PreferredComponentKeepPid -RuntimeRoot $RuntimeRoot -ScriptName $ScriptName -ProcessIds @($uniq) -PreferredPythonPath $PreferredPythonPath -LockPath $LockPath
 
     $stopStates = @()
     foreach ($procId in $uniq) {
@@ -696,7 +747,7 @@ function Start-Component {
                     lock_repair = $lockRepairState
                 }
             }
-            $dedupe = Deduplicate-ComponentInstances -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script) -LockPath $LockPath -Dry:$Dry
+            $dedupe = Deduplicate-ComponentInstances -RuntimeRoot $RuntimeRoot -ScriptName ([string]$Comp.Script) -LockPath $LockPath -PreferredPythonPath $PythonPath -Dry:$Dry
             if ($dedupe.status -eq "dedupe_failed") {
                 return @{
                     status = "duplicate_running"

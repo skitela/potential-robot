@@ -42,6 +42,9 @@ def test_mt5_session_guard_does_not_stop_itself_during_repair_cycle() -> None:
     required_tokens = (
         "Invoke-SystemRepair",
         "-SkipBackgroundGuards",
+        'Join-Path $RuntimeRoot "RUN\\START_WITH_OANDAKEY.ps1"',
+        "-AllowNonInteractive",
+        "start_with_oandakey",
     )
     for token in required_tokens:
         assert token in script, f"Missing self-preserving repair token: {token}"

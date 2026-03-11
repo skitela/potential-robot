@@ -310,6 +310,7 @@ function Invoke-SystemRepair {
         [switch]$Dry
     )
     $sc = Join-Path $RuntimeRoot "TOOLS\SYSTEM_CONTROL.ps1"
+    $starter = Join-Path $RuntimeRoot "RUN\START_WITH_OANDAKEY.ps1"
     if (-not (Test-Path $sc)) {
         return @{
             ok = $false
@@ -325,13 +326,20 @@ function Invoke-SystemRepair {
             reason = $Reason
             mode = "dry_run"
             profile_refresh = $profileRefresh
+            start_mode = if (Test-Path $starter) { "start_with_oandakey" } else { "system_control_fallback" }
         }
     }
     try {
         # Guard naprawia runtime i nie powinien ubić samego siebie podczas stop.
         $stopOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action stop -Root $RuntimeRoot -Profile $Profile -SkipBackgroundGuards 2>&1 | Out-String).Trim()
         Start-Sleep -Seconds 3
-        $startOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action start -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
+        $startMode = "system_control_fallback"
+        if (Test-Path $starter) {
+            $startOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $starter -Root $RuntimeRoot -Profile $Profile -AllowNonInteractive 2>&1 | Out-String).Trim()
+            $startMode = "start_with_oandakey"
+        } else {
+            $startOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action start -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
+        }
         Start-Sleep -Seconds 2
         $statusOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $sc -Action status -Root $RuntimeRoot -Profile $Profile 2>&1 | Out-String).Trim()
         $ok = ($statusOut -match "status=PASS")
@@ -340,6 +348,7 @@ function Invoke-SystemRepair {
             reason = $Reason
             profile = $Profile
             profile_refresh = $profileRefresh
+            start_mode = $startMode
             stop = $stopOut
             start = $startOut
             status = $statusOut
