@@ -6261,6 +6261,7 @@ class ExecutionEngine:
         self._account_info_static_cache: Dict[str, Any] = {}
         self._snapshot_missing_symbol_log_ts: Dict[str, float] = {}
         self._snapshot_missing_account_log_ts: float = 0.0
+        self._copy_rates_log_ts: Dict[str, float] = {}
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
         self._sltp_ts: List[float] = []
@@ -6284,6 +6285,15 @@ class ExecutionEngine:
         self._roll_retcodes_day()
         rc = int(retcode_num)
         self._retcodes_day[rc] = int(self._retcodes_day.get(rc, 0)) + 1
+
+    def _copy_rates_log_allowed(self, symbol: str, tf: int, code: str, interval_sec: int) -> bool:
+        now_ts = float(time.time())
+        key = f"{str(symbol).upper()}|{int(tf)}|{str(code).upper()}"
+        last_ts = float(self._copy_rates_log_ts.get(key, 0.0) or 0.0)
+        if (now_ts - last_ts) < float(max(1, int(interval_sec))):
+            return False
+        self._copy_rates_log_ts[key] = now_ts
+        return True
 
     def metrics_snapshot(self) -> Dict[str, Any]:
         self._roll_retcodes_day()
@@ -6707,22 +6717,24 @@ class ExecutionEngine:
                         )
                         return df_store.tail(want_n).reset_index(drop=True)
                     if strict_no_fetch:
-                        logging.info(
-                            "COPY_RATES_STRICT_NOFETCH_PARTIAL symbol=%s tf=%s need_rows=%s have_rows=%s",
-                            symbol,
-                            tf_i,
-                            int(want_n),
-                            rows,
-                        )
+                        if self._copy_rates_log_allowed(symbol, tf_i, "STRICT_NOFETCH_PARTIAL", 120):
+                            logging.info(
+                                "COPY_RATES_STRICT_NOFETCH_PARTIAL symbol=%s tf=%s need_rows=%s have_rows=%s",
+                                symbol,
+                                tf_i,
+                                int(want_n),
+                                rows,
+                            )
                         return df_store.tail(rows).reset_index(drop=True)
             if strict_no_fetch:
-                logging.info(
-                    "COPY_RATES_STRICT_NOFETCH_SKIP symbol=%s tf=%s need_rows=%s have_rows=%s",
-                    symbol,
-                    tf_i,
-                    int(want_n),
-                    int(0 if df_store is None else len(df_store)),
-                )
+                if self._copy_rates_log_allowed(symbol, tf_i, "STRICT_NOFETCH_SKIP", 120):
+                    logging.info(
+                        "COPY_RATES_STRICT_NOFETCH_SKIP symbol=%s tf=%s need_rows=%s have_rows=%s",
+                        symbol,
+                        tf_i,
+                        int(want_n),
+                        int(0 if df_store is None else len(df_store)),
+                    )
                 return None
 
         kind = f"rates_{timeframe}"

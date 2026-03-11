@@ -133,3 +133,10 @@ def test_m5_indicators_if_due_throttles_entry_ready_logs() -> None:
 def test_try_trade_throttles_entry_score_logs() -> None:
     source = Path("BIN/safetybot.py").resolve().read_text(encoding="utf-8")
     assert source.count('if self._skip_log_allowed(symbol, "ENTRY_SCORE", 60):') >= 3
+
+
+def test_execution_engine_copy_rates_throttles_strict_nofetch_logs() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "ExecutionEngine", "copy_rates")
+    called = _called_names(fn)
+    assert "_copy_rates_log_allowed" in called
