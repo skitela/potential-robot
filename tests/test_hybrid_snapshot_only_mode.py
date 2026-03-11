@@ -61,6 +61,8 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
         self._orig_hybrid_hard = getattr(safetybot.CFG, "hybrid_no_mt5_data_fetch_hard", False)
         self._orig_account_age = getattr(safetybot.CFG, "hybrid_account_snapshot_max_age_sec", 30)
         self._orig_symbol_age = getattr(safetybot.CFG, "hybrid_symbol_snapshot_max_age_sec", 300)
+        self._orig_tick_store_fallback_enabled = getattr(safetybot.CFG, "hybrid_tick_store_fallback_enabled", True)
+        self._orig_tick_store_fallback_max_age_sec = getattr(safetybot.CFG, "hybrid_tick_store_fallback_max_age_sec", 2.5)
 
         safetybot.mt5 = _StubMT5()
 
@@ -76,6 +78,8 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
         safetybot.CFG.hybrid_no_mt5_data_fetch_hard = self._orig_hybrid_hard
         safetybot.CFG.hybrid_account_snapshot_max_age_sec = self._orig_account_age
         safetybot.CFG.hybrid_symbol_snapshot_max_age_sec = self._orig_symbol_age
+        safetybot.CFG.hybrid_tick_store_fallback_enabled = self._orig_tick_store_fallback_enabled
+        safetybot.CFG.hybrid_tick_store_fallback_max_age_sec = self._orig_tick_store_fallback_max_age_sec
 
     def _tmpdir(self) -> Path:
         base = ROOT / "TMP_AUDIT_IO" / "test_hybrid_snapshot_only_mode"
@@ -95,6 +99,13 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
             limits=None,
         )
         return engine
+
+    def _attach_tick_store(self, engine):
+        tmp = self._tmpdir()
+        store = safetybot.TickSnapshotsStore(tmp)
+        engine.tick_store = store
+        self.addCleanup(store.conn.close)
+        return store
 
     def test_tick_strict_hard_uses_zmq_cache_without_mt5_fetch(self):
         safetybot.CFG.hybrid_m5_no_fetch_strict = True
@@ -130,6 +141,59 @@ class TestHybridSnapshotOnlyMode(unittest.TestCase):
 
         self.assertIsNotNone(t)
         self.assertAlmostEqual(1.2234, float(getattr(t, "bid", 0.0)), places=6)
+        self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
+
+    def test_tick_strict_hard_uses_recent_tick_store_snapshot_without_mt5_fetch(self):
+        safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
+        safetybot.CFG.hybrid_tick_store_fallback_enabled = True
+        safetybot.CFG.hybrid_tick_store_fallback_max_age_sec = 3.0
+        engine = self._build_engine()
+        store = self._attach_tick_store(engine)
+        now_ms = int(time.time() * 1000)
+        ok = store.upsert_tick_snapshot(
+            "EURUSD",
+            {
+                "timestamp_ms": now_ms,
+                "bid": 1.3331,
+                "ask": 1.3334,
+                "point": 0.0001,
+                "digits": 5,
+            },
+            recv_ts=time.time(),
+        )
+
+        t = engine.tick("EURUSD.pro", "FX", emergency=False)
+
+        self.assertTrue(ok)
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(1.3331, float(getattr(t, "bid", 0.0)), places=6)
+        self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
+
+    def test_tick_strict_hard_rejects_stale_tick_store_snapshot_without_mt5_fetch(self):
+        safetybot.CFG.hybrid_m5_no_fetch_strict = True
+        safetybot.CFG.hybrid_no_mt5_data_fetch_hard = True
+        safetybot.CFG.hybrid_tick_store_fallback_enabled = True
+        safetybot.CFG.hybrid_tick_store_fallback_max_age_sec = 1.0
+        engine = self._build_engine()
+        store = self._attach_tick_store(engine)
+        old_ts = int((time.time() - 600.0) * 1000)
+        ok = store.upsert_tick_snapshot(
+            "EURUSD",
+            {
+                "timestamp_ms": old_ts,
+                "bid": 1.4441,
+                "ask": 1.4445,
+                "point": 0.0001,
+                "digits": 5,
+            },
+            recv_ts=time.time() - 600.0,
+        )
+
+        t = engine.tick("EURUSD", "FX", emergency=False)
+
+        self.assertTrue(ok)
+        self.assertIsNone(t)
         self.assertEqual(0, safetybot.mt5.symbol_info_tick_calls)
 
     def test_tick_strict_hard_blocks_mt5_fallback_when_cache_missing(self):

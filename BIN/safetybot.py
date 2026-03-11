@@ -320,6 +320,10 @@ class CFG:
     hybrid_no_mt5_data_fetch_hard: bool = True
     # Maximum accepted age of incoming market snapshots in decision path.
     hybrid_snapshot_max_age_sec: int = 180
+    # If live ZMQ tick cache is temporarily empty, allow a very fresh persisted
+    # snapshot tick as transport fallback before touching MT5 API.
+    hybrid_tick_store_fallback_enabled: bool = True
+    hybrid_tick_store_fallback_max_age_sec: float = 2.5
     # BAR snapshots are M5-based and naturally older than tick stream; keep a wider age budget.
     hybrid_snapshot_bar_max_age_sec: int = 900
     # If False, stale BAR stream alone does not hard-block new entries while tick stream is fresh.
@@ -5257,7 +5261,7 @@ def inspect_m5_store_readiness(
 
 
 class TickSnapshotsStore:
-    """SQLite tick snapshot store for Renko/offline analytics (no direct trading decisions)."""
+    """SQLite tick snapshot store for Renko/offline analytics and fresh transport fallback."""
 
     def __init__(self, db_dir: Path):
         self.db_dir = db_dir
@@ -6262,6 +6266,7 @@ class ExecutionEngine:
         self._snapshot_missing_symbol_log_ts: Dict[str, float] = {}
         self._snapshot_missing_account_log_ts: float = 0.0
         self._copy_rates_log_ts: Dict[str, float] = {}
+        self.tick_store = None
         # Rate-limit helper for Appendix 4 (market orders/sec)
         self._deal_ts: List[float] = []
         self._sltp_ts: List[float] = []
@@ -6840,18 +6845,15 @@ class ExecutionEngine:
             if zmq_data:
                 break
         if zmq_data:
-            # Tworzymy stub udający strukturę MqlTick
-            class TickStub:
-                def __init__(self, d):
-                    self.bid = float(d.get("bid", 0.0))
-                    self.ask = float(d.get("ask", 0.0))
-                    self.time = int(d.get("timestamp_ms", 0) // 1000)
-                    self.volume = int(d.get("volume", 0))
-            
-            t = TickStub(zmq_data)
+            t = self._tick_stub_from_snapshot(zmq_data)
             logging.debug(f"TICK_FROM_ZMQ_CACHE symbol={symbol}")
             # Przy danych z ZMQ nie konsumujemy budżetu PRICE (oszczędność!)
             return t
+
+        snapshot_tick = self._load_recent_tick_store_snapshot(symbol)
+        if snapshot_tick:
+            logging.debug("TICK_FROM_TICK_STORE_CACHE symbol=%s", symbol)
+            return self._tick_stub_from_snapshot(snapshot_tick)
 
         if self._snapshot_only_mode() and (not bool(emergency)):
             logging.info("TICK_STRICT_NOFETCH_SKIP symbol=%s emergency=%s", symbol, int(bool(emergency)))
@@ -6876,6 +6878,63 @@ class ExecutionEngine:
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         return t
+
+    @staticmethod
+    def _tick_stub_from_snapshot(snapshot: Dict[str, Any]):
+        class TickStub:
+            def __init__(self, d):
+                self.bid = float(d.get("bid", 0.0))
+                self.ask = float(d.get("ask", 0.0))
+                self.time = int(d.get("timestamp_ms", 0) // 1000)
+                self.volume = int(d.get("volume", 0))
+
+        return TickStub(snapshot)
+
+    def _load_recent_tick_store_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+        if not bool(getattr(CFG, "hybrid_tick_store_fallback_enabled", True)):
+            return None
+        tick_store = getattr(self, "tick_store", None)
+        if tick_store is None or not hasattr(tick_store, "read_recent_ticks"):
+            return None
+        try:
+            base = str(symbol_base(symbol) or "").strip().upper()
+            if not base:
+                return None
+            rows = tick_store.read_recent_ticks(base, limit=1)
+            if not rows:
+                return None
+            row = dict(rows[-1] or {})
+            recv_ts_utc = str(row.get("recv_ts_utc") or "").strip()
+            recv_dt = _parse_iso_utc(recv_ts_utc) if recv_ts_utc else None
+            recv_ts = float(recv_dt.timestamp()) if recv_dt is not None else float(int(row.get("ts_msc") or 0) / 1000.0)
+            if recv_ts <= 0.0:
+                return None
+            max_age = max(0.5, float(getattr(CFG, "hybrid_tick_store_fallback_max_age_sec", 2.5)))
+            if (time.time() - float(recv_ts)) > float(max_age):
+                return None
+            payload = {
+                "symbol": base,
+                "bid": float(row.get("bid", 0.0) or 0.0),
+                "ask": float(row.get("ask", 0.0) or 0.0),
+                "timestamp_ms": int(row.get("ts_msc") or 0),
+                "volume": 0,
+                "point": (None if row.get("point") is None else float(row.get("point") or 0.0)),
+                "digits": (None if row.get("digits") is None else int(row.get("digits") or 0)),
+            }
+            if payload["bid"] <= 0.0 or payload["ask"] <= 0.0 or int(payload["timestamp_ms"]) <= 0:
+                return None
+            cache_keys = {
+                str(symbol),
+                str(symbol_base(symbol)),
+                str(symbol).upper(),
+                str(symbol_base(symbol)).upper(),
+            }
+            for cache_key in cache_keys:
+                self._zmq_tick_cache[cache_key] = payload
+            return payload
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return None
 
     def _rate_limit_market_orders(self, request: dict) -> None:
         """Appendix 4: market orders rate limit (orders/sec).
@@ -18710,6 +18769,14 @@ if __name__ == "__main__":
         CFG.hybrid_no_mt5_data_fetch_hard,
     )
     CFG.hybrid_snapshot_max_age_sec = _cfg_int("hybrid_snapshot_max_age_sec", CFG.hybrid_snapshot_max_age_sec)
+    CFG.hybrid_tick_store_fallback_enabled = _cfg_bool(
+        "hybrid_tick_store_fallback_enabled",
+        CFG.hybrid_tick_store_fallback_enabled,
+    )
+    CFG.hybrid_tick_store_fallback_max_age_sec = _cfg_float(
+        "hybrid_tick_store_fallback_max_age_sec",
+        CFG.hybrid_tick_store_fallback_max_age_sec,
+    )
     CFG.hybrid_snapshot_bar_max_age_sec = _cfg_int(
         "hybrid_snapshot_bar_max_age_sec",
         CFG.hybrid_snapshot_bar_max_age_sec,
