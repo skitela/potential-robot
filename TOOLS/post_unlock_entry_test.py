@@ -7,7 +7,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 
 ENTRY_SIGNAL_RX = re.compile(r"\bENTRY_SIGNAL\b", re.IGNORECASE)
@@ -86,6 +86,12 @@ def _write_report_json_txt(out_json: Path, payload: dict) -> Path:
         for it in top_skip:
             lines.append(f"{it.get('key')}={int(it.get('count', 0))}")
     lines.append("")
+    lines.append("[Strategy Mode]")
+    strategy_mode = payload.get("strategy_mode", {}) or {}
+    lines.append(f"paper_trading={strategy_mode.get('paper_trading')}")
+    lines.append(f"strategy_loaded={strategy_mode.get('strategy_loaded')}")
+    lines.append(f"strategy_path={strategy_mode.get('strategy_path')}")
+    lines.append("")
     lines.append("[Verdict]")
     lines.append(f"verdict={payload.get('verdict')}")
     lines.append(f"reason={payload.get('reason')}")
@@ -95,6 +101,57 @@ def _write_report_json_txt(out_json: Path, payload: dict) -> Path:
         lines.append(f"- {h}")
     out_txt.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out_txt
+
+
+def _load_strategy_mode(root: Path) -> Dict[str, bool | str]:
+    strategy_path = root / "CONFIG" / "strategy.json"
+    result: Dict[str, bool | str] = {
+        "strategy_loaded": False,
+        "strategy_path": str(strategy_path),
+        "paper_trading": True,
+    }
+    if not strategy_path.exists():
+        return result
+    try:
+        raw = strategy_path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+        result["strategy_loaded"] = True
+        result["paper_trading"] = bool(payload.get("paper_trading", True)) if isinstance(payload, dict) else True
+    except Exception:
+        return result
+    return result
+
+
+def _decide_verdict(
+    *,
+    counts: Dict[str, int],
+    retcodes: Dict[str, int],
+    paper_trading: bool,
+) -> Tuple[str, str, List[str]]:
+    verdict = "WARN_NO_ACTIVITY"
+    reason = "No entry signal during observation window."
+    hints: List[str] = []
+    if counts["order_success"] > 0:
+        return "PASS_EXECUTED", "At least one order was executed.", hints
+    if int(retcodes.get("10017", 0)) > 0:
+        if bool(paper_trading):
+            hints.append("CONFIG\\strategy.json wskazuje paper_trading=true; trade-disabled nie blokuje paper runtime.")
+            hints.append("Przed live odblokuj trade_allowed/trade_expert po stronie MT5 i brokera.")
+            return (
+                "WARN_TRADE_DISABLED_PAPER_MODE",
+                "retcode=10017 seen, but system is in paper_trading mode.",
+                hints,
+            )
+        hints.append("Sprawdz ponownie logowanie haslem MASTER (nie inwestorskim).")
+        hints.append("Potwierdz u brokera flage trade_allowed=True dla rachunku MT5.")
+        return "FAIL_TRADE_DISABLED", "retcode=10017 seen (account trade disabled or broker-side block).", hints
+    if counts["entry_signal"] > 0 and counts["dispatch_reject"] > 0:
+        hints.append("Sprawdz retcode i comment w safetybot.log.")
+        return "FAIL_REJECTED", "Entry signals exist, but all dispatches were rejected.", hints
+    if counts["entry_signal"] > 0:
+        return "WARN_SIGNAL_NO_RESULT", "Entry signals were produced, but no final execution/fail line was seen.", hints
+    hints.append("Brak sygnalow: sprawdz okno czasowe i powody ENTRY_SKIP.")
+    return verdict, reason, hints
 
 
 def run(root: Path, minutes: int, poll_sec: int) -> int:
@@ -147,26 +204,12 @@ def run(root: Path, minutes: int, poll_sec: int) -> int:
     end = _utc_now()
     duration_sec = int((end - start).total_seconds())
 
-    verdict = "WARN_NO_ACTIVITY"
-    reason = "No entry signal during observation window."
-    hints: List[str] = []
-    if counts["order_success"] > 0:
-        verdict = "PASS_EXECUTED"
-        reason = "At least one order was executed."
-    elif int(retcodes.get("10017", 0)) > 0:
-        verdict = "FAIL_TRADE_DISABLED"
-        reason = "retcode=10017 seen (account trade disabled or broker-side block)."
-        hints.append("Sprawdz ponownie logowanie haslem MASTER (nie inwestorskim).")
-        hints.append("Potwierdz u brokera flage trade_allowed=True dla rachunku MT5.")
-    elif counts["entry_signal"] > 0 and counts["dispatch_reject"] > 0:
-        verdict = "FAIL_REJECTED"
-        reason = "Entry signals exist, but all dispatches were rejected."
-        hints.append("Sprawdz retcode i comment w safetybot.log.")
-    elif counts["entry_signal"] > 0:
-        verdict = "WARN_SIGNAL_NO_RESULT"
-        reason = "Entry signals were produced, but no final execution/fail line was seen."
-    else:
-        hints.append("Brak sygnalow: sprawdz okno czasowe i powody ENTRY_SKIP.")
+    strategy_mode = _load_strategy_mode(root)
+    verdict, reason, hints = _decide_verdict(
+        counts=counts,
+        retcodes=retcodes,
+        paper_trading=bool(strategy_mode.get("paper_trading", True)),
+    )
 
     ts = end.strftime("%Y%m%d_%H%M%S")
     out_json = out_dir / f"POST_UNLOCK_ENTRY_TEST_{ts}.json"
@@ -177,6 +220,7 @@ def run(root: Path, minutes: int, poll_sec: int) -> int:
         "log_path": str(log_path),
         "counts": counts,
         "retcodes": retcodes,
+        "strategy_mode": strategy_mode,
         "top_skip_reasons": _to_top_pairs(skip_reasons, n=8),
         "verdict": verdict,
         "reason": reason,
@@ -195,6 +239,8 @@ def run(root: Path, minutes: int, poll_sec: int) -> int:
         return 2
     if verdict == "FAIL_REJECTED":
         return 3
+    if verdict == "WARN_TRADE_DISABLED_PAPER_MODE":
+        return 4
     return 4
 
 

@@ -29,6 +29,25 @@ function Resolve-DesktopPath {
     }
 }
 
+function Find-AuditPythonExe {
+    param([string]$RuntimeRoot)
+    $candidates = @(
+        (Join-Path $RuntimeRoot ".venv\\Scripts\\python.exe"),
+        "C:\OANDA_VENV\.venv\Scripts\python.exe",
+        "C:\Program Files\Python312\python.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+        }
+    }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+        return $cmd.Source
+    }
+    throw "Python executable for FX runtime audit not found."
+}
+
 function Get-LatestByPattern {
     param(
         [string]$Dir,
@@ -69,6 +88,7 @@ function Get-PropSafe {
 
 $runtimeRoot = Resolve-RootPath -Path $Root
 $desktop = Resolve-DesktopPath -ExplicitPath $DesktopPath
+$pythonExe = Find-AuditPythonExe -RuntimeRoot $runtimeRoot
 $runDir = Join-Path $runtimeRoot "RUN"
 $diagDir = Join-Path $runDir "DIAG_REPORTS"
 $activeDir = Join-Path $runtimeRoot "EVIDENCE\ACTIVE_CHECKS"
@@ -111,7 +131,8 @@ try {
     $activeTxt = Get-LatestByPattern -Dir $activeDir -Pattern "active_checklist_*.txt"
 
     Write-Host "[FX_AUDIT] checklist pass captured; running post-unlock entry audit..."
-    & python (Join-Path $runtimeRoot "TOOLS\post_unlock_entry_test.py") --minutes $PostUnlockMinutes --poll-sec $PostUnlockPollSec
+    Write-Host ("[FX_AUDIT] using python={0}" -f $pythonExe)
+    & $pythonExe (Join-Path $runtimeRoot "TOOLS\post_unlock_entry_test.py") --root $runtimeRoot --minutes $PostUnlockMinutes --poll-sec $PostUnlockPollSec
     $postRc = $LASTEXITCODE
     if ($postRc -ne 0 -and $postRc -ne 4) {
         Write-Host "[FX_AUDIT] post_unlock_entry_test rc=$postRc (continuing with report)"
