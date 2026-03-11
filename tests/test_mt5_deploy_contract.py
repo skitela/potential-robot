@@ -69,6 +69,10 @@ class TestMt5DeployContract(unittest.TestCase):
             "MT5_FULL_DIAG_*.txt",
             "Compile OK",
             "Result: 0 errors, 0 warnings",
+            "WARN_TRADE_DISABLED_PAPER_MODE",
+            "WARN_RECENT_TRADE_DISABLED_IN_LOGS",
+            "Diagnostic accepted warning verdict",
+            "[FINAL] Diag verdict :",
         )
         for token in required_tokens:
             self.assertIn(token, script, f"Deploy script missing compile/diag normalization token: {token}")

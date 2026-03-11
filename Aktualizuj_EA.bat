@@ -275,6 +275,7 @@ set "DIAG_RC=0"
 if exist "%DIAG_BAT%" (
   echo [STEP] Running full MT5 diagnostic
   set "DIAG_VERDICT="
+  set "DIAG_ALLOWED_WARN=0"
   for /L %%N in (1,1,3) do (
     call "%DIAG_BAT%"
     set "DIAG_RC=!ERRORLEVEL!"
@@ -289,6 +290,14 @@ if exist "%DIAG_BAT%" (
       "  }" ^
       "}"`) do set "DIAG_VERDICT=%%I"
     if /I "!DIAG_VERDICT!"=="PASS" set "DIAG_RC=0"
+    if /I "!DIAG_VERDICT!"=="WARN_TRADE_DISABLED_PAPER_MODE" (
+      set "DIAG_RC=0"
+      set "DIAG_ALLOWED_WARN=1"
+    )
+    if /I "!DIAG_VERDICT!"=="WARN_RECENT_TRADE_DISABLED_IN_LOGS" (
+      set "DIAG_RC=0"
+      set "DIAG_ALLOWED_WARN=1"
+    )
     if "!DIAG_RC!"=="0" goto :diag_ok
     if %%N LSS 3 (
       echo [WARN] Diagnostic not ready yet ^(attempt %%N/3, verdict=!DIAG_VERDICT!^). Retrying...
@@ -298,6 +307,8 @@ if exist "%DIAG_BAT%" (
   :diag_ok
   if not "!DIAG_RC!"=="0" (
     echo [WARN] Diagnostic returned rc=!DIAG_RC!
+  ) else if "!DIAG_ALLOWED_WARN!"=="1" (
+    echo [INFO] Diagnostic accepted warning verdict=!DIAG_VERDICT!
   )
 ) else (
   echo [WARN] Diagnostic script not found: %DIAG_BAT%
@@ -361,6 +372,7 @@ echo [FINAL] Data dir : %TERMINAL_DATA_DIR%
 echo [FINAL] MQL5 dir : %TARGET_DIR%
 echo [FINAL] Compile  : %COMPILE_OK%  (1=ok,0=check log)
 echo [FINAL] Diag rc  : %DIAG_RC%
+if defined DIAG_VERDICT echo [FINAL] Diag verdict : %DIAG_VERDICT%
 echo.
 echo [NEXT] Verify in MT5:
 echo [NEXT] 1) Algo Trading is ON (green).
