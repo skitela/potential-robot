@@ -59,6 +59,7 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     assert "_runtime_refresh_window_prefetch" in called
     assert "_runtime_refresh_global_guard_cache" in called
     assert "_runtime_refresh_market_guard_cache" in called
+    assert "_runtime_emit_budget_telemetry" in called
 
 
 def test_scan_once_no_longer_builds_market_guards_directly() -> None:
@@ -86,6 +87,8 @@ def test_scan_once_uses_cached_window_routing_policy() -> None:
     assert "_compute_window_routing_policy" in called
     assert "trade_window_next_ctx" not in called
     assert "_resolve_intents_to_canonical" not in called
+    assert "get_price_breakdown" not in called
+    assert "warn_level_reached" in called
 
 
 def test_compute_window_routing_policy_no_longer_runs_prefetch() -> None:

@@ -15406,6 +15406,70 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
+    def _runtime_emit_budget_telemetry(
+        self,
+        st: Dict[str, Any],
+        *,
+        eco_active: bool,
+        warn_active: bool,
+    ) -> None:
+        budget_log_interval_s = max(
+            5,
+            int(getattr(CFG, "budget_log_interval_sec", 60)),
+        )
+        now_budget_ts = float(time.time())
+        if (now_budget_ts - float(getattr(self, "_last_budget_log_ts", 0.0))) >= float(budget_log_interval_s):
+            self._last_budget_log_ts = now_budget_ts
+            logging.info(
+                f"BUDGET day_ny={st['day_ny']} utc_day={st['utc_day']} eco={int(bool(eco_active))} pl_day={st.get('pl_day','')} "
+                f"price_requests_day={st['price_requests_day']} order_actions_day={st['order_actions_day']} sys_requests_day={st['sys_requests_day']} "
+                f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
+            )
+
+        try:
+            if self.limits.warn_level_reached():
+                day_key = str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or "")
+                state_key = "oanda_limits:last_warn_logged_day"
+                last_warn_day = str(self.db.state_get(state_key, ""))
+                if day_key and day_key != last_warn_day:
+                    price_used = int(st.get("price_requests_day_guard") or st.get("price_requests_day") or 0)
+                    price_budget = int(st.get("price_budget") or 0)
+                    warn_level = int(getattr(self.limits, "warn_day", 0) or 0)
+                    logging.warning(
+                        f"OANDA_PRICE_WARN day={day_key} used={price_used} warn_level={warn_level} "
+                        f"price_budget={price_budget} safe_mode={int(bool(self.limits.safe_mode_active()))}"
+                    )
+                    self.db.state_set(state_key, day_key)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            pb_log_interval_s = max(
+                5,
+                int(getattr(CFG, "oanda_price_breakdown_log_interval_sec", 60)),
+            )
+            now_pb_ts = float(time.time())
+            if (now_pb_ts - float(getattr(self, "_last_oanda_price_breakdown_log_ts", 0.0))) >= float(pb_log_interval_s):
+                self._last_oanda_price_breakdown_log_ts = now_pb_ts
+                pb = self.limits.get_price_breakdown()
+                logging.info(
+                    "OANDA_PRICE_BREAKDOWN day=%s total=%s tick=%s rates=%s other=%s warn_active=%s",
+                    str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or ""),
+                    int(pb.get("total", 0)),
+                    int(pb.get("tick", 0)),
+                    int(pb.get("rates", 0)),
+                    int(pb.get("other", 0)),
+                    int(bool(warn_active)),
+                )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        logging.info(
+            f"PRICE used={st['price_used']}/{self.gov.price_trade_budget} + em={st['price_em_used']}/{self.gov.price_emergency} "
+            f"| SYS used={st['sys_used']}/{self.gov.sys_trade_budget} + em={st['sys_em_used']}/{self.gov.sys_emergency} "
+            f"| price_soft={self.gov.price_soft_mode()}"
+        )
+
     def _compute_group_policy_snapshot(
         self,
         *,
@@ -15614,6 +15678,15 @@ class SafetyBot:
 
         try:
             self._emit_runtime_metrics(
+                st,
+                eco_active=bool(getattr(self, "_runtime_cached_eco_active", False)),
+                warn_active=bool(getattr(self, "_runtime_cached_warn_active", False)),
+            )
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            self._runtime_emit_budget_telemetry(
                 st,
                 eco_active=bool(getattr(self, "_runtime_cached_eco_active", False)),
                 warn_active=bool(getattr(self, "_runtime_cached_warn_active", False)),
@@ -16454,20 +16527,6 @@ class SafetyBot:
             eco_by_budget = False
             eco_reason = ""
 
-        # P0 BUDGET log (hard-required fields: day_ny + utc_day + eco), z ograniczeniem szumu.
-        budget_log_interval_s = max(
-            5,
-            int(getattr(CFG, "budget_log_interval_sec", 60)),
-        )
-        now_budget_ts = float(time.time())
-        if (now_budget_ts - float(getattr(self, "_last_budget_log_ts", 0.0))) >= float(budget_log_interval_s):
-            self._last_budget_log_ts = now_budget_ts
-            logging.info(
-                f"BUDGET day_ny={st['day_ny']} utc_day={st['utc_day']} eco={int(bool(eco_by_budget))} pl_day={st.get('pl_day','')} "
-                f"price_requests_day={st['price_requests_day']} order_actions_day={st['order_actions_day']} sys_requests_day={st['sys_requests_day']} "
-                f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
-            )
-
         # Group-level arbitration snapshot jest odswiezany w maintenance i uzywany z cache.
         group_arb, group_risk = self._runtime_get_cached_group_policy_state()
         if not group_arb or not group_risk:
@@ -16491,41 +16550,10 @@ class SafetyBot:
         try:
             if self.limits.warn_level_reached():
                 day_key = str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or "")
-                state_key = "oanda_limits:last_warn_logged_day"
-                last_warn_day = str(self.db.state_get(state_key, ""))
-                if day_key and day_key != last_warn_day:
-                    price_used = int(st.get("price_requests_day_guard") or st.get("price_requests_day") or 0)
-                    price_budget = int(st.get("price_budget") or 0)
-                    warn_level = int(getattr(self.limits, "warn_day", 0) or 0)
-                    logging.warning(
-                        f"OANDA_PRICE_WARN day={day_key} used={price_used} warn_level={warn_level} "
-                        f"price_budget={price_budget} safe_mode={int(bool(self.limits.safe_mode_active()))}"
-                    )
-                    self.db.state_set(state_key, day_key)
-            warn_degrade_active = bool(self.limits.warn_degrade_active())
-            if warn_degrade_active and bool(getattr(CFG, "oanda_warn_degrade_enabled", True)):
-                eco_by_budget = True
-                eco_reason = ",".join([x for x in (eco_reason.split(",") if eco_reason else []) if x] + ["OANDA_WARN"])
-            try:
-                pb_log_interval_s = max(
-                    5,
-                    int(getattr(CFG, "oanda_price_breakdown_log_interval_sec", 60)),
-                )
-                now_pb_ts = float(time.time())
-                if (now_pb_ts - float(getattr(self, "_last_oanda_price_breakdown_log_ts", 0.0))) >= float(pb_log_interval_s):
-                    self._last_oanda_price_breakdown_log_ts = now_pb_ts
-                    pb = self.limits.get_price_breakdown()
-                    logging.info(
-                        "OANDA_PRICE_BREAKDOWN day=%s total=%s tick=%s rates=%s other=%s warn_active=%s",
-                        str(st.get("day_primary") or st.get("pl_day") or st.get("utc_day") or ""),
-                        int(pb.get("total", 0)),
-                        int(pb.get("tick", 0)),
-                        int(pb.get("rates", 0)),
-                        int(pb.get("other", 0)),
-                        int(bool(warn_degrade_active)),
-                    )
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                warn_degrade_active = bool(self.limits.warn_degrade_active())
+                if warn_degrade_active and bool(getattr(CFG, "oanda_warn_degrade_enabled", True)):
+                    eco_by_budget = True
+                    eco_reason = ",".join([x for x in (eco_reason.split(",") if eco_reason else []) if x] + ["OANDA_WARN"])
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -16544,13 +16572,6 @@ class SafetyBot:
         self._mark_runtime_scan_metrics(
             eco_active=bool(eco_by_budget),
             warn_active=bool(warn_degrade_active),
-        )
-
-# Additional legacy line kept for continuity (informational only)
-        logging.info(
-            f"PRICE used={st['price_used']}/{self.gov.price_trade_budget} + em={st['price_em_used']}/{self.gov.price_emergency} "
-            f"| SYS used={st['sys_used']}/{self.gov.sys_trade_budget} + em={st['sys_em_used']}/{self.gov.sys_emergency} "
-            f"| price_soft={self.gov.price_soft_mode()}"
         )
 
         # Trade windows gate:
