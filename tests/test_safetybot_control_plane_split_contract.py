@@ -53,3 +53,4 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     fn = _class_method_node(src, "SafetyBot", "_runtime_refresh_control_plane_state")
     called = _called_names(fn)
     assert "_runtime_refresh_group_policy_cache" in called
+    assert "_runtime_refresh_global_guard_cache" in called

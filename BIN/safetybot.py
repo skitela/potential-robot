@@ -116,9 +116,9 @@ try:
         GuardDecision as BlackSwanGuardDecisionV2,
         MarketSnapshot as BlackSwanMarketSnapshotV2,
     )
-    from .self_heal_guard import SelfHealGuard, SelfHealPolicy
-    from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
-    from .drift_guard import DriftGuard, DriftPolicy
+    from .self_heal_guard import SelfHealGuard, SelfHealPolicy, SelfHealSignal
+    from .canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy, CanarySignal
+    from .drift_guard import DriftGuard, DriftPolicy, DriftSignal
     from .incident_guard import IncidentJournal, classify_retcode
     from .oanda_limits_guard import OandaLimitsGuard
     from .cost_guard_runtime import (
@@ -178,9 +178,9 @@ except Exception:  # pragma: no cover
         GuardDecision as BlackSwanGuardDecisionV2,
         MarketSnapshot as BlackSwanMarketSnapshotV2,
     )
-    from self_heal_guard import SelfHealGuard, SelfHealPolicy
-    from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy
-    from drift_guard import DriftGuard, DriftPolicy
+    from self_heal_guard import SelfHealGuard, SelfHealPolicy, SelfHealSignal
+    from canary_rollout_guard import CanaryRolloutGuard, CanaryPolicy, CanarySignal
+    from drift_guard import DriftGuard, DriftPolicy, DriftSignal
     from incident_guard import IncidentJournal, classify_retcode
     from oanda_limits_guard import OandaLimitsGuard
     from cost_guard_runtime import (
@@ -10727,6 +10727,10 @@ class SafetyBot:
         self._runtime_cached_verdict: Optional[Dict[str, Any]] = None
         self._runtime_cached_scout_advice: Optional[Dict[str, Any]] = None
         self._runtime_meta_advisory_cache_ready: bool = False
+        self._runtime_cached_self_heal_signal: Optional[SelfHealSignal] = None
+        self._runtime_cached_canary_signal: Optional[CanarySignal] = None
+        self._runtime_cached_drift_signal: Optional[DriftSignal] = None
+        self._runtime_global_guard_cache_ready: bool = False
         self._last_group_policy_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
@@ -10735,6 +10739,7 @@ class SafetyBot:
         self._last_budget_log_ts: float = 0.0
         self._last_oanda_price_breakdown_log_ts: float = 0.0
         self._last_meta_advisory_refresh_ts: float = 0.0
+        self._last_global_guard_refresh_ts: float = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -14852,6 +14857,63 @@ class SafetyBot:
         scout = getattr(self, "_runtime_cached_scout_advice", None)
         return cache_ready, learner_qa_light, unified_learning, verdict, scout
 
+    @staticmethod
+    def _runtime_default_self_heal_signal() -> SelfHealSignal:
+        return SelfHealSignal(
+            active=False,
+            reasons=("CACHE_NOT_READY",),
+            backoff_seconds=0,
+            symbol_cooldown_seconds=0,
+            deals_in_window=0,
+            loss_streak=0,
+            net_pnl=0.0,
+            streak_symbols=(),
+        )
+
+    @staticmethod
+    def _runtime_default_canary_signal() -> CanarySignal:
+        return CanarySignal(
+            canary_active=False,
+            promoted=False,
+            promoted_now=False,
+            pause=False,
+            allowed_symbols=1_000_000,
+            reasons=("CACHE_NOT_READY",),
+            deals_in_window=0,
+            loss_streak=0,
+            net_pnl=0.0,
+            error_incidents=0,
+            backoff_seconds=0,
+        )
+
+    @staticmethod
+    def _runtime_default_drift_signal() -> DriftSignal:
+        return DriftSignal(
+            active=False,
+            reasons=("CACHE_NOT_READY",),
+            samples=0,
+            baseline_mean=0.0,
+            recent_mean=0.0,
+            mean_drop=0.0,
+            zscore=0.0,
+            backoff_seconds=0,
+        )
+
+    def _runtime_get_cached_global_guard_state(
+        self,
+    ) -> Tuple[bool, SelfHealSignal, CanarySignal, DriftSignal]:
+        cache_ready = bool(getattr(self, "_runtime_global_guard_cache_ready", False))
+        self_heal_signal = getattr(self, "_runtime_cached_self_heal_signal", None)
+        if not isinstance(self_heal_signal, SelfHealSignal):
+            self_heal_signal = self._runtime_default_self_heal_signal()
+        canary_signal = getattr(self, "_runtime_cached_canary_signal", None)
+        if not isinstance(canary_signal, CanarySignal):
+            canary_signal = self._runtime_default_canary_signal()
+        drift_signal = getattr(self, "_runtime_cached_drift_signal", None)
+        if not isinstance(drift_signal, DriftSignal):
+            drift_signal = self._runtime_default_drift_signal()
+        return cache_ready, self_heal_signal, canary_signal, drift_signal
+
     def _runtime_refresh_meta_advisory_cache(self) -> None:
         now_ts = float(time.time())
         scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
@@ -14878,6 +14940,29 @@ class SafetyBot:
         self._runtime_cached_scout_advice = dict(scout) if isinstance(scout, dict) else None
         self._runtime_meta_advisory_cache_ready = True
         self._last_meta_advisory_refresh_ts = now_ts
+
+    def _runtime_refresh_global_guard_cache(self) -> None:
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        refresh_interval_s = float(scan_interval_s)
+        cache_ready, cached_self_heal, cached_canary, cached_drift = self._runtime_get_cached_global_guard_state()
+        if (
+            cache_ready
+            and isinstance(cached_self_heal, SelfHealSignal)
+            and isinstance(cached_canary, CanarySignal)
+            and isinstance(cached_drift, DriftSignal)
+            and (now_ts - float(getattr(self, "_last_global_guard_refresh_ts", 0.0) or 0.0)) < refresh_interval_s
+        ):
+            return
+
+        self_heal_signal = self._evaluate_self_heal()
+        canary_signal = self._evaluate_canary_rollout()
+        drift_signal = self._evaluate_drift()
+        self._runtime_cached_self_heal_signal = self_heal_signal
+        self._runtime_cached_canary_signal = canary_signal
+        self._runtime_cached_drift_signal = drift_signal
+        self._runtime_global_guard_cache_ready = True
+        self._last_global_guard_refresh_ts = now_ts
 
     def _compute_group_policy_snapshot(
         self,
@@ -14987,6 +15072,11 @@ class SafetyBot:
 
         try:
             self._runtime_refresh_group_policy_cache()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            self._runtime_refresh_global_guard_cache()
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -15971,8 +16061,18 @@ class SafetyBot:
 
         # deals (SYS)
         self.poll_deals()
-        self_heal_signal = self._evaluate_self_heal()
-        canary_signal = self._evaluate_canary_rollout()
+        global_guard_cache_ready, self_heal_signal, canary_signal, drift_signal = (
+            self._runtime_get_cached_global_guard_state()
+        )
+        if not global_guard_cache_ready:
+            self_heal_signal = self._evaluate_self_heal()
+            canary_signal = self._evaluate_canary_rollout()
+            drift_signal = self._evaluate_drift()
+            self._runtime_cached_self_heal_signal = self_heal_signal
+            self._runtime_cached_canary_signal = canary_signal
+            self._runtime_cached_drift_signal = drift_signal
+            self._runtime_global_guard_cache_ready = True
+            self._last_global_guard_refresh_ts = float(time.time())
         # If canary is disabled in config, do not keep stale canary backoff from prior runs.
         if not bool(getattr(CFG, "canary_rollout_enabled", True)):
             try:
@@ -15985,7 +16085,6 @@ class SafetyBot:
                     )
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-        drift_signal = self._evaluate_drift()
         meta_cache_ready, learner_qa_light, unified_learning, cached_verdict, cached_scout = (
             self._runtime_get_cached_meta_advisory_state()
         )
