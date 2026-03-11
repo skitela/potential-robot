@@ -15418,12 +15418,20 @@ class SafetyBot:
             int(getattr(CFG, "budget_log_interval_sec", 60)),
         )
         now_budget_ts = float(time.time())
-        if (now_budget_ts - float(getattr(self, "_last_budget_log_ts", 0.0))) >= float(budget_log_interval_s):
+        budget_log_due = (
+            now_budget_ts - float(getattr(self, "_last_budget_log_ts", 0.0))
+        ) >= float(budget_log_interval_s)
+        if budget_log_due:
             self._last_budget_log_ts = now_budget_ts
             logging.info(
                 f"BUDGET day_ny={st['day_ny']} utc_day={st['utc_day']} eco={int(bool(eco_active))} pl_day={st.get('pl_day','')} "
                 f"price_requests_day={st['price_requests_day']} order_actions_day={st['order_actions_day']} sys_requests_day={st['sys_requests_day']} "
                 f"price_budget={st['price_budget']} order_budget={st['order_budget']} sys_budget={st['sys_budget']}"
+            )
+            logging.info(
+                f"PRICE used={st['price_used']}/{self.gov.price_trade_budget} + em={st['price_em_used']}/{self.gov.price_emergency} "
+                f"| SYS used={st['sys_used']}/{self.gov.sys_trade_budget} + em={st['sys_em_used']}/{self.gov.sys_emergency} "
+                f"| price_soft={self.gov.price_soft_mode()}"
             )
 
         try:
@@ -15464,11 +15472,6 @@ class SafetyBot:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
-        logging.info(
-            f"PRICE used={st['price_used']}/{self.gov.price_trade_budget} + em={st['price_em_used']}/{self.gov.price_emergency} "
-            f"| SYS used={st['sys_used']}/{self.gov.sys_trade_budget} + em={st['sys_em_used']}/{self.gov.sys_emergency} "
-            f"| price_soft={self.gov.price_soft_mode()}"
-        )
 
     def _compute_group_policy_snapshot(
         self,
