@@ -7859,6 +7859,19 @@ class StandardStrategy:
         # Guard defaults; populated by SafetyBot preflight when available.
         self._asia_shadow_symbol_gate: Dict[str, bool] = {}
         self._asia_shadow_symbol_targets: Set[str] = set()
+        self._runtime_day_state_snapshot: Dict[str, Any] = {}
+
+    def _cache_runtime_day_state_snapshot(self, state: Optional[Dict[str, Any]]) -> None:
+        try:
+            self._runtime_day_state_snapshot = dict(state or {})
+        except Exception:
+            self._runtime_day_state_snapshot = {}
+
+    def _runtime_get_cached_day_state_snapshot(self) -> Dict[str, Any]:
+        try:
+            return dict(getattr(self, "_runtime_day_state_snapshot", {}) or {})
+        except Exception:
+            return {}
 
     def _append_execution_telemetry(self, payload: Dict[str, Any]) -> None:
         """
@@ -9383,7 +9396,9 @@ class StandardStrategy:
 
         # licznik kosztów (EDGE FUEL) — obejmuje całą ocenę symbolu + tick/account_info + order_send
         try:
-            st = self.gov.day_state()
+            st = self._runtime_get_cached_day_state_snapshot()
+            if not st:
+                st = self.gov.day_state()
             price_used_now = int(st.get("price_used") or 0)
             sys_used_now = int(st.get("sys_used") or 0)
         except Exception as e:
@@ -10003,7 +10018,9 @@ class StandardStrategy:
             try:
                 last_soft = float(self.cache.last_soft_skip_log_ts.get(symbol, 0.0))
                 if (now_ts - last_soft) >= 60:
-                    st_soft = self.gov.day_state()
+                    st_soft = self._runtime_get_cached_day_state_snapshot()
+                    if not st_soft:
+                        st_soft = self.gov.day_state()
                     logging.info(
                         "ENTRY_SKIP_PRE symbol=%s grp=%s mode=%s reason=PRICE_SOFT_MODE price_used=%s price_soft=%s price_trade_budget=%s",
                         symbol,
@@ -10026,7 +10043,9 @@ class StandardStrategy:
             return
 
         try:
-            st0 = self.gov.day_state()
+            st0 = self._runtime_get_cached_day_state_snapshot()
+            if not st0:
+                st0 = self.gov.day_state()
             self._last_eval_price_before = int(st0.get('price_used') or 0)
             self._last_eval_sys_before = int(st0.get('sys_used') or 0)
         except Exception as e:
@@ -17286,6 +17305,10 @@ class SafetyBot:
 
     def scan_once(self):
         st = self.gov.day_state()
+        try:
+            self.strategy._cache_runtime_day_state_snapshot(st)
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         # Trade windows (P0): time windows + optional strict group routing.
         tw_ctx = trade_window_ctx(now_utc())

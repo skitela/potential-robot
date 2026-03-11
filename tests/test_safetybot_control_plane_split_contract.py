@@ -274,3 +274,30 @@ def test_evaluate_symbol_checks_fx_budget_pacing_before_advisory_contexts() -> N
     assert fx_pace_idx != -1
     assert ensure_idx != -1
     assert fx_pace_idx < ensure_idx
+
+
+def test_standard_strategy_exposes_runtime_day_state_snapshot_cache() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    source = src.read_text(encoding="utf-8")
+    assert "def _cache_runtime_day_state_snapshot(self, state: Optional[Dict[str, Any]]) -> None:" in source
+    assert "def _runtime_get_cached_day_state_snapshot(self) -> Dict[str, Any]:" in source
+
+
+def test_scan_once_caches_day_state_for_strategy_hot_path() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    method_src = _method_source_text(src, "SafetyBot", "scan_once")
+    state_idx = method_src.find("st = self.gov.day_state()")
+    cache_idx = method_src.find("self.strategy._cache_runtime_day_state_snapshot(st)")
+    assert state_idx != -1
+    assert cache_idx != -1
+    assert state_idx < cache_idx
+
+
+def test_evaluate_symbol_prefers_cached_day_state_snapshot_before_live_read() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    method_src = _method_source_text(src, "StandardStrategy", "evaluate_symbol")
+    cache_idx = method_src.find("st0 = self._runtime_get_cached_day_state_snapshot()")
+    live_idx = method_src.find("st0 = self.gov.day_state()")
+    assert cache_idx != -1
+    assert live_idx != -1
+    assert cache_idx < live_idx
