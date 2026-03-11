@@ -52,5 +52,6 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     src = Path("BIN/safetybot.py").resolve()
     fn = _class_method_node(src, "SafetyBot", "_runtime_refresh_control_plane_state")
     called = _called_names(fn)
+    assert "poll_deals" in called
     assert "_runtime_refresh_group_policy_cache" in called
     assert "_runtime_refresh_global_guard_cache" in called

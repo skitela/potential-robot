@@ -15057,6 +15057,10 @@ class SafetyBot:
 
     def _runtime_refresh_control_plane_state(self) -> None:
         self._runtime_refresh_meta_advisory_cache()
+        try:
+            self.poll_deals()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         tw_ctx = dict(getattr(self, "_runtime_cached_tw_ctx", {}) or {})
         st = dict(getattr(self, "_runtime_cached_day_state", {}) or {})
@@ -16059,8 +16063,6 @@ class SafetyBot:
             self._trade_window_closeout(reason="closeout_buffer", ctx=tw_ctx)
             return
 
-        # deals (SYS)
-        self.poll_deals()
         global_guard_cache_ready, self_heal_signal, canary_signal, drift_signal = (
             self._runtime_get_cached_global_guard_state()
         )

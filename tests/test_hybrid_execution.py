@@ -628,6 +628,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._last_no_live_drift_refresh_ts = 0.0
         bot._last_cost_guard_refresh_ts = 0.0
         bot._last_time_anchor_refresh_ts = 0.0
+        bot.poll_deals = MagicMock()
         bot._runtime_refresh_meta_advisory_cache = MagicMock()
         bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._runtime_refresh_global_guard_cache = MagicMock()
@@ -645,6 +646,7 @@ class TestHybridExecution(unittest.TestCase):
         finally:
             CFG.scan_interval_sec = scan_prev
 
+        bot.poll_deals.assert_called_once_with()
         bot._runtime_refresh_meta_advisory_cache.assert_called_once_with()
         bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._runtime_refresh_global_guard_cache.assert_called_once_with()
@@ -677,6 +679,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._last_no_live_drift_refresh_ts = 95.0
         bot._last_cost_guard_refresh_ts = 95.0
         bot._last_time_anchor_refresh_ts = 95.0
+        bot.poll_deals = MagicMock()
         bot._runtime_refresh_meta_advisory_cache = MagicMock()
         bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._runtime_refresh_global_guard_cache = MagicMock()
@@ -694,6 +697,7 @@ class TestHybridExecution(unittest.TestCase):
         finally:
             CFG.scan_interval_sec = scan_prev
 
+        bot.poll_deals.assert_called_once_with()
         bot._runtime_refresh_meta_advisory_cache.assert_called_once_with()
         bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._runtime_refresh_global_guard_cache.assert_called_once_with()
