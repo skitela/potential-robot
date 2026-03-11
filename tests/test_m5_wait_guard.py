@@ -22,9 +22,10 @@ import safetybot
 
 
 class _EngineStub:
-    def __init__(self, df):
+    def __init__(self, df, bars_store=None):
         self._df = df
         self.calls = 0
+        self.bars_store = bars_store
 
     def copy_rates(self, _symbol, _grp, _timeframe, _n):
         self.calls += 1
@@ -32,7 +33,7 @@ class _EngineStub:
 
 
 class _BotStub:
-    def __init__(self, now_ts: float, df):
+    def __init__(self, now_ts: float, df, bars_store=None):
         self.config = types.SimpleNamespace(scheduler={})
         self.cache = types.SimpleNamespace(
             last_m5_calc_ts={},
@@ -40,7 +41,7 @@ class _BotStub:
             last_m5_bar_time={},
         )
         self.zmq_feature_cache = {}
-        self.engine = _EngineStub(df)
+        self.engine = _EngineStub(df, bars_store=bars_store)
         self.last_indicators = {}
         self.skips = []
         self._skip_allowed = []
@@ -56,6 +57,14 @@ class _BotStub:
 
     def _try_zmq_feature_indicators(self, symbol, grp, mode, now_ts):  # noqa: ANN001
         return safetybot.StandardStrategy._try_zmq_feature_indicators(self, symbol, grp, mode, now_ts)
+
+
+class _BarsStoreStub:
+    def __init__(self, df):
+        self._df = df
+
+    def read_recent_df(self, _base_symbol, _limit):
+        return self._df.copy()
 
 
 class TestM5WaitGuard(unittest.TestCase):
@@ -299,6 +308,43 @@ class TestM5WaitGuard(unittest.TestCase):
             safetybot.CFG.paper_m5_indicator_reuse_max_age_sec = old_reuse_age
             safetybot.CFG.hybrid_use_zmq_m5_features = old_use_features
             safetybot.CFG.m5_pull_sec_eco = old_pull
+
+    def test_fresh_store_snapshot_recovers_short_copy_rates_without_skip(self):
+        old_paper = safetybot.CFG.paper_trading
+        old_use_features = safetybot.CFG.hybrid_use_zmq_m5_features
+        old_use_bars = safetybot.CFG.hybrid_use_zmq_m5_bars
+        old_pull = safetybot.CFG.m5_pull_sec_eco
+        old_atr = safetybot.CFG.atr_period
+        try:
+            safetybot.CFG.paper_trading = True
+            safetybot.CFG.hybrid_use_zmq_m5_features = False
+            safetybot.CFG.hybrid_use_zmq_m5_bars = True
+            safetybot.CFG.m5_pull_sec_eco = 1
+            safetybot.CFG.atr_period = 14
+
+            now_ts = safetybot.time.time()
+            short_df = self._short_m5_df(20)
+            full_df = self._m5_df(120)
+            bot = _BotStub(
+                now_ts=now_ts,
+                df=short_df,
+                bars_store=_BarsStoreStub(full_df),
+            )
+            bot.cache.last_m5_calc_ts["USDJPY.pro"] = float(now_ts - 5.0)
+            bot.cache.next_m5_fetch_ts["USDJPY.pro"] = float(now_ts)
+
+            ind = safetybot.StandardStrategy.m5_indicators_if_due(bot, "USDJPY.pro", "FX", "ECO")
+
+            self.assertIsNotNone(ind)
+            self.assertEqual(1, bot.engine.calls)
+            self.assertNotIn("M5_DATA_SHORT", bot.skips)
+            self.assertAlmostEqual(float(full_df["close"].iloc[-1]), float(ind["close"]), places=6)
+        finally:
+            safetybot.CFG.paper_trading = old_paper
+            safetybot.CFG.hybrid_use_zmq_m5_features = old_use_features
+            safetybot.CFG.hybrid_use_zmq_m5_bars = old_use_bars
+            safetybot.CFG.m5_pull_sec_eco = old_pull
+            safetybot.CFG.atr_period = old_atr
 
     def test_live_mode_does_not_reuse_cached_indicators_on_m5_data_short(self):
         old_paper = safetybot.CFG.paper_trading

@@ -9147,9 +9147,25 @@ class StandardStrategy:
             return None
 
         df = self.engine.copy_rates(symbol, grp, CFG.timeframe_trade, 120)
-        if df is None or len(df) < 60:
+        rows = 0 if df is None else int(len(df))
+        copy_rows = int(rows)
+        if (df is None or rows < 60) and bool(store_state.get("fresh_ok")) and int(store_state.get("rows") or 0) >= 60:
+            df_store = store_state.get("df")
+            if isinstance(df_store, pd.DataFrame) and len(df_store) >= 60:
+                df = df_store.copy()
+                rows = int(len(df))
+                if self._skip_log_allowed(symbol, "M5_DATA_SHORT_STORE_RECOVERY", 60):
+                    logging.info(
+                        "M5_DATA_SHORT_STORE_RECOVERY symbol=%s grp=%s mode=%s copy_rows=%s store_rows=%s last_bar_utc=%s",
+                        symbol,
+                        grp,
+                        mode,
+                        int(copy_rows),
+                        int(store_state.get("rows") or 0),
+                        store_state.get("last_bar_utc"),
+                    )
+        if df is None or rows < 60:
             self.cache.last_m5_calc_ts[symbol] = now_ts
-            rows = 0 if df is None else int(len(df))
             reason = "M5_DATA_SHORT"
             if strict_no_fetch and int(store_state.get("rows") or 0) > 0 and bool(store_state.get("stale")):
                 reason = "M5_STORE_STALE"
