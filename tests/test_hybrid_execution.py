@@ -625,6 +625,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._last_no_live_drift_refresh_ts = 0.0
         bot._last_cost_guard_refresh_ts = 0.0
         bot._last_time_anchor_refresh_ts = 0.0
+        bot._runtime_refresh_meta_advisory_cache = MagicMock()
         bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._refresh_live_module_states = MagicMock()
         bot._refresh_no_live_drift_check = MagicMock()
@@ -639,6 +640,7 @@ class TestHybridExecution(unittest.TestCase):
         finally:
             CFG.scan_interval_sec = scan_prev
 
+        bot._runtime_refresh_meta_advisory_cache.assert_called_once_with()
         bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._refresh_live_module_states.assert_called_once_with(
             tw_ctx=bot._runtime_cached_tw_ctx,
@@ -664,6 +666,7 @@ class TestHybridExecution(unittest.TestCase):
         bot._last_no_live_drift_refresh_ts = 95.0
         bot._last_cost_guard_refresh_ts = 95.0
         bot._last_time_anchor_refresh_ts = 95.0
+        bot._runtime_refresh_meta_advisory_cache = MagicMock()
         bot._runtime_refresh_group_policy_cache = MagicMock()
         bot._refresh_live_module_states = MagicMock()
         bot._refresh_no_live_drift_check = MagicMock()
@@ -678,11 +681,69 @@ class TestHybridExecution(unittest.TestCase):
         finally:
             CFG.scan_interval_sec = scan_prev
 
+        bot._runtime_refresh_meta_advisory_cache.assert_called_once_with()
         bot._runtime_refresh_group_policy_cache.assert_called_once_with()
         bot._refresh_live_module_states.assert_not_called()
         bot._refresh_no_live_drift_check.assert_not_called()
         bot._refresh_cost_guard_auto_relax_state.assert_not_called()
         bot._time_anchor_sync_if_due.assert_not_called()
+
+    def test_runtime_refresh_meta_advisory_cache_loads_runtime_meta_once_per_cadence(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot.meta_dir = Path("C:/meta")
+        bot._last_meta_advisory_refresh_ts = 0.0
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        unified_prev = getattr(CFG, "unified_learning_runtime_enabled", True)
+        CFG.scan_interval_sec = 30
+        CFG.unified_learning_runtime_enabled = True
+        try:
+            with (
+                patch("BIN.safetybot.time.time", return_value=100.0),
+                patch.object(bot, "_read_learner_qa_light", return_value="YELLOW") as qa_mock,
+                patch("BIN.safetybot.load_unified_learning_advice", return_value={"runtime_light": {"EURUSD": 1}}) as unified_mock,
+                patch("BIN.safetybot.load_verdict", return_value={"light": "GREEN"}) as verdict_mock,
+                patch("BIN.safetybot.load_scout_advice", return_value={"preferred_symbol": "EURUSD"}) as scout_mock,
+            ):
+                bot._runtime_refresh_meta_advisory_cache()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+            CFG.unified_learning_runtime_enabled = unified_prev
+
+        qa_mock.assert_called_once_with()
+        unified_mock.assert_called_once_with(bot.meta_dir)
+        verdict_mock.assert_called_once_with(bot.meta_dir)
+        scout_mock.assert_called_once_with(bot.meta_dir)
+        self.assertEqual(bot._runtime_cached_learner_qa_light, "YELLOW")
+        self.assertEqual(bot._runtime_cached_verdict, {"light": "GREEN"})
+        self.assertEqual(bot._runtime_cached_scout_advice, {"preferred_symbol": "EURUSD"})
+        self.assertEqual(bot._last_meta_advisory_refresh_ts, 100.0)
+
+    def test_runtime_refresh_meta_advisory_cache_skips_when_fresh(self):
+        with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):
+            bot = SafetyBot()
+        bot.meta_dir = Path("C:/meta")
+        bot._last_meta_advisory_refresh_ts = 95.0
+
+        scan_prev = getattr(CFG, "scan_interval_sec", 30)
+        CFG.scan_interval_sec = 30
+        try:
+            with (
+                patch("BIN.safetybot.time.time", return_value=100.0),
+                patch.object(bot, "_read_learner_qa_light") as qa_mock,
+                patch("BIN.safetybot.load_unified_learning_advice") as unified_mock,
+                patch("BIN.safetybot.load_verdict") as verdict_mock,
+                patch("BIN.safetybot.load_scout_advice") as scout_mock,
+            ):
+                bot._runtime_refresh_meta_advisory_cache()
+        finally:
+            CFG.scan_interval_sec = scan_prev
+
+        qa_mock.assert_not_called()
+        unified_mock.assert_not_called()
+        verdict_mock.assert_not_called()
+        scout_mock.assert_not_called()
 
     def test_runtime_refresh_group_policy_cache_builds_snapshot_when_missing(self):
         with patch.object(SafetyBot, "__init__", lambda s, *args, **kwargs: None):

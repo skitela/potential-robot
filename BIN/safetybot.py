@@ -10722,6 +10722,10 @@ class SafetyBot:
         self._runtime_cached_day_state: Dict[str, Any] = {}
         self._runtime_cached_eco_active: bool = False
         self._runtime_cached_warn_active: bool = False
+        self._runtime_cached_learner_qa_light: str = "UNKNOWN"
+        self._runtime_cached_unified_learning: Optional[Dict[str, Any]] = None
+        self._runtime_cached_verdict: Optional[Dict[str, Any]] = None
+        self._runtime_cached_scout_advice: Optional[Dict[str, Any]] = None
         self._last_group_policy_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
@@ -10729,6 +10733,7 @@ class SafetyBot:
         self._last_time_anchor_refresh_ts: float = 0.0
         self._last_budget_log_ts: float = 0.0
         self._last_oanda_price_breakdown_log_ts: float = 0.0
+        self._last_meta_advisory_refresh_ts: float = 0.0
         ensure_dirs(_paths)
 
         # LIVE: terminal OANDA MT5 hard requirement (fail-fast before connect)
@@ -14836,6 +14841,41 @@ class SafetyBot:
         self._runtime_cached_eco_active = bool(eco_active)
         self._runtime_cached_warn_active = bool(warn_active)
 
+    def _runtime_get_cached_meta_advisory_state(
+        self,
+    ) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        learner_qa_light = str(getattr(self, "_runtime_cached_learner_qa_light", "UNKNOWN") or "UNKNOWN").upper()
+        unified_learning = getattr(self, "_runtime_cached_unified_learning", None)
+        verdict = getattr(self, "_runtime_cached_verdict", None)
+        scout = getattr(self, "_runtime_cached_scout_advice", None)
+        return learner_qa_light, unified_learning, verdict, scout
+
+    def _runtime_refresh_meta_advisory_cache(self) -> None:
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        refresh_interval_s = float(scan_interval_s)
+        if (now_ts - float(getattr(self, "_last_meta_advisory_refresh_ts", 0.0) or 0.0)) < refresh_interval_s:
+            return
+
+        learner_qa_light, unified_learning, cached_verdict, cached_scout = self._runtime_get_cached_meta_advisory_state()
+        if learner_qa_light == "UNKNOWN":
+            learner_qa_light = self._read_learner_qa_light()
+        if (
+            unified_learning is None
+            and bool(getattr(CFG, "unified_learning_runtime_enabled", True))
+        ):
+            unified_learning = load_unified_learning_advice(self.meta_dir)
+        verdict = load_verdict(self.meta_dir)
+        scout = load_scout_advice(self.meta_dir)
+
+        self._runtime_cached_learner_qa_light = str(learner_qa_light or "UNKNOWN").upper()
+        self._runtime_cached_unified_learning = (
+            dict(unified_learning) if isinstance(unified_learning, dict) else None
+        )
+        self._runtime_cached_verdict = dict(verdict) if isinstance(verdict, dict) else None
+        self._runtime_cached_scout_advice = dict(scout) if isinstance(scout, dict) else None
+        self._last_meta_advisory_refresh_ts = now_ts
+
     def _compute_group_policy_snapshot(
         self,
         *,
@@ -14928,6 +14968,8 @@ class SafetyBot:
         self._emit_group_policy_snapshot_log(group_arb=group_arb)
 
     def _runtime_refresh_control_plane_state(self) -> None:
+        self._runtime_refresh_meta_advisory_cache()
+
         tw_ctx = dict(getattr(self, "_runtime_cached_tw_ctx", {}) or {})
         st = dict(getattr(self, "_runtime_cached_day_state", {}) or {})
         if not tw_ctx or not st:
@@ -16544,10 +16586,10 @@ class SafetyBot:
 
         # Query SCUD/tie-break path only on real near-tie cases.
         if has_near_tie_in_topk(candidates, n_limit):
-            verdict = load_verdict(self.meta_dir)
+            verdict = cached_verdict if isinstance(cached_verdict, dict) else load_verdict(self.meta_dir)
             verdict_light = (verdict.get("light") if verdict else "INSUFFICIENT_DATA")
             if verdict_light == "GREEN":
-                scout = load_scout_advice(self.meta_dir)
+                scout = cached_scout if isinstance(cached_scout, dict) else load_scout_advice(self.meta_dir)
                 # Tie-break (mode B): only for GREEN + near-tie (also in LIVE).
                 candidates = apply_scout_tiebreak(
                     candidates=candidates,
