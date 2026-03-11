@@ -15971,12 +15971,14 @@ class SafetyBot:
             except Exception as e:
                 cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
         drift_signal = self._evaluate_drift()
-        learner_qa_light = self._read_learner_qa_light()
-        unified_learning = (
-            load_unified_learning_advice(self.meta_dir)
-            if bool(getattr(CFG, "unified_learning_runtime_enabled", True))
-            else None
-        )
+        learner_qa_light, unified_learning, cached_verdict, cached_scout = self._runtime_get_cached_meta_advisory_state()
+        if learner_qa_light == "UNKNOWN":
+            learner_qa_light = self._read_learner_qa_light()
+        if (
+            unified_learning is None
+            and bool(getattr(CFG, "unified_learning_runtime_enabled", True))
+        ):
+            unified_learning = load_unified_learning_advice(self.meta_dir)
 
         # rollover global
         rollover_safe = self.strategy.rollover_safe()
