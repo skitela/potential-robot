@@ -8967,6 +8967,60 @@ class StandardStrategy:
             _norm_bar_key(df_d1["time"].iloc[-1]),
         )
 
+    def _try_zmq_feature_indicators(self, symbol: str, grp: str, mode: str, now_ts: float) -> Optional[Dict]:
+        if not bool(getattr(CFG, "hybrid_use_zmq_m5_features", True)):
+            return None
+        fcache = self.zmq_feature_cache if isinstance(self.zmq_feature_cache, dict) else None
+        fres = None
+        if fcache is not None:
+            fres = fcache.get(symbol_base(symbol)) or fcache.get(str(symbol).upper())
+        if not isinstance(fres, dict):
+            return None
+        try:
+            ts_msg = float(fres.get("recv_ts") or 0.0)
+            max_age_base = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
+            max_age = max(
+                max_age_base,
+                int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)),
+            )
+            age_s = max(0.0, now_ts - ts_msg)
+            if age_s > float(max_age):
+                return None
+            last_bar = pd.Timestamp(fres.get("bar_time_pl"))
+            prev_bar = self.cache.last_m5_bar_time.get(symbol)
+            if prev_bar is not None and last_bar == prev_bar:
+                return None
+            self.cache.last_m5_calc_ts[symbol] = now_ts
+            self.cache.last_m5_bar_time[symbol] = last_bar
+            self.cache.next_m5_fetch_ts[symbol] = float(now_ts) + float(
+                max(1, int(getattr(CFG, "timeframe_trade", 5))) * 60
+            )
+            ind = {
+                "close": float(fres.get("close")),
+                "open": float(fres.get("open")),
+                "high": (float(fres.get("high")) if fres.get("high") is not None else None),
+                "low": (float(fres.get("low")) if fres.get("low") is not None else None),
+                "sma": float(fres.get("sma_fast")),
+                "adx": float(fres.get("adx")),
+                "atr": float(fres.get("atr")),
+            }
+            self.last_indicators[symbol_base(symbol)] = dict(ind)
+            if self._skip_log_allowed(symbol, "ENTRY_READY_ZMQ", 60):
+                logging.info(
+                    "ENTRY_READY source=ZMQ_FEATURE symbol=%s grp=%s mode=%s adx=%.2f close=%.6f sma=%.6f open=%.6f",
+                    symbol,
+                    grp,
+                    mode,
+                    float(ind["adx"]),
+                    float(ind["close"]),
+                    float(ind["sma"]),
+                    float(ind["open"]),
+                )
+            return ind
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+            return None
+
     def m5_indicators_if_due(self, symbol: str, grp: str, mode: str) -> Optional[Dict]:
         now_ts = time.time()
         tf_min = max(1, int(getattr(CFG, "timeframe_trade", 5)))
@@ -8992,6 +9046,11 @@ class StandardStrategy:
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
             pull = CFG.m5_pull_sec_eco if mode == "ECO" else (CFG.m5_pull_sec_warm if mode == "WARM" else CFG.m5_pull_sec_hot)
+
+        zmq_ind = self._try_zmq_feature_indicators(symbol, grp, mode, now_ts)
+        if zmq_ind is not None:
+            return zmq_ind
+
         last = self.cache.last_m5_calc_ts.get(symbol, 0.0)
         if now_ts - last < pull:
             wait_s = int(max(0, float(pull) - (now_ts - last)))
@@ -9058,61 +9117,6 @@ class StandardStrategy:
                     extra=f"wait_s={wait_s}",
                 )
                 return None
-
-        if bool(getattr(CFG, "hybrid_use_zmq_m5_features", True)):
-            fcache = self.zmq_feature_cache if isinstance(self.zmq_feature_cache, dict) else None
-            fres = None
-            if fcache is not None:
-                fres = fcache.get(symbol_base(symbol)) or fcache.get(str(symbol).upper())
-            if isinstance(fres, dict):
-                try:
-                    ts_msg = float(fres.get("recv_ts") or 0.0)
-                    max_age_base = max(5, int(getattr(CFG, "hybrid_snapshot_max_age_sec", 180)))
-                    max_age = max(
-                        max_age_base,
-                        int(getattr(CFG, "hybrid_snapshot_bar_max_age_sec", 900)),
-                    )
-                    age_s = max(0.0, now_ts - ts_msg)
-                    if age_s <= float(max_age):
-                        last_bar = pd.Timestamp(fres.get("bar_time_pl"))
-                        prev_bar = self.cache.last_m5_bar_time.get(symbol)
-                        if prev_bar is not None and last_bar == prev_bar:
-                            self._metric_inc_skip("M5_SAME_BAR")
-                            self._log_skip_pre_throttled(
-                                symbol,
-                                grp,
-                                mode,
-                                "M5_SAME_BAR",
-                                interval_sec=45,
-                            )
-                            return None
-                        self.cache.last_m5_calc_ts[symbol] = now_ts
-                        self.cache.last_m5_bar_time[symbol] = last_bar
-                        self.cache.next_m5_fetch_ts[symbol] = float(now_ts) + float(max(1, int(getattr(CFG, "timeframe_trade", 5))) * 60)
-                        ind = {
-                            "close": float(fres.get("close")),
-                            "open": float(fres.get("open")),
-                            "high": (float(fres.get("high")) if fres.get("high") is not None else None),
-                            "low": (float(fres.get("low")) if fres.get("low") is not None else None),
-                            "sma": float(fres.get("sma_fast")),
-                            "adx": float(fres.get("adx")),
-                            "atr": float(fres.get("atr")),
-                        }
-                        self.last_indicators[symbol_base(symbol)] = dict(ind)
-                        if self._skip_log_allowed(symbol, "ENTRY_READY_ZMQ", 60):
-                            logging.info(
-                                "ENTRY_READY source=ZMQ_FEATURE symbol=%s grp=%s mode=%s adx=%.2f close=%.6f sma=%.6f open=%.6f",
-                                symbol,
-                                grp,
-                                mode,
-                                float(ind["adx"]),
-                                float(ind["close"]),
-                                float(ind["sma"]),
-                                float(ind["open"]),
-                            )
-                        return ind
-                except Exception as e:
-                    cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
         strict_no_fetch = bool(getattr(CFG, "hybrid_m5_no_fetch_strict", False)) or bool(
             getattr(CFG, "hybrid_no_mt5_data_fetch_hard", False)

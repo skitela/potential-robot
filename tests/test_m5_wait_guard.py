@@ -54,6 +54,9 @@ class _BotStub:
     def _log_skip_pre_throttled(self, symbol, grp, mode, reason, **_kwargs):  # noqa: ANN001
         self.skips.append(str(reason))
 
+    def _try_zmq_feature_indicators(self, symbol, grp, mode, now_ts):  # noqa: ANN001
+        return safetybot.StandardStrategy._try_zmq_feature_indicators(self, symbol, grp, mode, now_ts)
+
 
 class TestM5WaitGuard(unittest.TestCase):
     def _tmpdir(self) -> Path:
