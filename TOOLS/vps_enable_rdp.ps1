@@ -1,6 +1,8 @@
 param(
     [int]$Port = 3389,
-    [switch]$DisableNla
+    [switch]$DisableNla,
+    [ValidateSet(0, 1, 2)]
+    [int]$SecurityLayer = 1
 )
 
 Set-StrictMode -Version Latest
@@ -36,6 +38,9 @@ if ($DisableNla.IsPresent) {
     Write-Step "nla=enabled"
 }
 
+Set-ItemProperty -Path $rdpTcpKey -Name SecurityLayer -Value ([int]$SecurityLayer)
+Write-Step ("security_layer=" + [int]$SecurityLayer)
+
 if ($Port -ne 3389) {
     Set-ItemProperty -Path $rdpTcpKey -Name PortNumber -Value ([int]$Port)
     Write-Step "port=$Port"
@@ -51,7 +56,9 @@ try {
 }
 
 Set-Service -Name TermService -StartupType Automatic
-if ((Get-Service -Name TermService).Status -ne "Running") {
+if ((Get-Service -Name TermService).Status -eq "Running") {
+    Restart-Service -Name TermService -Force
+} else {
     Start-Service -Name TermService
 }
 Write-Step "termservice=running"
@@ -69,6 +76,7 @@ $report = [ordered]@{
     user = $env:USERNAME
     port = $Port
     nla_enabled = (-not $DisableNla.IsPresent)
+    security_layer = [int]$SecurityLayer
     listener_detected = ($null -ne $listener)
 }
 

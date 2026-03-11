@@ -1,6 +1,9 @@
 param(
     [string]$Root = "C:\OANDA_MT5_SYSTEM",
-    [switch]$EnableBasicAuth
+    [switch]$EnableBasicAuth,
+    [switch]$DisableRdpNla,
+    [ValidateSet(0, 1, 2)]
+    [int]$RdpSecurityLayer = 1
 )
 
 Set-StrictMode -Version Latest
@@ -28,6 +31,7 @@ $report = [ordered]@{
     host = $env:COMPUTERNAME
     winrm = [ordered]@{}
     openssh = [ordered]@{}
+    rdp = [ordered]@{}
 }
 
 # WinRM / PowerShell Remoting
@@ -84,6 +88,27 @@ if (Test-Path -LiteralPath $cfgPath) {
 $report.openssh.capability_state = if ($null -ne $cap) { [string]$cap.State } else { "UNKNOWN" }
 $report.openssh.service = (Get-Service -Name sshd -ErrorAction SilentlyContinue).Status.ToString()
 $report.openssh.firewall_22 = [bool](Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue)
+
+# RDP baseline repair
+$rdpHelper = Join-Path $runtimeRoot "TOOLS\vps_enable_rdp.ps1"
+if (Test-Path -LiteralPath $rdpHelper) {
+    $rdpArgs = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $rdpHelper,
+        "-SecurityLayer", [string]$RdpSecurityLayer
+    )
+    if ($DisableRdpNla) {
+        $rdpArgs += "-DisableNla"
+    }
+    $rdpOutput = & powershell @rdpArgs 2>&1
+    $report.rdp.helper = $rdpHelper
+    $report.rdp.disable_nla = [bool]$DisableRdpNla
+    $report.rdp.security_layer = [int]$RdpSecurityLayer
+    $report.rdp.output = @($rdpOutput | ForEach-Object { [string]$_ })
+} else {
+    $report.rdp.helper = "MISSING"
+}
 
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding UTF8
 Write-Output ("ENABLE_VPS_REMOTE_ADMIN_OK report={0}" -f $reportPath)
