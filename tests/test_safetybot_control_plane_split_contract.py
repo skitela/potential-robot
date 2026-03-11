@@ -65,6 +65,7 @@ def test_runtime_refresh_control_plane_state_refreshes_group_policy_cache() -> N
     assert "_runtime_refresh_group_policy_cache" in called
     assert "_runtime_refresh_window_routing_cache" in called
     assert "_runtime_refresh_window_prefetch" in called
+    assert "_runtime_refresh_candidate_ranking_cache" in called
     assert "_runtime_refresh_global_guard_cache" in called
     assert "_runtime_refresh_market_guard_cache" in called
     assert "_runtime_emit_budget_telemetry" in called
@@ -122,19 +123,31 @@ def test_scan_once_stages_market_snapshot_instead_of_writing_it() -> None:
     assert "atomic_write_json" not in called
 
 
-def test_scan_once_uses_cached_window_routing_policy() -> None:
+def test_scan_once_no_longer_builds_window_routing_inline() -> None:
     src = Path("BIN/safetybot.py").resolve()
     fn = _class_method_node(src, "SafetyBot", "scan_once")
     called = _called_names(fn)
-    assert "_runtime_get_cached_window_routing_state" in called
-    assert "_runtime_window_routing_cache_matches" in called
-    assert "_runtime_materialize_window_routing_state" in called
-    assert "_compute_window_routing_policy" in called
+    assert "_runtime_get_cached_window_routing_state" not in called
+    assert "_runtime_window_routing_cache_matches" not in called
+    assert "_runtime_materialize_window_routing_state" not in called
+    assert "_compute_window_routing_policy" not in called
+    assert "_runtime_get_cached_candidate_ranking_state" in called
     assert "trade_window_next_ctx" not in called
     assert "_resolve_intents_to_canonical" not in called
     assert "fx_rotation_bucket" not in called
     assert "get_price_breakdown" not in called
     assert "warn_level_reached" in called
+
+
+def test_scan_once_uses_cached_candidate_ranking_policy() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "scan_once")
+    called = _called_names(fn)
+    assert "_runtime_get_cached_candidate_ranking_state" in called
+    assert "_runtime_candidate_ranking_signature" in called
+    assert "_compute_candidate_ranking" in called
+    assert "resolve_unified_learning_rank_adjustment" not in called
+    assert "risk_window_skip_decision" not in called
 
 
 def test_compute_window_routing_policy_no_longer_runs_prefetch() -> None:
@@ -144,6 +157,17 @@ def test_compute_window_routing_policy_no_longer_runs_prefetch() -> None:
     assert "trade_window_next_ctx" not in called
     assert "read_recent_df" not in called
     assert "fx_rotation_bucket" in called
+
+
+def test_compute_candidate_ranking_owns_ranking_logic() -> None:
+    src = Path("BIN/safetybot.py").resolve()
+    fn = _class_method_node(src, "SafetyBot", "_compute_candidate_ranking")
+    called = _called_names(fn)
+    assert "_runtime_get_cached_window_routing_state" in called
+    assert "_runtime_window_routing_cache_matches" in called
+    assert "_runtime_materialize_window_routing_state" in called
+    assert "risk_window_skip_decision" in called
+    assert "resolve_unified_learning_rank_adjustment" in called
 
 
 def test_runtime_refresh_window_prefetch_owns_prefetch_logic() -> None:

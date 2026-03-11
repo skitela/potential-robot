@@ -10826,10 +10826,14 @@ class SafetyBot:
         self._runtime_market_guard_cache_ready: bool = False
         self._runtime_cached_window_routing: Dict[str, Any] = {}
         self._runtime_window_routing_cache_ready: bool = False
+        self._runtime_cached_candidate_ranking: Dict[str, Any] = {}
+        self._runtime_candidate_ranking_cache_ready: bool = False
+        self._runtime_cached_open_syms: set[str] = set()
         self._runtime_pending_market_snapshot: Optional[Dict[str, Any]] = None
         self._runtime_market_snapshot_dirty: bool = False
         self._last_group_policy_refresh_ts: float = 0.0
         self._last_window_routing_refresh_ts: float = 0.0
+        self._last_candidate_ranking_refresh_ts: float = 0.0
         self._last_window_prefetch_refresh_ts: float = 0.0
         self._last_live_module_refresh_ts: float = 0.0
         self._last_no_live_drift_refresh_ts: float = 0.0
@@ -14944,12 +14948,19 @@ class SafetyBot:
         eco_active: bool,
         warn_active: bool,
         global_mode: str,
+        open_syms: Optional[Iterable[str]] = None,
     ) -> None:
         self._runtime_cached_tw_ctx = dict(tw_ctx or {})
         self._runtime_cached_day_state = dict(st or {})
         self._runtime_cached_eco_active = bool(eco_active)
         self._runtime_cached_warn_active = bool(warn_active)
         self._runtime_cached_global_mode = str(global_mode or "ECO").upper()
+        if open_syms is not None:
+            self._runtime_cached_open_syms = {
+                canonical_symbol(str(sym))
+                for sym in (open_syms or ())
+                if str(sym).strip()
+            }
 
     def _runtime_get_cached_meta_advisory_state(
         self,
@@ -15455,6 +15466,289 @@ class SafetyBot:
         }
         self._runtime_cached_window_routing = routing
         self._runtime_window_routing_cache_ready = True
+
+    @staticmethod
+    def _runtime_group_policy_signature(
+        group_arb: Dict[str, Dict[str, Any]],
+        group_risk: Dict[str, Dict[str, Any]],
+    ) -> str:
+        parts: List[str] = []
+        for g in sorted(set(list((group_arb or {}).keys()) + list((group_risk or {}).keys()))):
+            arb = (group_arb or {}).get(g, {}) or {}
+            risk = (group_risk or {}).get(g, {}) or {}
+            parts.append(
+                "|".join(
+                    [
+                        str(g),
+                        f"{float(arb.get('priority_factor', 1.0) or 1.0):.4f}",
+                        str(int(bool(risk.get("entry_allowed", True)))),
+                        str(int(bool(risk.get("friday_risk", False)))),
+                        str(int(bool(risk.get("reopen_guard", False)))),
+                        str(risk.get("reason", "NONE")),
+                    ]
+                )
+            )
+        return ";".join(parts)
+
+    @staticmethod
+    def _runtime_meta_rank_signature(
+        learner_qa_light: str,
+        unified_learning: Optional[Dict[str, Any]],
+    ) -> str:
+        obj = unified_learning if isinstance(unified_learning, dict) else {}
+        marker = (
+            obj.get("config_hash")
+            or obj.get("generated_at_utc")
+            or obj.get("generated_at")
+            or obj.get("schema_version")
+            or "NONE"
+        )
+        return f"{str(learner_qa_light or 'UNKNOWN').upper()}|{str(marker)}"
+
+    def _runtime_candidate_ranking_signature(
+        self,
+        *,
+        tw_ctx: Dict[str, Any],
+        open_syms: Iterable[str],
+        global_mode: str,
+        group_arb: Dict[str, Dict[str, Any]],
+        group_risk: Dict[str, Dict[str, Any]],
+        learner_qa_light: str,
+        unified_learning: Optional[Dict[str, Any]],
+    ) -> str:
+        routing_sig = self._runtime_window_routing_signature(
+            tw_window_id=str((tw_ctx or {}).get("window_id") or ""),
+            tw_group=str((tw_ctx or {}).get("group") or ""),
+            tw_strict_group=bool(getattr(CFG, "trade_window_strict_group_routing", True)),
+            policy_shadow=bool(getattr(CFG, "policy_shadow_mode_enabled", True)),
+            open_syms=open_syms,
+        )
+        group_sig = self._runtime_group_policy_signature(group_arb, group_risk)
+        meta_sig = self._runtime_meta_rank_signature(learner_qa_light, unified_learning)
+        return f"{routing_sig}|{str(global_mode or 'ECO').upper()}|{group_sig}|{meta_sig}"
+
+    def _runtime_get_cached_candidate_ranking_state(self) -> Tuple[bool, Dict[str, Any]]:
+        state = dict(getattr(self, "_runtime_cached_candidate_ranking", {}) or {})
+        state["candidates"] = [
+            tuple(item)
+            for item in (state.get("candidates") or [])
+            if isinstance(item, (list, tuple)) and len(item) == 4
+        ]
+        state["unified_rank_map"] = {
+            str(k): dict(v or {})
+            for k, v in (state.get("unified_rank_map", {}) or {}).items()
+            if str(k).strip()
+        }
+        return bool(getattr(self, "_runtime_candidate_ranking_cache_ready", False)), state
+
+    def _cache_candidate_ranking_state(self, state: Dict[str, Any]) -> None:
+        cache_state = dict(state or {})
+        cache_state["candidates"] = [
+            (
+                float(item[0]),
+                str(item[1]),
+                str(item[2]),
+                str(item[3]),
+            )
+            for item in (cache_state.get("candidates") or [])
+            if isinstance(item, (list, tuple)) and len(item) == 4
+        ]
+        cache_state["unified_rank_map"] = {
+            str(k): dict(v or {})
+            for k, v in (cache_state.get("unified_rank_map", {}) or {}).items()
+            if str(k).strip()
+        }
+        self._runtime_cached_candidate_ranking = cache_state
+        self._runtime_candidate_ranking_cache_ready = True
+
+    def _compute_candidate_ranking(
+        self,
+        *,
+        tw_ctx: Dict[str, Any],
+        open_syms: Iterable[str],
+        group_arb: Dict[str, Dict[str, Any]],
+        group_risk: Dict[str, Dict[str, Any]],
+        global_mode: str,
+        learner_qa_light: str,
+        unified_learning: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        tw_window_id = str((tw_ctx or {}).get("window_id") or "")
+        tw_group = str((tw_ctx or {}).get("group") or "")
+        policy_shadow = bool(getattr(CFG, "policy_shadow_mode_enabled", True))
+        use_windows_v2_hard = bool(getattr(CFG, "policy_windows_v2_enabled", True)) and (not policy_shadow)
+        use_risk_windows_hard = bool(getattr(CFG, "policy_risk_windows_enabled", True)) and (not policy_shadow)
+        use_group_arb_hard = bool(getattr(CFG, "policy_group_arbitration_enabled", True)) and (not policy_shadow)
+        now_prio = now_utc()
+        routing_sig = self._runtime_window_routing_signature(
+            tw_window_id=tw_window_id,
+            tw_group=tw_group,
+            tw_strict_group=bool(getattr(CFG, "trade_window_strict_group_routing", True)),
+            policy_shadow=bool(policy_shadow),
+            open_syms=open_syms,
+        )
+        routing_cache_ready, routing_state = self._runtime_get_cached_window_routing_state()
+        if routing_cache_ready and self._runtime_window_routing_cache_matches(routing_state, routing_sig):
+            allowed_groups, allowed_symbols_by_group, carryover_active, fx_bucket_idx, fx_bucket_count = (
+                self._runtime_materialize_window_routing_state(routing_state)
+            )
+        else:
+            routing_state = self._compute_window_routing_policy(
+                tw_ctx=tw_ctx,
+                open_syms=open_syms,
+                group_arb=group_arb,
+                policy_shadow=policy_shadow,
+                global_mode=str(global_mode or "ECO"),
+                now_prio=now_prio,
+            )
+            self._cache_window_routing_state(routing_state)
+            self._last_window_routing_refresh_ts = float(time.time())
+            allowed_groups, allowed_symbols_by_group, carryover_active, fx_bucket_idx, fx_bucket_count = (
+                self._runtime_materialize_window_routing_state(routing_state)
+            )
+
+        candidates: List[Tuple[float, str, str, str]] = []
+        unified_rank_map: Dict[str, Dict[str, Any]] = {}
+        open_set = {str(sym) for sym in (open_syms or ()) if str(sym).strip()}
+        for raw, sym, grp in self.universe:
+            grp_u = _group_key(grp)
+            if allowed_groups is not None and grp_u not in allowed_groups:
+                continue
+            sym_allow = allowed_symbols_by_group.get(grp_u)
+            if sym_allow is not None and canonical_symbol(sym) not in sym_allow:
+                continue
+            risk_state = group_risk.get(grp_u) or group_market_risk_state(grp_u, now_dt=now_prio)
+            skip_entry, skip_tag = risk_window_skip_decision(
+                symbol=sym,
+                group=grp_u,
+                risk_state=risk_state,
+                is_open_symbol=(sym in open_set),
+                use_risk_windows_hard=use_risk_windows_hard,
+                policy_risk_windows_enabled=bool(getattr(CFG, "policy_risk_windows_enabled", True)),
+            )
+            if skip_tag:
+                logging.info(
+                    "%s symbol=%s group=%s friday=%s reopen=%s reason=%s",
+                    skip_tag,
+                    sym,
+                    grp_u,
+                    int(bool(risk_state.get("friday_risk"))),
+                    int(bool(risk_state.get("reopen_guard"))),
+                    str(risk_state.get("reason", "NONE")),
+                )
+            if skip_entry:
+                continue
+
+            try:
+                if use_group_arb_hard:
+                    group_factor = float(
+                        group_arb.get(grp_u, {}).get("priority_factor", effective_group_priority_factor(grp_u, now_dt=now_prio))
+                    )
+                else:
+                    group_factor = float(group_arb.get(grp_u, {}).get("priority_factor", self.gov.group_priority_factor(grp_u)))
+            except Exception as e:
+                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+                group_factor = 1.0
+            if use_windows_v2_hard:
+                time_weight = float(group_window_weight(grp, sym, now_dt=now_prio))
+            else:
+                time_weight = float(self.ctrl.time_weight(grp, sym))
+            score_factor = float(self.ctrl.score_factor(grp, sym))
+            prio = float(time_weight) * float(score_factor) * float(group_factor)
+            if sym in open_set:
+                prio += 5.0
+            if bool(getattr(CFG, "unified_learning_rank_enabled", True)):
+                rank_adj = resolve_unified_learning_rank_adjustment(
+                    unified=unified_learning if isinstance(unified_learning, dict) else None,
+                    symbol=sym,
+                    window_id=tw_window_id,
+                    window_phase=str((tw_ctx or {}).get("phase") or ""),
+                    min_samples=int(getattr(CFG, "unified_learning_rank_min_samples", 20)),
+                    max_bonus_pct=float(getattr(CFG, "unified_learning_rank_max_bonus_pct", 0.08)),
+                )
+                if bool(getattr(CFG, "unified_learning_rank_paper_only", True)) and (not bool(self.is_paper)):
+                    rank_adj = {}
+                rank_mult = float(rank_adj.get("prio_multiplier") or 1.0) if isinstance(rank_adj, dict) else 1.0
+                if rank_mult <= 0.0:
+                    rank_mult = 1.0
+                prio = float(prio) * float(rank_mult)
+                if rank_adj:
+                    unified_rank_map[str(symbol_base(sym))] = dict(rank_adj)
+                    pct_bonus = float(rank_adj.get("pct_bonus") or 0.0)
+                    if abs(pct_bonus) >= 0.001:
+                        logging.info(
+                            "UNIFIED_LEARNING_RANK symbol=%s window=%s base_prio=%.6f pct_bonus=%.4f adjusted_prio=%.6f leader=%s reasons=%s",
+                            str(symbol_base(sym)),
+                            str(rank_adj.get("window") or "UNKNOWN"),
+                            float((float(time_weight) * float(score_factor) * float(group_factor)) + (5.0 if sym in open_set else 0.0)),
+                            float(pct_bonus),
+                            float(prio),
+                            str(rank_adj.get("feedback_leader") or "UNKNOWN"),
+                            ",".join([str(x) for x in (rank_adj.get("reasons") or [])]) or "NONE",
+                        )
+            candidates.append((prio, raw, sym, grp))
+
+        candidates.sort(reverse=True, key=lambda x: x[0])
+        signature = self._runtime_candidate_ranking_signature(
+            tw_ctx=tw_ctx,
+            open_syms=open_set,
+            global_mode=str(global_mode or "ECO"),
+            group_arb=group_arb,
+            group_risk=group_risk,
+            learner_qa_light=learner_qa_light,
+            unified_learning=unified_learning,
+        )
+        return {
+            "signature": signature,
+            "candidates": candidates,
+            "unified_rank_map": unified_rank_map,
+            "carryover_active": int(carryover_active),
+            "fx_bucket_idx": int(fx_bucket_idx),
+            "fx_bucket_count": int(fx_bucket_count),
+        }
+
+    def _runtime_refresh_candidate_ranking_cache(self) -> None:
+        tw_ctx = dict(getattr(self, "_runtime_cached_tw_ctx", {}) or {})
+        if not tw_ctx:
+            return
+        now_ts = float(time.time())
+        scan_interval_s = max(5, int(getattr(CFG, "scan_interval_sec", 30)))
+        refresh_interval_s = float(scan_interval_s)
+        group_arb, group_risk = self._runtime_get_cached_group_policy_state()
+        meta_cache_ready, learner_qa_light, unified_learning, _cached_verdict, _cached_scout = (
+            self._runtime_get_cached_meta_advisory_state()
+        )
+        if not group_arb or not group_risk:
+            return
+        if (not meta_cache_ready) or str(learner_qa_light or "UNKNOWN").upper() == "UNKNOWN":
+            learner_qa_light = str(getattr(self, "_runtime_cached_learner_qa_light", "UNKNOWN") or "UNKNOWN").upper()
+        open_syms = set(getattr(self, "_runtime_cached_open_syms", set()) or set())
+        signature = self._runtime_candidate_ranking_signature(
+            tw_ctx=tw_ctx,
+            open_syms=open_syms,
+            global_mode=str(getattr(self, "_runtime_cached_global_mode", "ECO") or "ECO"),
+            group_arb=group_arb,
+            group_risk=group_risk,
+            learner_qa_light=learner_qa_light,
+            unified_learning=unified_learning,
+        )
+        cache_ready, cached_state = self._runtime_get_cached_candidate_ranking_state()
+        if (
+            cache_ready
+            and str((cached_state or {}).get("signature") or "") == str(signature)
+            and (now_ts - float(getattr(self, "_last_candidate_ranking_refresh_ts", 0.0) or 0.0)) < refresh_interval_s
+        ):
+            return
+        state = self._compute_candidate_ranking(
+            tw_ctx=tw_ctx,
+            open_syms=open_syms,
+            group_arb=group_arb,
+            group_risk=group_risk,
+            global_mode=str(getattr(self, "_runtime_cached_global_mode", "ECO") or "ECO"),
+            learner_qa_light=learner_qa_light,
+            unified_learning=unified_learning,
+        )
+        self._cache_candidate_ranking_state(state)
+        self._last_candidate_ranking_refresh_ts = now_ts
 
     def _compute_window_routing_policy(
         self,
@@ -16007,6 +16301,11 @@ class SafetyBot:
 
         try:
             self._runtime_refresh_window_prefetch()
+        except Exception as e:
+            cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
+
+        try:
+            self._runtime_refresh_candidate_ranking_cache()
         except Exception as e:
             cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
 
@@ -17015,19 +17314,19 @@ class SafetyBot:
             global_mode = "ECO"
         # Learner QA is telemetry-only for trading path. Its logging lives in cached advisory refresh.
 
+        # pozycje (SYS): ECO nie może odciąć opieki nad otwartymi pozycjami
+        in_force_close = self.strategy.force_close_window()
+        positions_map = self.positions_snapshot(global_mode, force=bool(in_force_close))
+        pending_map = self.pending_snapshot(global_mode, force=bool(in_force_close))
+        open_syms = set(positions_map.keys()) if positions_map else set()
         self._runtime_cache_control_plane_inputs(
             tw_ctx=tw_ctx,
             st=st,
             eco_active=bool(eco_by_budget),
             warn_active=bool(warn_degrade_active),
             global_mode=str(global_mode or "ECO"),
+            open_syms=open_syms,
         )
-
-        # pozycje (SYS): ECO nie może odciąć opieki nad otwartymi pozycjami
-        in_force_close = self.strategy.force_close_window()
-        positions_map = self.positions_snapshot(global_mode, force=bool(in_force_close))
-        pending_map = self.pending_snapshot(global_mode, force=bool(in_force_close))
-        open_syms = set(positions_map.keys()) if positions_map else set()
         if open_syms and (not in_force_close):
             try:
                 in_force_close = any(self.strategy.force_close_window(symbol=s) for s in open_syms)
@@ -17118,123 +17417,40 @@ class SafetyBot:
                     int(snapshot_health.get("uptime_sec", 0)),
                 )
 
-        candidates: List[Tuple[float, str, str, str]] = []  # (priority, raw, sym, grp)
-        unified_rank_map: Dict[str, Dict[str, Any]] = {}
-        policy_shadow = bool(getattr(CFG, "policy_shadow_mode_enabled", True))
-        use_windows_v2_hard = bool(getattr(CFG, "policy_windows_v2_enabled", True)) and (not policy_shadow)
-        use_risk_windows_hard = bool(getattr(CFG, "policy_risk_windows_enabled", True)) and (not policy_shadow)
-        use_group_arb_hard = bool(getattr(CFG, "policy_group_arbitration_enabled", True)) and (not policy_shadow)
-        now_prio = now_utc()
-
-        # --- Trade-window extensions (P0 deterministic; defaults = no behavior change) ---
-        routing_sig = self._runtime_window_routing_signature(
-            tw_window_id=str(tw_window_id or ""),
-            tw_group=str(tw_group or ""),
-            tw_strict_group=bool(tw_strict_group),
-            policy_shadow=bool(policy_shadow),
+        candidate_sig = self._runtime_candidate_ranking_signature(
+            tw_ctx=tw_ctx,
             open_syms=open_syms,
+            global_mode=str(global_mode or "ECO"),
+            group_arb=group_arb,
+            group_risk=group_risk,
+            learner_qa_light=learner_qa_light,
+            unified_learning=unified_learning,
         )
-        routing_cache_ready, routing_state = self._runtime_get_cached_window_routing_state()
-        if routing_cache_ready and self._runtime_window_routing_cache_matches(routing_state, routing_sig):
-            allowed_groups, allowed_symbols_by_group, carryover_active, fx_bucket_idx, fx_bucket_count = (
-                self._runtime_materialize_window_routing_state(routing_state)
-            )
+        ranking_cache_ready, ranking_state = self._runtime_get_cached_candidate_ranking_state()
+        if ranking_cache_ready and str((ranking_state or {}).get("signature") or "") == str(candidate_sig):
+            candidates = list((ranking_state or {}).get("candidates") or [])
+            unified_rank_map = dict((ranking_state or {}).get("unified_rank_map") or {})
+            carryover_active = int((ranking_state or {}).get("carryover_active", 0) or 0)
+            fx_bucket_idx = int((ranking_state or {}).get("fx_bucket_idx", 0) or 0)
+            fx_bucket_count = int((ranking_state or {}).get("fx_bucket_count", 0) or 0)
         else:
-            routing_state = self._compute_window_routing_policy(
+            ranking_state = self._compute_candidate_ranking(
                 tw_ctx=tw_ctx,
                 open_syms=open_syms,
                 group_arb=group_arb,
-                policy_shadow=policy_shadow,
+                group_risk=group_risk,
                 global_mode=str(global_mode or "ECO"),
-                now_prio=now_prio,
+                learner_qa_light=learner_qa_light,
+                unified_learning=unified_learning,
             )
-            self._cache_window_routing_state(routing_state)
-            self._last_window_routing_refresh_ts = float(time.time())
-            allowed_groups, allowed_symbols_by_group, carryover_active, fx_bucket_idx, fx_bucket_count = (
-                self._runtime_materialize_window_routing_state(routing_state)
-            )
+            self._cache_candidate_ranking_state(ranking_state)
+            self._last_candidate_ranking_refresh_ts = float(time.time())
+            candidates = list((ranking_state or {}).get("candidates") or [])
+            unified_rank_map = dict((ranking_state or {}).get("unified_rank_map") or {})
+            carryover_active = int((ranking_state or {}).get("carryover_active", 0) or 0)
+            fx_bucket_idx = int((ranking_state or {}).get("fx_bucket_idx", 0) or 0)
+            fx_bucket_count = int((ranking_state or {}).get("fx_bucket_count", 0) or 0)
 
-        for raw, sym, grp in self.universe:
-            grp_u = _group_key(grp)
-            if allowed_groups is not None and grp_u not in allowed_groups:
-                continue
-            sym_allow = allowed_symbols_by_group.get(grp_u)
-            if sym_allow is not None and canonical_symbol(sym) not in sym_allow:
-                continue
-            risk_state = group_risk.get(grp_u) or group_market_risk_state(grp_u, now_dt=now_prio)
-            skip_entry, skip_tag = risk_window_skip_decision(
-                symbol=sym,
-                group=grp_u,
-                risk_state=risk_state,
-                is_open_symbol=(sym in open_syms),
-                use_risk_windows_hard=use_risk_windows_hard,
-                policy_risk_windows_enabled=bool(getattr(CFG, "policy_risk_windows_enabled", True)),
-            )
-            if skip_tag:
-                logging.info(
-                    "%s symbol=%s group=%s friday=%s reopen=%s reason=%s",
-                    skip_tag,
-                    sym,
-                    grp_u,
-                    int(bool(risk_state.get("friday_risk"))),
-                    int(bool(risk_state.get("reopen_guard"))),
-                    str(risk_state.get("reason", "NONE")),
-                )
-            if skip_entry:
-                continue
-
-            # priorytet: time_weight * score_factor * effective_group_priority_factor (+ bonus przy otwartej pozycji)
-            try:
-                if use_group_arb_hard:
-                    group_factor = float(
-                        group_arb.get(grp_u, {}).get("priority_factor", effective_group_priority_factor(grp_u, now_dt=now_prio))
-                    )
-                else:
-                    group_factor = float(group_arb.get(grp_u, {}).get("priority_factor", self.gov.group_priority_factor(grp_u)))
-            except Exception as e:
-                cg.tlog(None, "WARN", "SB_EXC", "nonfatal exception swallowed", e)
-                group_factor = 1.0
-            if use_windows_v2_hard:
-                time_weight = float(group_window_weight(grp, sym, now_dt=now_prio))
-            else:
-                time_weight = float(self.ctrl.time_weight(grp, sym))
-            score_factor = float(self.ctrl.score_factor(grp, sym))
-            prio = float(time_weight) * float(score_factor) * float(group_factor)
-            if sym in open_syms:
-                prio += 5.0
-            rank_adj: Dict[str, Any] = {}
-            if bool(getattr(CFG, "unified_learning_rank_enabled", True)):
-                rank_adj = resolve_unified_learning_rank_adjustment(
-                    unified=unified_learning if isinstance(unified_learning, dict) else None,
-                    symbol=sym,
-                    window_id=str(tw_window_id or ""),
-                    window_phase=str(tw_phase or ""),
-                    min_samples=int(getattr(CFG, "unified_learning_rank_min_samples", 20)),
-                    max_bonus_pct=float(getattr(CFG, "unified_learning_rank_max_bonus_pct", 0.08)),
-                )
-                if bool(getattr(CFG, "unified_learning_rank_paper_only", True)) and (not bool(self.is_paper)):
-                    rank_adj = {}
-                rank_mult = float(rank_adj.get("prio_multiplier") or 1.0) if isinstance(rank_adj, dict) else 1.0
-                if rank_mult <= 0.0:
-                    rank_mult = 1.0
-                prio = float(prio) * float(rank_mult)
-                if rank_adj:
-                    unified_rank_map[str(symbol_base(sym))] = dict(rank_adj)
-                    pct_bonus = float(rank_adj.get("pct_bonus") or 0.0)
-                    if abs(pct_bonus) >= 0.001:
-                        logging.info(
-                            "UNIFIED_LEARNING_RANK symbol=%s window=%s base_prio=%.6f pct_bonus=%.4f adjusted_prio=%.6f leader=%s reasons=%s",
-                            str(symbol_base(sym)),
-                            str(rank_adj.get("window") or "UNKNOWN"),
-                            float((float(time_weight) * float(score_factor) * float(group_factor)) + (5.0 if sym in open_syms else 0.0)),
-                            float(pct_bonus),
-                            float(prio),
-                            str(rank_adj.get("feedback_leader") or "UNKNOWN"),
-                            ",".join([str(x) for x in (rank_adj.get("reasons") or [])]) or "NONE",
-                        )
-            candidates.append((prio, raw, sym, grp))
-
-        candidates.sort(reverse=True, key=lambda x: x[0])
         if not candidates:
             logging.info("NO_CANDIDATES_AFTER_POLICY_FILTER")
             return
