@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.0",
+  "generated_on": "2026-03-14",
+  "timezone_operator": "Europe/Warsaw",
+  "notes": [
+    "Operator-facing matrix in Polish time.",
+    "FX_ASIA remains anchored to Asia/Tokyo internally.",
+    "ETF is not blocked by OANDA as a product, but old system intentionally blocked automated algo on ETF/ETN/EQUITY."
+  ],
+  "groups": [
+    {
+      "group": "FX_ASIA",
+      "anchor_tz": "Asia/Tokyo",
+      "operator_windows_pl": [
+        {
+          "window_id": "FX_ASIA_CORE_1",
+          "winter_pl": "01:00-05:00",
+          "summer_pl": "02:00-06:00",
+          "mode": "TRADE"
+        },
+        {
+          "window_id": "FX_ASIA_CORE_2",
+          "winter_pl": "05:00-08:00",
+          "summer_pl": "06:00-09:00",
+          "mode": "TRADE"
+        }
+      ],
+      "full_anchor_window": "09:00-16:00 Asia/Tokyo",
+      "status": "ACTIVE_CANDIDATE"
+    },
+    {
+      "group": "FX_AM",
+      "anchor_tz": "Europe/Warsaw",
+      "operator_windows_pl": [
+        {
+          "window_id": "FX_AM_PREWARM",
+          "pl": "08:45-09:00",
+          "mode": "OBSERVATION_ONLY"
+        },
+        {
+          "window_id": "FX_AM_CORE",
+          "pl": "09:00-12:00",
+          "mode": "TRADE"
+        }
+      ],
+      "status": "ACTIVE_CANDIDATE"
+    },
+    {
+      "group": "INDEX_EU",
+      "anchor_tz": "Europe/Warsaw",
+      "operator_windows_pl": [
+        {
+          "window_id": "INDEX_EU_CORE",
+          "pl": "12:00-14:00",
+          "mode": "TRADE"
+        },
+        {
+          "window_id": "INDEX_EU_ALT_PEAK_A",
+          "pl": "09:00-12:00",
+          "mode": "FUTURE_RESEARCH"
+        },
+        {
+          "window_id": "INDEX_EU_ALT_PEAK_B",
+          "pl": "15:00-17:35",
+          "mode": "FUTURE_RESEARCH"
+        }
+      ],
+      "status": "ACTIVE_CANDIDATE"
+    },
+    {
+      "group": "METALS",
+      "anchor_tz": "Europe/Warsaw",
+      "operator_windows_pl": [
+        {
+          "window_id": "METALS_PM_PREWARM",
+          "pl": "13:45-14:00",
+          "mode": "OBSERVATION_ONLY"
+        },
+        {
+          "window_id": "METALS_PM_CORE",
+          "pl": "14:00-17:00",
+          "mode": "TRADE"
+        },
+        {
+          "window_id": "METALS_PM_EXT_SHADOW",
+          "pl": "17:00-19:00",
+          "mode": "OBSERVATION_ONLY"
+        }
+      ],
+      "historical_peaks_pl": [
+        "15:00-19:00",
+        "16:00-19:00"
+      ],
+      "status": "ACTIVE_CANDIDATE"
+    },
+    {
+      "group": "INDEX_US",
+      "anchor_tz": "Europe/Warsaw",
+      "operator_windows_pl": [
+        {
+          "window_id": "INDEX_US_CORE",
+          "pl": "17:00-20:00",
+          "mode": "TRADE"
+        },
+        {
+          "window_id": "INDEX_US_OPEN_PEAK",
+          "pl": "DST_DEPENDENT_US_OPEN",
+          "mode": "FUTURE_RESEARCH"
+        },
+        {
+          "window_id": "INDEX_US_CLOSE_PEAK",
+          "pl": "DST_DEPENDENT_US_CLOSE",
+          "mode": "FUTURE_RESEARCH"
+        }
+      ],
+      "status": "ACTIVE_CANDIDATE"
+    }
+  ]
+}

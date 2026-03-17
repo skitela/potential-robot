@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0",
+  "ts_utc": "2026-03-14T10:30:00Z",
+  "family": "FX_MAIN",
+  "purpose": "candidate_monday_open_settings",
+  "status": "proposal_only_not_applied",
+  "family_candidates": {
+    "breakout_family_tax": 0.10,
+    "trend_family_tax": 0.08,
+    "dominant_confidence_cap": 0.78,
+    "dominant_risk_cap": 0.75,
+    "rejection_range_boost": 0.00,
+    "rationale": [
+      "breakout and trend-in-breakout were family-wide toxic classes",
+      "range rejection is not a family-wide strength and should stay local only"
+    ]
+  },
+  "symbol_candidates": {
+    "EURUSD": {
+      "trend_breakout_tax": 0.12,
+      "trend_chaos_tax": 0.10,
+      "trend_no_aux_tax": 0.05,
+      "breakout_range_tax": 0.08,
+      "breakout_chaos_tax": 0.08,
+      "rejection_range_boost": 0.06,
+      "confidence_cap": 0.82,
+      "risk_cap": 0.80,
+      "notes": [
+        "keep trend/trend and rejection/range alive",
+        "do not tighten confidence globally without fresh evidence"
+      ]
+    },
+    "GBPUSD": {
+      "breakout_global_tax": 0.04,
+      "trend_breakout_tax": 0.14,
+      "trend_chaos_tax": 0.12,
+      "trend_caution_tax": 0.12,
+      "rejection_range_boost": 0.00,
+      "confidence_cap": 0.75,
+      "risk_cap": 0.70,
+      "notes": [
+        "treat trend as highly defensive at open",
+        "do not boost rejection until the pair proves edge"
+      ]
+    },
+    "USDCAD": {
+      "breakout_global_tax": 0.10,
+      "breakout_chaos_tax": 0.08,
+      "breakout_range_tax": 0.06,
+      "trend_chaos_tax": 0.05,
+      "rejection_range_boost": 0.00,
+      "confidence_cap": 0.78,
+      "risk_cap": 0.72,
+      "notes": [
+        "rejection remains defensive until support-aware tuning proves itself live",
+        "support-aware rejection filter is implemented but should stay observation-first at reopen"
+      ]
+    },
+    "USDCHF": {
+      "breakout_global_tax": 0.14,
+      "breakout_chaos_tax": 0.08,
+      "breakout_conflict_tax": 0.08,
+      "trend_breakout_tax": 0.04,
+      "rejection_range_boost": 0.00,
+      "confidence_cap": 0.70,
+      "risk_cap": 0.65,
+      "notes": [
+        "treat breakout as primary danger class",
+        "non-poor renko breakout filter is implemented but should be watched before wider rollout"
+      ]
+    }
+  },
+  "implemented_tuning_model_extensions": [
+    "require_support_for_rejection",
+    "breakout_require_non_poor_renko",
+    "trend_require_non_poor_candle",
+    "candidate_signal_journal"
+  ],
+  "deferred_tuning_model_extensions": [
+    "timeout_profile_shortening"
+  ]
+}

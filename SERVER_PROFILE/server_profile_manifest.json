@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "profile_name": "MAKRO_I_MIKRO_BOT_MT5_ONLY",
+  "runtime_type": "mql5_only",
+  "required_paths": [
+    "MQL5/Experts/MicroBots/*.mq5",
+    "MQL5/Include/Core/*.mqh",
+    "MQL5/Include/Profiles/*.mqh",
+    "MQL5/Include/Strategies/*.mqh",
+    "MQL5/Presets/*.set",
+    "CONFIG/project_config.json",
+    "MANIFEST.json"
+  ],
+  "common_files_root": "MAKRO_I_MIKRO_BOT",
+  "notes": [
+    "Deployment package must remain self-contained.",
+    "Runtime must not depend on Python or external IPC."
+  ]
+}

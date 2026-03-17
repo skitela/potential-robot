@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "generated_at_utc": "2026-03-14T16:05:00Z",
+  "status": "manual_core_capital_contract_bootstrap",
+  "intent": "manual_core_capital_contract",
+  "assumption": "bootstrap values use the current working scenario of 1000 PLN and should be consciously updated before production live deployment",
+  "global_rules": {
+    "manual_contract_may_only_be_changed_by_explicit_operator_decision": true,
+    "agents_may_not_modify_core_capital": true,
+    "live_core_capital_floor_is_sacred": true,
+    "paper_and_live_may_use_separate_manual_core_values": true
+  },
+  "runtime": {
+    "enabled": true,
+    "revision": 1,
+    "refresh_interval_sec": 60
+  },
+  "paper": {
+    "core_capital": 1000.0
+  },
+  "live": {
+    "core_capital": 1000.0
+  }
+}

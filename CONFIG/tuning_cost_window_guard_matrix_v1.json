@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.0",
+  "generated_on": "2026-03-15",
+  "intent": "agent_tuning_guard_matrix",
+  "global_hard_rules": {
+    "allow_new_live_only_in_trade_window": true,
+    "block_new_live_in_observation_only": true,
+    "block_new_live_in_shadow": true,
+    "block_new_live_in_future_research": true,
+    "block_new_live_in_close_only": true,
+    "agents_may_only_raise_confidence_or_reduce_risk": true
+  },
+  "cost_pressure_actions": {
+    "LOW": {
+      "confidence_delta_min": 0.00,
+      "confidence_delta_max": 0.03,
+      "risk_cap_max": 0.90,
+      "preferred_fallback": "LIVE_DEFENSIVE"
+    },
+    "MEDIUM": {
+      "confidence_delta_min": 0.03,
+      "confidence_delta_max": 0.08,
+      "risk_cap_max": 0.80,
+      "preferred_fallback": "PAPER_ACTIVE"
+    },
+    "HIGH": {
+      "confidence_delta_min": 0.08,
+      "confidence_delta_max": 0.15,
+      "risk_cap_max": 0.65,
+      "preferred_fallback": "SKIP_OR_PAPER"
+    }
+  },
+  "families": [
+    {
+      "family": "FX_MAIN",
+      "domain": "FX",
+      "cost_pressure": "LOW_MEDIUM",
+      "fast_extinguish_risk": "MEDIUM",
+      "min_breath": "LOW",
+      "block_new_live_last_minutes": 15,
+      "primary_mode": "LIVE_IN_TRADE_ONLY",
+      "outside_trade_mode": "PAPER_ONLY",
+      "tuning_bias": [
+        "tighten weak trend",
+        "tighten weak breakout",
+        "delay hard risk cuts until repeated noise"
+      ]
+    },
+    {
+      "family": "FX_ASIA",
+      "domain": "FX",
+      "cost_pressure": "MEDIUM",
+      "fast_extinguish_risk": "MEDIUM_HIGH",
+      "min_breath": "MEDIUM",
+      "block_new_live_last_minutes": 20,
+      "primary_mode": "LIVE_IN_TRADE_ONLY",
+      "outside_trade_mode": "PAPER_ONLY",
+      "tuning_bias": [
+        "penalize weak immediate follow-through",
+        "tighten late-window entries",
+        "prefer defensive mode near Europe handoff"
+      ]
+    },
+    {
+      "family": "FX_CROSS",
+      "domain": "FX",
+      "cost_pressure": "HIGH",
+      "fast_extinguish_risk": "HIGH",
+      "min_breath": "MEDIUM_HIGH",
+      "block_new_live_last_minutes": 25,
+      "primary_mode": "STRICT_LIVE_IN_TRADE_ONLY",
+      "outside_trade_mode": "PAPER_ONLY",
+      "tuning_bias": [
+        "penalize breakout harder",
+        "reduce risk early",
+        "prefer skip over mediocre live"
+      ]
+    },
+    {
+      "family": "METALS_SPOT_PM",
+      "domain": "METALS",
+      "cost_pressure": "MEDIUM_HIGH",
+      "fast_extinguish_risk": "MEDIUM",
+      "min_breath": "MEDIUM_HIGH",
+      "block_new_live_last_minutes": 20,
+      "primary_mode": "LIVE_IN_CORE_ONLY",
+      "outside_trade_mode": "PAPER_OR_SHADOW",
+      "tuning_bias": [
+        "treat prewarm as paper only",
+        "require cleaner movement before live",
+        "force shadow after 17:00 PL"
+      ]
+    },
+    {
+      "family": "METALS_FUTURES",
+      "domain": "METALS",
+      "cost_pressure": "HIGH",
+      "fast_extinguish_risk": "HIGH",
+      "min_breath": "HIGH",
+      "block_new_live_last_minutes": 25,
+      "primary_mode": "STRICT_LIVE_IN_CORE_ONLY",
+      "outside_trade_mode": "PAPER_OR_SHADOW",
+      "tuning_bias": [
+        "require higher confidence",
+        "cut risk earlier than FX",
+        "reject almost-good scalps"
+      ]
+    },
+    {
+      "family": "INDEX_EU",
+      "domain": "INDICES",
+      "cost_pressure": "MEDIUM",
+      "fast_extinguish_risk": "MEDIUM_HIGH",
+      "min_breath": "MEDIUM",
+      "block_new_live_last_minutes": 15,
+      "primary_mode": "PAPER_FIRST",
+      "outside_trade_mode": "PAPER_ONLY",
+      "tuning_bias": [
+        "treat runtime as young",
+        "keep alternative peaks in research only",
+        "promote to live only after runtime maturity"
+      ]
+    },
+    {
+      "family": "INDEX_US",
+      "domain": "INDICES",
+      "cost_pressure": "MEDIUM_HIGH",
+      "fast_extinguish_risk": "HIGH",
+      "min_breath": "MEDIUM_HIGH",
+      "block_new_live_last_minutes": 20,
+      "primary_mode": "CLEAR_WINNER_ONLY",
+      "outside_trade_mode": "PAPER_ONLY",
+      "tuning_bias": [
+        "prefer clean family winner",
+        "skip weak near-ties",
+        "tighten on poor execution quality"
+      ]
+    }
+  ]
+}

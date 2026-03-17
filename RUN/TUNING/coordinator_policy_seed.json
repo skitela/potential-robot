@@ -1,0 +1,12 @@
+﻿{
+    "family_count":  7,
+    "trusted_family_count":  3,
+    "degraded_family_count":  7,
+    "trusted_data":  true,
+    "trust_reason":  "PARTIAL_TRUST",
+    "freeze_new_changes":  true,
+    "max_local_changes_per_cycle":  0,
+    "global_confidence_cap":  0.8333,
+    "global_risk_cap":  0.8133,
+    "action_code":  "FREEZE_FLEET"
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "ts_utc": "2026-03-14T17:25:00Z",
+  "scope": "INDICES",
+  "purpose": "first_hour_reopen_guardrails",
+  "status": "prepared_not_applied",
+  "do_not_touch": [
+    "code_changes",
+    "manual_family_policy_edits",
+    "manual_fleet_policy_edits",
+    "manual_risk_cap_widening",
+    "manual_confidence_cap_widening",
+    "manual_unfreeze_of_index_family",
+    "manual_reentry_after_single_paper_win",
+    "nonessential_runtime_log_cleanup"
+  ],
+  "observe_only": [
+    "candidate_signals",
+    "learning_observations_v2",
+    "paper_open_close_flow",
+    "paper_timeout_vs_paper_sl",
+    "effective_tuning_policy",
+    "domain_runtime_control",
+    "spread_execution_market_regime_mix",
+    "index_breakout_filter_activity",
+    "index_trendlike_filter_activity"
+  ],
+  "intervene_only_if": [
+    "runtime_not_updating_on_live_market",
+    "schema_corruption_detected",
+    "effective_policy_is_invalid",
+    "technical_execution_failure_streak",
+    "coordinator_domain_state_is_invalid"
+  ],
+  "notes": [
+    "indices enter runtime without local trusted sample",
+    "first hour is diagnostic not experimental",
+    "single paper win is not enough for live reentry",
+    "collect clean candidate flow before relaxing anything"
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "generated_at_utc": "2026-03-14T13:05:00Z",
+  "status": "runtime_applied_v1_max_open_risk_pending",
+  "intent": "immutable_capital_risk_contract",
+  "global_rules": {
+    "agents_may_not_modify": [
+      "risk_per_trade_base_pct",
+      "risk_per_trade_min_pct",
+      "risk_per_trade_max_pct",
+      "account_soft_daily_loss_pct",
+      "account_hard_daily_loss_pct",
+      "account_hard_session_loss_pct",
+      "family_hard_daily_loss_pct",
+      "symbol_hard_daily_loss_pct",
+      "max_open_risk_pct",
+      "soft_loss_risk_factor",
+      "profit_buffer_participation_factor",
+      "daily_loss_relax_start_buffer_pct",
+      "daily_loss_relax_soft_buffer_pct",
+      "daily_loss_relax_full_buffer_pct",
+      "daily_loss_relax_soft_max_multiplier",
+      "daily_loss_relax_hard_max_multiplier"
+    ],
+    "agents_may_only_reduce_risk_within_contract": true,
+    "paper_and_live_must_use_separate_loss_anchors": true,
+    "paper_loss_caps_must_use_paper_pnl": true,
+    "live_loss_caps_must_use_real_equity": true,
+    "live_must_preserve_core_capital_floor": true
+  },
+  "paper": {
+    "risk_per_trade_base_pct": 0.50,
+    "risk_per_trade_min_pct": 0.20,
+    "risk_per_trade_max_pct": 0.75,
+    "account_soft_daily_loss_pct": 2.00,
+    "account_hard_daily_loss_pct": 4.00,
+    "account_hard_session_loss_pct": 1.50,
+    "family_hard_daily_loss_pct": 1.20,
+    "symbol_hard_daily_loss_pct": 0.80,
+    "max_open_risk_pct": 2.00,
+    "soft_loss_risk_factor": 0.60,
+    "profit_buffer_participation_factor": 0.50,
+    "daily_loss_relax_start_buffer_pct": 10.0,
+    "daily_loss_relax_soft_buffer_pct": 25.0,
+    "daily_loss_relax_full_buffer_pct": 50.0,
+    "daily_loss_relax_soft_max_multiplier": 1.25,
+    "daily_loss_relax_hard_max_multiplier": 1.50,
+    "rationale": [
+      "paper must remain loose enough to generate learning data",
+      "paper must still be capped far below the currently observed 20 percent daily bleed"
+    ]
+  },
+  "live": {
+    "risk_per_trade_base_pct": 0.25,
+    "risk_per_trade_min_pct": 0.10,
+    "risk_per_trade_max_pct": 0.50,
+    "account_soft_daily_loss_pct": 1.00,
+    "account_hard_daily_loss_pct": 1.50,
+    "account_hard_session_loss_pct": 0.75,
+    "family_hard_daily_loss_pct": 0.60,
+    "symbol_hard_daily_loss_pct": 0.40,
+    "max_open_risk_pct": 1.25,
+    "soft_loss_risk_factor": 0.50,
+    "profit_buffer_participation_factor": 0.50,
+    "daily_loss_relax_start_buffer_pct": 10.0,
+    "daily_loss_relax_soft_buffer_pct": 25.0,
+    "daily_loss_relax_full_buffer_pct": 50.0,
+    "daily_loss_relax_soft_max_multiplier": 1.25,
+    "daily_loss_relax_hard_max_multiplier": 1.50,
+    "rationale": [
+      "private capital live trading should be materially tighter than paper",
+      "single-trade and daily loss limits should prevent a multi-day capital wipeout",
+      "live risk base uses core capital plus half of the realized profit buffer instead of full floating equity"
+    ]
+  }
+}

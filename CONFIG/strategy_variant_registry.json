@@ -1,0 +1,981 @@
+﻿{
+    "schema":  "makro_i_mikro_bot.strategy.variant.audit.v1",
+    "generated_at_utc":  "2026-03-14T17:16:10.6693972Z",
+    "root":  "C:\\MAKRO_I_MIKRO_BOT",
+    "common_contract":  {
+                            "common_fields":  {
+                                                  "has_reversal":  "False",
+                                                  "trade_tf":  "PERIOD_M5",
+                                                  "uses_new_bar_gate":  "True"
+                                              },
+                            "override_fields":  [
+                                                    "atr_period",
+                                                    "base_risk_pct",
+                                                    "caution_spread_points",
+                                                    "caution_trigger_abs",
+                                                    "ema_fast",
+                                                    "ema_slow",
+                                                    "execution_decay",
+                                                    "execution_floor",
+                                                    "has_live_manage_position",
+                                                    "has_range",
+                                                    "has_rejection",
+                                                    "max_risk_pct",
+                                                    "max_spread_points",
+                                                    "min_risk_pct",
+                                                    "ready_trigger_abs",
+                                                    "rsi_period",
+                                                    "session_profile",
+                                                    "setup_signature",
+                                                    "sl_atr_multiplier",
+                                                    "sl_min_points",
+                                                    "tp_atr_multiplier",
+                                                    "tp_min_points",
+                                                    "trade_window_end_hour",
+                                                    "trade_window_start_hour",
+                                                    "trail_atr_multiplier"
+                                                ],
+                            "design_intent":  [
+                                                  "Common strategy flow should stay in shared include files.",
+                                                  "Per-symbol overrides should stay in registry/profile/variant params.",
+                                                  "Propagation should update common flow without overwriting symbol-specific parameters."
+                                              ]
+                        },
+    "variants":  [
+                     {
+                         "symbol":  "AUDUSD",
+                         "alias_symbol":  "AUDUSD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_AUDUSD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "AUDUSD",
+                                         "symbol":  "AUDUSD",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_ASIA",
+                                         "trade_window_start_hour":  0,
+                                         "trade_window_end_hour":  5,
+                                         "max_spread_points":  25,
+                                         "caution_spread_points":  18,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_audusd.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_AUDUSD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  11,
+                                            "ema_slow":  30,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.3,
+                                      "execution_floor":  0.74,
+                                      "execution_decay":  0.5,
+                                      "min_risk_pct":  0.18,
+                                      "max_risk_pct":  0.44,
+                                      "sl_atr_multiplier":  1.6,
+                                      "sl_min_points":  26,
+                                      "tp_atr_multiplier":  2.05,
+                                      "tp_min_points":  44,
+                                      "trail_atr_multiplier":  1.12
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.99,
+                                          "ready_trigger_abs":  0.81,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "COPPER-US.pro",
+                         "alias_symbol":  "COPPERUS",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_COPPERUS.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "COPPERUS",
+                                         "symbol":  "COPPER-US.pro",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "METALS_FUTURES",
+                                         "trade_window_start_hour":  14,
+                                         "trade_window_end_hour":  17,
+                                         "max_spread_points":  200,
+                                         "caution_spread_points":  130,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  120,
+                                         "kill_switch_token_name":  "oandakey_copperus.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_COPPERUS.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  11,
+                                            "ema_slow":  30,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.16,
+                                      "execution_floor":  0.75,
+                                      "execution_decay":  0.48,
+                                      "min_risk_pct":  0.07,
+                                      "max_risk_pct":  0.22,
+                                      "sl_atr_multiplier":  1.95,
+                                      "sl_min_points":  160,
+                                      "tp_atr_multiplier":  2.55,
+                                      "tp_min_points":  250,
+                                      "trail_atr_multiplier":  1.15
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1.08,
+                                          "ready_trigger_abs":  0.9,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "DE30.pro",
+                         "alias_symbol":  "DE30",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_DE30.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "DE30",
+                                         "symbol":  "DE30.pro",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "INDEX_EU",
+                                         "trade_window_start_hour":  12,
+                                         "trade_window_end_hour":  14,
+                                         "max_spread_points":  110,
+                                         "caution_spread_points":  70,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  90,
+                                         "kill_switch_token_name":  "oandakey_de30.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_DE30.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  12,
+                                            "ema_slow":  34,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.17,
+                                      "execution_floor":  0.74,
+                                      "execution_decay":  0.46,
+                                      "min_risk_pct":  0.07,
+                                      "max_risk_pct":  0.22,
+                                      "sl_atr_multiplier":  1.75,
+                                      "sl_min_points":  95,
+                                      "tp_atr_multiplier":  2.25,
+                                      "tp_min_points":  145,
+                                      "trail_atr_multiplier":  1.08
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.98,
+                                          "ready_trigger_abs":  0.82,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "EURAUD",
+                         "alias_symbol":  "EURAUD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_EURAUD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "EURAUD",
+                                         "symbol":  "EURAUD",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_CROSS",
+                                         "trade_window_start_hour":  7,
+                                         "trade_window_end_hour":  11,
+                                         "max_spread_points":  34,
+                                         "caution_spread_points":  25,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_euraud.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_EURAUD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  14,
+                                            "ema_slow":  38,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.27,
+                                      "execution_floor":  0.72,
+                                      "execution_decay":  0.48,
+                                      "min_risk_pct":  0.16,
+                                      "max_risk_pct":  0.4,
+                                      "sl_atr_multiplier":  1.85,
+                                      "sl_min_points":  42,
+                                      "tp_atr_multiplier":  2.35,
+                                      "tp_min_points":  70,
+                                      "trail_atr_multiplier":  1.3
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.99,
+                                          "ready_trigger_abs":  0.83,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "EURJPY",
+                         "alias_symbol":  "EURJPY",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_EURJPY.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "EURJPY",
+                                         "symbol":  "EURJPY",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_CROSS",
+                                         "trade_window_start_hour":  7,
+                                         "trade_window_end_hour":  12,
+                                         "max_spread_points":  35,
+                                         "caution_spread_points":  26,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_eurjpy.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_EURJPY.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  13,
+                                            "ema_slow":  34,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.32,
+                                      "execution_floor":  0.72,
+                                      "execution_decay":  0.5,
+                                      "min_risk_pct":  0.18,
+                                      "max_risk_pct":  0.46,
+                                      "sl_atr_multiplier":  1.8,
+                                      "sl_min_points":  34,
+                                      "tp_atr_multiplier":  2.3,
+                                      "tp_min_points":  60,
+                                      "trail_atr_multiplier":  1.22
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.98,
+                                          "ready_trigger_abs":  0.82,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "EURUSD",
+                         "alias_symbol":  "EURUSD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_EURUSD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "EURUSD",
+                                         "symbol":  "EURUSD",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_MAIN",
+                                         "trade_window_start_hour":  8,
+                                         "trade_window_end_hour":  11,
+                                         "max_spread_points":  24,
+                                         "caution_spread_points":  18,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_eurusd.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_EURUSD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  null,
+                                            "ema_slow":  null,
+                                            "atr_period":  null,
+                                            "rsi_period":  null
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  null,
+                                      "execution_floor":  null,
+                                      "execution_decay":  null,
+                                      "min_risk_pct":  null,
+                                      "max_risk_pct":  null,
+                                      "sl_atr_multiplier":  null,
+                                      "sl_min_points":  null,
+                                      "tp_atr_multiplier":  null,
+                                      "tp_min_points":  null,
+                                      "trail_atr_multiplier":  null
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.9,
+                                          "ready_trigger_abs":  0.72,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  true,
+                                       "has_range":  false,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  false
+                                   }
+                     },
+                     {
+                         "symbol":  "GBPAUD",
+                         "alias_symbol":  "GBPAUD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GBPAUD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "GBPAUD",
+                                         "symbol":  "GBPAUD",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_CROSS",
+                                         "trade_window_start_hour":  7,
+                                         "trade_window_end_hour":  11,
+                                         "max_spread_points":  52,
+                                         "caution_spread_points":  40,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_gbpaud.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GBPAUD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  13,
+                                            "ema_slow":  36,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.29,
+                                      "execution_floor":  0.7,
+                                      "execution_decay":  0.5,
+                                      "min_risk_pct":  0.17,
+                                      "max_risk_pct":  0.42,
+                                      "sl_atr_multiplier":  1.9,
+                                      "sl_min_points":  44,
+                                      "tp_atr_multiplier":  2.4,
+                                      "tp_min_points":  72,
+                                      "trail_atr_multiplier":  1.32
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1,
+                                          "ready_trigger_abs":  0.84,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "GBPJPY",
+                         "alias_symbol":  "GBPJPY",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GBPJPY.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "GBPJPY",
+                                         "symbol":  "GBPJPY",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_CROSS",
+                                         "trade_window_start_hour":  7,
+                                         "trade_window_end_hour":  12,
+                                         "max_spread_points":  48,
+                                         "caution_spread_points":  36,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_gbpjpy.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GBPJPY.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  12,
+                                            "ema_slow":  30,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.34,
+                                      "execution_floor":  0.7,
+                                      "execution_decay":  0.52,
+                                      "min_risk_pct":  0.2,
+                                      "max_risk_pct":  0.48,
+                                      "sl_atr_multiplier":  1.9,
+                                      "sl_min_points":  36,
+                                      "tp_atr_multiplier":  2.4,
+                                      "tp_min_points":  64,
+                                      "trail_atr_multiplier":  1.28
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1,
+                                          "ready_trigger_abs":  0.84,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "GBPUSD",
+                         "alias_symbol":  "GBPUSD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GBPUSD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "GBPUSD",
+                                         "symbol":  "GBPUSD",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_MAIN",
+                                         "trade_window_start_hour":  8,
+                                         "trade_window_end_hour":  11,
+                                         "max_spread_points":  25,
+                                         "caution_spread_points":  18,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_gbpusd.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GBPUSD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  12,
+                                            "ema_slow":  34,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.38,
+                                      "execution_floor":  0.68,
+                                      "execution_decay":  0.55,
+                                      "min_risk_pct":  0.22,
+                                      "max_risk_pct":  0.55,
+                                      "sl_atr_multiplier":  1.9,
+                                      "sl_min_points":  42,
+                                      "tp_atr_multiplier":  2.5,
+                                      "tp_min_points":  70,
+                                      "trail_atr_multiplier":  1.25
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.92,
+                                          "ready_trigger_abs":  0.76,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  true,
+                                       "has_range":  false,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "GOLD.pro",
+                         "alias_symbol":  "GOLD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GOLD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "GOLD",
+                                         "symbol":  "GOLD.pro",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "METALS_SPOT_PM",
+                                         "trade_window_start_hour":  14,
+                                         "trade_window_end_hour":  17,
+                                         "max_spread_points":  120,
+                                         "caution_spread_points":  80,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  90,
+                                         "kill_switch_token_name":  "oandakey_gold.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GOLD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  13,
+                                            "ema_slow":  36,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.24,
+                                      "execution_floor":  0.74,
+                                      "execution_decay":  0.48,
+                                      "min_risk_pct":  0.1,
+                                      "max_risk_pct":  0.3,
+                                      "sl_atr_multiplier":  2.1,
+                                      "sl_min_points":  180,
+                                      "tp_atr_multiplier":  2.7,
+                                      "tp_min_points":  280,
+                                      "trail_atr_multiplier":  1.18
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1.02,
+                                          "ready_trigger_abs":  0.84,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  true,
+                                       "has_range":  false,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "NZDUSD",
+                         "alias_symbol":  "NZDUSD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_NZDUSD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "NZDUSD",
+                                         "symbol":  "NZDUSD",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_ASIA",
+                                         "trade_window_start_hour":  0,
+                                         "trade_window_end_hour":  5,
+                                         "max_spread_points":  25,
+                                         "caution_spread_points":  18,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_nzdusd.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_NZDUSD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  12,
+                                            "ema_slow":  32,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.28,
+                                      "execution_floor":  0.74,
+                                      "execution_decay":  0.5,
+                                      "min_risk_pct":  0.17,
+                                      "max_risk_pct":  0.42,
+                                      "sl_atr_multiplier":  1.6,
+                                      "sl_min_points":  24,
+                                      "tp_atr_multiplier":  2,
+                                      "tp_min_points":  42,
+                                      "trail_atr_multiplier":  1.14
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1,
+                                          "ready_trigger_abs":  0.82,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "PLATIN.pro",
+                         "alias_symbol":  "PLATIN",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_PLATIN.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "PLATIN",
+                                         "symbol":  "PLATIN.pro",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "METALS_FUTURES",
+                                         "trade_window_start_hour":  14,
+                                         "trade_window_end_hour":  17,
+                                         "max_spread_points":  190,
+                                         "caution_spread_points":  125,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  120,
+                                         "kill_switch_token_name":  "oandakey_platin.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_PLATIN.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  13,
+                                            "ema_slow":  37,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.18,
+                                      "execution_floor":  0.73,
+                                      "execution_decay":  0.5,
+                                      "min_risk_pct":  0.08,
+                                      "max_risk_pct":  0.24,
+                                      "sl_atr_multiplier":  2.2,
+                                      "sl_min_points":  220,
+                                      "tp_atr_multiplier":  2.8,
+                                      "tp_min_points":  330,
+                                      "trail_atr_multiplier":  1.22
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1.04,
+                                          "ready_trigger_abs":  0.86,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "SILVER.pro",
+                         "alias_symbol":  "SILVER",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_SILVER.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "SILVER",
+                                         "symbol":  "SILVER.pro",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "METALS_SPOT_PM",
+                                         "trade_window_start_hour":  14,
+                                         "trade_window_end_hour":  17,
+                                         "max_spread_points":  170,
+                                         "caution_spread_points":  110,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  120,
+                                         "kill_switch_token_name":  "oandakey_silver.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_SILVER.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  14,
+                                            "ema_slow":  38,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.2,
+                                      "execution_floor":  0.72,
+                                      "execution_decay":  0.5,
+                                      "min_risk_pct":  0.08,
+                                      "max_risk_pct":  0.26,
+                                      "sl_atr_multiplier":  2.35,
+                                      "sl_min_points":  260,
+                                      "tp_atr_multiplier":  2.95,
+                                      "tp_min_points":  390,
+                                      "trail_atr_multiplier":  1.26
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1.06,
+                                          "ready_trigger_abs":  0.88,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  true,
+                                       "has_range":  false,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "US500.pro",
+                         "alias_symbol":  "US500",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_US500.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "US500",
+                                         "symbol":  "US500.pro",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "INDEX_US",
+                                         "trade_window_start_hour":  17,
+                                         "trade_window_end_hour":  20,
+                                         "max_spread_points":  95,
+                                         "caution_spread_points":  60,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  90,
+                                         "kill_switch_token_name":  "oandakey_us500.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_US500.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  11,
+                                            "ema_slow":  32,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.16,
+                                      "execution_floor":  0.75,
+                                      "execution_decay":  0.46,
+                                      "min_risk_pct":  0.07,
+                                      "max_risk_pct":  0.21,
+                                      "sl_atr_multiplier":  1.65,
+                                      "sl_min_points":  70,
+                                      "tp_atr_multiplier":  2.15,
+                                      "tp_min_points":  115,
+                                      "trail_atr_multiplier":  1.05
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  1,
+                                          "ready_trigger_abs":  0.84,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "USDCAD",
+                         "alias_symbol":  "USDCAD",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_USDCAD.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "USDCAD",
+                                         "symbol":  "USDCAD",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_MAIN",
+                                         "trade_window_start_hour":  8,
+                                         "trade_window_end_hour":  12,
+                                         "max_spread_points":  25,
+                                         "caution_spread_points":  18,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_usdcad.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_USDCAD.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  11,
+                                            "ema_slow":  30,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.32,
+                                      "execution_floor":  0.72,
+                                      "execution_decay":  0.5,
+                                      "min_risk_pct":  0.18,
+                                      "max_risk_pct":  0.46,
+                                      "sl_atr_multiplier":  1.7,
+                                      "sl_min_points":  38,
+                                      "tp_atr_multiplier":  2.3,
+                                      "tp_min_points":  58,
+                                      "trail_atr_multiplier":  1.15
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.95,
+                                          "ready_trigger_abs":  0.78,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  true,
+                                       "has_range":  false,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "USDCHF",
+                         "alias_symbol":  "USDCHF",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_USDCHF.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "USDCHF",
+                                         "symbol":  "USDCHF",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_MAIN",
+                                         "trade_window_start_hour":  8,
+                                         "trade_window_end_hour":  12,
+                                         "max_spread_points":  25,
+                                         "caution_spread_points":  18,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_usdchf.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_USDCHF.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  13,
+                                            "ema_slow":  36,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.3,
+                                      "execution_floor":  0.74,
+                                      "execution_decay":  0.48,
+                                      "min_risk_pct":  0.18,
+                                      "max_risk_pct":  0.44,
+                                      "sl_atr_multiplier":  1.75,
+                                      "sl_min_points":  40,
+                                      "tp_atr_multiplier":  2.2,
+                                      "tp_min_points":  56,
+                                      "trail_atr_multiplier":  1.18
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.94,
+                                          "ready_trigger_abs":  0.77,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  true,
+                                       "has_range":  false,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     },
+                     {
+                         "symbol":  "USDJPY",
+                         "alias_symbol":  "USDJPY",
+                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_USDJPY.mqh",
+                         "profile":  {
+                                         "alias_symbol":  "USDJPY",
+                                         "symbol":  "USDJPY",
+                                         "trade_tf":  "PERIOD_M5",
+                                         "session_profile":  "FX_ASIA",
+                                         "trade_window_start_hour":  0,
+                                         "trade_window_end_hour":  3,
+                                         "max_spread_points":  25,
+                                         "caution_spread_points":  18,
+                                         "hard_daily_loss_pct":  2,
+                                         "hard_session_loss_pct":  1,
+                                         "min_seconds_between_entries":  60,
+                                         "kill_switch_token_name":  "oandakey_usdjpy.token",
+                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_USDJPY.mqh"
+                                     },
+                         "indicators":  {
+                                            "ema_fast":  10,
+                                            "ema_slow":  28,
+                                            "atr_period":  14,
+                                            "rsi_period":  14
+                                        },
+                         "risk":  {
+                                      "base_risk_pct":  0.34,
+                                      "execution_floor":  0.72,
+                                      "execution_decay":  0.52,
+                                      "min_risk_pct":  0.2,
+                                      "max_risk_pct":  0.48,
+                                      "sl_atr_multiplier":  1.55,
+                                      "sl_min_points":  28,
+                                      "tp_atr_multiplier":  2.1,
+                                      "tp_min_points":  48,
+                                      "trail_atr_multiplier":  1.08
+                                  },
+                         "decision":  {
+                                          "caution_trigger_abs":  0.98,
+                                          "ready_trigger_abs":  0.8,
+                                          "setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ]
+                                      },
+                         "model":  {
+                                       "has_rejection":  false,
+                                       "has_range":  true,
+                                       "has_reversal":  false,
+                                       "uses_new_bar_gate":  true,
+                                       "has_live_manage_position":  true
+                                   }
+                     }
+                 ]
+}

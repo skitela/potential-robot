@@ -1,0 +1,162 @@
+﻿{
+    "family":  "FX_MAIN",
+    "source_symbol":  "EURUSD",
+    "symbols":  [
+                    "EURUSD",
+                    "GBPUSD",
+                    "USDCAD",
+                    "USDCHF"
+                ],
+    "trusted_data":  true,
+    "trust_reason":  "TRUSTED",
+    "freeze_new_changes":  true,
+    "symbol_count":  4,
+    "trusted_symbol_count":  4,
+    "degraded_symbol_count":  4,
+    "chaos_symbol_count":  3,
+    "bad_spread_symbol_count":  3,
+    "total_samples":  322,
+    "dominant_confidence_cap":  0.82,
+    "dominant_risk_cap":  0.8,
+    "breakout_family_tax":  0.06,
+    "trend_family_tax":  0.05,
+    "rejection_range_boost":  0.06,
+    "action_code":  "FREEZE_FAMILY",
+    "family_invariants":  {
+                              "trade_tf":  "PERIOD_M5",
+                              "atr_period":  "14",
+                              "rsi_period":  "14",
+                              "uses_new_bar_gate":  "True",
+                              "has_live_manage_position":  "False,True"
+                          },
+    "family_allowed_ranges":  {
+                                  "trade_window_start_hour":  {
+                                                                  "min":  8,
+                                                                  "max":  8
+                                                              },
+                                  "trade_window_end_hour":  {
+                                                                "min":  11,
+                                                                "max":  12
+                                                            },
+                                  "max_spread_points":  {
+                                                            "min":  24,
+                                                            "max":  25
+                                                        },
+                                  "caution_trigger_abs":  {
+                                                              "min":  0.9,
+                                                              "max":  0.95
+                                                          },
+                                  "ready_trigger_abs":  {
+                                                            "min":  0.72,
+                                                            "max":  0.78
+                                                        }
+                              },
+    "family_allowed_setup_labels":  [
+                                        "SETUP_BREAKOUT",
+                                        "SETUP_PULLBACK",
+                                        "SETUP_REJECTION",
+                                        "SETUP_TREND"
+                                    ],
+    "snapshots":  [
+                      {
+                          "symbol":  "EURUSD",
+                          "family":  "FX_MAIN",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  true,
+                          "learning_sample_count":  151,
+                          "learning_win_count":  56,
+                          "learning_loss_count":  95,
+                          "loss_ratio":  0.6291,
+                          "loss_streak":  4,
+                          "adaptive_risk_scale":  0.944753,
+                          "market_regime":  "CHAOS",
+                          "spread_regime":  "BAD",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_BREAKOUT",
+                          "confidence_cap":  0.85,
+                          "risk_cap":  0.88,
+                          "breakout_tax":  0.335096,
+                          "trend_tax":  0.33108,
+                          "rejection_boost":  0.077336,
+                          "trust_reason":  "TRUSTED",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURUSD\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURUSD\\tuning_policy.csv"
+                      },
+                      {
+                          "symbol":  "GBPUSD",
+                          "family":  "FX_MAIN",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  true,
+                          "learning_sample_count":  63,
+                          "learning_win_count":  10,
+                          "learning_loss_count":  53,
+                          "loss_ratio":  0.8413,
+                          "loss_streak":  0,
+                          "adaptive_risk_scale":  0.929296,
+                          "market_regime":  "CHAOS",
+                          "spread_regime":  "BAD",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_TREND",
+                          "confidence_cap":  1,
+                          "risk_cap":  1,
+                          "breakout_tax":  0,
+                          "trend_tax":  0,
+                          "rejection_boost":  0,
+                          "trust_reason":  "TRUSTED",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPUSD\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPUSD\\tuning_policy.csv"
+                      },
+                      {
+                          "symbol":  "USDCAD",
+                          "family":  "FX_MAIN",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  true,
+                          "learning_sample_count":  51,
+                          "learning_win_count":  9,
+                          "learning_loss_count":  42,
+                          "loss_ratio":  0.8235,
+                          "loss_streak":  4,
+                          "adaptive_risk_scale":  0.902786,
+                          "market_regime":  "CHAOS",
+                          "spread_regime":  "BAD",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_REJECTION",
+                          "confidence_cap":  1,
+                          "risk_cap":  1,
+                          "breakout_tax":  0,
+                          "trend_tax":  0,
+                          "rejection_boost":  0,
+                          "trust_reason":  "TRUSTED",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\USDCAD\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\USDCAD\\tuning_policy.csv"
+                      },
+                      {
+                          "symbol":  "USDCHF",
+                          "family":  "FX_MAIN",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  true,
+                          "learning_sample_count":  57,
+                          "learning_win_count":  4,
+                          "learning_loss_count":  53,
+                          "loss_ratio":  0.9298,
+                          "loss_streak":  2,
+                          "adaptive_risk_scale":  0.900077,
+                          "market_regime":  "BREAKOUT",
+                          "spread_regime":  "CAUTION",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_BREAKOUT",
+                          "confidence_cap":  1,
+                          "risk_cap":  1,
+                          "breakout_tax":  0,
+                          "trend_tax":  0,
+                          "rejection_boost":  0,
+                          "trust_reason":  "TRUSTED",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\USDCHF\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\USDCHF\\tuning_policy.csv"
+                      }
+                  ]
+}

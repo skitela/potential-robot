@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "ts_utc": "2026-03-14T17:25:00Z",
+  "family": "INDICES",
+  "purpose": "candidate_monday_open_settings",
+  "status": "proposal_only_not_applied",
+  "current_hierarchy_state": {
+    "index_eu_freeze": true,
+    "index_us_freeze": true,
+    "fleet_freeze": true,
+    "indices_domain_active_runtime": true,
+    "local_trusted_data": false
+  },
+  "family_candidates": {
+    "INDEX_EU": {
+      "dominant_confidence_cap": 0.78,
+      "dominant_risk_cap": 0.72,
+      "breakout_family_tax": 0.08,
+      "trend_family_tax": 0.04,
+      "rationale": [
+        "DE30 starts without local sample and should stay noon-cash defensive",
+        "breakout should not be allowed to dominate before structure is proven"
+      ]
+    },
+    "INDEX_US": {
+      "dominant_confidence_cap": 0.76,
+      "dominant_risk_cap": 0.70,
+      "breakout_family_tax": 0.10,
+      "trend_family_tax": 0.05,
+      "rationale": [
+        "US500 opening pressure is more violent and should stay more selective",
+        "reentry to true live should wait for meaningful paper evidence"
+      ]
+    }
+  },
+  "symbol_candidates": {
+    "DE30.pro": {
+      "mode": "observe_first",
+      "confidence_cap": 0.78,
+      "risk_cap": 0.72,
+      "notes": [
+        "collect candidate flow and first paper outcomes before any local relaxation",
+        "treat noon breakout as guarded not default"
+      ]
+    },
+    "US500.pro": {
+      "mode": "observe_first",
+      "confidence_cap": 0.76,
+      "risk_cap": 0.70,
+      "notes": [
+        "opening-window breakout remains the primary danger class",
+        "do not attempt same-session reentry after one isolated paper win"
+      ]
+    }
+  },
+  "deferred_index_language_extensions": [
+    "index_opening_impulse_tax",
+    "index_noon_transition_tax",
+    "index_cash_open_reentry_gate",
+    "index_shadow_window_observation_model"
+  ]
+}

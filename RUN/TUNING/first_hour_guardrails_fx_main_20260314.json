@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "ts_utc": "2026-03-14T11:45:00Z",
+  "scope": "FX_MAIN",
+  "purpose": "first_hour_reopen_guardrails",
+  "status": "prepared_not_applied",
+  "do_not_touch": [
+    "code_changes",
+    "manual_family_policy_edits",
+    "manual_fleet_policy_edits",
+    "manual_risk_cap_widening",
+    "manual_confidence_cap_widening",
+    "manual_unfreeze_after_single_win",
+    "nonessential_runtime_log_cleanup"
+  ],
+  "observe_only": [
+    "learning_observations_v2",
+    "paper_open_close_flow",
+    "paper_timeout_vs_paper_sl",
+    "effective_tuning_policy",
+    "local_tuning_actions_presence",
+    "spread_execution_market_regime_mix",
+    "breakout_renko_filter_activity",
+    "trend_candle_filter_activity",
+    "rejection_support_filter_activity"
+  ],
+  "intervene_only_if": [
+    "runtime_not_updating_on_live_market",
+    "schema_corruption_detected",
+    "effective_policy_is_invalid",
+    "technical_execution_failure_streak"
+  ],
+  "notes": [
+    "first hour is diagnostic not experimental",
+    "single win or single loss is not enough to override hierarchy",
+    "observe the pattern before changing the pattern"
+  ]
+}
