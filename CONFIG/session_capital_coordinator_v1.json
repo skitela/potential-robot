@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.2",
+  "generated_at_utc": "2026-03-14T16:20:00Z",
+  "intent": "global_session_capital_coordinator",
+  "notes": [
+    "Coordinator uses session_window_matrix_v1.json for actual operator windows in Polish time.",
+    "This layer does not change immutable capital contract values; it only decides which domain may risk live capital at a given time.",
+    "Reserve activation is prepared structurally in V1 and may be tightened further when INDICES runtime is rolled out.",
+    "PAPER_ONLY is now a first-class runtime mode used for capital-protection degradation and same-day reentry gating.",
+    "V2 adds coordinator risk caps for LIVE_DEFENSIVE, RESERVE takeover and REENTRY probation without moving heavy logic into the tick path."
+  ],
+  "rules": {
+    "sleep_requested_mode": "CLOSE_ONLY",
+    "prewarm_requested_mode": "CLOSE_ONLY",
+    "observation_requested_mode": "CLOSE_ONLY",
+    "trade_requested_mode": "RUN",
+    "paper_requested_mode": "PAPER_ONLY",
+    "manual_paper_requested_mode": "PAPER_ONLY",
+    "manual_close_only_requested_mode": "CLOSE_ONLY",
+    "manual_halt_requested_mode": "HALT",
+    "reentry_recover_fraction": 0.60,
+    "defensive_family_loss_fraction": 0.50,
+    "reentry_probation_risk_cap": 0.35,
+    "reserve_takeover_risk_cap": 0.50
+  },
+  "domains": [
+    {
+      "domain": "FX",
+      "active_runtime": true,
+      "manual_override": "AUTO",
+      "wake_priority": 1
+    },
+    {
+      "domain": "METALS",
+      "active_runtime": true,
+      "manual_override": "AUTO",
+      "wake_priority": 2
+    },
+    {
+      "domain": "INDICES",
+      "active_runtime": true,
+      "manual_override": "AUTO",
+      "wake_priority": 3
+    }
+  ],
+  "groups": [
+    {
+      "group": "FX_ASIA",
+      "domain": "FX",
+      "family_hint": "FX_ASIA",
+      "budget_share_of_day": 0.18,
+      "reserve_domains": []
+    },
+    {
+      "group": "FX_AM",
+      "domain": "FX",
+      "family_hint": "FX_MAIN",
+      "budget_share_of_day": 0.27,
+      "reserve_domains": [
+        "INDICES"
+      ]
+    },
+    {
+      "group": "INDEX_EU",
+      "domain": "INDICES",
+      "family_hint": "INDEX_EU",
+      "budget_share_of_day": 0.15,
+      "reserve_domains": [
+        "FX",
+        "METALS"
+      ]
+    },
+    {
+      "group": "METALS",
+      "domain": "METALS",
+      "family_hint": "METALS_SPOT_PM+METALS_FUTURES",
+      "budget_share_of_day": 0.20,
+      "reserve_domains": [
+        "INDICES"
+      ]
+    },
+    {
+      "group": "INDEX_US",
+      "domain": "INDICES",
+      "family_hint": "INDEX_US",
+      "budget_share_of_day": 0.20,
+      "reserve_domains": [
+        "METALS"
+      ]
+    }
+  ]
+}

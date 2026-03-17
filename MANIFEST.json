@@ -1,0 +1,13 @@
+{
+  "project": "MAKRO_I_MIKRO_BOT",
+  "schema_version": "1.0",
+  "runtime_model": "mql5_only_microbots",
+  "core_model": "shared_library_only",
+  "deployment_model": "one_ea_per_chart",
+  "symbol_scope": "single_symbol_per_microbot",
+  "source_repos": [
+    "c:\\OANDA_MT5_SYSTEM",
+    "C:\\GLOBALNY HANDEL VER1\\EURUSD"
+  ],
+  "status": "first_batch_11_ready_with_rollout_wrapper_preset_safety_handoff_transfer_validation_and_remote_install_sim"
+}

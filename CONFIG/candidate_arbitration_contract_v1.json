@@ -1,0 +1,34 @@
+{
+  "schema": "makro_i_mikro_bot.candidate_arbitration_contract.v1",
+  "enabled": true,
+  "selection_mode_live": "TOP_1_PER_ACTIVE_FAMILY",
+  "selection_mode_paper": "TOP_1_PER_ACTIVE_FAMILY",
+  "symbol_max_open_positions": 1,
+  "family_max_new_entries_per_cycle": 1,
+  "domain_max_new_entries_per_cycle": 1,
+  "global_max_new_entries_per_cycle": 1,
+  "max_candidates_considered_per_family": 4,
+  "near_tie_priority_gap_pct": 0.03,
+  "true_tie_mode_live": "SKIP",
+  "true_tie_mode_paper": "ALTERNATE",
+  "portfolio_heat_guard_enabled": true,
+  "portfolio_heat_same_family_weight": 1.0,
+  "portfolio_heat_cross_family_weight": 0.55,
+  "portfolio_max_open_risk_source": "capital_risk_contract_v1",
+  "priority_formula": {
+    "local_edge_weight": 1.0,
+    "quality_factor_weight": 1.0,
+    "family_factor_weight": 1.0,
+    "capital_factor_weight": 1.0
+  },
+  "runtime_integration": {
+    "candidate_emitter": "microbot_local_runtime",
+    "candidate_arbiter": "family_runtime_gate",
+    "capital_gate": "global_capital_guard",
+    "execution_owner": "microbot_after_grant"
+  },
+  "status": {
+    "design_ready": true,
+    "runtime_applied": false
+  }
+}

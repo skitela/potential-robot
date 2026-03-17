@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "targets": [
+    {
+      "name": "VPS_PRIMARY",
+      "connection_mode": "psremoting",
+      "computer_name": "YOUR_VPS_HOSTNAME_OR_IP",
+      "connection_uri": "",
+      "port": 5985,
+      "use_ssl": false,
+      "configuration_name": "Microsoft.PowerShell",
+      "authentication": "Default",
+      "remote_project_root": "C:\\MAKRO_I_MIKRO_BOT",
+      "remote_terminal_data_dir": "C:\\Users\\Administrator\\AppData\\Roaming\\MetaQuotes\\Terminal\\<INSTANCE>",
+      "remote_common_files_dir": "C:\\Users\\Administrator\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common\\Files"
+    }
+  ]
+}

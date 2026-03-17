@@ -1,0 +1,177 @@
+MAKRO_I_MIKRO_BOT SYSTEM GLOSSARY AND ATLAS
+Version: 1.0
+Scope: C:\MAKRO_I_MIKRO_BOT
+Model: 100% MQL5, MT5-only, thin Core, thick MicroBots
+
+MAINTENANCE RULE
+
+Ten opis musi byc aktualizowany zawsze, gdy:
+- dochodzi nowy plik runtime, toolingowy albo rolloutowy,
+- plik zmienia role,
+- zmienia sie zaleznosc miedzy Core, Profiles, Strategies, MicroBots i TOOLS,
+- zmienia sie polityka rodzin albo wzorzec rodziny.
+
+CEL SYSTEMU
+
+Projekt sluzy do budowy systemu MQL5-only, ktory:
+- zachowuje ochrone kapitalu,
+- zmniejsza latencje per instrument,
+- utrzymuje wspolne zachowania forexowe w Core,
+- zostawia lokalne geny po stronie mikro-botow,
+- wdraza boty jako 1 bot = 1 chart = 1 symbol.
+
+GLOWNE WARSTWY
+
+CONFIG
+- registry rolloutowe, warianty strategii, polityki rodzin, wzorce rodzin.
+
+DOCS
+- architektura, rollout, propagacja, polityki, slownik, atlas systemu.
+
+MQL5/Experts/MicroBots
+- autonomiczne EA per symbol.
+
+MQL5/Include/Core
+- wspolny kod biblioteczny:
+  runtime types, storage, guards, execution, journaling, telemetry.
+
+MQL5/Include/Profiles
+- lokalna polityka symbolu:
+  okna handlu, session_profile, limity, spread, kill-switch token.
+
+MQL5/Include/Strategies
+- lokalna inteligencja symbolowa:
+  setupy, scoring, trigger, risk model, trailing, manage position.
+
+TOOLS
+- generatory, walidatory, kompilacja, rollout, backup, deploy, propagacja.
+
+SERVER_PROFILE
+- gotowy obraz wdrozeniowy PACKAGE i HANDOFF.
+
+EVIDENCE
+- dowody kompilacji, rolloutu, polityk rodzin i planow propagacji.
+
+KLUCZOWE PLIKI RUNTIME
+
+MicroBot_EURUSD.mq5
+- wzorzec rodziny FX_MAIN.
+
+MicroBot_USDJPY.mq5
+- wzorzec rodziny FX_ASIA.
+
+MicroBot_EURJPY.mq5
+- wzorzec rodziny FX_CROSS.
+
+MbRuntimeTypes.mqh
+- wspolny kontrakt typow calego systemu.
+
+MbRuntimeKernel.mqh
+- najcienszy kernel OnTick/OnTimer.
+
+MbMarketGuards.mqh
+- wspolne pre-trade guardy rynku.
+
+MbExecutionSend.mqh
+- wspolny wrapper wysylki i retry.
+
+MbExecutionQualityGuard.mqh
+- wspolny lekki guard jakosci execution na bazie swiezych metryk.
+
+MbClosedDealTracker.mqh
+- lekka pamiec swiezych wynikow:
+  aktualizuje learning_bias i adaptive_risk_scale bez czytania ciezkiej historii.
+
+MbStrategyCommon.mqh
+- wspolny bezpieczny flow strategii:
+  indicator lifecycle, indicator copy, new-bar gate, risk-plan, ranking, trigger gate, trailing helper.
+- uwzglednia adaptive_risk_scale przy liczeniu ryzyka.
+
+NOWY STAN WZORCA EURUSD
+
+- buforowane journale i telemetryka poza hot-path,
+- cached log paths,
+- execution quality guard,
+- lekka pamiec swiezych wynikow,
+- wzorzec runtime juz przeniesiony na pozostale 10 ekspertow.
+
+LOKALNE GENY PAR
+
+Zostaja lokalne:
+- session_profile,
+- okna handlu,
+- scoring formulas,
+- setup labels,
+- trigger thresholds,
+- risk model values,
+- SL/TP multipliers,
+- trail multipliers.
+
+RODZINY
+
+FX_MAIN
+- EURUSD, GBPUSD, USDCAD, USDCHF
+- wzorzec: EURUSD
+
+FX_ASIA
+- USDJPY, NZDUSD, AUDUSD
+- wzorzec: USDJPY
+
+FX_CROSS
+- EURJPY, GBPJPY, EURAUD, GBPAUD
+- wzorzec: EURJPY
+
+REJESTRY I WALIDACJE
+
+microbots_registry.json
+- rollout registry.
+
+strategy_variant_registry.json
+- mapa lokalnych genow strategii.
+
+family_policy_registry.json
+- granice rodzin i ich inwarianty.
+
+family_reference_registry.json
+- jawny zapis, ktory bot jest wzorcem rodziny.
+
+VALIDATE_SYMBOL_POLICY_CONSISTENCY.ps1
+- sprawdza zgodnosc registry z profilami i wariantami.
+
+VALIDATE_FAMILY_POLICY_BOUNDS.ps1
+- pilnuje, czy symbol nie wypada poza granice rodziny.
+
+VALIDATE_FAMILY_REFERENCE_REGISTRY.ps1
+- pilnuje, czy wzorzec rodziny faktycznie nalezy do tej rodziny.
+
+PROPAGACJA
+
+PLAN_STRATEGY_PROPAGATION.ps1
+- planuje bezpieczna propagacje zmian z wzorca.
+
+GENERATE_ALL_PROPAGATION_PLANS.ps1
+- tworzy komplet planow dla FX_MAIN, FX_ASIA, FX_CROSS.
+
+strategy_propagation_plan.json
+- pojedynczy plan propagacji.
+
+propagation_plan_matrix.json
+- macierz wszystkich rodzinnych planow.
+
+WNIOSKI
+
+System ma juz:
+- cienki Core,
+- autonomiczne MicroBots,
+- polityki rodzin,
+- wzorce rodzin,
+- kontrolowana propagacje zmian,
+- tooling rolloutowy,
+- dowody walidacji.
+
+Dalszy rozwoj ma byc prowadzony:
+- przez wzorzec symbolu,
+- przez wzorzec rodziny,
+- albo przez wspolny flow,
+
+ale nigdy przez niszczenie lokalnych genow par.

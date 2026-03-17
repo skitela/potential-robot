@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0",
+  "deployment_model": "one_microbot_per_chart",
+  "symbols": [
+    {
+      "symbol": "EURUSD",
+      "expert": "MicroBot_EURUSD",
+      "preset": "MicroBot_EURUSD_Live.set",
+      "magic": 910101,
+      "chart_tf": "M5",
+      "session_profile": "FX_MAIN",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "AUDUSD",
+      "expert": "MicroBot_AUDUSD",
+      "preset": "MicroBot_AUDUSD_Live.set",
+      "magic": 910104,
+      "chart_tf": "M5",
+      "session_profile": "FX_ASIA",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "GBPUSD",
+      "expert": "MicroBot_GBPUSD",
+      "preset": "MicroBot_GBPUSD_Live.set",
+      "magic": 910102,
+      "chart_tf": "M5",
+      "session_profile": "FX_MAIN",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "USDJPY",
+      "expert": "MicroBot_USDJPY",
+      "preset": "MicroBot_USDJPY_Live.set",
+      "magic": 910103,
+      "chart_tf": "M5",
+      "session_profile": "FX_ASIA",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "USDCAD",
+      "expert": "MicroBot_USDCAD",
+      "preset": "MicroBot_USDCAD_Live.set",
+      "magic": 910105,
+      "chart_tf": "M5",
+      "session_profile": "FX_MAIN",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "USDCHF",
+      "expert": "MicroBot_USDCHF",
+      "preset": "MicroBot_USDCHF_Live.set",
+      "magic": 910106,
+      "chart_tf": "M5",
+      "session_profile": "FX_MAIN",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "NZDUSD",
+      "expert": "MicroBot_NZDUSD",
+      "preset": "MicroBot_NZDUSD_Live.set",
+      "magic": 910107,
+      "chart_tf": "M5",
+      "session_profile": "FX_ASIA",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "EURJPY",
+      "expert": "MicroBot_EURJPY",
+      "preset": "MicroBot_EURJPY_Live.set",
+      "magic": 910108,
+      "chart_tf": "M5",
+      "session_profile": "FX_CROSS",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "GBPJPY",
+      "expert": "MicroBot_GBPJPY",
+      "preset": "MicroBot_GBPJPY_Live.set",
+      "magic": 910109,
+      "chart_tf": "M5",
+      "session_profile": "FX_CROSS",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "EURAUD",
+      "expert": "MicroBot_EURAUD",
+      "preset": "MicroBot_EURAUD_Live.set",
+      "magic": 910110,
+      "chart_tf": "M5",
+      "session_profile": "FX_CROSS",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "GBPAUD",
+      "expert": "MicroBot_GBPAUD",
+      "preset": "MicroBot_GBPAUD_Live.set",
+      "magic": 910111,
+      "chart_tf": "M5",
+      "session_profile": "FX_CROSS",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "GOLD.pro",
+      "code_symbol": "GOLD",
+      "expert": "MicroBot_GOLD",
+      "preset": "MicroBot_GOLD_Live.set",
+      "magic": 920201,
+      "chart_tf": "M5",
+      "session_profile": "METALS_SPOT_PM",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "SILVER.pro",
+      "code_symbol": "SILVER",
+      "expert": "MicroBot_SILVER",
+      "preset": "MicroBot_SILVER_Live.set",
+      "magic": 920202,
+      "chart_tf": "M5",
+      "session_profile": "METALS_SPOT_PM",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "PLATIN.pro",
+      "code_symbol": "PLATIN",
+      "expert": "MicroBot_PLATIN",
+      "preset": "MicroBot_PLATIN_Live.set",
+      "magic": 920203,
+      "chart_tf": "M5",
+      "session_profile": "METALS_FUTURES",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "COPPER-US.pro",
+      "code_symbol": "COPPERUS",
+      "expert": "MicroBot_COPPERUS",
+      "preset": "MicroBot_COPPERUS_Live.set",
+      "magic": 920204,
+      "chart_tf": "M5",
+      "session_profile": "METALS_FUTURES",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "DE30.pro",
+      "code_symbol": "DE30",
+      "expert": "MicroBot_DE30",
+      "preset": "MicroBot_DE30_Live.set",
+      "magic": 930301,
+      "chart_tf": "M5",
+      "session_profile": "INDEX_EU",
+      "status": "compiled_verified"
+    },
+    {
+      "symbol": "US500.pro",
+      "code_symbol": "US500",
+      "expert": "MicroBot_US500",
+      "preset": "MicroBot_US500_Live.set",
+      "magic": 930302,
+      "chart_tf": "M5",
+      "session_profile": "INDEX_US",
+      "status": "compiled_verified"
+    }
+  ]
+}

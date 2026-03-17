@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "ts_utc": "2026-03-14T13:25:00Z",
+  "scope": "FX_ASIA",
+  "purpose": "first_hour_reopen_guardrails",
+  "status": "prepared_not_applied",
+  "do_not_touch": [
+    "code_changes",
+    "manual_family_policy_edits",
+    "manual_fleet_policy_edits",
+    "manual_risk_cap_widening",
+    "manual_confidence_cap_widening",
+    "manual_unfreeze_after_single_win",
+    "nonessential_runtime_log_cleanup"
+  ],
+  "observe_only": [
+    "learning_observations_v2",
+    "candidate_signals",
+    "paper_open_close_flow",
+    "paper_timeout_vs_paper_sl",
+    "effective_tuning_policy",
+    "local_tuning_actions_presence",
+    "spread_execution_market_regime_mix",
+    "breakout_renko_filter_activity",
+    "trend_candle_filter_activity",
+    "nzdusd_low_sample_discipline"
+  ],
+  "intervene_only_if": [
+    "runtime_not_updating_on_live_market",
+    "schema_corruption_detected",
+    "effective_policy_is_invalid",
+    "technical_execution_failure_streak"
+  ],
+  "notes": [
+    "first hour is diagnostic not experimental",
+    "usdjpy should show less toxic breakout pressure",
+    "audusd should show less blind range participation",
+    "nzdusd stays observation-first until sample improves"
+  ]
+}

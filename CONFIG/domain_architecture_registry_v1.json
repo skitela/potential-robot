@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "intent": "shared_domain_architecture_registry",
+  "organism_root": "MAKRO_I_MIKRO_BOT",
+  "global_coordinator": {
+    "name": "GLOBAL_SESSION_AND_CAPITAL_COORDINATOR",
+    "responsibilities": [
+      "own the daily capital contract across all domains",
+      "wake and sleep domains based on time windows, health and reserve logic",
+      "decide when a degraded primary domain may be replaced by a reserve domain",
+      "keep paper/live transitions consistent across domains and families"
+    ],
+    "cannot_do": [
+      "modify immutable capital contract values",
+      "trade on tick path",
+      "override local strategy genotype"
+    ]
+  },
+  "domains": [
+    {
+      "domain": "FX",
+      "status": "active",
+      "catalog_path": "MQL5\\Experts\\MicroBots",
+      "families": [
+        "FX_MAIN",
+        "FX_ASIA",
+        "FX_CROSS"
+      ],
+      "domain_agent_name": "FX_DOMAIN_AGENT",
+      "reserve_priority_order": [
+        "INDICES",
+        "METALS"
+      ]
+    },
+    {
+      "domain": "METALS",
+      "status": "active",
+      "catalog_path": "METALS_MAKRO_I_MIKRO_BOT",
+      "families": [
+        "METALS_SPOT_PM",
+        "METALS_FUTURES"
+      ],
+      "domain_agent_name": "METALS_DOMAIN_AGENT",
+      "reserve_priority_order": [
+        "INDICES"
+      ]
+    },
+    {
+      "domain": "INDICES",
+      "status": "active",
+      "catalog_path": "INDICES_MAKRO_I_MIKRO_BOT",
+      "families": [
+        "INDEX_EU",
+        "INDEX_US"
+      ],
+      "domain_agent_name": "INDICES_DOMAIN_AGENT",
+      "reserve_priority_order": [
+        "METALS"
+      ]
+    }
+  ],
+  "shared_state_model": [
+    "SLEEP",
+    "PREWARM",
+    "LIVE",
+    "LIVE_DEFENSIVE",
+    "PAPER_ACTIVE",
+    "PAPER_SHADOW",
+    "REENTRY_PROBATION"
+  ],
+  "architecture_rules": [
+    "microbots execute only local instrument logic",
+    "family agents coordinate one family inside one domain",
+    "domain agents coordinate one domain inside the shared organism",
+    "the global coordinator owns inter-domain substitution and day-level capital discipline"
+  ]
+}

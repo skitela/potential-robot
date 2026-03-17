@@ -1,0 +1,99 @@
+{
+  "schema_version": "1.0",
+  "family": "INDICES",
+  "status": "phase_1_runtime_active",
+  "top_level_family": {
+    "family": "INDICES",
+    "notes": [
+      "One umbrella domain for index trading inside the shared organism.",
+      "This is not a separate runtime project.",
+      "Detailed symbol rollout comes after the domain and session architecture is accepted."
+    ]
+  },
+  "subfamilies": [
+    {
+      "family": "INDEX_EU",
+      "profile": "EU_DAY",
+      "notes": [
+        "European index family anchored in Poland time.",
+        "Primary operational window stays 12:00-14:00 PL for now.",
+        "Runtime seed starts with DE30.pro."
+      ],
+      "active_window_id": "INDEX_EU_CORE",
+      "symbols": [
+        "DE30.pro"
+      ]
+    },
+    {
+      "family": "INDEX_US",
+      "profile": "US_CASH",
+      "notes": [
+        "US index family anchored in Poland time via New York market behavior.",
+        "Primary operational window stays 17:00-20:00 PL for now.",
+        "Runtime seed starts with US500.pro."
+      ],
+      "active_window_id": "INDEX_US_CORE",
+      "symbols": [
+        "US500.pro"
+      ]
+    }
+  ],
+  "windows": [
+    {
+      "window_id": "INDEX_EU_CORE",
+      "anchor_tz": "Europe/Warsaw",
+      "start_local": "12:00",
+      "end_local": "14:00",
+      "mode": "trade",
+      "notes": [
+        "Current main European index window already accepted in the shared matrix."
+      ]
+    },
+    {
+      "window_id": "INDEX_EU_SHADOW_AM",
+      "anchor_tz": "Europe/Warsaw",
+      "start_local": "09:00",
+      "end_local": "12:00",
+      "mode": "shadow",
+      "notes": [
+        "Historical morning hump from the old system.",
+        "Observation-first until detailed index rollout is done."
+      ]
+    },
+    {
+      "window_id": "INDEX_EU_SHADOW_PM",
+      "anchor_tz": "Europe/Warsaw",
+      "start_local": "15:00",
+      "end_local": "17:35",
+      "mode": "shadow",
+      "notes": [
+        "Historical afternoon hump from the old system."
+      ]
+    },
+    {
+      "window_id": "INDEX_US_PREWARM",
+      "anchor_tz": "Europe/Warsaw",
+      "start_local": "16:45",
+      "end_local": "17:00",
+      "mode": "prewarm",
+      "notes": [
+        "Warm-up period before the main US index window."
+      ]
+    },
+    {
+      "window_id": "INDEX_US_CORE",
+      "anchor_tz": "Europe/Warsaw",
+      "start_local": "17:00",
+      "end_local": "20:00",
+      "mode": "trade",
+      "notes": [
+        "Current main US index window already accepted in the shared matrix."
+      ]
+    }
+  ],
+  "architecture_notes": [
+    "INDEX_EU and INDEX_US stay in one domain but remain separate families.",
+    "The domain agent decides which family is primary and which is reserve inside the index domain.",
+    "The global coordinator decides whether INDICES may replace a degraded primary domain in a given part of the day."
+  ]
+}

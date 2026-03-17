@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.0",
+  "generated_on": "2026-03-14",
+  "family": "METALS",
+  "status": "BLUEPRINT_ONLY",
+  "top_level_family": {
+    "family": "METALS",
+    "notes": [
+      "One umbrella family for metals.",
+      "Do not flatten spot precious metals and industrial/futures-like metals into one identical genotype.",
+      "PALLAD.pro excluded from phase 1."
+    ]
+  },
+  "subfamilies": [
+    {
+      "family": "METALS_SPOT_PM",
+      "symbols": [
+        "GOLD.pro",
+        "SILVER.pro"
+      ],
+      "role": "precious_spot_pm",
+      "active_window_id": "METALS_PM_CORE"
+    },
+    {
+      "family": "METALS_FUTURES",
+      "symbols": [
+        "PLATIN.pro",
+        "COPPER-US.pro"
+      ],
+      "role": "industrial_futures_like",
+      "active_window_id": "METALS_PM_CORE"
+    }
+  ],
+  "session_matrix": [
+    {
+      "window_id": "FX_ASIA",
+      "group": "FX",
+      "anchor_tz": "Asia/Tokyo",
+      "start_hm": [9, 0],
+      "end_hm": [16, 0],
+      "mode": "TRADE",
+      "notes": [
+        "Shortened vs old 09:00-18:00 Tokyo profile to reduce overlap with FX_AM in Poland.",
+        "Approx PL: 01:00-08:00 winter / 02:00-09:00 summer."
+      ]
+    },
+    {
+      "window_id": "FX_AM",
+      "group": "FX",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [9, 0],
+      "end_hm": [12, 0],
+      "mode": "TRADE"
+    },
+    {
+      "window_id": "INDEX_EU",
+      "group": "INDEX",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [12, 0],
+      "end_hm": [14, 0],
+      "mode": "TRADE"
+    },
+    {
+      "window_id": "METALS_PM_PREWARM",
+      "group": "METAL",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [13, 45],
+      "end_hm": [14, 0],
+      "mode": "OBSERVATION_ONLY",
+      "notes": [
+        "Shortlist selection.",
+        "Warm indicators from local store only.",
+        "No new entries."
+      ]
+    },
+    {
+      "window_id": "METALS_PM_CORE",
+      "group": "METAL",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [14, 0],
+      "end_hm": [17, 0],
+      "mode": "TRADE",
+      "notes": [
+        "Phase-1 live/paper trading window for metals.",
+        "Matches the proven old-system operating window."
+      ]
+    },
+    {
+      "window_id": "METALS_PM_EXT_SHADOW",
+      "group": "METAL",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [17, 0],
+      "end_hm": [19, 0],
+      "mode": "OBSERVATION_ONLY",
+      "notes": [
+        "Historical scan suggests metals often improve in 15:00-19:00 or 16:00-19:00 PL.",
+        "Do not enable live entries here until the new system proves edge."
+      ]
+    },
+    {
+      "window_id": "INDEX_US",
+      "group": "INDEX",
+      "anchor_tz": "Europe/Warsaw",
+      "start_hm": [17, 0],
+      "end_hm": [20, 0],
+      "mode": "TRADE"
+    }
+  ],
+  "prefetch": {
+    "enabled": true,
+    "lead_min": 15,
+    "max_symbols": 4,
+    "warm_store_only": true
+  },
+  "carryover": {
+    "enabled": true,
+    "minutes": 3,
+    "max_symbols": 2,
+    "trade_enabled": false
+  },
+  "future_family_notes": [
+    "Old system had a more mature INDEX family than ETF/EQUITY.",
+    "Scheduler already had EQUITY weights in New York time, but no active trade windows in strategy.json.",
+    "A future family is more likely INDICES or EQUITY_US than ETF-first."
+  ],
+  "sources": {
+    "official": [
+      "https://www.oanda.com/eu-en/sites/default/files/document_files/sif-tms-connect-eng-20.10.2025.pdf",
+      "https://www.oanda.com/eu-en/commodities-cfd",
+      "https://www.oanda.com/eu-en/invest/trading-account"
+    ],
+    "local": [
+      "C:\\OANDA_MT5_SYSTEM\\CONFIG\\strategy.json",
+      "C:\\OANDA_MT5_SYSTEM\\BIN\\safetybot.py",
+      "C:\\OANDA_MT5_SYSTEM\\BIN\\scheduler.py",
+      "C:\\OANDA_MT5_SYSTEM\\DOCS\\TRADE_WINDOW_EXTENSIONS_V1.md",
+      "C:\\OANDA_MT5_SYSTEM\\DOCS\\SESSION_HANDOFF_2026-02-23_2348.md"
+    ]
+  }
+}

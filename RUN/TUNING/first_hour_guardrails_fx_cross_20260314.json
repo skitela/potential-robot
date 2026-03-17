@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "ts_utc": "2026-03-14T13:25:00Z",
+  "family": "FX_CROSS",
+  "purpose": "first_hour_reopen_guardrails",
+  "status": "prepared_not_applied",
+  "observation_window_minutes": 60,
+  "leave_untouched": [
+    "no_code_changes",
+    "no_manual_family_policy_relaxation",
+    "no_manual_fleet_policy_changes",
+    "no_manual_risk_cap_increase",
+    "no_manual_confidence_cap_increase",
+    "no_manual_range_boost"
+  ],
+  "observe": [
+    "candidate_signals",
+    "learning_observations_v2",
+    "paper_open_close_flow",
+    "paper_timeout_vs_paper_sl",
+    "spread_execution_market_regimes",
+    "tuning_policy_effective",
+    "local_trust_state",
+    "gbpjpy_range_chaos_recurrence"
+  ],
+  "intervention_only_if": [
+    "runtime_not_updating_while_market_active",
+    "journal_schema_corruption",
+    "effective_policy_corruption",
+    "hard_execution_failures"
+  ],
+  "success_signals": [
+    "clean_logs",
+    "meaningful_candidate_flow",
+    "no_immediate_return_of_range_chaos_as_dominant_wound",
+    "no_latency_regression",
+    "no_aggressive_local_tuning_under_low_sample"
+  ]
+}

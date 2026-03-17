@@ -1,0 +1,162 @@
+﻿{
+    "family":  "FX_CROSS",
+    "source_symbol":  "EURJPY",
+    "symbols":  [
+                    "EURAUD",
+                    "EURJPY",
+                    "GBPAUD",
+                    "GBPJPY"
+                ],
+    "trusted_data":  true,
+    "trust_reason":  "TRUSTED",
+    "freeze_new_changes":  true,
+    "symbol_count":  4,
+    "trusted_symbol_count":  4,
+    "degraded_symbol_count":  4,
+    "chaos_symbol_count":  4,
+    "bad_spread_symbol_count":  4,
+    "total_samples":  79,
+    "dominant_confidence_cap":  0.82,
+    "dominant_risk_cap":  0.8,
+    "breakout_family_tax":  0.06,
+    "trend_family_tax":  0.05,
+    "rejection_range_boost":  0,
+    "action_code":  "FREEZE_FAMILY",
+    "family_invariants":  {
+                              "trade_tf":  "PERIOD_M5",
+                              "atr_period":  "14",
+                              "rsi_period":  "14",
+                              "uses_new_bar_gate":  "True",
+                              "has_live_manage_position":  "True"
+                          },
+    "family_allowed_ranges":  {
+                                  "trade_window_start_hour":  {
+                                                                  "min":  7,
+                                                                  "max":  7
+                                                              },
+                                  "trade_window_end_hour":  {
+                                                                "min":  11,
+                                                                "max":  12
+                                                            },
+                                  "max_spread_points":  {
+                                                            "min":  34,
+                                                            "max":  52
+                                                        },
+                                  "caution_trigger_abs":  {
+                                                              "min":  0.98,
+                                                              "max":  1
+                                                          },
+                                  "ready_trigger_abs":  {
+                                                            "min":  0.82,
+                                                            "max":  0.84
+                                                        }
+                              },
+    "family_allowed_setup_labels":  [
+                                        "SETUP_BREAKOUT",
+                                        "SETUP_PULLBACK",
+                                        "SETUP_RANGE",
+                                        "SETUP_TREND"
+                                    ],
+    "snapshots":  [
+                      {
+                          "symbol":  "EURAUD",
+                          "family":  "FX_CROSS",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  false,
+                          "learning_sample_count":  18,
+                          "learning_win_count":  3,
+                          "learning_loss_count":  15,
+                          "loss_ratio":  0.8333,
+                          "loss_streak":  5,
+                          "adaptive_risk_scale":  0.928201,
+                          "market_regime":  "CHAOS",
+                          "spread_regime":  "BAD",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_BREAKOUT",
+                          "confidence_cap":  1,
+                          "risk_cap":  1,
+                          "breakout_tax":  0,
+                          "trend_tax":  0,
+                          "rejection_boost":  0,
+                          "trust_reason":  "OBSERVATIONS_MISSING",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURAUD\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURAUD\\tuning_policy.csv"
+                      },
+                      {
+                          "symbol":  "EURJPY",
+                          "family":  "FX_CROSS",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  false,
+                          "learning_sample_count":  20,
+                          "learning_win_count":  2,
+                          "learning_loss_count":  18,
+                          "loss_ratio":  0.9,
+                          "loss_streak":  14,
+                          "adaptive_risk_scale":  0.911765,
+                          "market_regime":  "CHAOS",
+                          "spread_regime":  "BAD",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_BREAKOUT",
+                          "confidence_cap":  1,
+                          "risk_cap":  1,
+                          "breakout_tax":  0,
+                          "trend_tax":  0,
+                          "rejection_boost":  0,
+                          "trust_reason":  "OBSERVATIONS_MISSING",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURJPY\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURJPY\\tuning_policy.csv"
+                      },
+                      {
+                          "symbol":  "GBPAUD",
+                          "family":  "FX_CROSS",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  false,
+                          "learning_sample_count":  15,
+                          "learning_win_count":  2,
+                          "learning_loss_count":  13,
+                          "loss_ratio":  0.8667,
+                          "loss_streak":  4,
+                          "adaptive_risk_scale":  0.941948,
+                          "market_regime":  "CHAOS",
+                          "spread_regime":  "BAD",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_BREAKOUT",
+                          "confidence_cap":  1,
+                          "risk_cap":  1,
+                          "breakout_tax":  0,
+                          "trend_tax":  0,
+                          "rejection_boost":  0,
+                          "trust_reason":  "OBSERVATIONS_MISSING",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPAUD\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPAUD\\tuning_policy.csv"
+                      },
+                      {
+                          "symbol":  "GBPJPY",
+                          "family":  "FX_CROSS",
+                          "runtime_present":  true,
+                          "local_policy_present":  true,
+                          "local_policy_trusted":  false,
+                          "learning_sample_count":  26,
+                          "learning_win_count":  4,
+                          "learning_loss_count":  22,
+                          "loss_ratio":  0.8462,
+                          "loss_streak":  5,
+                          "adaptive_risk_scale":  0.912162,
+                          "market_regime":  "CHAOS",
+                          "spread_regime":  "BAD",
+                          "execution_regime":  "GOOD",
+                          "last_setup_type":  "SETUP_RANGE",
+                          "confidence_cap":  1,
+                          "risk_cap":  1,
+                          "breakout_tax":  0,
+                          "trend_tax":  0,
+                          "rejection_boost":  0,
+                          "trust_reason":  "LOW_SAMPLE",
+                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPJPY\\runtime_state.csv",
+                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPJPY\\tuning_policy.csv"
+                      }
+                  ]
+}

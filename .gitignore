@@ -1,0 +1,28 @@
+# Runtime i artefakty generowane
+/BACKUP/
+/EVIDENCE/
+/LOGS/
+/STATE/
+
+# Edytor i lokalne ustawienia
+/.vscode/
+Thumbs.db
+
+# Artefakty wdrozeniowe i pakiety
+/SERVER_PROFILE/PACKAGE/
+/SERVER_PROFILE/REMOTE_SIM/
+/SERVER_PROFILE/HANDOFF/EVIDENCE/
+
+# Wygenerowane pliki uruchomieniowe
+/RUN/strategy_tester/
+/RUN/*_state.json
+/RUN/*.bak_*
+
+# Wygenerowane kopie i logi narzedzi
+/TOOLS/*.bak_*
+*.log
+*.zip
+*.tmp
+
+# Artefakty kompilacji MT5
+*.ex5

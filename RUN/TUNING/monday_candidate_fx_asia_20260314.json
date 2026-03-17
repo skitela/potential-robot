@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "ts_utc": "2026-03-14T11:40:00Z",
+  "family": "FX_ASIA",
+  "purpose": "candidate_monday_open_settings",
+  "status": "proposal_only_not_applied",
+  "current_hierarchy_state": {
+    "family_freeze": true,
+    "fleet_freeze": true,
+    "family_breakout_tax": 0.06,
+    "family_confidence_cap": 0.86,
+    "fleet_confidence_cap": 0.833333,
+    "fleet_risk_cap": 0.813333
+  },
+  "family_candidates": {
+    "breakout_family_tax": 0.10,
+    "trend_family_tax": 0.00,
+    "dominant_confidence_cap": 0.80,
+    "dominant_risk_cap": 0.74,
+    "rejection_range_boost": 0.00,
+    "rationale": [
+      "FX_ASIA has no shared positive bucket worth boosting at family level",
+      "family-level breakout pressure remains justified",
+      "family should stay defensive until fresh reopen data arrives"
+    ]
+  },
+  "symbol_candidates": {
+    "USDJPY": {
+      "breakout_global_tax": 0.12,
+      "breakout_conflict_tax": 0.06,
+      "confidence_cap": 0.78,
+      "risk_cap": 0.72,
+      "notes": [
+        "treat breakout as the primary danger class",
+        "watch whether existing Renko filter removes the worst breakout entries"
+      ]
+    },
+    "AUDUSD": {
+      "breakout_global_tax": 0.08,
+      "confidence_cap": 0.80,
+      "risk_cap": 0.74,
+      "notes": [
+        "do not boost range at reopen",
+        "AUDUSD needs range-specific tuning language more than more breakout aggression"
+      ]
+    },
+    "NZDUSD": {
+      "confidence_cap": 0.80,
+      "risk_cap": 0.74,
+      "notes": [
+        "insufficient sample, observation first",
+        "do not derive aggressive local tuning from a single closed trade"
+      ]
+    }
+  },
+  "implemented_tuning_model_extensions": [
+    "require_support_for_rejection",
+    "breakout_require_non_poor_renko",
+    "trend_require_non_poor_candle",
+    "candidate_signal_journal"
+  ],
+  "deferred_tuning_model_extensions": [
+    "range_confidence_floor",
+    "range_trend_tax",
+    "breakout_require_non_poor_candle"
+  ]
+}

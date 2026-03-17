@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "project_name": "MAKRO_I_MIKRO_BOT",
+  "runtime_root": "MAKRO_I_MIKRO_BOT",
+  "mt5_model": "one_microbot_per_chart",
+  "allow_python_runtime": false,
+  "allow_bridge_runtime": false,
+  "reference_microbot": "EURUSD",
+  "domain_architecture": {
+    "shared_organism": true,
+    "top_level_coordinator_name": "GLOBAL_SESSION_AND_CAPITAL_COORDINATOR",
+    "domains": [
+      "FX",
+      "METALS",
+      "INDICES"
+    ],
+    "domain_catalogs": {
+      "FX": "MQL5\\Experts\\MicroBots + CONFIG + DOCS",
+      "METALS": "METALS_MAKRO_I_MIKRO_BOT",
+      "INDICES": "INDICES_MAKRO_I_MIKRO_BOT"
+    },
+    "rules": [
+      "domains are not separate runtimes",
+      "domains share one capital contract and one broker policy layer",
+      "domain agents coordinate families and wake-sleep states",
+      "the global coordinator is the only layer allowed to wake a reserve domain in place of a sleeping or degraded primary domain"
+    ]
+  },
+  "notes": [
+    "Core is a shared library, not a central runtime owner.",
+    "Every microbot keeps its own runtime, kill-switch and local safeguards.",
+    "Rollout preflight is orchestrated by TOOLS\\PREPARE_MT5_ROLLOUT.ps1.",
+    "Default repo presets stay safe with InpEnableLiveEntries=false.",
+    "Truly live presets are generated consciously by TOOLS\\GENERATE_ACTIVE_LIVE_PRESETS.ps1.",
+    "Transfer delivery is validated as PACKAGE plus HANDOFF and can be zipped separately.",
+    "FX, METALS and INDICES are now active local runtime domains inside the same organism.",
+    "Core capital may now be set manually through CONFIG\\core_capital_contract_v1.json and applied globally to Common Files.",
+    "Global session and capital rhythm is now published through CONFIG\\session_capital_coordinator_v1.json and projected to Common Files at domain scope."
+  ]
+}
