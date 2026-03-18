@@ -249,13 +249,37 @@ bool MbTuningDeckhandScanCandidates(
             c17 == "FAIR" &&
             !spread_dirty
          );
+         bool nzdusd_breakout_trend_relief = (
+            canonical_symbol == "NZDUSD" &&
+            setup_type == "SETUP_BREAKOUT" &&
+            market_regime == "TREND" &&
+            !spread_dirty &&
+            !poor_renko
+         );
+         bool nzdusd_range_breakout_relief = (
+            canonical_symbol == "NZDUSD" &&
+            setup_type == "SETUP_RANGE" &&
+            market_regime == "BREAKOUT" &&
+            !spread_dirty &&
+            !poor_renko
+         );
+         bool nzdusd_trend_chaos_relief = (
+            canonical_symbol == "NZDUSD" &&
+            setup_type == "SETUP_TREND" &&
+            market_regime == "CHAOS" &&
+            !spread_dirty &&
+            !poor_renko
+         );
          if(
             dirty_by_quality &&
             (
                audusd_supported_range_candle ||
                audusd_range_regime_relief ||
                gbpusd_trend_breakout_relief ||
-               gbpusd_breakout_breakout_relief
+               gbpusd_breakout_breakout_relief ||
+               nzdusd_breakout_trend_relief ||
+               nzdusd_range_breakout_relief ||
+               nzdusd_trend_chaos_relief
             )
          )
             dirty_by_quality = false;
