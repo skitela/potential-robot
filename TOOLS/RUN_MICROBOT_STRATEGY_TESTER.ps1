@@ -105,6 +105,27 @@ function Get-KeyValueCsvMap {
     return $map
 }
 
+function Import-TabCsvWithRetry {
+    param(
+        [string]$Path,
+        [int]$MaxAttempts = 20,
+        [int]$DelayMs = 500
+    )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            return @(Import-Csv -LiteralPath $Path -Delimiter "`t")
+        } catch {
+            $message = $_.Exception.Message
+            $isLast = ($attempt -ge $MaxAttempts)
+            if ($message -notmatch 'being used by another process' -or $isLast) {
+                throw
+            }
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+    return @()
+}
+
 function Get-TesterRunOutcome {
     param(
         [string[]]$LogPaths,
@@ -358,7 +379,7 @@ $paperCloseStats = @()
 $paperOpenBySetupRegime = @()
 $deckhandSnapshot = $null
 if (Test-Path -LiteralPath $candidateSignalsPath) {
-    $candidateRows = Import-Csv -LiteralPath $candidateSignalsPath -Delimiter "`t"
+    $candidateRows = Import-TabCsvWithRetry -Path $candidateSignalsPath
     $paperOpenRows = @($candidateRows | Where-Object { $_.stage -eq 'PAPER_OPEN' -and $_.reason_code -eq 'PAPER_POSITION_OPENED' }).Count
     $paperScoreGateRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and $_.reason_code -eq 'PAPER_SCORE_GATE' }).Count
     $acceptedEvaluatedRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and $_.accepted -eq '1' }).Count
@@ -381,7 +402,7 @@ if (Test-Path -LiteralPath $candidateSignalsPath) {
 $worstBuckets = @()
 if (Test-Path -LiteralPath $bucketSummaryPath) {
     $worstBuckets = @(
-        Import-Csv -LiteralPath $bucketSummaryPath -Delimiter "`t" |
+        Import-TabCsvWithRetry -Path $bucketSummaryPath |
         Sort-Object { [double]$_.avg_pnl } |
         Select-Object -First 6 setup_type,market_regime,samples,wins,losses,avg_pnl
     )
@@ -389,7 +410,7 @@ if (Test-Path -LiteralPath $bucketSummaryPath) {
 
 if (Test-Path -LiteralPath $learningObservationsPath) {
     $paperCloseStats = @(
-        Import-Csv -LiteralPath $learningObservationsPath -Delimiter "`t" |
+        Import-TabCsvWithRetry -Path $learningObservationsPath |
         Group-Object close_reason |
         Sort-Object Count -Descending |
         ForEach-Object {
@@ -403,7 +424,7 @@ if (Test-Path -LiteralPath $learningObservationsPath) {
 }
 
 if (Test-Path -LiteralPath $tuningDeckhandPath) {
-    $deckhandRows = @(Import-Csv -LiteralPath $tuningDeckhandPath -Delimiter "`t")
+    $deckhandRows = @(Import-TabCsvWithRetry -Path $tuningDeckhandPath)
     if ($deckhandRows.Count -gt 0) {
         $deckhandSnapshot = $deckhandRows[-1]
     }
