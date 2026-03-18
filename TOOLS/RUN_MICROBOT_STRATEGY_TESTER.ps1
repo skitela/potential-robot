@@ -409,6 +409,26 @@ if (Test-Path -LiteralPath $tuningDeckhandPath) {
     }
 }
 
+$summaryTrustState = $executionSummary.trust_state
+$summaryTrustReason = $executionSummary.trust_reason
+$summaryExecutionQualityState = $executionSummary.execution_quality_state
+$summaryCostPressureState = $executionSummary.cost_pressure_state
+
+if ($null -ne $deckhandSnapshot) {
+    if ($deckhandSnapshot.PSObject.Properties.Name -contains 'trust_state' -and -not [string]::IsNullOrWhiteSpace([string]$deckhandSnapshot.trust_state)) {
+        $summaryTrustState = [string]$deckhandSnapshot.trust_state
+    }
+    if ($deckhandSnapshot.PSObject.Properties.Name -contains 'reason_code' -and -not [string]::IsNullOrWhiteSpace([string]$deckhandSnapshot.reason_code)) {
+        $summaryTrustReason = [string]$deckhandSnapshot.reason_code
+    }
+    if ($deckhandSnapshot.PSObject.Properties.Name -contains 'execution_quality_state' -and -not [string]::IsNullOrWhiteSpace([string]$deckhandSnapshot.execution_quality_state)) {
+        $summaryExecutionQualityState = [string]$deckhandSnapshot.execution_quality_state
+    }
+    if ($deckhandSnapshot.PSObject.Properties.Name -contains 'cost_pressure_state' -and -not [string]::IsNullOrWhiteSpace([string]$deckhandSnapshot.cost_pressure_state)) {
+        $summaryCostPressureState = [string]$deckhandSnapshot.cost_pressure_state
+    }
+}
+
 $conversionRatio = 0.0
 if ($acceptedEvaluatedRows -gt 0) {
     $conversionRatio = [math]::Round(($paperOpenRows / [double]$acceptedEvaluatedRows), 4)
@@ -455,10 +475,10 @@ $summary = [ordered]@{
     result_label              = $resultLabel
     worker_name               = $workerToken
     evidence_dir              = $evidenceDir
-    trust_state               = $executionSummary.trust_state
-    trust_reason              = $executionSummary.trust_reason
-    execution_quality_state   = $executionSummary.execution_quality_state
-    cost_pressure_state       = $executionSummary.cost_pressure_state
+    trust_state               = $summaryTrustState
+    trust_reason              = $summaryTrustReason
+    execution_quality_state   = $summaryExecutionQualityState
+    cost_pressure_state       = $summaryCostPressureState
     market_regime             = $executionSummary.market_regime
     last_setup_type           = $executionSummary.last_setup_type
     learning_bias             = $executionSummary.learning_bias
@@ -471,6 +491,10 @@ $summary = [ordered]@{
     score_below_trigger_rows  = $scoreBelowTriggerRows
     paper_conversion_ratio    = $conversionRatio
     realized_pnl_lifetime     = ($runtimeMap['realized_pnl_lifetime'])
+    execution_summary_trust_state = $executionSummary.trust_state
+    execution_summary_trust_reason = $executionSummary.trust_reason
+    execution_summary_cost_pressure_state = $executionSummary.cost_pressure_state
+    execution_summary_execution_quality_state = $executionSummary.execution_quality_state
     top_candidate_reasons     = $topCandidateReasons
     paper_open_by_setup_regime = $paperOpenBySetupRegime
     paper_close_stats         = $paperCloseStats
