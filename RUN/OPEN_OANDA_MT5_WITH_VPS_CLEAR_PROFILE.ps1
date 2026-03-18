@@ -9,7 +9,20 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$guardScript = "C:\OANDA_MT5_SYSTEM\TOOLS\mt5_risk_popup_guard.ps1"
+$guardStatus = "C:\OANDA_MT5_SYSTEM\RUN\mt5_risk_guard_status.json"
 $pythonScript = Join-Path $projectRoot "TOOLS\setup_mt5_safe_empty_profile.py"
+
+Get-Process terminal64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+Start-Process powershell -ArgumentList @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $guardScript,
+    "-Mt5DataDir", $TerminalDataDir
+) | Out-Null
+
+Start-Sleep -Seconds 1
 
 & python $pythonScript --terminal-data-dir $TerminalDataDir --mt5-exe $Mt5Exe --profile-name $ProfileName --symbol $Symbol --launch
 
@@ -18,4 +31,8 @@ Start-Sleep -Seconds 5
 $reportPath = Join-Path $projectRoot "EVIDENCE\mt5_vps_clear_profile_report.json"
 if (Test-Path -LiteralPath $reportPath) {
     Get-Content -LiteralPath $reportPath -Raw
+}
+
+if (Test-Path -LiteralPath $guardStatus) {
+    Get-Content -LiteralPath $guardStatus -Raw
 }
