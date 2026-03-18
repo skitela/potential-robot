@@ -44,6 +44,8 @@ input uint InpTimerSec = 5;
 input bool InpEnableLiveEntries = false;
 input bool InpPaperCollectMode = true;
 input string InpTradeComment = "MB_EURJPY";
+input bool InpEnableStrategyTesterSandbox = true;
+input string InpStrategyTesterSandboxTag = "EURJPY_AGENT";
 
 CTrade g_trade;
 MbRuntimeState g_state;
@@ -92,6 +94,19 @@ bool ShouldRunEURJPYTuningCycle(const datetime now)
 bool IsLocalPaperModeActive()
   {
    return (InpPaperCollectMode || g_runtime_control.paper_only);
+  }
+
+void ConfigureEURJPYStrategyTesterSandbox()
+  {
+   if(!InpEnableStrategyTesterSandbox || !MbIsStrategyTesterRuntime())
+      return;
+
+   string sandbox_tag = MbCanonicalSymbol(g_profile.symbol);
+   string custom_tag = MbStoragePathSanitizeToken(InpStrategyTesterSandboxTag);
+   if(custom_tag != "" && custom_tag != "DEFAULT")
+      sandbox_tag += "_" + custom_tag;
+
+   MbEnableStrategyTesterSandbox(sandbox_tag);
   }
 
 void NormalizeEURJPYMarketPermissions()
@@ -281,6 +296,7 @@ int OnInit()
    if(!MbVerifyChartSymbol(g_profile.symbol))
       return(INIT_FAILED);
    g_profile.symbol = Symbol();
+   ConfigureEURJPYStrategyTesterSandbox();
    g_state.magic = InpMagic;
    g_state.symbol = g_profile.symbol;
    g_state.mode = MB_MODE_READY;

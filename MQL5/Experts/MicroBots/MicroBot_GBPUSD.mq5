@@ -276,6 +276,12 @@ int ResolveGBPUSDPaperHoldSeconds(const MbSignalDecision &signal)
      {
       if(signal.reason_code == "PAPER_SCORE_GATE" || signal.confidence_bucket == "LOW")
          hold_seconds = 150;
+      else if(
+         (signal.market_regime == "TREND" || signal.market_regime == "BREAKOUT") &&
+         signal.candle_quality_grade == "POOR" &&
+         signal.renko_quality_grade != "POOR"
+      )
+         hold_seconds = 180;
       else if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE")
          hold_seconds = 210;
       else if(signal.confidence_bucket == "HIGH" && !signal.renko_reversal_flag && signal.renko_run_length >= 3)
