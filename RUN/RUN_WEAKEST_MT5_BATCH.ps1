@@ -4,7 +4,10 @@ param(
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
-    [int]$TimeoutSec = 7200
+    [int]$TimeoutSec = 7200,
+    [switch]$UsePriorityReport = $true,
+    [string]$PriorityReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
+    [int]$PriorityCount = 8
 )
 
 Set-StrictMode -Version Latest
@@ -19,21 +22,64 @@ foreach ($path in @($prepareScript, $batchScript, $priorityScript)) {
     }
 }
 
+function Normalize-SymbolAlias {
+    param([string]$Alias)
+
+    if ([string]::IsNullOrWhiteSpace($Alias)) {
+        return $null
+    }
+
+    $trimmed = $Alias.Trim()
+    $map = @{
+        "COPPER-US" = "COPPERUS"
+        "USA500.IDX" = "US500"
+        "XAUUSD" = "GOLD"
+        "XAGUSD" = "SILVER"
+    }
+
+    if ($map.ContainsKey($trimmed)) {
+        return $map[$trimmed]
+    }
+
+    return ($trimmed -replace '[^A-Z0-9]', '')
+}
+
 Write-Host "Preparing secondary MT5 weakest-first terminal..."
 & $prepareScript -ProjectRoot $ProjectRoot -TerminalOrigin (Split-Path -Parent $Mt5Exe) -TerminalDataDir $TerminalDataDir | Out-Host
 
 & $priorityScript | Out-Host
 
-$symbols = @(
-    "USDCHF",
-    "USDCAD",
-    "USDJPY",
-    "NZDUSD",
-    "GBPJPY",
-    "COPPERUS",
-    "SILVER",
-    "DE30"
-)
+$symbols = @()
+if ($UsePriorityReport -and (Test-Path -LiteralPath $PriorityReportPath)) {
+    try {
+        $priorityReport = Get-Content -LiteralPath $PriorityReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ranked = @($priorityReport.ranked_instruments)
+        $symbols = @(
+            $ranked |
+                ForEach-Object { Normalize-SymbolAlias -Alias ([string]$_.symbol_alias) } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique -First $PriorityCount
+        )
+    }
+    catch {
+        $symbols = @()
+    }
+}
+
+if ($symbols.Count -eq 0) {
+    $symbols = @(
+        "NZDUSD",
+        "GBPJPY",
+        "SILVER",
+        "EURAUD",
+        "COPPERUS",
+        "PLATIN",
+        "GBPAUD",
+        "EURJPY"
+    )
+}
+
+Write-Host ("Weakest-first symbol plan: {0}" -f ($symbols -join ", "))
 
 $workers = @(
     "weakest_mt5_01",
