@@ -51,12 +51,24 @@ $rows = Import-Csv -LiteralPath $ProfilePath | Where-Object { $_.enabled -eq "1"
 foreach ($row in $rows) {
     $symbol = $row.symbol.Trim()
     $exportName = $row.mt5_export_name.Trim()
+    $historyFile = Join-Path $QdmRoot ("user\data\History\{0}\{0}_TICK.dat" -f $symbol)
+
+    if (-not (Test-Path -LiteralPath $historyFile)) {
+        Write-Warning "Skipping export for $symbol - history file missing: $historyFile"
+        continue
+    }
+
+    $historyInfo = Get-Item -LiteralPath $historyFile -ErrorAction Stop
+    if ($historyInfo.Length -le 0) {
+        Write-Warning "Skipping export for $symbol - history file is empty: $historyFile"
+        continue
+    }
 
     $arguments = @(
         "-data",
         "action=exportToMT5",
         "symbol=$symbol",
-        "timeframe=Tick",
+        "timeframe=TICK",
         "outputdir=$OutputRoot",
         "filename=$exportName"
     )
