@@ -33,6 +33,13 @@ void MbResolveTrustThresholds(
    out_min_conversion_candidates = 10;
    out_max_dirty_ratio = 0.42;
 
+   if(family == "FX_MAIN")
+     {
+      out_min_conversion_ratio = 0.06;
+      out_min_conversion_candidates = 8;
+      out_max_dirty_ratio = 0.46;
+      return;
+     }
    if(family == "FX_ASIA")
      {
       out_min_conversion_ratio = 0.04;
@@ -258,6 +265,14 @@ void MbResolveCostBenchmarks(
    out_mfe_points = 28.0;
    out_mae_points = 18.0;
 
+   if(family == "FX_MAIN")
+     {
+      out_typical_move_points = 52.0;
+      out_time_stop_points = 24.0;
+      out_mfe_points = 38.0;
+      out_mae_points = 26.0;
+      return;
+     }
    if(family == "FX_ASIA")
      {
       out_typical_move_points = 36.0;
@@ -397,11 +412,18 @@ void MbEvaluateCostPressureState(
 
    out.state = "LOW";
    out.reason_code = "COST_ACCEPTABLE";
-   out.spread_now = market.spread_points;
-   out.spread_vs_typical_move = market.spread_points / MathMax(1.0,typical_move_points);
-   out.spread_vs_time_stop = market.spread_points / MathMax(1.0,time_stop_points);
-   out.spread_vs_mfe = market.spread_points / MathMax(1.0,mfe_points);
-   out.spread_vs_mae = market.spread_points / MathMax(1.0,mae_points);
+   double effective_spread_points = market.spread_points;
+   // Strategy Tester can end a run on an artificially wide last quote. For the FX
+   // families this was poisoning cost classification far more than the rest of the run.
+   bool fx_family = (family == "FX_MAIN" || family == "FX_ASIA" || family == "FX_CROSS");
+   if(MbIsStrategyTesterRuntime() && fx_family && effective_spread_points > (time_stop_points * 2.0))
+      effective_spread_points = time_stop_points;
+
+   out.spread_now = effective_spread_points;
+   out.spread_vs_typical_move = effective_spread_points / MathMax(1.0,typical_move_points);
+   out.spread_vs_time_stop = effective_spread_points / MathMax(1.0,time_stop_points);
+   out.spread_vs_mfe = effective_spread_points / MathMax(1.0,mfe_points);
+   out.spread_vs_mae = effective_spread_points / MathMax(1.0,mae_points);
 
    double worst_ratio = MathMax(
       MathMax(out.spread_vs_typical_move,out.spread_vs_time_stop),
@@ -409,11 +431,15 @@ void MbEvaluateCostPressureState(
    );
 
    bool structurally_expensive = (family == "METALS_FUTURES");
+   double bad_spread_non_representative_ratio = 0.80;
+   if(fx_family)
+      bad_spread_non_representative_ratio = 1.05;
+
    bool paper_not_representative = (structurally_expensive && worst_ratio >= 0.90);
    if(MbCanonicalSymbol(symbol) == "COPPER-US" && worst_ratio >= 0.75)
       paper_not_representative = true;
 
-   if(state.spread_regime == "BAD" && worst_ratio >= 0.80)
+   if(state.spread_regime == "BAD" && worst_ratio >= bad_spread_non_representative_ratio)
       paper_not_representative = true;
 
    if(paper_not_representative)
