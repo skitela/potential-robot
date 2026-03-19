@@ -10,8 +10,9 @@ $primaryMt5 = Join-Path $ProjectRoot "RUN\START_FX_MT5_BATCH_BACKGROUND.ps1"
 $secondaryMt5 = Join-Path $ProjectRoot "RUN\START_FX_MT5_SECONDARY_BATCH_BACKGROUND.ps1"
 $ml = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
 $qdm = Join-Path $ProjectRoot "RUN\START_QDM_EXPORT_AFTER_SYNC_BACKGROUND.ps1"
+$opsArchiver = Join-Path $ProjectRoot "RUN\START_LOCAL_OPERATOR_ARCHIVER_BACKGROUND.ps1"
 
-foreach ($path in @($tuningScript, $primaryMt5, $secondaryMt5, $ml, $qdm)) {
+foreach ($path in @($tuningScript, $primaryMt5, $secondaryMt5, $ml, $qdm, $opsArchiver)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -19,6 +20,9 @@ foreach ($path in @($tuningScript, $primaryMt5, $secondaryMt5, $ml, $qdm)) {
 
 Write-Host "Applying workstation tuning for 90% lab..."
 & $tuningScript -ThrottleInteractiveApps -MlPerfProfile "ConcurrentLab" | Out-Host
+
+Write-Host "Starting local operator archiver..."
+& $opsArchiver
 
 Write-Host "Starting lane 1/4: OANDA MT5 broker-faithful batch..."
 & $primaryMt5

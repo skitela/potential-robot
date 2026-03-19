@@ -30,10 +30,16 @@ finally {
 
 Set-Content -LiteralPath $wrapperPath -Value $wrapperContent -Encoding UTF8
 
-Start-Process -FilePath "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+$proc = Start-Process -FilePath "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $wrapperPath) `
-    -Priority AboveNormal `
-    -WorkingDirectory $ProjectRoot
+    -WorkingDirectory $ProjectRoot `
+    -PassThru
+
+try {
+    $proc.PriorityClass = "AboveNormal"
+}
+catch {
+}
 
 Write-Host "Background FX MT5 batch started."
 Write-Host "Log: $logPath"
