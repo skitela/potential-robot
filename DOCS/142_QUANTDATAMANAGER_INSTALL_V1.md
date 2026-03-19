@@ -52,10 +52,15 @@ To oznacza, ze fizyczna instalacja jest gotowa, ale trzeba jeszcze:
 ## Co zostalo dodane do projektu
 Dodano launcher:
 - [OPEN_QUANT_DATA_MANAGER.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\OPEN_QUANT_DATA_MANAGER.ps1)
+- [QDM_LICENSE.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\QDM_LICENSE.ps1)
 
 Jego rola:
 - otwierac `QDM` z wlasciwej sciezki
 - bez szukania exe recznie po dysku
+
+Drugi skrypt:
+- sprawdza stan licencji
+- i pozwala podac kod licencji z wiersza polecen
 
 ## Co jest gotowe na teraz
 - instalacja na `C:`: gotowa
@@ -78,3 +83,10 @@ Po aktywacji:
 2. skonfigurowac pierwsze pobieranie danych
 3. zrobic pierwszy eksport dla jednego instrumentu testowego
 4. sprawdzic import do `MT5 Custom Symbols`
+
+## Szybka obsluga licencji
+Sprawdzenie:
+- `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\QDM_LICENSE.ps1 -Action info`
+
+Aktualizacja po uzyskaniu kodu:
+- `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\QDM_LICENSE.ps1 -Action update -Code TWOJ_KOD`
