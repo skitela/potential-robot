@@ -625,6 +625,21 @@ void OnTick()
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_RANGE" && g_SILVER_effective_tuning_policy.range_confidence_floor > 0.0 && signal.confidence_score < g_SILVER_effective_tuning_policy.range_confidence_floor)
          blocked_by_tuning_gate = true;
+      if(signal.setup_type == "SETUP_TREND" && signal.confidence_bucket == "LOW" && poor_candle && signal.market_regime == "CHAOS")
+        {
+         blocked_by_tuning_gate = true;
+         signal.reason_code = "SILVER_TREND_CHAOS_POOR_CANDLE_BLOCK";
+        }
+      if(signal.setup_type == "SETUP_TREND" && signal.confidence_bucket == "LOW" && poor_candle && signal.market_regime == "TREND")
+        {
+         blocked_by_tuning_gate = true;
+         signal.reason_code = "SILVER_TREND_LOW_POOR_CANDLE_BLOCK";
+        }
+      if(signal.setup_type == "SETUP_REJECTION" && signal.confidence_bucket == "LOW" && poor_candle && signal.market_regime == "CHAOS")
+        {
+         blocked_by_tuning_gate = true;
+         signal.reason_code = "SILVER_REJECTION_CHAOS_POOR_CANDLE_BLOCK";
+        }
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
          paper_gate_abs = 0.60;

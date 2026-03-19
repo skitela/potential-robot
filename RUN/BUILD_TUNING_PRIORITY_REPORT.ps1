@@ -162,13 +162,16 @@ function Get-LatestTesterSummaries {
                 $sampleCount = [int](Get-FirstValue -Object $summary -Names @("learning_sample_count"))
                 $biasValue = [double](Get-FirstValue -Object $summary -Names @("learning_bias"))
                 $pnlValue = [double](Get-FirstValue -Object $summary -Names @("realized_pnl_lifetime"))
-                if (
-                    [string]::IsNullOrWhiteSpace($resultLabel) -and
+                $isEmptySummary = (
                     [string]::IsNullOrWhiteSpace($trustState) -and
                     $sampleCount -le 0 -and
                     [math]::Abs($biasValue) -lt 0.0000001 -and
-                    [math]::Abs($pnlValue) -lt 0.0000001
-                ) {
+                    (
+                        $null -eq $pnlValue -or
+                        [math]::Abs($pnlValue) -lt 0.0000001
+                    )
+                )
+                if ($isEmptySummary) {
                     return
                 }
                 if ($map.ContainsKey($alias)) {
