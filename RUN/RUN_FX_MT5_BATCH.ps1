@@ -11,9 +11,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $batchScript = Join-Path $ProjectRoot "TOOLS\RUN_STRATEGY_TESTER_BATCH.ps1"
+$priorityScript = Join-Path $ProjectRoot "RUN\APPLY_LAB_PROCESS_PRIORITIES.ps1"
 if (-not (Test-Path -LiteralPath $batchScript)) {
     throw "Strategy tester batch script not found: $batchScript"
 }
+if (-not (Test-Path -LiteralPath $priorityScript)) {
+    throw "Priority script not found: $priorityScript"
+}
+
+& $priorityScript | Out-Host
 
 $symbols = @(
     "EURUSD",

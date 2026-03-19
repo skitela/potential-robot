@@ -17,6 +17,6 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
 Write-Host ""
 Write-Host "=== MT5 / QDM PROCESSES ==="
 Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProcessName -in @("terminal64", "qdmcli", "QDataManager_nocheck", "QuantDataManager_ui") } |
-    Select-Object ProcessName, Id, Path |
+    Where-Object { $_.ProcessName -in @("terminal64", "metatester64", "qdmcli", "QDataManager_nocheck", "QuantDataManager_ui", "python") } |
+    Select-Object ProcessName, Id, PriorityClass, WorkingSet64, Path |
     Format-Table -AutoSize

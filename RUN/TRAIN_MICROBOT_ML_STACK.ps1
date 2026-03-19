@@ -1,5 +1,7 @@
 param(
-    [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT"
+    [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
+    [ValidateSet("ConcurrentLab", "OfflineMax", "Light")]
+    [string]$PerfProfile = "ConcurrentLab"
 )
 
 Set-StrictMode -Version Latest
@@ -11,6 +13,6 @@ if (-not (Test-Path -LiteralPath $paperGateScript)) {
 }
 
 Write-Host "=== TRAIN PAPER GATE ACCEPTOR ==="
-& $paperGateScript
+& $paperGateScript -PerfProfile $PerfProfile
 
 Write-Host "MicroBot ML stack training finished."
