@@ -53,6 +53,8 @@ To oznacza, ze fizyczna instalacja jest gotowa, ale trzeba jeszcze:
 Dodano launcher:
 - [OPEN_QUANT_DATA_MANAGER.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\OPEN_QUANT_DATA_MANAGER.ps1)
 - [QDM_LICENSE.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\QDM_LICENSE.ps1)
+- [STORE_QDM_LICENSE_SECRET.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\STORE_QDM_LICENSE_SECRET.ps1)
+- [APPLY_QDM_LICENSE_FROM_SECRET.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\APPLY_QDM_LICENSE_FROM_SECRET.ps1)
 
 Jego rola:
 - otwierac `QDM` z wlasciwej sciezki
@@ -61,6 +63,10 @@ Jego rola:
 Drugi skrypt:
 - sprawdza stan licencji
 - i pozwala podac kod licencji z wiersza polecen
+
+Dodatkowo:
+- mozna zapisac kod licencji do lokalnego vaulta sekretow
+- i potem podawac go do `QDM` automatycznie
 
 ## Co jest gotowe na teraz
 - instalacja na `C:`: gotowa
