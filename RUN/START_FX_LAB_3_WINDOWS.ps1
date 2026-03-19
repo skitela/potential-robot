@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $fxMt5Batch = Join-Path $ProjectRoot "RUN\START_FX_MT5_BATCH_BACKGROUND.ps1"
 $fxMl = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
+$tuningScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
 
 if (-not (Test-Path -LiteralPath $fxMt5Batch)) {
     throw "FX MT5 launcher not found: $fxMt5Batch"
@@ -14,6 +15,12 @@ if (-not (Test-Path -LiteralPath $fxMt5Batch)) {
 if (-not (Test-Path -LiteralPath $fxMl)) {
     throw "FX ML launcher not found: $fxMl"
 }
+if (-not (Test-Path -LiteralPath $tuningScript)) {
+    throw "Workstation tuning script not found: $tuningScript"
+}
+
+Write-Host "Applying workstation tuning for FX lab..."
+& $tuningScript -ThrottleInteractiveApps -MlPerfProfile "ConcurrentLab" | Out-Host
 
 Write-Host "Starting FX window 1: MT5 tester batch..."
 & $fxMt5Batch
