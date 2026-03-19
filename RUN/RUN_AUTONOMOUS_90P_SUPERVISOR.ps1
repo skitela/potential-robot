@@ -67,6 +67,7 @@ function Get-Mt5LabActivityCount {
 
     $wrapperCount = Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*"
     $wrapperCount += Get-WrapperCount -Pattern "*usdchf_fix_retest_*"
+    $wrapperCount += Get-WrapperCount -Pattern "*silver_baseline_*"
 
     $secondaryTerminalCount = @(
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
@@ -160,6 +161,9 @@ while ($true) {
     $cycle++
 
     $actions = [ordered]@{}
+
+    & $perfScript -ThrottleInteractiveApps -MlPerfProfile "ConcurrentLab" | Out-Null
+    $actions["perf_tuning"] = "applied"
 
     & $priorityScript | Out-Null
     $actions["priority_report"] = "rebuilt"
