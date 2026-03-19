@@ -1,8 +1,11 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$TerminalLogPath = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\logs\20260319.log",
+    [string]$TerminalLogPath = "",
+    [string]$TerminalLogDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\logs",
+    [string]$WatchedTerminalPath = "C:\Program Files\MetaTrader 5\terminal64.exe",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
-    [int]$PollSeconds = 60
+    [int]$PollSeconds = 60,
+    [int]$StaleMinutes = 10
 )
 
 Set-StrictMode -Version Latest
@@ -33,8 +36,79 @@ function Get-LastMatchInfo {
     return $null
 }
 
+function Resolve-TerminalLogPath {
+    param(
+        [string]$PreferredPath,
+        [string]$LogDir
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath) -and (Test-Path -LiteralPath $PreferredPath)) {
+        return $PreferredPath
+    }
+
+    if (-not (Test-Path -LiteralPath $LogDir)) {
+        return $PreferredPath
+    }
+
+    $latest = Get-ChildItem -LiteralPath $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($latest) {
+        return $latest.FullName
+    }
+
+    return $PreferredPath
+}
+
+function Get-LogLineTimestamp {
+    param(
+        [string]$Line,
+        [datetime]$LogDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return $null
+    }
+
+    $match = [regex]::Match($Line, '^[A-Z0-9]+\t\d+\t(\d{2}:\d{2}:\d{2})\.\d{3}\t')
+    if (-not $match.Success) {
+        return $null
+    }
+
+    try {
+        $timeText = $match.Groups[1].Value
+        return [datetime]::ParseExact(
+            ("{0} {1}" -f $LogDate.ToString("yyyy-MM-dd"), $timeText),
+            "yyyy-MM-dd HH:mm:ss",
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-WatchedTerminalRunning {
+    param([string]$ExecutablePath)
+
+    $normalized = $ExecutablePath.ToLowerInvariant()
+    $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "terminal64.exe" -and
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            $_.ExecutablePath.ToLowerInvariant() -eq $normalized
+        }
+
+    return (@($processes).Count -gt 0)
+}
+
 function Get-Mt5TesterStatus {
-    param([string]$LogPath)
+    param(
+        [string]$LogPath,
+        [string]$WatchedTerminalPath,
+        [int]$StaleMinutes
+    )
 
     $status = [ordered]@{
         generated_at_local   = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -47,6 +121,9 @@ function Get-Mt5TesterStatus {
         result_label         = ""
         result_duration      = ""
         latest_result_line   = ""
+        last_activity_at_local = ""
+        watched_terminal_running = $false
+        stale_minutes          = $StaleMinutes
         signature            = ""
     }
 
@@ -55,6 +132,10 @@ function Get-Mt5TesterStatus {
         $status.signature = "log_missing"
         return [pscustomobject]$status
     }
+
+    $logItem = Get-Item -LiteralPath $LogPath -ErrorAction Stop
+    $logDate = $logItem.LastWriteTime.Date
+    $status.watched_terminal_running = Test-WatchedTerminalRunning -ExecutablePath $WatchedTerminalPath
 
     $lines = @(Get-Content -LiteralPath $LogPath -Tail 250 -ErrorAction SilentlyContinue)
     if ($lines.Count -eq 0) {
@@ -115,11 +196,38 @@ function Get-Mt5TesterStatus {
         $status.latest_result_line = $resultInfo.line.Trim()
     }
 
+    $lastActivityLine = $null
+    if ($resultInfo) {
+        $lastActivityLine = $resultInfo.line
+    }
+    elseif ($progressInfo) {
+        $lastActivityLine = $progressInfo.line
+    }
+    elseif ($launchInfo) {
+        $lastActivityLine = $launchInfo.line
+    }
+
+    $lastActivityAt = Get-LogLineTimestamp -Line $lastActivityLine -LogDate $logDate
+    if ($lastActivityAt) {
+        $status.last_activity_at_local = $lastActivityAt.ToString("yyyy-MM-dd HH:mm:ss")
+    }
+
     if ($launchInfo -and $resultInfo -and $resultInfo.index -gt $launchIndex) {
         $status.state = "completed"
     }
     elseif ($launchInfo) {
         $status.state = "running"
+        if (-not $status.watched_terminal_running) {
+            $minutesSinceActivity = if ($lastActivityAt) {
+                [math]::Round(((Get-Date) - $lastActivityAt).TotalMinutes, 1)
+            } else {
+                [double]::PositiveInfinity
+            }
+
+            if ($minutesSinceActivity -ge $StaleMinutes) {
+                $status.state = "stale"
+            }
+        }
     }
 
     $status.signature = "{0}|{1}|{2}|{3}|{4}" -f `
@@ -197,7 +305,8 @@ function Save-Mt5TesterStatus {
 }
 
 while ($true) {
-    $status = Get-Mt5TesterStatus -LogPath $TerminalLogPath
+    $resolvedLogPath = Resolve-TerminalLogPath -PreferredPath $TerminalLogPath -LogDir $TerminalLogDir
+    $status = Get-Mt5TesterStatus -LogPath $resolvedLogPath -WatchedTerminalPath $WatchedTerminalPath -StaleMinutes $StaleMinutes
     Save-Mt5TesterStatus -Status $status -LatestJsonPath $latestJsonPath -LatestMdPath $latestMdPath -EventRoot $eventRoot
     Start-Sleep -Seconds $PollSeconds
 }
