@@ -120,6 +120,22 @@ function Get-KeyValueCsvMap {
     return $map
 }
 
+function Get-SafeObjectValue {
+    param(
+        [object]$Object,
+        [string]$PropertyName,
+        $Default = $null
+    )
+
+    if ($null -eq $Object) {
+        return $Default
+    }
+    if ($Object.PSObject.Properties.Name -contains $PropertyName) {
+        return $Object.$PropertyName
+    }
+    return $Default
+}
+
 function Import-TabCsvWithRetry {
     param(
         [string]$Path,
@@ -449,10 +465,10 @@ if (Test-Path -LiteralPath $tuningDeckhandPath) {
     }
 }
 
-$summaryTrustState = $executionSummary.trust_state
-$summaryTrustReason = $executionSummary.trust_reason
-$summaryExecutionQualityState = $executionSummary.execution_quality_state
-$summaryCostPressureState = $executionSummary.cost_pressure_state
+$summaryTrustState = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_state' -Default '')
+$summaryTrustReason = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_reason' -Default '')
+$summaryExecutionQualityState = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'execution_quality_state' -Default '')
+$summaryCostPressureState = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'cost_pressure_state' -Default '')
 
 if ($null -ne $deckhandSnapshot) {
     if ($deckhandSnapshot.PSObject.Properties.Name -contains 'trust_state' -and -not [string]::IsNullOrWhiteSpace([string]$deckhandSnapshot.trust_state)) {
@@ -467,6 +483,19 @@ if ($null -ne $deckhandSnapshot) {
     if ($deckhandSnapshot.PSObject.Properties.Name -contains 'cost_pressure_state' -and -not [string]::IsNullOrWhiteSpace([string]$deckhandSnapshot.cost_pressure_state)) {
         $summaryCostPressureState = [string]$deckhandSnapshot.cost_pressure_state
     }
+}
+
+if ([string]::IsNullOrWhiteSpace($summaryTrustState) -and $runtimeMap.Contains('trust_state')) {
+    $summaryTrustState = [string]$runtimeMap['trust_state']
+}
+if ([string]::IsNullOrWhiteSpace($summaryTrustReason) -and $runtimeMap.Contains('trust_reason')) {
+    $summaryTrustReason = [string]$runtimeMap['trust_reason']
+}
+if ([string]::IsNullOrWhiteSpace($summaryExecutionQualityState) -and $runtimeMap.Contains('execution_quality_state')) {
+    $summaryExecutionQualityState = [string]$runtimeMap['execution_quality_state']
+}
+if ([string]::IsNullOrWhiteSpace($summaryCostPressureState) -and $runtimeMap.Contains('cost_pressure_state')) {
+    $summaryCostPressureState = [string]$runtimeMap['cost_pressure_state']
 }
 
 $conversionRatio = 0.0
@@ -521,22 +550,22 @@ $summary = [ordered]@{
     trust_reason              = $summaryTrustReason
     execution_quality_state   = $summaryExecutionQualityState
     cost_pressure_state       = $summaryCostPressureState
-    market_regime             = $executionSummary.market_regime
-    last_setup_type           = $executionSummary.last_setup_type
-    learning_bias             = $executionSummary.learning_bias
-    learning_sample_count     = [int]$executionSummary.learning_sample_count
-    learning_win_count        = [int]$executionSummary.learning_win_count
-    learning_loss_count       = [int]$executionSummary.learning_loss_count
+    market_regime             = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'market_regime' -Default '')
+    last_setup_type           = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'last_setup_type' -Default '')
+    learning_bias             = [double](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_bias' -Default 0.0)
+    learning_sample_count     = [int](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_sample_count' -Default 0)
+    learning_win_count        = [int](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_win_count' -Default 0)
+    learning_loss_count       = [int](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_loss_count' -Default 0)
     paper_open_rows           = $paperOpenRows
     paper_score_gate_rows     = $paperScoreGateRows
     accepted_evaluated_rows   = $acceptedEvaluatedRows
     score_below_trigger_rows  = $scoreBelowTriggerRows
     paper_conversion_ratio    = $conversionRatio
     realized_pnl_lifetime     = ($runtimeMap['realized_pnl_lifetime'])
-    execution_summary_trust_state = $executionSummary.trust_state
-    execution_summary_trust_reason = $executionSummary.trust_reason
-    execution_summary_cost_pressure_state = $executionSummary.cost_pressure_state
-    execution_summary_execution_quality_state = $executionSummary.execution_quality_state
+    execution_summary_trust_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_state' -Default '')
+    execution_summary_trust_reason = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_reason' -Default '')
+    execution_summary_cost_pressure_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'cost_pressure_state' -Default '')
+    execution_summary_execution_quality_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'execution_quality_state' -Default '')
     top_candidate_reasons     = $topCandidateReasons
     paper_open_by_setup_regime = $paperOpenBySetupRegime
     paper_close_stats         = $paperCloseStats

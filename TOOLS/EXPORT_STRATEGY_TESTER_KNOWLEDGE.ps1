@@ -101,10 +101,10 @@ $observationsPath = Join-Path $symbolDir "learning_observations_v2.csv"
 $deckhandPath = Join-Path $symbolDir "tuning_deckhand.csv"
 $summaryPath = Join-Path $EvidenceDir ($RunId + "_summary.json")
 
-$candidateRows = Read-TsvRows -Path $candidatePath
-$bucketRows = Read-TsvRows -Path $bucketPath
-$observationRows = Read-TsvRows -Path $observationsPath
-$deckhandRows = Read-TsvRows -Path $deckhandPath
+$candidateRows = @(Read-TsvRows -Path $candidatePath)
+$bucketRows = @(Read-TsvRows -Path $bucketPath)
+$observationRows = @(Read-TsvRows -Path $observationsPath)
+$deckhandRows = @(Read-TsvRows -Path $deckhandPath)
 $summary = $null
 if (Test-Path -LiteralPath $summaryPath) {
     $summary = Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -154,7 +154,7 @@ $weakPatterns = @(
 )
 
 $deckhandSnapshot = $null
-if ($deckhandRows.Count -gt 0) {
+if (@($deckhandRows).Count -gt 0) {
     $deckhandSnapshot = $deckhandRows[-1]
 }
 
