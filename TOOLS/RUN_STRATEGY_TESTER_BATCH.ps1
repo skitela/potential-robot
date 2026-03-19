@@ -6,7 +6,9 @@ param(
     [int]$TimeoutSec = 3600,
     [string[]]$WorkerNames = @("worker_main_1","worker_main_2","worker_main_3"),
     [string]$FromDate = "2026.03.01",
-    [string]$ToDate = "2026.03.16"
+    [string]$ToDate = "2026.03.16",
+    [string]$BatchReportName = "strategy_tester_batch_latest",
+    [string]$EvidenceSubdir = ""
 )
 
 Set-StrictMode -Version Latest
@@ -25,7 +27,8 @@ for ($i = 0; $i -lt $SymbolAliases.Count; $i++) {
         -WorkerName $workerName `
         -TimeoutSec $TimeoutSec `
         -FromDate $FromDate `
-        -ToDate $ToDate
+        -ToDate $ToDate `
+        -EvidenceSubdir $EvidenceSubdir
     $results += $run
 
     try {
@@ -46,8 +49,12 @@ $report = [ordered]@{
 }
 
 $evidenceDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER"
-$jsonPath = Join-Path $evidenceDir "strategy_tester_batch_latest.json"
-$mdPath = Join-Path $evidenceDir "strategy_tester_batch_latest.md"
+if (-not [string]::IsNullOrWhiteSpace($EvidenceSubdir)) {
+    $evidenceDir = Join-Path $evidenceDir $EvidenceSubdir
+}
+New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
+$jsonPath = Join-Path $evidenceDir ($BatchReportName + ".json")
+$mdPath = Join-Path $evidenceDir ($BatchReportName + ".md")
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
 
 $mdLines = @(
