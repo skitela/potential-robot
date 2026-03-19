@@ -1,42 +1,39 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
-    [int]$IntervalMinutes = 5
+    [int]$PollSeconds = 60
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$saveScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
-if (-not (Test-Path -LiteralPath $saveScript)) {
-    throw "Snapshot script not found: $saveScript"
+$watcherScript = Join-Path $ProjectRoot "RUN\WATCH_MT5_TESTER_STATUS.ps1"
+if (-not (Test-Path -LiteralPath $watcherScript)) {
+    throw "MT5 tester watcher script not found: $watcherScript"
 }
 
 $existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object {
         $_.Name -eq "powershell.exe" -and
-        $_.CommandLine -like "*local_operator_archiver_wrapper_*"
+        $_.CommandLine -like "*mt5_tester_status_watcher_wrapper_*"
     }
 
 if ($existing) {
-    Write-Host "Local operator archiver is already running."
+    Write-Host "MT5 tester status watcher is already running."
     return
 }
 
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$logPath = Join-Path $OutputRoot ("local_operator_archiver_{0}.log" -f $timestamp)
-$wrapperPath = Join-Path $env:TEMP ("local_operator_archiver_wrapper_{0}.ps1" -f $timestamp)
+$logPath = Join-Path $OutputRoot ("mt5_tester_status_watcher_{0}.log" -f $timestamp)
+$wrapperPath = Join-Path $env:TEMP ("mt5_tester_status_watcher_wrapper_{0}.ps1" -f $timestamp)
 
 $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'
 Start-Transcript -Path '$logPath' -Force
 try {
-    while (`$true) {
-        & '$saveScript' -ProjectRoot '$ProjectRoot' -OutputRoot '$OutputRoot' | Out-Null
-        Start-Sleep -Seconds $($IntervalMinutes * 60)
-    }
+    & '$watcherScript' -ProjectRoot '$ProjectRoot' -OutputRoot '$OutputRoot' -PollSeconds $PollSeconds
 }
 finally {
     Stop-Transcript
@@ -56,5 +53,5 @@ try {
 catch {
 }
 
-Write-Host "Local operator archiver started."
+Write-Host "MT5 tester status watcher started."
 Write-Host "Log: $logPath"
