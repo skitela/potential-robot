@@ -157,19 +157,33 @@ function Get-LatestTesterSummaries {
                 if ([string]::IsNullOrWhiteSpace($alias)) {
                     return
                 }
+                $resultLabel = [string](Get-FirstValue -Object $summary -Names @("result_label"))
+                $trustState = [string](Get-FirstValue -Object $summary -Names @("trust_state"))
+                $sampleCount = [int](Get-FirstValue -Object $summary -Names @("learning_sample_count"))
+                $biasValue = [double](Get-FirstValue -Object $summary -Names @("learning_bias"))
+                $pnlValue = [double](Get-FirstValue -Object $summary -Names @("realized_pnl_lifetime"))
+                if (
+                    [string]::IsNullOrWhiteSpace($resultLabel) -and
+                    [string]::IsNullOrWhiteSpace($trustState) -and
+                    $sampleCount -le 0 -and
+                    [math]::Abs($biasValue) -lt 0.0000001 -and
+                    [math]::Abs($pnlValue) -lt 0.0000001
+                ) {
+                    return
+                }
                 if ($map.ContainsKey($alias)) {
                     return
                 }
                 $map[$alias] = [ordered]@{
                     path         = $_.FullName
                     written_local = $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
-                    trust_state  = [string](Get-FirstValue -Object $summary -Names @("trust_state"))
+                    trust_state  = $trustState
                     trust_reason = [string](Get-FirstValue -Object $summary -Names @("trust_reason"))
                     cost_state   = [string](Get-FirstValue -Object $summary -Names @("cost_pressure_state"))
-                    sample       = [int](Get-FirstValue -Object $summary -Names @("learning_sample_count"))
-                    bias         = [double](Get-FirstValue -Object $summary -Names @("learning_bias"))
-                    pnl          = [double](Get-FirstValue -Object $summary -Names @("realized_pnl_lifetime"))
-                    result_label = [string](Get-FirstValue -Object $summary -Names @("result_label"))
+                    sample       = $sampleCount
+                    bias         = $biasValue
+                    pnl          = $pnlValue
+                    result_label = $resultLabel
                 }
             }
             catch {

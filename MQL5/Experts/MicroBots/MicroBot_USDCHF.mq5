@@ -633,6 +633,8 @@ void OnTick()
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
+      bool blocked_by_usdchf_trend_chaos_dirty_gate = false;
+      bool blocked_by_usdchf_rejection_chaos_dirty_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_usdchf_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_usdchf_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -645,6 +647,22 @@ void OnTick()
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_RANGE" && g_usdchf_effective_tuning_policy.range_confidence_floor > 0.0 && signal.confidence_score < g_usdchf_effective_tuning_policy.range_confidence_floor)
          blocked_by_tuning_gate = true;
+      if(
+         signal.setup_type == "SETUP_TREND" &&
+         signal.market_regime == "CHAOS" &&
+         signal.confidence_bucket == "LOW" &&
+         poor_candle &&
+         poor_renko
+      )
+         blocked_by_usdchf_trend_chaos_dirty_gate = true;
+      if(
+         signal.setup_type == "SETUP_REJECTION" &&
+         signal.market_regime == "CHAOS" &&
+         signal.confidence_bucket == "LOW" &&
+         poor_candle &&
+         poor_renko
+      )
+         blocked_by_usdchf_rejection_chaos_dirty_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && poor_candle && poor_renko)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && signal.market_regime == "CHAOS" && poor_candle)
@@ -661,15 +679,37 @@ void OnTick()
           else if(poor_candle)
              paper_gate_abs = MathMax(paper_gate_abs,0.78);
         }
+      else if(signal.setup_type == "SETUP_TREND")
+        {
+         if(signal.market_regime == "CHAOS" && signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
+            paper_gate_abs = 0.38;
+         else if(signal.confidence_bucket == "LOW" && poor_candle)
+            paper_gate_abs = 0.28;
+        }
       else if(signal.setup_type == "SETUP_REJECTION")
+        {
          paper_gate_abs = 0.19;
+         if(signal.market_regime == "CHAOS")
+            paper_gate_abs = MathMax(paper_gate_abs,0.24);
+         if(signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
+            paper_gate_abs = MathMax(paper_gate_abs,0.30);
+        }
 
-      if(!blocked_by_tuning_gate && MathAbs(signal.score) >= paper_gate_abs)
+      if(
+         !blocked_by_tuning_gate &&
+         !blocked_by_usdchf_trend_chaos_dirty_gate &&
+         !blocked_by_usdchf_rejection_chaos_dirty_gate &&
+         MathAbs(signal.score) >= paper_gate_abs
+      )
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
          signal.reason_code = "PAPER_SCORE_GATE";
         }
+      else if(blocked_by_usdchf_trend_chaos_dirty_gate)
+         signal.reason_code = "USDCHF_TREND_CHAOS_DIRTY_BLOCK";
+      else if(blocked_by_usdchf_rejection_chaos_dirty_gate)
+         signal.reason_code = "USDCHF_REJECTION_CHAOS_DIRTY_BLOCK";
      }
    AppendUSDCHFCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)

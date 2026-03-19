@@ -15,6 +15,7 @@ $qdmWeakestScript = Join-Path $ProjectRoot "RUN\START_QDM_WEAKEST_SYNC_BACKGROUN
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
 $statusDir = Join-Path $ProjectRoot "EVIDENCE\OPS"
+$secondaryMt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe"
 
 foreach ($path in @(
     $priorityScript,
@@ -57,6 +58,28 @@ function Ensure-BackgroundTask {
 
     & $StarterPath | Out-Host
     return "started"
+}
+
+function Get-Mt5LabActivityCount {
+    param(
+        [string]$TerminalExePath
+    )
+
+    $wrapperCount = Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*"
+    $wrapperCount += Get-WrapperCount -Pattern "*usdchf_fix_retest_*"
+
+    $secondaryTerminalCount = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "terminal64.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                $_.ExecutablePath -eq $TerminalExePath
+            }
+    ).Count
+
+    $metaTesterCount = @(Get-Process metatester64 -ErrorAction SilentlyContinue).Count
+
+    return ($wrapperCount + $secondaryTerminalCount + $metaTesterCount)
 }
 
 function Write-SupervisorStatus {
@@ -161,7 +184,7 @@ while ($true) {
 
     $actions["weakest_mt5"] = Ensure-BackgroundTask `
         -Label "weakest_mt5" `
-        -IsRunning { (Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*") -gt 0 } `
+        -IsRunning { (Get-Mt5LabActivityCount -TerminalExePath $secondaryMt5Exe) -gt 0 } `
         -StarterPath $weakestBatchScript
 
     Write-SupervisorStatus -Cycle $cycle -Actions $actions
