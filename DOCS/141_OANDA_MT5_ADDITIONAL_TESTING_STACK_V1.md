@@ -225,6 +225,114 @@ Nie sa one naturalnym zamiennikiem `MT5 Strategy Tester` w naszym projekcie.
    - export `ONNX`
    - retest w `MT5 Strategy Tester`
 
+## Darmowe vs platne vs przystawki
+### Darmowe i juz sensowne
+- `MT5 Strategy Tester`
+  - wbudowany w terminal
+  - darmowy
+  - glowny silnik testowy
+- `MetaTester` + lokalne agenty
+  - darmowe
+  - osobna instalacja lub skladnik MT5
+  - przyspieszaja testy i optymalizacje
+- `Custom Symbols`
+  - wbudowane w MT5
+  - darmowe
+  - najlepsze do badan na wyselekcjonowanych danych
+- Python + `MetaTrader5`, `pandas`, `numpy`
+  - darmowe / open source
+  - warstwa offline
+- `ONNX`, `onnxruntime`, `scikit-learn`, `duckdb`, `pyarrow`, `matplotlib`, `jupyterlab`
+  - darmowe / open source
+  - warstwa badawcza i modelowa
+
+### Platne, ale sensowne
+- `MQL5 Cloud Network`
+  - platna usluga zuzycia mocy obliczeniowej
+  - nie jest osobnym programem
+  - dobra do ciezkich optymalizacji
+- `QuantDataManager`
+  - osobne narzedzie z wersja darmowa i `Pro`
+  - `Free = $0`
+  - `Pro = $49 lifetime`
+  - nie jest wtyczka do terminala, tylko zewnetrznym menedzerem danych eksportujacym do MT5
+- `Tickstory`
+  - osobna aplikacja do danych historycznych
+  - eksport do MT5 przez pliki / custom workflow
+  - wersja darmowa istnieje, licencja `Standard` kosztuje `79 USD`
+- `Soft4FX Forex Simulator`
+  - osobny symulator / dodatek do pracy z MT4/MT5
+  - demo darmowe
+  - licencja lifetime `109 USD`
+
+### Platne, ale nie dla nas teraz
+- `StrategyQuant X`
+  - pelna platforma badawczo-generujaca
+  - nie jest przystawka do naszego aktualnego kodu MQL5
+  - raczej osobny ekosystem do generowania nowych strategii
+  - sens dopiero wtedy, gdy chcemy budowac rownolegle calkiem nowa warstwe strategii
+
+## Co jest przystawka, a co nie
+- `MQL5 Cloud Network`
+  - nie jest pluginem
+  - to usluga obliczeniowa podpieta do testera
+- `QuantDataManager`
+  - nie jest pluginem runtime
+  - to zewnetrzne narzedzie do danych i eksportu
+- `Tickstory`
+  - nie jest pluginem runtime
+  - to zewnetrzne narzedzie danych
+- `Soft4FX`
+  - bardziej symulator / dodatek operatorski niz tester naszego kodu produkcyjnego
+- Python stack
+  - nie jest wtyczka do MT5
+  - to osobne srodowisko badawcze offline
+
+## Co mozemy wdrozyc od razu
+### Tu i teraz
+1. W pelni wykorzystac to, co juz mamy:
+   - `Strategy Tester`
+   - lokalne agenty
+   - batch workerow
+   - repeatability
+2. Doinstalowac darmowy pakiet badawczy:
+   - `scikit-learn`
+   - `duckdb`
+   - `pyarrow`
+   - `matplotlib`
+   - `jupyterlab`
+   - `onnx`
+   - `onnxruntime`
+3. Zbudowac eksport:
+   - `tester/evidence -> parquet/csv -> Python`
+4. Przygotowac workflow `Custom Symbols` dla wybranych sesji i regime'ow
+
+### W drugim kroku
+5. Dolozyc `QuantDataManager`
+   - najlepiej najpierw wersje darmowa
+   - `Pro` dopiero jesli bedzie brakowac szybkosci i verified downloads
+
+### Na razie odpuscic
+- `TradingView`
+- `Soft4FX`
+- `StrategyQuant X`
+- wszelkie zewnetrzne egzekutory live
+
+## Ryzyka i kolizje
+- `Custom Symbols` nie moga miec nazw takich samych jak symbole brokera
+- zmiana specyfikacji custom symbolu moze skasowac jego tick/minute history
+- `MQL5 Cloud Network` nie obsluguje optymalizacji na `Custom Symbols`
+- Python nie powinien byc odpalany na chartach w runtime produkcyjnym
+- narzedzia typu `Soft4FX` lub dodatkowe terminale nie powinny wspoldzielic aktywnego profilu runtime floty
+
+## Priorytet dla naszego projektu
+1. `MT5 native + Custom Symbols + lokalne agenty`
+2. darmowy `Python offline stack`
+3. `QuantDataManager`
+4. ewentualnie `MQL5 Cloud Network`
+
+To daje najwiekszy zysk poznawczy przy najmniejszym ryzyku architektonicznym.
+
 ## Zrodla oficjalne
 - MetaTrader 5 Strategy Tester:
   - https://www.metatrader5.com/en/terminal/help/algotrading/testing
