@@ -56,11 +56,17 @@ FEATURE_NUMERIC_FLOAT = [
     "candle_score",
     "renko_score",
     "spread_points",
+    "qdm_spread_mean",
+    "qdm_spread_max",
+    "qdm_mid_range_1m",
+    "qdm_mid_return_1m",
 ]
 
 FEATURE_NUMERIC_INT = [
     "renko_run_length",
     "renko_reversal_flag",
+    "qdm_tick_count",
+    "qdm_data_present",
 ]
 
 FEATURE_COLUMNS = FEATURE_CATEGORICAL + FEATURE_NUMERIC_FLOAT + FEATURE_NUMERIC_INT
@@ -72,41 +78,110 @@ def ensure_dir(path: Path) -> Path:
 
 
 def load_dataset(db_path: Path, sample_limit: int) -> pd.DataFrame:
-    query = """
+    base_query = """
         SELECT
-            ts,
-            symbol,
-            accepted,
-            setup_type,
-            side,
-            score,
-            confidence_score,
-            market_regime,
-            spread_regime,
-            confidence_bucket,
-            candle_bias,
-            candle_quality_grade,
-            candle_score,
-            renko_bias,
-            renko_quality_grade,
-            renko_score,
-            renko_run_length,
-            renko_reversal_flag,
-            spread_points
-        FROM candidate_signals
-        WHERE stage = 'EVALUATED'
-          AND accepted IS NOT NULL
-          AND reason_code IN ('PAPER_SCORE_GATE', 'SCORE_BELOW_TRIGGER')
-        ORDER BY ts
+            c.ts,
+            c.symbol,
+            c.accepted,
+            c.setup_type,
+            c.side,
+            c.score,
+            c.confidence_score,
+            c.market_regime,
+            c.spread_regime,
+            c.confidence_bucket,
+            c.candle_bias,
+            c.candle_quality_grade,
+            c.candle_score,
+            c.renko_bias,
+            c.renko_quality_grade,
+            c.renko_score,
+            c.renko_run_length,
+            c.renko_reversal_flag,
+            c.spread_points,
+            {qdm_select}
+        FROM candidate_signals c
+        {qdm_join}
+        WHERE c.stage = 'EVALUATED'
+          AND c.accepted IS NOT NULL
+          AND c.reason_code IN ('PAPER_SCORE_GATE', 'SCORE_BELOW_TRIGGER')
+        ORDER BY c.ts
     """
 
-    if sample_limit > 0:
-        query += f" LIMIT {int(sample_limit)}"
-
     with duckdb.connect(str(db_path), read_only=True) as con:
+        qdm_available = bool(
+            con.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_name = 'qdm_minute_bars'
+                LIMIT 1
+                """
+            ).fetchone()
+        )
+
+        if qdm_available:
+            query = base_query.format(
+                qdm_select="""
+                    COALESCE(q.tick_count, 0)::BIGINT AS qdm_tick_count,
+                    COALESCE(q.spread_mean, 0.0)::DOUBLE AS qdm_spread_mean,
+                    COALESCE(q.spread_max, 0.0)::DOUBLE AS qdm_spread_max,
+                    COALESCE(q.mid_range_1m, 0.0)::DOUBLE AS qdm_mid_range_1m,
+                    COALESCE(q.mid_return_1m, 0.0)::DOUBLE AS qdm_mid_return_1m,
+                    CASE WHEN q.bar_minute IS NULL THEN 0 ELSE 1 END::BIGINT AS qdm_data_present
+                """,
+                qdm_join="""
+                    LEFT JOIN qdm_minute_bars q
+                      ON q.symbol_alias = c.symbol
+                     AND q.bar_minute = date_trunc('minute', epoch_ms(CAST(c.ts AS BIGINT) * 1000))
+                """,
+            )
+        else:
+            query = base_query.format(
+                qdm_select="""
+                    0::BIGINT AS qdm_tick_count,
+                    0.0::DOUBLE AS qdm_spread_mean,
+                    0.0::DOUBLE AS qdm_spread_max,
+                    0.0::DOUBLE AS qdm_mid_range_1m,
+                    0.0::DOUBLE AS qdm_mid_return_1m,
+                    0::BIGINT AS qdm_data_present
+                """,
+                qdm_join="",
+            )
+
+        if sample_limit > 0:
+            query += f" LIMIT {int(sample_limit)}"
+
         df = con.execute(query).df()
 
     return df
+
+
+def build_qdm_coverage(df: pd.DataFrame) -> dict[str, Any]:
+    if df.empty or "qdm_data_present" not in df.columns:
+        return {
+            "rows_with_qdm": 0,
+            "row_coverage_ratio": 0.0,
+            "symbols_with_qdm": [],
+            "symbol_coverage": [],
+        }
+
+    rows_with_qdm = int((df["qdm_data_present"] > 0).sum())
+    symbol_cov = (
+        df.groupby("symbol", dropna=False)["qdm_data_present"]
+        .agg(["count", "sum"])
+        .reset_index()
+        .rename(columns={"count": "rows_total", "sum": "rows_with_qdm"})
+    )
+    symbol_cov["coverage_ratio"] = symbol_cov["rows_with_qdm"] / symbol_cov["rows_total"].replace(0, 1)
+    symbol_cov = symbol_cov.sort_values(["coverage_ratio", "rows_with_qdm"], ascending=[False, False])
+
+    return {
+        "rows_with_qdm": rows_with_qdm,
+        "row_coverage_ratio": float(rows_with_qdm / len(df.index)),
+        "symbols_with_qdm": [str(v) for v in symbol_cov.loc[symbol_cov["rows_with_qdm"] > 0, "symbol"].tolist()],
+        "symbol_coverage": symbol_cov.head(20).to_dict(orient="records"),
+    }
 
 
 def normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -248,12 +323,25 @@ def markdown_report(metadata: dict[str, Any]) -> str:
         f"- train: `{metadata['dataset']['train_rows']}`",
         f"- holdout: `{metadata['dataset']['test_rows']}`",
         f"- dodatni target (`accepted=1`): `{metadata['dataset']['positive_rate']:.4f}`",
+        f"- pokrycie `QDM`: `{metadata['dataset']['qdm_coverage']['row_coverage_ratio']:.4f}`",
         "",
         "## Metryki holdout",
     ]
 
     for key, value in metadata["metrics"].items():
         lines.append(f"- `{key}`: `{value:.6f}`")
+
+    lines.extend(
+        [
+            "",
+            "## Pokrycie QDM",
+        ]
+    )
+    for row in metadata["dataset"]["qdm_coverage"]["symbol_coverage"][:10]:
+        lines.append(
+            f"- `{row['symbol']}` -> coverage `{row['coverage_ratio']:.4f}` "
+            f"({int(row['rows_with_qdm'])}/{int(row['rows_total'])})"
+        )
 
     lines.extend(
         [
@@ -325,6 +413,7 @@ def main() -> int:
             "positive_rate": float(dataset["accepted"].mean()),
             "ts_min": int(dataset["ts"].min()),
             "ts_max": int(dataset["ts"].max()),
+            "qdm_coverage": build_qdm_coverage(dataset),
         },
         "features": {
             "categorical": FEATURE_CATEGORICAL,
