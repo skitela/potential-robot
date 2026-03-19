@@ -58,7 +58,11 @@ $wrapperPatterns = @(
     "fx_qdm_pipeline_wrapper_",
     "refresh_and_train_ml_wrapper_",
     "qdm_focus_sync_wrapper_",
-    "qdm_export_after_sync_wrapper_"
+    "qdm_export_after_sync_wrapper_",
+    "mt5_retest_queue_wrapper_",
+    "microbot_retest_after_idle_wrapper_",
+    "autonomous_90p_supervisor_wrapper_",
+    "local_operator_archiver_"
 )
 
 $wrapperIds = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |

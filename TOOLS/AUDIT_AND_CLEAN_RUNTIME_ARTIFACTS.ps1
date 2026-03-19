@@ -17,7 +17,34 @@ if (!(Test-Path -LiteralPath $registryPath)) {
 }
 
 $registry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json
-$expectedSymbols = @($registry.symbols | ForEach-Object { $_.symbol } | Sort-Object -Unique)
+
+function Get-AllowedSymbolNames {
+    param([object[]]$RegistrySymbols)
+
+    $set = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($item in @($RegistrySymbols)) {
+        $rawSymbol = [string]$item.symbol
+        if (-not [string]::IsNullOrWhiteSpace($rawSymbol)) {
+            [void]$set.Add($rawSymbol)
+
+            if ($rawSymbol -match '\.pro$') {
+                [void]$set.Add(($rawSymbol -replace '\.pro$',''))
+            }
+        }
+
+        if ($item.PSObject.Properties.Name -contains "code_symbol") {
+            $codeSymbol = [string]$item.code_symbol
+            if (-not [string]::IsNullOrWhiteSpace($codeSymbol)) {
+                [void]$set.Add($codeSymbol)
+            }
+        }
+    }
+
+    return @($set | Sort-Object)
+}
+
+$expectedSymbols = Get-AllowedSymbolNames -RegistrySymbols $registry.symbols
 
 function Get-UnexpectedDirectories {
     param(
@@ -44,7 +71,7 @@ function Get-UnexpectedDirectories {
 }
 
 $allowedByRoot = @{
-    state = @($expectedSymbols + @("_families","_coordinator","_global","_domains"))
+    state = @($expectedSymbols + @("_families","_coordinator","_global","_domains","_groups"))
     logs  = @($expectedSymbols + @("_families","_coordinator"))
     run   = @($expectedSymbols)
     key   = @($expectedSymbols)

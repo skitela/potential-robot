@@ -8,11 +8,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $syncScript = Join-Path $ProjectRoot "RUN\SYNC_QDM_FOCUS_PACK.ps1"
+$buildProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 if (-not (Test-Path -LiteralPath $syncScript)) {
     throw "QDM sync script not found: $syncScript"
 }
+if (-not (Test-Path -LiteralPath $buildProfileScript)) {
+    throw "QDM weakest profile builder not found: $buildProfileScript"
+}
+
+& $buildProfileScript -ProjectRoot $ProjectRoot -OutputPath $ProfilePath | Out-Null
 if (-not (Test-Path -LiteralPath $ProfilePath)) {
-    throw "QDM weakest profile not found: $ProfilePath"
+    throw "QDM weakest profile was not generated: $ProfilePath"
 }
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
