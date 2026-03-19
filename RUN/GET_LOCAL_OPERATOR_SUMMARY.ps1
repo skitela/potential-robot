@@ -26,9 +26,31 @@ if (Test-Path -LiteralPath $metricsPath) {
     $lines.Add("")
 }
 
+$priorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json"
+if (Test-Path -LiteralPath $priorityPath) {
+    $priority = Get-Content -LiteralPath $priorityPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $priorityItems = @($priority.ranked_instruments)
+    if ($priorityItems.Count -gt 0) {
+        $lines.Add("Current weakest-first tuning queue:")
+        foreach ($item in $priorityItems | Select-Object -First 6) {
+            $lines.Add(("- #{0} {1}: score={2} trust={3} cost={4} sample={5} live_net_24h={6} action={7}" -f
+                $item.rank,
+                $item.symbol_alias,
+                $item.priority_score,
+                $item.trust_state,
+                $item.cost_state,
+                $item.learning_sample_count,
+                $item.live_net_24h,
+                $item.recommended_action))
+        }
+        $lines.Add("")
+    }
+}
+
 $reportCandidates = @(@(
     "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\fx_lab\primary\fx_mt5_primary_batch_latest.json",
     "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\fx_lab\secondary\fx_mt5_secondary_batch_latest.json",
+    "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\weakest_lab\primary\weakest_mt5_batch_latest.json",
     "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\strategy_tester_batch_latest.json"
 ) | Where-Object { Test-Path -LiteralPath $_ })
 
