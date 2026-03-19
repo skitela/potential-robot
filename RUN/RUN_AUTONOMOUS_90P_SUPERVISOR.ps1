@@ -11,6 +11,7 @@ $priorityScript = Join-Path $ProjectRoot "RUN\BUILD_TUNING_PRIORITY_REPORT.ps1"
 $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $profitTrackingScript = Join-Path $ProjectRoot "RUN\BUILD_PROFIT_TRACKING_REPORT.ps1"
+$trustButVerifyScript = Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 $fullStackAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1"
 $archiverScript = Join-Path $ProjectRoot "RUN\START_LOCAL_OPERATOR_ARCHIVER_BACKGROUND.ps1"
@@ -27,6 +28,7 @@ foreach ($path in @(
     $qdmProfileScript,
     $mlHintsScript,
     $profitTrackingScript,
+    $trustButVerifyScript,
     $snapshotScript,
     $fullStackAuditScript,
     $archiverScript,
@@ -172,6 +174,12 @@ function Write-SupervisorStatus {
         $qdmHead = @($qdmProfile.included | Select-Object -First 4)
     }
 
+    $trustButVerifyPath = Join-Path $statusDir "trust_but_verify_latest.json"
+    $trustButVerify = $null
+    if (Test-Path -LiteralPath $trustButVerifyPath) {
+        $trustButVerify = Get-Content -LiteralPath $trustButVerifyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
     $mt5QueuePath = Join-Path $statusDir "mt5_retest_queue_latest.json"
     $mt5Queue = $null
     if (Test-Path -LiteralPath $mt5QueuePath) {
@@ -186,6 +194,7 @@ function Write-SupervisorStatus {
         top_priority = $priorityHead
         top_ml_hints = $mlHintHead
         top_qdm_profile = $qdmHead
+        trust_but_verify = $trustButVerify
         mt5_retest_queue = $mt5Queue
     }
 
@@ -245,6 +254,19 @@ function Write-SupervisorStatus {
             $item.qdm_symbol,
             $item.datasource,
             $item.mt5_export_name))
+    }
+    $lines.Add("")
+    $lines.Add("## Trust But Verify")
+    $lines.Add("")
+    if ($null -ne $trustButVerify) {
+        $lines.Add(("- verdict: {0}" -f $trustButVerify.verdict))
+        $lines.Add(("- needs_manual_eye: {0}" -f $trustButVerify.needs_manual_eye))
+        foreach ($finding in @($trustButVerify.findings | Select-Object -First 3)) {
+            $lines.Add(("- [{0}] {1}: {2}" -f $finding.severity, $finding.component, $finding.message))
+        }
+    }
+    else {
+        $lines.Add("- trust-but-verify report not available")
     }
     $lines.Add("")
     $lines.Add("## MT5 Retest Queue")
@@ -332,6 +354,11 @@ while ($true) {
     } | Out-Null
 
     Write-SupervisorStatus -Cycle $cycle -Actions $actions
+
+    Invoke-SupervisorAction -Actions $actions -Name "trust_but_verify" -Operation {
+        & $trustButVerifyScript | Out-Null
+        "rebuilt"
+    } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "full_stack_audit" -Operation {
         & $fullStackAuditScript | Out-Null

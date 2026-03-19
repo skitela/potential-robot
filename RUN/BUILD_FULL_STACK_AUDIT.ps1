@@ -128,6 +128,7 @@ $freshness = @(
     Get-FileFreshness -Label "local_operator_snapshot" -Path (Join-Path $opsRoot "local_operator_snapshot_latest.json") -ThresholdSeconds 600
     Get-FileFreshness -Label "mt5_tester_status" -Path (Join-Path $opsRoot "mt5_tester_status_latest.json") -ThresholdSeconds 600
     Get-FileFreshness -Label "autonomous_90p" -Path (Join-Path $opsRoot "autonomous_90p_latest.json") -ThresholdSeconds 600
+    Get-FileFreshness -Label "trust_but_verify" -Path (Join-Path $opsRoot "trust_but_verify_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "tuning_priority" -Path (Join-Path $opsRoot "tuning_priority_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "mt5_retest_queue" -Path (Join-Path $opsRoot "mt5_retest_queue_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "ml_tuning_hints" -Path (Join-Path $opsRoot "ml_tuning_hints_latest.json") -ThresholdSeconds 1200
@@ -141,6 +142,7 @@ $mt5TesterStatus = Read-JsonFile -Path (Join-Path $opsRoot "mt5_tester_status_la
 $mt5RetestQueue = Read-JsonFile -Path (Join-Path $opsRoot "mt5_retest_queue_latest.json")
 $localSnapshot = Read-JsonFile -Path (Join-Path $opsRoot "local_operator_snapshot_latest.json")
 $autonomousStatus = Read-JsonFile -Path (Join-Path $opsRoot "autonomous_90p_latest.json")
+$trustButVerify = Read-JsonFile -Path (Join-Path $opsRoot "trust_but_verify_latest.json")
 $profitTracking = Read-JsonFile -Path (Join-Path $opsRoot "profit_tracking_latest.json")
 
 $runtimeUnexpectedTotal = 0
@@ -180,6 +182,7 @@ $essentialLocalLabels = @(
     "local_operator_snapshot",
     "mt5_tester_status",
     "autonomous_90p",
+    "trust_but_verify",
     "tuning_priority",
     "ml_tuning_hints",
     "qdm_weakest_profile",
@@ -187,6 +190,7 @@ $essentialLocalLabels = @(
 )
 $localFresh = (@($freshness | Where-Object { $essentialLocalLabels -contains $_.label -and $_.fresh }).Count -eq $essentialLocalLabels.Count)
 $vpsFeedbackFresh = (@($freshness | Where-Object { $_.label -eq "vps_runtime_review" -and $_.fresh }).Count -eq 1)
+$verificationClean = ($null -ne $trustButVerify -and [string]$trustButVerify.verdict -eq "OK")
 
 $mt5Running = ($null -ne $mt5TesterStatus -and [string]$mt5TesterStatus.state -eq "running")
 $mlRunning = $wrapperState.ml
@@ -215,6 +219,7 @@ $syncAllowed = (
     ($runtimeUnexpectedTotal -eq 0) -and
     ($rotationCandidateCount -eq 0) -and
     ($gitDirtyCount -eq 0) -and
+    $verificationClean -and
     -not $labBusy
 )
 
@@ -233,6 +238,9 @@ elseif ($rotationCandidateCount -gt 0) {
 }
 elseif ($gitDirtyCount -gt 0) {
     $releaseVerdict = "CHECKPOINT_CODE_FIRST"
+}
+elseif (-not $verificationClean) {
+    $releaseVerdict = "TRUST_BUT_VERIFY_RECHECK_FIRST"
 }
 elseif ($labBusy) {
     $releaseVerdict = "WAIT_FOR_ACTIVE_CYCLES"
@@ -289,12 +297,20 @@ $report = [ordered]@{
         mt5_retest_queue_fresh = $mt5QueueFresh
         mt5_retest_queue_consistent_with_tester = $mt5QueueConsistency
     }
+    verification = if ($null -ne $trustButVerify) {
+        [ordered]@{
+            verdict = $trustButVerify.verdict
+            needs_manual_eye = $trustButVerify.needs_manual_eye
+            findings = @($trustButVerify.findings)
+        }
+    } else { $null }
     release_gate = [ordered]@{
         vps_feedback_fresh = $vpsFeedbackFresh
         local_lab_fresh = $localFresh
         runtime_artifacts_clean = ($runtimeUnexpectedTotal -eq 0)
         runtime_logs_rotated = ($rotationCandidateCount -eq 0)
         code_checkpoint_clean = ($gitDirtyCount -eq 0)
+        verification_clean = $verificationClean
         lab_busy = $labBusy
         sync_allowed = $syncAllowed
         verdict = $releaseVerdict
@@ -319,6 +335,7 @@ $lines.Add(("- local_lab_fresh: {0}" -f $report.release_gate.local_lab_fresh))
 $lines.Add(("- runtime_artifacts_clean: {0}" -f $report.release_gate.runtime_artifacts_clean))
 $lines.Add(("- runtime_logs_rotated: {0}" -f $report.release_gate.runtime_logs_rotated))
 $lines.Add(("- code_checkpoint_clean: {0}" -f $report.release_gate.code_checkpoint_clean))
+$lines.Add(("- verification_clean: {0}" -f $report.release_gate.verification_clean))
 $lines.Add(("- lab_busy: {0}" -f $report.release_gate.lab_busy))
 $lines.Add("")
 $lines.Add("## Cleanliness")
@@ -344,6 +361,19 @@ $lines.Add("## Consistency")
 $lines.Add("")
 $lines.Add(("- mt5_retest_queue_fresh: {0}" -f $report.consistency.mt5_retest_queue_fresh))
 $lines.Add(("- mt5_retest_queue_consistent_with_tester: {0}" -f $report.consistency.mt5_retest_queue_consistent_with_tester))
+$lines.Add("")
+$lines.Add("## Trust But Verify")
+$lines.Add("")
+if ($null -ne $report.verification) {
+    $lines.Add(("- verdict: {0}" -f $report.verification.verdict))
+    $lines.Add(("- needs_manual_eye: {0}" -f $report.verification.needs_manual_eye))
+    foreach ($finding in @($report.verification.findings | Select-Object -First 5)) {
+        $lines.Add(("- [{0}] {1}: {2}" -f $finding.severity, $finding.component, $finding.message))
+    }
+}
+else {
+    $lines.Add("- verification report not available")
+}
 $lines.Add("")
 $lines.Add("## Freshness")
 $lines.Add("")

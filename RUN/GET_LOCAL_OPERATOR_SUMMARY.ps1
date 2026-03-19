@@ -168,14 +168,31 @@ if (Test-Path -LiteralPath $mt5RetestQueuePath) {
 }
 
 $fullStackAuditPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\full_stack_audit_latest.json"
+$trustButVerifyPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\trust_but_verify_latest.json"
+if (Test-Path -LiteralPath $trustButVerifyPath) {
+    $trustButVerify = Get-Content -LiteralPath $trustButVerifyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $lines.Add("Trust but verify:")
+    $lines.Add(("- verdict={0} needs_manual_eye={1}" -f $trustButVerify.verdict, $trustButVerify.needs_manual_eye))
+    foreach ($finding in @($trustButVerify.findings | Select-Object -First 3)) {
+        $lines.Add(("- [{0}] {1}: {2}" -f $finding.severity, $finding.component, $finding.message))
+    }
+    $lines.Add("")
+}
+
 if (Test-Path -LiteralPath $fullStackAuditPath) {
     $fullAudit = Get-Content -LiteralPath $fullStackAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $verificationClean = if ($fullAudit.release_gate.PSObject.Properties.Name -contains "verification_clean") {
+        $fullAudit.release_gate.verification_clean
+    } else {
+        "n/a"
+    }
     $lines.Add("Latest full-stack audit:")
     $lines.Add(("- verdict={0} sync_allowed={1}" -f $fullAudit.release_gate.verdict, $fullAudit.release_gate.sync_allowed))
-    $lines.Add(("- git_dirty_count={0} runtime_unexpected_dir_count={1} rotation_candidate_count={2}" -f
+    $lines.Add(("- git_dirty_count={0} runtime_unexpected_dir_count={1} rotation_candidate_count={2} verification_clean={3}" -f
         $fullAudit.cleanliness.git_dirty_count,
         $fullAudit.cleanliness.runtime_unexpected_dir_count,
-        $fullAudit.cleanliness.rotation_candidate_count))
+        $fullAudit.cleanliness.rotation_candidate_count,
+        $verificationClean))
     $lines.Add("")
 }
 
