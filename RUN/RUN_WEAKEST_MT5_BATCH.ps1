@@ -4,7 +4,7 @@ param(
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
-    [int]$TimeoutSec = 3600
+    [int]$TimeoutSec = 7200
 )
 
 Set-StrictMode -Version Latest
