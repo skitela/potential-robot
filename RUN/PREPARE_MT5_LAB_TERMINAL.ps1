@@ -2,6 +2,8 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$TerminalOrigin = "C:\Program Files\MetaTrader 5",
     [string]$TerminalDataDir = "",
+    [string]$AuthSourceTerminalOrigin = "C:\Program Files\OANDA TMS MT5 Terminal",
+    [string]$AuthSourceTerminalDataDir = "",
     [string]$MetaEditorExe = "",
     [switch]$CompileAll = $true
 )
@@ -62,8 +64,50 @@ function Copy-ProjectSourcesToTerminal {
     Copy-Item (Join-Path $SourceProjectRoot "MQL5\Include\Strategies\Common\*.mqh") $targetStrategiesCommon -Force
 }
 
+function Copy-AuthConfigToTerminal {
+    param(
+        [string]$SourceTerminalDataDir,
+        [string]$TargetTerminalDataDir
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SourceTerminalDataDir) -or -not (Test-Path -LiteralPath $SourceTerminalDataDir)) {
+        return @()
+    }
+
+    $sourceConfig = Join-Path $SourceTerminalDataDir "config"
+    $targetConfig = Join-Path $TargetTerminalDataDir "config"
+    if (-not (Test-Path -LiteralPath $sourceConfig)) {
+        return @()
+    }
+
+    New-Item -ItemType Directory -Force -Path $targetConfig | Out-Null
+
+    $copied = New-Object System.Collections.Generic.List[string]
+    foreach ($fileName in @("accounts.dat", "common.ini", "servers.dat")) {
+        $sourcePath = Join-Path $sourceConfig $fileName
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            continue
+        }
+
+        $targetPath = Join-Path $targetConfig $fileName
+        Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
+        $copied.Add($targetPath)
+    }
+
+    return @($copied)
+}
+
 if ([string]::IsNullOrWhiteSpace($TerminalDataDir)) {
     $TerminalDataDir = Resolve-TerminalDataDirByOrigin -OriginPath $TerminalOrigin
+}
+
+if ([string]::IsNullOrWhiteSpace($AuthSourceTerminalDataDir) -and -not [string]::IsNullOrWhiteSpace($AuthSourceTerminalOrigin)) {
+    try {
+        $AuthSourceTerminalDataDir = Resolve-TerminalDataDirByOrigin -OriginPath $AuthSourceTerminalOrigin
+    }
+    catch {
+        $AuthSourceTerminalDataDir = ""
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($MetaEditorExe)) {
@@ -79,6 +123,7 @@ if (-not (Test-Path -LiteralPath $MetaEditorExe)) {
 
 $projectRootResolved = (Resolve-Path -LiteralPath $ProjectRoot).Path
 Copy-ProjectSourcesToTerminal -SourceProjectRoot $projectRootResolved -TargetTerminalDataDir $TerminalDataDir
+$authConfigCopied = Copy-AuthConfigToTerminal -SourceTerminalDataDir $AuthSourceTerminalDataDir -TargetTerminalDataDir $TerminalDataDir
 
 $compileResults = @()
 if ($CompileAll) {
@@ -120,6 +165,8 @@ if ($CompileAll) {
 [pscustomobject]@{
     terminal_origin = $TerminalOrigin
     terminal_data_dir = $TerminalDataDir
+    auth_source_terminal_data_dir = $AuthSourceTerminalDataDir
+    auth_config_copied = $authConfigCopied
     metaeditor = $MetaEditorExe
     compile_all = [bool]$CompileAll
     compile_results = $compileResults
