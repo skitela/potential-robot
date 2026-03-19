@@ -53,6 +53,8 @@ Stop:
 
 ### 2. Eksport do MT5
 - [EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1)
+- [RUN_QDM_FOCUS_PIPELINE.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\RUN_QDM_FOCUS_PIPELINE.ps1)
+- [START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1)
 
 Skrypt:
 - bierze ten sam profil
@@ -62,6 +64,11 @@ Skrypt:
   - `MB_GOLD_DUKA`
   - `MB_US500_DUKA`
   - itd.
+
+Pipeline:
+- robi `sync -> export` w jednym przebiegu
+- nadaje sie do dlugiego, nocnego uruchomienia w tle
+- zapisuje osobny log pipeline do `C:\TRADING_DATA\QDM\logs`
 
 ## Dlaczego takie nazwy
 Nie chcemy:
@@ -89,4 +96,7 @@ Druga wazna obserwacja:
    - [STOP_QDM_FOCUS_SYNC.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\STOP_QDM_FOCUS_SYNC.ps1)
 4. wyeksportowac focus pack do `MT5`:
    - [EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1)
-5. potem podpinac to do `Custom Symbols` i badan offline
+5. albo uruchomic caly tor `sync -> export`:
+   - [RUN_QDM_FOCUS_PIPELINE.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\RUN_QDM_FOCUS_PIPELINE.ps1)
+   - [START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1)
+6. potem podpinac to do `Custom Symbols` i badan offline
