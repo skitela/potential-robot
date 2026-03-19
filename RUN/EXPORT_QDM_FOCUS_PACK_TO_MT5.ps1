@@ -28,8 +28,11 @@ function Stop-QdmProcesses {
             $_.Name -eq "powershell.exe" -and
             $_.ProcessId -ne $PID -and
             ($_.CommandLine -like "*qdm_focus_sync_wrapper_*" -or
+             $_.CommandLine -like "*qdm_focus_pipeline_wrapper_*" -or
              $_.CommandLine -like "*SYNC_QDM_FOCUS_PACK.ps1*" -or
-             $_.CommandLine -like "*EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1*")
+             $_.CommandLine -like "*RUN_QDM_FOCUS_PIPELINE.ps1*" -or
+             $_.CommandLine -like "*EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1*" -or
+             $_.CommandLine -like "*START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1*")
         } |
         ForEach-Object {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
