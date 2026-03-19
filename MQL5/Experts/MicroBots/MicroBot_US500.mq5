@@ -44,6 +44,8 @@ input uint InpTimerSec = 5;
 input bool InpEnableLiveEntries = false;
 input bool InpPaperCollectMode = true;
 input string InpTradeComment = "MB_US500";
+input bool InpEnableStrategyTesterSandbox = true;
+input string InpStrategyTesterSandboxTag = "US500_AGENT";
 
 CTrade g_trade;
 MbRuntimeState g_state;
@@ -92,6 +94,19 @@ bool ShouldRunUS500TuningCycle(const datetime now)
 bool IsLocalPaperModeActive()
   {
    return (InpPaperCollectMode || g_runtime_control.paper_only);
+  }
+
+void ConfigureUS500StrategyTesterSandbox()
+  {
+   if(!InpEnableStrategyTesterSandbox || !MbIsStrategyTesterRuntime())
+      return;
+
+   string sandbox_tag = MbCanonicalSymbol(g_profile.symbol);
+   string custom_tag = MbStoragePathSanitizeToken(InpStrategyTesterSandboxTag);
+   if(custom_tag != "" && custom_tag != "DEFAULT")
+      sandbox_tag += "_" + custom_tag;
+
+   MbEnableStrategyTesterSandbox(sandbox_tag);
   }
 
 void NormalizeUS500MarketPermissions()
@@ -282,6 +297,7 @@ int OnInit()
    if(!MbVerifyChartSymbol(g_profile.symbol))
       return(INIT_FAILED);
    g_profile.symbol = Symbol();
+   ConfigureUS500StrategyTesterSandbox();
    g_state.magic = InpMagic;
    g_state.symbol = g_profile.symbol;
    g_state.mode = MB_MODE_READY;
