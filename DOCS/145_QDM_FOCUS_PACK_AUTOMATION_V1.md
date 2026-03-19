@@ -55,6 +55,8 @@ Stop:
 - [EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1)
 - [RUN_QDM_FOCUS_PIPELINE.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\RUN_QDM_FOCUS_PIPELINE.ps1)
 - [START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1)
+- [WAIT_QDM_SYNC_AND_EXPORT.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\WAIT_QDM_SYNC_AND_EXPORT.ps1)
+- [START_QDM_EXPORT_AFTER_SYNC_BACKGROUND.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\START_QDM_EXPORT_AFTER_SYNC_BACKGROUND.ps1)
 
 Skrypt:
 - bierze ten sam profil
@@ -69,6 +71,11 @@ Pipeline:
 - robi `sync -> export` w jednym przebiegu
 - nadaje sie do dlugiego, nocnego uruchomienia w tle
 - zapisuje osobny log pipeline do `C:\TRADING_DATA\QDM\logs`
+
+Watcher:
+- czeka na zakonczenie juz uruchomionego syncu
+- nie przerywa trwajacego pobierania
+- po zakonczeniu syncu sam odpala eksport do `MT5`
 
 ## Dlaczego takie nazwy
 Nie chcemy:
@@ -99,4 +106,7 @@ Druga wazna obserwacja:
 5. albo uruchomic caly tor `sync -> export`:
    - [RUN_QDM_FOCUS_PIPELINE.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\RUN_QDM_FOCUS_PIPELINE.ps1)
    - [START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\START_QDM_FOCUS_PIPELINE_BACKGROUND.ps1)
-6. potem podpinac to do `Custom Symbols` i badan offline
+6. albo do aktywnego syncu dolaczyc sam eksport po zakonczeniu:
+   - [WAIT_QDM_SYNC_AND_EXPORT.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\WAIT_QDM_SYNC_AND_EXPORT.ps1)
+   - [START_QDM_EXPORT_AFTER_SYNC_BACKGROUND.ps1](C:\MAKRO_I_MIKRO_BOT\RUN\START_QDM_EXPORT_AFTER_SYNC_BACKGROUND.ps1)
+7. potem podpinac to do `Custom Symbols` i badan offline
