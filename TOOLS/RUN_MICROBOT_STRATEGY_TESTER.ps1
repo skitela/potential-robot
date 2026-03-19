@@ -195,6 +195,10 @@ if (-not $entry) {
 
 $entryCodeSymbol = if ($entry.PSObject.Properties.Name -contains 'code_symbol') { [string]$entry.code_symbol } else { "" }
 $resolvedAlias = Convert-ToSandboxToken $(if (-not [string]::IsNullOrWhiteSpace($entryCodeSymbol)) { $entryCodeSymbol } else { [string]$entry.symbol })
+$storageAlias = Convert-ToSandboxToken (([string]$entry.symbol) -replace '\.pro$','')
+if ([string]::IsNullOrWhiteSpace($storageAlias)) {
+    $storageAlias = $resolvedAlias
+}
 if ([string]::IsNullOrWhiteSpace($SandboxTag)) {
     $SandboxTag = "${resolvedAlias}_AGENT"
 }
@@ -227,14 +231,14 @@ $configPath = Join-Path $runDir ($runId + ".ini")
 $testerLogDir = Join-Path $TerminalDataDir "Tester\logs"
 $terminalLogDir = Join-Path $TerminalDataDir "logs"
 $reportBaseRel = "reports\" + $runId
-$sandboxName = "MAKRO_I_MIKRO_BOT_TESTER_${resolvedAlias}_${sanitizedTag}"
+$sandboxName = "MAKRO_I_MIKRO_BOT_TESTER_${storageAlias}_${sanitizedTag}"
 $sandboxRoot = Join-Path (Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Files") $sandboxName
 
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
 New-Item -ItemType Directory -Force -Path $mt5ReportsDir | Out-Null
 
-& (Join-Path $ProjectRoot "TOOLS\RESET_MICROBOT_STRATEGY_TESTER_SANDBOX.ps1") -ProjectRoot $ProjectRoot -SymbolAlias $resolvedAlias -SandboxTag $sanitizedTag | Out-Null
+& (Join-Path $ProjectRoot "TOOLS\RESET_MICROBOT_STRATEGY_TESTER_SANDBOX.ps1") -ProjectRoot $ProjectRoot -SymbolAlias $storageAlias -SandboxTag $sanitizedTag | Out-Null
 & (Join-Path $ProjectRoot "TOOLS\COMPILE_MICROBOT.ps1") -ExpertName $ExpertName | Out-Null
 
 $config = @"
@@ -356,12 +360,12 @@ if ($timedOut -and [string]::IsNullOrWhiteSpace($resultLabel)) {
     $resultLabel = "timed_out"
 }
 
-$executionSummaryPath = Join-Path $sandboxRoot ("state\{0}\execution_summary.json" -f $resolvedAlias)
-$runtimeStatePath = Join-Path $sandboxRoot ("state\{0}\runtime_state.csv" -f $resolvedAlias)
-$candidateSignalsPath = Join-Path $sandboxRoot ("logs\{0}\candidate_signals.csv" -f $resolvedAlias)
-$bucketSummaryPath = Join-Path $sandboxRoot ("logs\{0}\learning_bucket_summary_v1.csv" -f $resolvedAlias)
-$learningObservationsPath = Join-Path $sandboxRoot ("logs\{0}\learning_observations_v2.csv" -f $resolvedAlias)
-$tuningDeckhandPath = Join-Path $sandboxRoot ("logs\{0}\tuning_deckhand.csv" -f $resolvedAlias)
+$executionSummaryPath = Join-Path $sandboxRoot ("state\{0}\execution_summary.json" -f $storageAlias)
+$runtimeStatePath = Join-Path $sandboxRoot ("state\{0}\runtime_state.csv" -f $storageAlias)
+$candidateSignalsPath = Join-Path $sandboxRoot ("logs\{0}\candidate_signals.csv" -f $storageAlias)
+$bucketSummaryPath = Join-Path $sandboxRoot ("logs\{0}\learning_bucket_summary_v1.csv" -f $storageAlias)
+$learningObservationsPath = Join-Path $sandboxRoot ("logs\{0}\learning_observations_v2.csv" -f $storageAlias)
+$tuningDeckhandPath = Join-Path $sandboxRoot ("logs\{0}\tuning_deckhand.csv" -f $storageAlias)
 
 $executionSummary = $null
 if (Test-Path -LiteralPath $executionSummaryPath) {
@@ -463,6 +467,7 @@ $result = [ordered]@{
     run_id                = $runId
     generated_at_utc      = (Get-Date).ToUniversalTime().ToString("o")
     symbol_alias          = $resolvedAlias
+    storage_alias         = $storageAlias
     sandbox_name          = $sandboxName
     config_path           = $configPath
     mt5_exe               = $Mt5Exe
@@ -487,6 +492,7 @@ $result = [ordered]@{
 $summary = [ordered]@{
     run_id                    = $runId
     symbol_alias              = $resolvedAlias
+    storage_alias             = $storageAlias
     symbol                    = $Symbol
     expert_name               = $ExpertName
     from_date                 = $FromDate
@@ -534,7 +540,7 @@ if (-not $SkipKnowledgeExport) {
     & (Join-Path $ProjectRoot "TOOLS\EXPORT_STRATEGY_TESTER_KNOWLEDGE.ps1") `
         -ProjectRoot $ProjectRoot `
         -RunId $runId `
-        -SymbolAlias $resolvedAlias `
+        -SymbolAlias $storageAlias `
         -EvidenceDir $evidenceDir `
         -SandboxRoot $sandboxRoot | Out-Null
 }
