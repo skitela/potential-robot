@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$LogRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
-    [int]$CycleSeconds = 300
+    [int]$CycleSeconds = 180
 )
 
 Set-StrictMode -Version Latest
