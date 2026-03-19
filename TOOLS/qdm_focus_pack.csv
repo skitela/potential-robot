@@ -1,0 +1,12 @@
+enabled,symbol,datasource,datatype,date_from,date_to,mt5_export_name,notes
+1,EURUSD,dukascopy,TICK,2016.01.01,,MB_EURUSD_DUKA,core_fx
+1,GBPUSD,dukascopy,TICK,2016.01.01,,MB_GBPUSD_DUKA,core_fx
+1,USDJPY,dukascopy,TICK,2016.01.01,,MB_USDJPY_DUKA,core_fx
+1,USDCHF,dukascopy,TICK,2016.01.01,,MB_USDCHF_DUKA,cost_focus
+1,USDCAD,dukascopy,TICK,2016.01.01,,MB_USDCAD_DUKA,cost_focus
+1,NZDUSD,dukascopy,TICK,2016.01.01,,MB_NZDUSD_DUKA,sample_focus
+1,XAUUSD,dukascopy,TICK,2018.01.01,,MB_GOLD_DUKA,active_runtime
+1,XAGUSD,dukascopy,TICK,2018.01.01,,MB_SILVER_DUKA,active_runtime
+1,USA500.IDX,dukascopy,TICK,2018.01.01,,MB_US500_DUKA,active_runtime
+1,DEU.IDX,dukascopy,TICK,2018.01.01,,MB_DE30_DUKA,active_runtime
+1,COPPER.CMD,dukascopy,TICK,2018.01.01,,MB_COPPER_DUKA,problem_symbol
