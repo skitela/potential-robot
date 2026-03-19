@@ -24,6 +24,21 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Stop-MatchingTerminalProcesses {
+    param([string]$ExecutablePath)
+
+    $normalizedTarget = [System.IO.Path]::GetFullPath($ExecutablePath).ToLowerInvariant()
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "terminal64.exe" -and
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq $normalizedTarget)
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+}
+
 function Convert-ToSandboxToken {
     param([string]$Value)
     $chars = $Value.ToCharArray() | ForEach-Object {
@@ -276,7 +291,7 @@ if (Test-Path -LiteralPath $testerAgentsRoot) {
     $beforeAgentLogs = @(Get-ChildItem -LiteralPath $testerAgentsRoot -Recurse -File -Filter *.log | Select-Object -ExpandProperty FullName)
 }
 
-Get-Process terminal64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Stop-MatchingTerminalProcesses -ExecutablePath $Mt5Exe
 Start-Sleep -Seconds 2
 
 $process = Start-Process -FilePath $Mt5Exe -ArgumentList @("/config:$configPath") -PassThru

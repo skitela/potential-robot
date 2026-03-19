@@ -7,6 +7,7 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         $_.Name -eq "powershell.exe" -and
         ($_.CommandLine -like "*fx_mt5_batch_wrapper_*" -or
          $_.CommandLine -like "*fx_qdm_pipeline_wrapper_*" -or
+         $_.CommandLine -like "*fx_mt5_secondary_batch_wrapper_*" -or
          $_.CommandLine -like "*refresh_and_train_ml_wrapper_*" -or
          $_.CommandLine -like "*qdm_focus_sync_wrapper_*" -or
          $_.CommandLine -like "*qdm_export_after_sync_wrapper_*")
