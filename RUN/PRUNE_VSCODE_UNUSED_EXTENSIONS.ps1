@@ -14,6 +14,7 @@ if (-not (Test-Path -LiteralPath $ExtensionsRoot)) {
 }
 
 $safeUninstall = @(
+    "continue.continue",
     "github.codespaces",
     "github.remotehub",
     "ms-azuretools.vscode-containers",
@@ -113,7 +114,7 @@ $stalePatterns = @(
     "saoudrizwan.claude-dev-*",
     "shishirregmi.generate-code-gemini-*",
     "sixth.sixth-ai-*",
-    "continue.continue-1.2.16*"
+    "continue.continue-*"
 )
 
 foreach ($pattern in $stalePatterns) {

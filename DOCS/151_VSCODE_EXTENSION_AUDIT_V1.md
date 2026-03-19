@@ -47,6 +47,7 @@ Te dodatki mimo braku trafien zostaja, bo sa zgodne z naszym torem:
 
 Na podstawie logow z ostatnich 3 dni i zgodnosci z naszym torem pracy:
 
+- `continue.continue`
 - `github.codespaces`
 - `github.remotehub`
 - `ms-azuretools.vscode-containers`
@@ -71,10 +72,10 @@ Na podstawie logow z ostatnich 3 dni i zgodnosci z naszym torem pracy:
 
 ## Co zostawiono na razie jako graniczne
 
-- `continue.continue`
 - `github.copilot-chat`
 
-Te dodatki byly aktywowane w logach z ostatnich dni, wiec nie zostaly automatycznie wyciete w tej rundzie.
+`github.copilot-chat` byl aktywowany w logach z ostatnich dni i zostaje.
+`continue.continue` zostal ostatecznie wyciety decyzja operatorska, mimo aktywnosci w logach.
 
 ## Dodatkowe porzadki techniczne
 
