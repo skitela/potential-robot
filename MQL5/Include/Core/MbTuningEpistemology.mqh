@@ -442,6 +442,15 @@ void MbEvaluateCostPressureState(
    if(state.spread_regime == "BAD" && worst_ratio >= bad_spread_non_representative_ratio)
       paper_not_representative = true;
 
+   if(
+      paper_not_representative &&
+      MbIsStrategyTesterRuntime() &&
+      fx_family &&
+      state.spread_regime == "BAD" &&
+      out.spread_vs_typical_move < 0.95
+   )
+      paper_not_representative = false;
+
    if(paper_not_representative)
      {
       out.state = "NON_REPRESENTATIVE";

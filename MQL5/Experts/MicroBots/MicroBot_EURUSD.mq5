@@ -629,12 +629,20 @@ void OnTick()
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
+      bool blocked_by_eurusd_breakout_chaos_dirty_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_eurusd_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_eurusd_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_eurusd_effective_tuning_policy.require_non_poor_renko_for_breakout && poor_renko)
          blocked_by_tuning_gate = true;
+      if(
+         signal.setup_type == "SETUP_BREAKOUT" &&
+         signal.market_regime == "CHAOS" &&
+         poor_candle &&
+         (poor_renko || signal.confidence_bucket == "LOW")
+      )
+         blocked_by_eurusd_breakout_chaos_dirty_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
          paper_gate_abs = 0.60;
@@ -662,12 +670,14 @@ void OnTick()
       else if(signal.setup_type == "SETUP_REJECTION")
          paper_gate_abs = 0.18;
 
-      if(!blocked_by_tuning_gate && MathAbs(signal.score) >= paper_gate_abs)
+      if(!blocked_by_tuning_gate && !blocked_by_eurusd_breakout_chaos_dirty_gate && MathAbs(signal.score) >= paper_gate_abs)
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
          signal.reason_code = "PAPER_SCORE_GATE";
         }
+      else if(blocked_by_eurusd_breakout_chaos_dirty_gate)
+         signal.reason_code = "EURUSD_BREAKOUT_CHAOS_DIRTY_BLOCK";
      }
    AppendEURUSDCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
