@@ -16,6 +16,8 @@ Thumbs.db
 # Wygenerowane pliki uruchomieniowe
 /RUN/strategy_tester/
 /RUN/*_state.json
+/RUN/*_status.json
+/RUN/*.pid
 /RUN/*.bak_*
 
 # Wygenerowane kopie i logi narzedzi
