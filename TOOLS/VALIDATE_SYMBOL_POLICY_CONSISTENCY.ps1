@@ -5,6 +5,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Convert-TradeTfToChartTf {
     param([string]$TradeTf)
     switch ($TradeTf) {
@@ -27,16 +30,25 @@ $variantRegistry = Get-Content -Raw -LiteralPath $variantPath | ConvertFrom-Json
 $variantBySymbol = @{}
 foreach ($variant in $variantRegistry.variants) {
     $variantBySymbol[$variant.symbol] = $variant
+    $variantBySymbol[(($variant.symbol) -replace '\.pro$','')] = $variant
 }
 
 $checks = @()
 $mismatches = @()
 
 foreach ($entry in $registry.symbols) {
-    $variant = $variantBySymbol[$entry.symbol]
+    $canonicalSymbol = Get-RegistryCanonicalSymbol -RegistryItem $entry
+    $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $entry
+    $variant = $null
+    foreach ($key in @($canonicalSymbol, $brokerSymbol, [string]$entry.symbol)) {
+        if (-not [string]::IsNullOrWhiteSpace($key) -and $variantBySymbol.ContainsKey($key)) {
+            $variant = $variantBySymbol[$key]
+            break
+        }
+    }
     if ($null -eq $variant) {
         $mismatches += [ordered]@{
-            symbol = $entry.symbol
+            symbol = $canonicalSymbol
             field = "variant"
             registry = "<missing>"
             expected = "variant entry present"
@@ -46,7 +58,8 @@ foreach ($entry in $registry.symbols) {
 
     $expectedChartTf = Convert-TradeTfToChartTf $variant.profile.trade_tf
     $row = [ordered]@{
-        symbol = $entry.symbol
+        symbol = $canonicalSymbol
+        broker_symbol = $brokerSymbol
         registry_session_profile = $entry.session_profile
         variant_session_profile = $variant.profile.session_profile
         registry_chart_tf = $entry.chart_tf
@@ -60,6 +73,7 @@ foreach ($entry in $registry.symbols) {
         $row.ok = $false
         $mismatches += [ordered]@{
             symbol = $entry.symbol
+            broker_symbol = $brokerSymbol
             field = "session_profile"
             registry = $entry.session_profile
             expected = $variant.profile.session_profile
@@ -70,6 +84,7 @@ foreach ($entry in $registry.symbols) {
         $row.ok = $false
         $mismatches += [ordered]@{
             symbol = $entry.symbol
+            broker_symbol = $brokerSymbol
             field = "chart_tf"
             registry = $entry.chart_tf
             expected = $expectedChartTf

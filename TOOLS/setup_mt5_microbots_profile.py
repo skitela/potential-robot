@@ -149,7 +149,7 @@ def _upsert_microbot_expert_block(chart_text: str, expert: str, preset_lines: Li
 
 
 def _build_chart_text(template_text: str, item: Dict[str, Any], preset_lines: List[str], chart_id: str) -> str:
-    symbol = _resolve_symbol(str(item["symbol"]))
+    symbol = _resolve_symbol(str(item.get("broker_symbol") or item["symbol"]))
     expert = str(item["expert"])
     out = _upsert_microbot_expert_block(template_text, expert, preset_lines)
     out = _replace_line(out, "id", chart_id)
@@ -259,9 +259,10 @@ def main() -> int:
             {
                 "chart": out_path.name,
                 "symbol": item["symbol"],
+                "broker_symbol": item.get("broker_symbol", item["symbol"]),
                 "expert": item["expert"],
                 "preset": item["preset"],
-                "symbol_terminal": _resolve_symbol(str(item["symbol"])),
+                "symbol_terminal": _resolve_symbol(str(item.get("broker_symbol") or item["symbol"])),
             }
         )
 

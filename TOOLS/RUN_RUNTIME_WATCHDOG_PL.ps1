@@ -9,6 +9,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Read-JsonOrNull {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -61,6 +64,8 @@ $runDir = Join-Path $ProjectRoot "RUN"
 New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
+$commonFilesRootResolved = Split-Path -Parent $StateRoot
+
 $statusJsonPath = Join-Path $evidenceDir "runtime_watchdog_status.json"
 $statusTxtPath = Join-Path $evidenceDir "runtime_watchdog_status.txt"
 $statePath = Join-Path $runDir "runtime_watchdog_state.json"
@@ -75,9 +80,10 @@ $staleSymbols = @()
 $missingSymbols = @()
 
 foreach ($item in @($registry.symbols)) {
-    $symbol = [string]$item.symbol
+    $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $stateAlias = Resolve-RegistryStateAlias -RegistryItem $item -CommonFilesRoot $commonFilesRootResolved
     $family = [string]$item.session_profile
-    $symbolDir = Join-Path $StateRoot $symbol
+    $symbolDir = Join-Path $StateRoot $stateAlias
     $runtimeStatusPath = Join-Path $symbolDir "runtime_status.json"
     $runtimeStatePath = Join-Path $symbolDir "runtime_state.csv"
     $heartbeatPath = Join-Path $symbolDir "heartbeat.txt"
@@ -102,6 +108,7 @@ foreach ($item in @($registry.symbols)) {
 
     $symbolRows += [pscustomobject]@{
         symbol = $symbol
+        state_alias = $stateAlias
         family = $family
         status = $rowStatus
         heartbeat_age_sec = $heartbeatAgeSec

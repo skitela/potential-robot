@@ -1,9 +1,11 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "deployment_model": "one_microbot_per_chart",
   "symbols": [
     {
       "symbol": "EURUSD",
+      "broker_symbol": "EURUSD.pro",
+      "code_symbol": "EURUSD",
       "expert": "MicroBot_EURUSD",
       "preset": "MicroBot_EURUSD_Live.set",
       "magic": 910101,
@@ -13,6 +15,8 @@
     },
     {
       "symbol": "AUDUSD",
+      "broker_symbol": "AUDUSD.pro",
+      "code_symbol": "AUDUSD",
       "expert": "MicroBot_AUDUSD",
       "preset": "MicroBot_AUDUSD_Live.set",
       "magic": 910104,
@@ -22,6 +26,8 @@
     },
     {
       "symbol": "GBPUSD",
+      "broker_symbol": "GBPUSD.pro",
+      "code_symbol": "GBPUSD",
       "expert": "MicroBot_GBPUSD",
       "preset": "MicroBot_GBPUSD_Live.set",
       "magic": 910102,
@@ -31,6 +37,8 @@
     },
     {
       "symbol": "USDJPY",
+      "broker_symbol": "USDJPY.pro",
+      "code_symbol": "USDJPY",
       "expert": "MicroBot_USDJPY",
       "preset": "MicroBot_USDJPY_Live.set",
       "magic": 910103,
@@ -40,6 +48,8 @@
     },
     {
       "symbol": "USDCAD",
+      "broker_symbol": "USDCAD.pro",
+      "code_symbol": "USDCAD",
       "expert": "MicroBot_USDCAD",
       "preset": "MicroBot_USDCAD_Live.set",
       "magic": 910105,
@@ -49,6 +59,8 @@
     },
     {
       "symbol": "USDCHF",
+      "broker_symbol": "USDCHF.pro",
+      "code_symbol": "USDCHF",
       "expert": "MicroBot_USDCHF",
       "preset": "MicroBot_USDCHF_Live.set",
       "magic": 910106,
@@ -58,6 +70,8 @@
     },
     {
       "symbol": "NZDUSD",
+      "broker_symbol": "NZDUSD.pro",
+      "code_symbol": "NZDUSD",
       "expert": "MicroBot_NZDUSD",
       "preset": "MicroBot_NZDUSD_Live.set",
       "magic": 910107,
@@ -67,6 +81,8 @@
     },
     {
       "symbol": "EURJPY",
+      "broker_symbol": "EURJPY.pro",
+      "code_symbol": "EURJPY",
       "expert": "MicroBot_EURJPY",
       "preset": "MicroBot_EURJPY_Live.set",
       "magic": 910108,
@@ -76,6 +92,8 @@
     },
     {
       "symbol": "GBPJPY",
+      "broker_symbol": "GBPJPY.pro",
+      "code_symbol": "GBPJPY",
       "expert": "MicroBot_GBPJPY",
       "preset": "MicroBot_GBPJPY_Live.set",
       "magic": 910109,
@@ -85,6 +103,8 @@
     },
     {
       "symbol": "EURAUD",
+      "broker_symbol": "EURAUD.pro",
+      "code_symbol": "EURAUD",
       "expert": "MicroBot_EURAUD",
       "preset": "MicroBot_EURAUD_Live.set",
       "magic": 910110,
@@ -94,6 +114,8 @@
     },
     {
       "symbol": "GBPAUD",
+      "broker_symbol": "GBPAUD.pro",
+      "code_symbol": "GBPAUD",
       "expert": "MicroBot_GBPAUD",
       "preset": "MicroBot_GBPAUD_Live.set",
       "magic": 910111,
@@ -102,7 +124,8 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "GOLD.pro",
+      "symbol": "GOLD",
+      "broker_symbol": "GOLD.pro",
       "code_symbol": "GOLD",
       "expert": "MicroBot_GOLD",
       "preset": "MicroBot_GOLD_Live.set",
@@ -112,7 +135,8 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "SILVER.pro",
+      "symbol": "SILVER",
+      "broker_symbol": "SILVER.pro",
       "code_symbol": "SILVER",
       "expert": "MicroBot_SILVER",
       "preset": "MicroBot_SILVER_Live.set",
@@ -122,7 +146,8 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "PLATIN.pro",
+      "symbol": "PLATIN",
+      "broker_symbol": "PLATIN.pro",
       "code_symbol": "PLATIN",
       "expert": "MicroBot_PLATIN",
       "preset": "MicroBot_PLATIN_Live.set",
@@ -132,7 +157,8 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "COPPER-US.pro",
+      "symbol": "COPPER-US",
+      "broker_symbol": "COPPER-US.pro",
       "code_symbol": "COPPERUS",
       "expert": "MicroBot_COPPERUS",
       "preset": "MicroBot_COPPERUS_Live.set",
@@ -142,7 +168,8 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "DE30.pro",
+      "symbol": "DE30",
+      "broker_symbol": "DE30.pro",
       "code_symbol": "DE30",
       "expert": "MicroBot_DE30",
       "preset": "MicroBot_DE30_Live.set",
@@ -152,7 +179,8 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "US500.pro",
+      "symbol": "US500",
+      "broker_symbol": "US500.pro",
       "code_symbol": "US500",
       "expert": "MicroBot_US500",
       "preset": "MicroBot_US500_Live.set",

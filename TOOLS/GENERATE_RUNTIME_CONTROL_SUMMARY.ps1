@@ -6,6 +6,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Resolve-DomainFromSessionProfile {
     param([string]$SessionProfile)
     switch ([string]$SessionProfile) {
@@ -18,39 +21,6 @@ function Resolve-DomainFromSessionProfile {
         "INDEX_US" { return "INDICES" }
         default { return "" }
     }
-}
-
-function Resolve-RuntimeControlAlias {
-    param(
-        $RegistryItem,
-        [string]$CommonFilesRoot
-    )
-
-    $candidates = New-Object System.Collections.Generic.List[string]
-
-    if ($RegistryItem.PSObject.Properties.Name -contains "symbol" -and -not [string]::IsNullOrWhiteSpace([string]$RegistryItem.symbol)) {
-        $symbol = [string]$RegistryItem.symbol
-        [void]$candidates.Add($symbol)
-        [void]$candidates.Add(($symbol -replace '\.pro$',''))
-    }
-
-    if ($RegistryItem.PSObject.Properties.Name -contains "code_symbol" -and -not [string]::IsNullOrWhiteSpace([string]$RegistryItem.code_symbol)) {
-        [void]$candidates.Add([string]$RegistryItem.code_symbol)
-    }
-
-    $unique = @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-    foreach ($candidate in $unique) {
-        $controlPath = Join-Path $CommonFilesRoot ("state\{0}\runtime_control.csv" -f $candidate)
-        if (Test-Path -LiteralPath $controlPath) {
-            return $candidate
-        }
-    }
-
-    if ($unique.Count -gt 0) {
-        return $unique[0]
-    }
-
-    return ""
 }
 
 function Read-RuntimeControlFile {
@@ -156,10 +126,10 @@ function Merge-RuntimeControlState {
 $registry = Get-Content -Raw -LiteralPath (Join-Path $ProjectRoot "CONFIG\microbots_registry.json") | ConvertFrom-Json
 $rows = @()
 foreach ($item in $registry.symbols) {
-    $symbol = [string]$item.symbol
+    $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
     $family = [string]$item.session_profile
     $domain = Resolve-DomainFromSessionProfile -SessionProfile $family
-    $stateAlias = Resolve-RuntimeControlAlias -RegistryItem $item -CommonFilesRoot $CommonFilesRoot
+    $stateAlias = Resolve-RegistryStateAlias -RegistryItem $item -CommonFilesRoot $CommonFilesRoot
     $symbolControlPath = if ([string]::IsNullOrWhiteSpace($stateAlias)) {
         ""
     }

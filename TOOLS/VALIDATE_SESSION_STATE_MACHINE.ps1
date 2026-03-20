@@ -5,6 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $InvariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 
 function Read-KeyValueTsv {
@@ -47,67 +50,6 @@ function Parse-InvariantDouble {
         return $out
     }
     return 0.0
-}
-
-function Resolve-SymbolStateKey {
-    param($RegistryItem)
-
-    $codeSymbolProp = $RegistryItem.PSObject.Properties["code_symbol"]
-    if ($null -ne $codeSymbolProp) {
-        $codeSymbol = [string]$codeSymbolProp.Value
-        if (-not [string]::IsNullOrWhiteSpace($codeSymbol)) {
-            return $codeSymbol.ToUpperInvariant()
-        }
-    }
-
-    $symbol = [string]$RegistryItem.symbol
-    if ([string]::IsNullOrWhiteSpace($symbol)) {
-        return ""
-    }
-
-    $upper = $symbol.Trim().ToUpperInvariant()
-    $dot = $upper.IndexOf('.')
-    if ($dot -gt 0) {
-        return $upper.Substring(0,$dot)
-    }
-    return $upper
-}
-
-function Resolve-SymbolStateDirName {
-    param(
-        $RegistryItem,
-        [string]$CommonFilesRoot
-    )
-
-    $candidates = New-Object System.Collections.Generic.List[string]
-
-    if ($RegistryItem.PSObject.Properties.Name -contains "symbol" -and -not [string]::IsNullOrWhiteSpace([string]$RegistryItem.symbol)) {
-        $symbol = [string]$RegistryItem.symbol
-        [void]$candidates.Add($symbol)
-        [void]$candidates.Add(($symbol -replace '\.pro$',''))
-    }
-
-    $stateKey = Resolve-SymbolStateKey $RegistryItem
-    if (-not [string]::IsNullOrWhiteSpace($stateKey)) {
-        [void]$candidates.Add($stateKey)
-    }
-
-    $unique = @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-    foreach ($candidate in $unique) {
-        $runtimePath = Join-Path $CommonFilesRoot ("state\{0}\runtime_control.csv" -f $candidate)
-        if (Test-Path -LiteralPath $runtimePath) {
-            return $candidate
-        }
-    }
-
-    foreach ($candidate in $unique) {
-        $dirPath = Join-Path $CommonFilesRoot ("state\{0}" -f $candidate)
-        if (Test-Path -LiteralPath $dirPath) {
-            return $candidate
-        }
-    }
-
-    return $stateKey
 }
 
 function Add-Issue {
@@ -321,8 +263,8 @@ if ($runDomains.Count -gt 1) {
 }
 
 foreach ($item in @($registry.symbols)) {
-    $symbol = [string]$item.symbol
-    $symbolStateKey = Resolve-SymbolStateDirName -RegistryItem $item -CommonFilesRoot $CommonFilesRoot
+    $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $symbolStateKey = Resolve-RegistryStateAlias -RegistryItem $item -CommonFilesRoot $CommonFilesRoot
     $sessionProfile = [string]$item.session_profile
     $domain = Resolve-DomainFromSessionProfile -SessionProfile $sessionProfile
     $symbolStateDir = Join-Path $CommonFilesRoot ("state\{0}" -f $symbolStateKey)

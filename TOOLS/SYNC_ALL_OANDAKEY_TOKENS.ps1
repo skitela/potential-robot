@@ -6,6 +6,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $registry = Get-Content -LiteralPath $registryPath -Encoding UTF8 | ConvertFrom-Json
 $variantPath = Join-Path $ProjectRoot "CONFIG\strategy_variant_registry.json"
@@ -15,6 +18,7 @@ if ($variantRegistry) {
     foreach ($variant in $variantRegistry.variants) {
         if ($variant.profile -and $variant.profile.kill_switch_token_name) {
             $tokenMap[[string]$variant.symbol] = [string]$variant.profile.kill_switch_token_name
+            $tokenMap[(([string]$variant.symbol) -replace '\.pro$','')] = [string]$variant.profile.kill_switch_token_name
         }
     }
 }
@@ -22,8 +26,9 @@ $syncScript = Join-Path $ProjectRoot "TOOLS\SYNC_OANDAKEY_TOKEN.ps1"
 
 $results = @()
 foreach ($item in $registry.symbols) {
-    $symbol = [string]$item.symbol
-    $tokenName = if ($tokenMap.ContainsKey($symbol)) { $tokenMap[$symbol] } else { ("oandakey_{0}.token" -f $symbol.ToLowerInvariant()) }
+    $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $item
+    $tokenName = if ($tokenMap.ContainsKey($symbol)) { $tokenMap[$symbol] } elseif ($tokenMap.ContainsKey($brokerSymbol)) { $tokenMap[$brokerSymbol] } else { ("oandakey_{0}.token" -f $symbol.ToLowerInvariant()) }
     $json = & $syncScript -Symbol $symbol -TokenName $tokenName -UsbRoot $UsbRoot
     $results += ($json | ConvertFrom-Json)
 }

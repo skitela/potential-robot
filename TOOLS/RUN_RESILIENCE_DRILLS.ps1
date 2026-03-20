@@ -6,8 +6,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registry = Get-Content (Join-Path $ProjectRoot "CONFIG\microbots_registry.json") -Raw | ConvertFrom-Json
-$symbols = @($registry.symbols.symbol)
+$symbols = @($registry.symbols)
 $checks = @()
 
 function Add-Drill {
@@ -25,7 +28,8 @@ function Add-Drill {
 
 $stateOk = $true
 foreach ($symbol in $symbols) {
-    $statePath = Join-Path $CommonFilesRoot ("state\{0}\runtime_state.csv" -f $symbol)
+    $stateAlias = Resolve-RegistryStateAlias -RegistryItem $symbol -CommonFilesRoot $CommonFilesRoot -RequiredFiles @("runtime_state.csv")
+    $statePath = Join-Path $CommonFilesRoot ("state\{0}\runtime_state.csv" -f $stateAlias)
     if (-not (Test-Path $statePath)) {
         $stateOk = $false
     }
@@ -34,7 +38,8 @@ Add-Drill 'runtime_state_presence' $stateOk 'Every symbol should have runtime_st
 
 $tokenOk = $true
 foreach ($symbol in $symbols) {
-    $tokenDir = Join-Path $CommonFilesRoot ("key\{0}" -f $symbol)
+    $canonicalSymbol = Get-RegistryCanonicalSymbol -RegistryItem $symbol
+    $tokenDir = Join-Path $CommonFilesRoot ("key\{0}" -f $canonicalSymbol)
     if (-not (Test-Path $tokenDir)) {
         $tokenOk = $false
     }
@@ -56,7 +61,8 @@ Add-Drill 'post_restart_expert_loads' $loadOk 'MT5 log should show successful ex
 
 $runtimeSummaryOk = $true
 foreach ($symbol in $symbols) {
-    $summaryPath = Join-Path $CommonFilesRoot ("state\{0}\execution_summary.json" -f $symbol)
+    $stateAlias = Resolve-RegistryStateAlias -RegistryItem $symbol -CommonFilesRoot $CommonFilesRoot -RequiredFiles @("execution_summary.json")
+    $summaryPath = Join-Path $CommonFilesRoot ("state\{0}\execution_summary.json" -f $stateAlias)
     if (-not (Test-Path $summaryPath)) {
         $runtimeSummaryOk = $false
         continue

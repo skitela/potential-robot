@@ -24,6 +24,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Stop-MatchingTerminalProcesses {
     param([string]$ExecutablePath)
 
@@ -69,23 +72,13 @@ function Resolve-EvidenceDir {
 
 function Resolve-TesterSymbol {
     param(
-        [string]$RegistrySymbol,
+        [object]$RegistryItem,
         [string]$ExplicitSymbol
     )
     if (-not [string]::IsNullOrWhiteSpace($ExplicitSymbol)) {
         return $ExplicitSymbol
     }
-    $symbol = [string]$RegistrySymbol
-    if ([string]::IsNullOrWhiteSpace($symbol)) {
-        return $symbol
-    }
-    if ($symbol -match '\.pro$') {
-        return $symbol
-    }
-    if ($symbol -match '^[A-Z]{6}$') {
-        return ($symbol + ".pro")
-    }
-    return $symbol
+    return (Get-RegistryBrokerSymbol -RegistryItem $RegistryItem)
 }
 
 function Get-RegistryEntry {
@@ -94,15 +87,7 @@ function Get-RegistryEntry {
         [string]$Alias
     )
     $registry = Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $matches = @(
-        $registry.symbols | Where-Object {
-            $codeSymbol = if ($_.PSObject.Properties.Name -contains 'code_symbol') { [string]$_.code_symbol } else { "" }
-            $_.symbol -eq $Alias -or
-            $codeSymbol -eq $Alias -or
-            $_.expert -eq $Alias
-        }
-    )
-    return ($matches | Select-Object -First 1)
+    return (Find-RegistryEntryByAlias -Registry $registry -Alias $Alias)
 }
 
 function Get-KeyValueCsvMap {
@@ -225,8 +210,8 @@ if (-not $entry) {
 }
 
 $entryCodeSymbol = if ($entry.PSObject.Properties.Name -contains 'code_symbol') { [string]$entry.code_symbol } else { "" }
-$resolvedAlias = Convert-ToSandboxToken $(if (-not [string]::IsNullOrWhiteSpace($entryCodeSymbol)) { $entryCodeSymbol } else { [string]$entry.symbol })
-$storageAlias = Convert-ToSandboxToken (([string]$entry.symbol) -replace '\.pro$','')
+$resolvedAlias = Convert-ToSandboxToken $(if (-not [string]::IsNullOrWhiteSpace($entryCodeSymbol)) { $entryCodeSymbol } else { Get-RegistryCanonicalSymbol -RegistryItem $entry })
+$storageAlias = Convert-ToSandboxToken (Get-RegistryCanonicalSymbol -RegistryItem $entry)
 if ([string]::IsNullOrWhiteSpace($storageAlias)) {
     $storageAlias = $resolvedAlias
 }
@@ -235,7 +220,7 @@ if ([string]::IsNullOrWhiteSpace($SandboxTag)) {
 }
 $sanitizedTag = Convert-ToSandboxToken $SandboxTag
 
-$Symbol = Resolve-TesterSymbol -RegistrySymbol ([string]$entry.symbol) -ExplicitSymbol $Symbol
+$Symbol = Resolve-TesterSymbol -RegistryItem $entry -ExplicitSymbol $Symbol
 if ([string]::IsNullOrWhiteSpace($ExpertName)) {
     $ExpertName = [string]$entry.expert
 }

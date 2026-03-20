@@ -6,6 +6,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Get-InputMagicFromExpert {
     param([string]$ExpertPath)
     $match = Select-String -Path $ExpertPath -Pattern 'input ulong InpMagic = (\d+);' | Select-Object -First 1
@@ -72,6 +75,7 @@ $variantBySymbol = @{}
 if ($variantRegistry) {
     foreach ($variant in $variantRegistry.variants) {
         $variantBySymbol[[string]$variant.symbol] = $variant
+        $variantBySymbol[(([string]$variant.symbol) -replace '\.pro$','')] = $variant
     }
 }
 $commonRoot = Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\key"
@@ -80,11 +84,12 @@ $issues = New-Object System.Collections.Generic.List[string]
 $magicSet = New-Object System.Collections.Generic.HashSet[long]
 
 foreach ($item in $registry.symbols) {
-    $symbol = [string]$item.symbol
+    $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $item
     $expert = [string]$item.expert
     $preset = [string]$item.preset
     $registryMagic = [long]$item.magic
-    $variant = if ($variantBySymbol.ContainsKey($symbol)) { $variantBySymbol[$symbol] } else { $null }
+    $variant = if ($variantBySymbol.ContainsKey($symbol)) { $variantBySymbol[$symbol] } elseif ($variantBySymbol.ContainsKey($brokerSymbol)) { $variantBySymbol[$brokerSymbol] } else { $null }
     $tokenName = if ($variant -and $variant.profile -and $variant.profile.kill_switch_token_name) { [string]$variant.profile.kill_switch_token_name } else { ("oandakey_{0}.token" -f $symbol.ToLowerInvariant()) }
 
     $expertPath = Join-Path $ProjectRoot ("MQL5\Experts\MicroBots\{0}.mq5" -f $expert)
@@ -110,6 +115,7 @@ foreach ($item in $registry.symbols) {
 
     $reportRows += [pscustomobject]@{
         symbol = $symbol
+        broker_symbol = $brokerSymbol
         expert = $expert
         preset = $preset
         registry_magic = $registryMagic

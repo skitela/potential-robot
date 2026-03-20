@@ -8,6 +8,9 @@ Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = "Stop"
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $runtimeSummaryPath = Join-Path $ProjectRoot "EVIDENCE\runtime_control_summary.json"
 $dailyJsonPath = Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json"
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
@@ -36,7 +39,7 @@ function Refresh-Reports {
 $registry = Read-JsonOrNull $registryPath
 $symbols = @()
 if ($registry) {
-    $symbols = @($registry.symbols | ForEach-Object { [string]$_.symbol })
+    $symbols = @($registry.symbols | ForEach-Object { Get-RegistryDisplaySymbol -RegistryItem $_ -PreferBroker } | Select-Object -Unique)
 }
 $families = @("FX_MAIN","FX_ASIA","FX_CROSS","METALS_SPOT_PM","METALS_FUTURES","INDEX_EU","INDEX_US")
 

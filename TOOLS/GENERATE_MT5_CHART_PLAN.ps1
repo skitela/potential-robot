@@ -5,15 +5,21 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\\microbots_registry.json"
 $registry = Get-Content -LiteralPath $registryPath -Encoding UTF8 | ConvertFrom-Json
 
 $rows = @()
 $index = 1
 foreach ($item in $registry.symbols) {
+    $canonicalSymbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $item
     $rows += [PSCustomObject]@{
         chart_no = $index
-        symbol = [string]$item.symbol
+        symbol = $canonicalSymbol
+        broker_symbol = $brokerSymbol
         expert = [string]$item.expert
         preset = [string]$item.preset
         magic = [string]$item.magic
@@ -31,7 +37,7 @@ $lines = @()
 $lines += "MT5 CHART ATTACHMENT PLAN"
 $lines += ""
 foreach ($row in $rows) {
-    $lines += ("Chart {0}: {1} -> {2} -> {3} -> Magic={4} -> TF={5} -> Session={6} -> Status={7}" -f $row.chart_no,$row.symbol,$row.expert,$row.preset,$row.magic,$row.chart_tf,$row.session_profile,$row.status)
+    $lines += ("Chart {0}: {1} [{2}] -> {3} -> {4} -> Magic={5} -> TF={6} -> Session={7} -> Status={8}" -f $row.chart_no,$row.symbol,$row.broker_symbol,$row.expert,$row.preset,$row.magic,$row.chart_tf,$row.session_profile,$row.status)
 }
 $lines | Set-Content -LiteralPath $txtPath -Encoding ASCII
 
