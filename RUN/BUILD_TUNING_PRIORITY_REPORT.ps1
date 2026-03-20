@@ -215,7 +215,7 @@ if ($null -ne $runtimeReview -and $runtimeReview.PSObject.Properties.Name -conta
 
 $testerMap = Get-LatestTesterSummaries -StrategyTesterRoot (Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER")
 
-$items = New-Object System.Collections.Generic.List[object]
+$itemsByAlias = @{}
 Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
     $summaryPath = Join-Path $_.FullName "execution_summary.json"
     if (-not (Test-Path -LiteralPath $summaryPath)) {
@@ -258,7 +258,7 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
 
     $tester = if ($testerMap.ContainsKey($alias)) { $testerMap[$alias] } else { $null }
 
-    $items.Add([pscustomobject]@{
+    $candidate = [pscustomobject]@{
         rank                = 0
         symbol_alias        = $alias
         priority_score      = [int][math]::Round($score, 0)
@@ -279,8 +279,30 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
         latest_tester_sample = if ($null -ne $tester) { $tester.sample } else { 0 }
         latest_tester_bias  = if ($null -ne $tester) { [math]::Round([double]$tester.bias, 4) } else { 0.0 }
         latest_tester_pnl   = if ($null -ne $tester) { [math]::Round([double]$tester.pnl, 2) } else { 0.0 }
-    })
+        source_summary_path = $summaryPath
+        source_written_utc  = $_.LastWriteTimeUtc
+    }
+
+    if (-not $itemsByAlias.ContainsKey($alias)) {
+        $itemsByAlias[$alias] = $candidate
+        return
+    }
+
+    $current = $itemsByAlias[$alias]
+    $replace = $false
+    if ($candidate.source_written_utc -gt $current.source_written_utc) {
+        $replace = $true
+    }
+    elseif ($candidate.source_written_utc -eq $current.source_written_utc -and $candidate.learning_sample_count -gt $current.learning_sample_count) {
+        $replace = $true
+    }
+
+    if ($replace) {
+        $itemsByAlias[$alias] = $candidate
+    }
 }
+
+$items = @($itemsByAlias.Values)
 
 $ranked = $items | Sort-Object `
     @{ Expression = "priority_score"; Descending = $true }, `

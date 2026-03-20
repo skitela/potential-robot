@@ -1,6 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$CommonFilesRoot = ""
+    [string]$CommonFilesRoot = "",
+    [ValidateSet("DEFAULT","LAPTOP_RESEARCH","PAPER_LIVE")]
+    [string]$RuntimeProfile = "DEFAULT"
 )
 
 Set-StrictMode -Version Latest
@@ -145,6 +147,28 @@ function Resolve-DomainFromSessionProfile {
     }
 }
 
+function Merge-CoordinatorRules {
+    param(
+        $BaseRules,
+        $OverrideRules
+    )
+
+    $merged = [ordered]@{}
+    if ($null -ne $BaseRules) {
+        foreach ($prop in $BaseRules.PSObject.Properties) {
+            $merged[$prop.Name] = $prop.Value
+        }
+    }
+
+    if ($null -ne $OverrideRules) {
+        foreach ($prop in $OverrideRules.PSObject.Properties) {
+            $merged[$prop.Name] = $prop.Value
+        }
+    }
+
+    return [pscustomobject]$merged
+}
+
 function Get-NormalizedSymbolCode {
     param($RegistryItem)
 
@@ -160,6 +184,34 @@ function Get-NormalizedSymbolCode {
 
     $base = $symbol.Split('.',2)[0]
     return ($base.ToUpperInvariant() -replace '[^A-Z0-9]', '')
+}
+
+function Get-StateDirAliases {
+    param(
+        [string]$RegistrySymbol,
+        [string]$CodeSymbol
+    )
+
+    $aliases = New-Object System.Collections.Generic.List[string]
+
+    function Add-Alias {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value)) { return }
+        if ($aliases -notcontains $Value) {
+            $aliases.Add($Value) | Out-Null
+        }
+    }
+
+    Add-Alias -Value $RegistrySymbol
+
+    if (-not [string]::IsNullOrWhiteSpace($RegistrySymbol)) {
+        $base = $RegistrySymbol.Split('.',2)[0]
+        Add-Alias -Value $base
+    }
+
+    Add-Alias -Value $CodeSymbol
+
+    return @($aliases)
 }
 
 function New-RolloverGuardState {
@@ -503,12 +555,17 @@ $coord = Get-Content -LiteralPath $coordPath -Raw -Encoding UTF8 | ConvertFrom-J
 $matrix = Get-Content -LiteralPath $matrixPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $capital = Get-Content -LiteralPath $capitalPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $rollover = Get-Content -LiteralPath $rolloverPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$runtimeProfileConfig = $null
+if ($coord.PSObject.Properties.Name -contains "runtime_profiles") {
+    $runtimeProfileConfig = $coord.runtime_profiles.PSObject.Properties[$RuntimeProfile]
+}
+$effectiveRules = Merge-CoordinatorRules -BaseRules $coord.rules -OverrideRules $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value.rules_override } else { $null })
 $fleetAssessment = Get-FleetAssessment -CommonRoot $CommonFilesRoot
 
-$reentryRecoverFraction = [double]$coord.rules.reentry_recover_fraction
-$defensiveFamilyLossFraction = [double]$coord.rules.defensive_family_loss_fraction
-$reentryProbationRiskCap = [double]$coord.rules.reentry_probation_risk_cap
-$reserveTakeoverRiskCap = [double]$coord.rules.reserve_takeover_risk_cap
+$reentryRecoverFraction = [double]$effectiveRules.reentry_recover_fraction
+$defensiveFamilyLossFraction = [double]$effectiveRules.defensive_family_loss_fraction
+$reentryProbationRiskCap = [double]$effectiveRules.reentry_probation_risk_cap
+$reserveTakeoverRiskCap = [double]$effectiveRules.reserve_takeover_risk_cap
 $familyReentryThreshold = [double]$capital.live.family_hard_daily_loss_pct * $reentryRecoverFraction
 $fleetReentryThreshold = [double]$capital.live.account_hard_daily_loss_pct * $reentryRecoverFraction
 $familyDefensiveThreshold = [double]$capital.live.family_hard_daily_loss_pct * $defensiveFamilyLossFraction
@@ -526,12 +583,14 @@ $nowMinutes = ($nowPl.Hour * 60 + $nowPl.Minute)
 $symbolEntries = @()
 foreach ($item in $registry.symbols) {
     $codeSymbol = Get-NormalizedSymbolCode -RegistryItem $item
+    $registrySymbol = [string]$item.symbol
     $sessionProfile = [string]$item.session_profile
     $symbolEntries += [pscustomobject]@{
-        registry_symbol = [string]$item.symbol
+        registry_symbol = $registrySymbol
         code_symbol = $codeSymbol
         session_profile = $sessionProfile
         domain = (Resolve-DomainFromSessionProfile -SessionProfile $sessionProfile)
+        state_dir_aliases = @(Get-StateDirAliases -RegistrySymbol $registrySymbol -CodeSymbol $codeSymbol)
     }
 }
 
@@ -551,7 +610,7 @@ foreach ($domain in $coord.domains) {
         reserve_domains = @()
         active_runtime = [bool]$domain.active_runtime
         manual_override = [string]$domain.manual_override
-        requested_mode = [string]$coord.rules.sleep_requested_mode
+        requested_mode = [string]$effectiveRules.sleep_requested_mode
         reason_code = "DOMAIN_SLEEP"
         requested_mode_source = "WINDOW"
         family_paper_lock = $false
@@ -773,7 +832,7 @@ foreach ($domainName in @($domainStates.Keys)) {
         -State $state `
         -ActiveRuntime ([bool]$state.active_runtime) `
         -ManualOverride ([string]$state.manual_override) `
-        -Rules $coord.rules `
+        -Rules $effectiveRules `
         -LiveDefensiveRiskCap $liveDefensiveRiskCap `
         -ReentryProbationRiskCap $reentryProbationRiskCap `
         -ReserveTakeoverRiskCap $reserveTakeoverRiskCap
@@ -797,6 +856,7 @@ Ensure-Dir $domainsDir
 $globalPath = Join-Path $globalDir "session_capital_coordinator.csv"
 $globalLines = @(
     "ts_utc`t$((Get-Date).ToUniversalTime().ToString('o'))"
+    "runtime_profile`t$RuntimeProfile"
     "operator_time_pl`t$($nowPl.ToString('yyyy-MM-dd HH:mm'))"
     "operator_time_ny`t$($nowNy.ToString('yyyy-MM-dd HH:mm'))"
     "is_dst`t$([int]$isDst)"
@@ -895,38 +955,72 @@ foreach ($entry in $symbolEntries) {
     $codeSymbol = [string]$entry.code_symbol
     if ([string]::IsNullOrWhiteSpace($codeSymbol)) { continue }
 
-    $symbolDir = Join-Path $stateRoot $codeSymbol
-    Ensure-Dir $symbolDir
-    $runtimePath = Join-Path $symbolDir "runtime_control.csv"
-    $backupRuntimePath = Join-Path $symbolDir "runtime_control_pre_rollover.csv"
+    $aliasDirs = @([string[]]$entry.state_dir_aliases | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($aliasDirs.Count -eq 0) {
+        $aliasDirs = @($codeSymbol)
+    }
+
+    $runtimeTargets = @()
+    foreach ($aliasDir in $aliasDirs) {
+        $symbolDir = Join-Path $stateRoot $aliasDir
+        Ensure-Dir $symbolDir
+        $runtimeTargets += [pscustomobject]@{
+            alias = $aliasDir
+            runtime_path = (Join-Path $symbolDir "runtime_control.csv")
+            backup_runtime_path = (Join-Path $symbolDir "runtime_control_pre_rollover.csv")
+        }
+    }
+
+    $primaryTarget = @($runtimeTargets | Where-Object { Test-Path -LiteralPath $_.runtime_path } | Select-Object -First 1)
+    if ($primaryTarget.Count -eq 0) {
+        $primaryTarget = @($runtimeTargets | Select-Object -First 1)
+    }
+
     $guard = $symbolRolloverStates[$codeSymbol]
-    $existing = Read-KeyValueStateFile -Path $runtimePath
+    $existing = Read-KeyValueStateFile -Path $primaryTarget[0].runtime_path
     $existingReason = Get-MapString -Map $existing -Key "reason_code" -Default ""
     $existingRequestedMode = Get-MapString -Map $existing -Key "requested_mode" -Default ""
     $existingForceFlatten = Get-MapBool -Map $existing -Key "force_flatten"
 
+    $rolloverLines = @(
+        "requested_mode`tCLOSE_ONLY"
+        "reason_code`t$($guard.reason_code)"
+        "risk_cap`t1.0000"
+        "force_flatten`t$([int][bool]$guard.force_flatten)"
+    )
+
     if ($guard.block) {
-        if ($existing.Count -gt 0 -and -not $existingReason.StartsWith("ROLLOVER_") -and -not (Test-Path -LiteralPath $backupRuntimePath)) {
-            Copy-Item -LiteralPath $runtimePath -Destination $backupRuntimePath -Force
+        foreach ($target in $runtimeTargets) {
+            $existingTarget = Read-KeyValueStateFile -Path $target.runtime_path
+            $existingTargetReason = Get-MapString -Map $existingTarget -Key "reason_code" -Default ""
+            if (
+                $existingTarget.Count -gt 0 -and
+                -not $existingTargetReason.StartsWith("ROLLOVER_") -and
+                -not (Test-Path -LiteralPath $target.backup_runtime_path)
+            ) {
+                Copy-Item -LiteralPath $target.runtime_path -Destination $target.backup_runtime_path -Force
+            }
+            $rolloverLines | Set-Content -LiteralPath $target.runtime_path -Encoding UTF8
         }
-        @(
-            "requested_mode`tCLOSE_ONLY"
-            "reason_code`t$($guard.reason_code)"
-            "risk_cap`t1.0000"
-            "force_flatten`t$([int][bool]$guard.force_flatten)"
-        ) | Set-Content -LiteralPath $runtimePath -Encoding UTF8
     }
-    elseif (Test-Path -LiteralPath $backupRuntimePath) {
-        Copy-Item -LiteralPath $backupRuntimePath -Destination $runtimePath -Force
-        Remove-Item -LiteralPath $backupRuntimePath -Force -ErrorAction SilentlyContinue
-    }
-    elseif ($existing.Count -gt 0 -and $existingReason.StartsWith("ROLLOVER_")) {
-        Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
+    else {
+        foreach ($target in $runtimeTargets) {
+            $existingTarget = Read-KeyValueStateFile -Path $target.runtime_path
+            $existingTargetReason = Get-MapString -Map $existingTarget -Key "reason_code" -Default ""
+            if (Test-Path -LiteralPath $target.backup_runtime_path) {
+                Copy-Item -LiteralPath $target.backup_runtime_path -Destination $target.runtime_path -Force
+                Remove-Item -LiteralPath $target.backup_runtime_path -Force -ErrorAction SilentlyContinue
+            }
+            elseif ($existingTarget.Count -gt 0 -and $existingTargetReason.StartsWith("ROLLOVER_")) {
+                Remove-Item -LiteralPath $target.runtime_path -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     $symbolReports += [pscustomobject]@{
         code_symbol = $codeSymbol
         registry_symbol = [string]$entry.registry_symbol
+        state_dir_aliases = @($aliasDirs)
         domain = [string]$entry.domain
         session_profile = [string]$entry.session_profile
         rollover_block = [bool]$guard.block
@@ -934,8 +1028,10 @@ foreach ($entry in $symbolEntries) {
         reason_code = [string]$guard.reason_code
         source = [string]$guard.source
         matched_events = @($guard.matched_events)
-        runtime_control_path = $runtimePath
-        backup_runtime_control_path = $backupRuntimePath
+        runtime_control_path = $primaryTarget[0].runtime_path
+        runtime_control_paths = @($runtimeTargets | ForEach-Object { $_.runtime_path })
+        backup_runtime_control_path = $primaryTarget[0].backup_runtime_path
+        backup_runtime_control_paths = @($runtimeTargets | ForEach-Object { $_.backup_runtime_path })
         previous_requested_mode = $existingRequestedMode
         previous_reason_code = $existingReason
         previous_force_flatten = [bool]$existingForceFlatten
@@ -946,7 +1042,7 @@ $reportDir = Join-Path $projectPath "EVIDENCE"
 Ensure-Dir $reportDir
 $reportPath = Join-Path $reportDir ("APPLY_SESSION_CAPITAL_COORDINATOR_{0}.json" -f ((Get-Date).ToUniversalTime().ToString("yyyyMMdd_HHmmss")))
 $result = [ordered]@{
-    schema_version = "1.3"
+    schema_version = "1.4"
     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
     project_root = $projectPath
     common_files_root = $CommonFilesRoot

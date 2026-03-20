@@ -66,6 +66,7 @@
     "LIVE_DEFENSIVE",
     "PAPER_ACTIVE",
     "PAPER_SHADOW",
+    "RESERVE_RESEARCH",
     "REENTRY_PROBATION"
   ],
   "architecture_rules": [

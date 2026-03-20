@@ -25,6 +25,20 @@ function Read-KeyValueTsv {
     return $map
 }
 
+function Resolve-DomainFromSessionProfile {
+    param([string]$SessionProfile)
+    switch ([string]$SessionProfile) {
+        "FX_MAIN" { return "FX" }
+        "FX_ASIA" { return "FX" }
+        "FX_CROSS" { return "FX" }
+        "METALS_SPOT_PM" { return "METALS" }
+        "METALS_FUTURES" { return "METALS" }
+        "INDEX_EU" { return "INDICES" }
+        "INDEX_US" { return "INDICES" }
+        default { return "" }
+    }
+}
+
 function Parse-InvariantDouble {
     param([string]$Value)
 
@@ -59,9 +73,86 @@ function Resolve-SymbolStateKey {
     return $upper
 }
 
+function Resolve-SymbolStateDirName {
+    param(
+        $RegistryItem,
+        [string]$CommonFilesRoot
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if ($RegistryItem.PSObject.Properties.Name -contains "symbol" -and -not [string]::IsNullOrWhiteSpace([string]$RegistryItem.symbol)) {
+        $symbol = [string]$RegistryItem.symbol
+        [void]$candidates.Add($symbol)
+        [void]$candidates.Add(($symbol -replace '\.pro$',''))
+    }
+
+    $stateKey = Resolve-SymbolStateKey $RegistryItem
+    if (-not [string]::IsNullOrWhiteSpace($stateKey)) {
+        [void]$candidates.Add($stateKey)
+    }
+
+    $unique = @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    foreach ($candidate in $unique) {
+        $runtimePath = Join-Path $CommonFilesRoot ("state\{0}\runtime_control.csv" -f $candidate)
+        if (Test-Path -LiteralPath $runtimePath) {
+            return $candidate
+        }
+    }
+
+    foreach ($candidate in $unique) {
+        $dirPath = Join-Path $CommonFilesRoot ("state\{0}" -f $candidate)
+        if (Test-Path -LiteralPath $dirPath) {
+            return $candidate
+        }
+    }
+
+    return $stateKey
+}
+
 function Add-Issue {
     param([System.Collections.Generic.List[string]]$Issues,[string]$Message)
     $Issues.Add($Message) | Out-Null
+}
+
+function Merge-RequestedModes {
+    param(
+        $SymbolRuntime,
+        $DomainRuntime
+    )
+
+    $symbolMode = [string]$SymbolRuntime["requested_mode"]
+    $domainMode = [string]$DomainRuntime["requested_mode"]
+    $symbolModeUpper = $symbolMode.ToUpperInvariant()
+    $domainModeUpper = $domainMode.ToUpperInvariant()
+
+    if ($domainModeUpper -eq "HALT") {
+        return [pscustomobject]@{ requested_mode = "HALT"; source = "DOMAIN"; reason_code = [string]$DomainRuntime["reason_code"] }
+    }
+    if ($symbolModeUpper -eq "HALT") {
+        return [pscustomobject]@{ requested_mode = "HALT"; source = "SYMBOL"; reason_code = [string]$SymbolRuntime["reason_code"] }
+    }
+    if ($domainModeUpper -eq "PAPER_ONLY" -and $symbolModeUpper -ne "HALT") {
+        return [pscustomobject]@{ requested_mode = "PAPER_ONLY"; source = "DOMAIN"; reason_code = [string]$DomainRuntime["reason_code"] }
+    }
+    if ($symbolModeUpper -eq "PAPER_ONLY") {
+        return [pscustomobject]@{ requested_mode = "PAPER_ONLY"; source = "SYMBOL"; reason_code = [string]$SymbolRuntime["reason_code"] }
+    }
+    if ($domainModeUpper -eq "CLOSE_ONLY" -and $symbolModeUpper -ne "HALT" -and $symbolModeUpper -ne "PAPER_ONLY") {
+        return [pscustomobject]@{ requested_mode = "CLOSE_ONLY"; source = "DOMAIN"; reason_code = [string]$DomainRuntime["reason_code"] }
+    }
+    if ($symbolModeUpper -eq "CLOSE_ONLY") {
+        return [pscustomobject]@{ requested_mode = "CLOSE_ONLY"; source = "SYMBOL"; reason_code = [string]$SymbolRuntime["reason_code"] }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$symbolMode)) {
+        return [pscustomobject]@{ requested_mode = "RUN"; source = "SYMBOL"; reason_code = [string]$SymbolRuntime["reason_code"] }
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$domainMode)) {
+        return [pscustomobject]@{ requested_mode = "RUN"; source = "DOMAIN"; reason_code = [string]$DomainRuntime["reason_code"] }
+    }
+
+    return [pscustomobject]@{ requested_mode = "RUN"; source = "NONE"; reason_code = "" }
 }
 
 $issues = New-Object System.Collections.Generic.List[string]
@@ -89,6 +180,7 @@ $expectedStates = @(
     "LIVE_DEFENSIVE",
     "PAPER_ACTIVE",
     "PAPER_SHADOW",
+    "RESERVE_RESEARCH",
     "REENTRY_PROBATION"
 )
 foreach ($expected in $expectedStates) {
@@ -230,31 +322,50 @@ if ($runDomains.Count -gt 1) {
 
 foreach ($item in @($registry.symbols)) {
     $symbol = [string]$item.symbol
-    $symbolStateKey = Resolve-SymbolStateKey $item
+    $symbolStateKey = Resolve-SymbolStateDirName -RegistryItem $item -CommonFilesRoot $CommonFilesRoot
     $sessionProfile = [string]$item.session_profile
+    $domain = Resolve-DomainFromSessionProfile -SessionProfile $sessionProfile
     $symbolStateDir = Join-Path $CommonFilesRoot ("state\{0}" -f $symbolStateKey)
     $runtimeControlPath = Join-Path $symbolStateDir "runtime_control.csv"
-    if (-not (Test-Path -LiteralPath $runtimeControlPath)) {
-        if (-not (Test-Path -LiteralPath $symbolStateDir)) {
-            $warnings.Add("Symbol '$symbol' has no runtime state directory yet; runtime may not be attached on chart.") | Out-Null
-        }
-        else {
-            Add-Issue $issues "Missing symbol runtime control for '$symbol'."
-        }
+    $domainRuntimeControlPath = if ([string]::IsNullOrWhiteSpace($domain)) {
+        ""
+    }
+    else {
+        Join-Path $CommonFilesRoot ("state\_domains\{0}\runtime_control.csv" -f $domain)
+    }
+
+    $symbolRuntime = @{}
+    if (Test-Path -LiteralPath $runtimeControlPath) {
+        $symbolRuntime = Read-KeyValueTsv -Path $runtimeControlPath
+    }
+    elseif (-not (Test-Path -LiteralPath $symbolStateDir)) {
+        $warnings.Add("Symbol '$symbol' has no runtime state directory yet; runtime may not be attached on chart.") | Out-Null
+    }
+
+    $domainRuntime = @{}
+    if (-not [string]::IsNullOrWhiteSpace($domainRuntimeControlPath) -and (Test-Path -LiteralPath $domainRuntimeControlPath)) {
+        $domainRuntime = Read-KeyValueTsv -Path $domainRuntimeControlPath
+    }
+
+    if ($symbolRuntime.Count -eq 0 -and $domainRuntime.Count -eq 0) {
+        Add-Issue $issues "Missing both symbol and domain runtime control for '$symbol'."
         continue
     }
 
-    $runtime = Read-KeyValueTsv -Path $runtimeControlPath
-    $requestedMode = [string]$runtime["requested_mode"]
+    $effectiveRuntime = Merge-RequestedModes -SymbolRuntime $symbolRuntime -DomainRuntime $domainRuntime
+    $requestedMode = [string]$effectiveRuntime.requested_mode
     if (-not $allowedRequestedModes.ContainsKey($requestedMode)) {
         Add-Issue $issues "Symbol '$symbol' uses invalid requested_mode '$requestedMode'."
     }
 
     $symbolReports += [pscustomobject]@{
         symbol = $symbol
+        state_alias = $symbolStateKey
+        domain = $domain
         session_profile = $sessionProfile
         requested_mode = $requestedMode
-        reason_code = [string]$runtime["reason_code"]
+        requested_mode_source = [string]$effectiveRuntime.source
+        reason_code = [string]$effectiveRuntime.reason_code
     }
 }
 

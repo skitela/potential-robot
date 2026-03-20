@@ -23,6 +23,38 @@
     "reentry_probation_risk_cap": 0.35,
     "reserve_takeover_risk_cap": 0.50
   },
+  "runtime_profiles": {
+    "DEFAULT": {
+      "notes": [
+        "Legacy-safe profile that preserves current coordinator behaviour until an explicit runtime split is requested."
+      ],
+      "rules_override": {}
+    },
+    "LAPTOP_RESEARCH": {
+      "notes": [
+        "Laptop research remains conservative by default; broader research orchestration is handled outside the domain runtime guard."
+      ],
+      "rules_override": {
+        "sleep_requested_mode": "CLOSE_ONLY",
+        "prewarm_requested_mode": "CLOSE_ONLY",
+        "observation_requested_mode": "CLOSE_ONLY",
+        "trade_requested_mode": "RUN",
+        "paper_requested_mode": "PAPER_ONLY"
+      }
+    },
+    "PAPER_LIVE": {
+      "notes": [
+        "Paper/live uses the same window discipline as live: only the active family trades, the rest stays in paper collection mode outside its window."
+      ],
+      "rules_override": {
+        "sleep_requested_mode": "PAPER_ONLY",
+        "prewarm_requested_mode": "PAPER_ONLY",
+        "observation_requested_mode": "PAPER_ONLY",
+        "trade_requested_mode": "RUN",
+        "paper_requested_mode": "PAPER_ONLY"
+      }
+    }
+  },
   "domains": [
     {
       "domain": "FX",

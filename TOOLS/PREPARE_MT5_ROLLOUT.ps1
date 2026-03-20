@@ -91,6 +91,10 @@ $steps += Invoke-Step -Name "generate_family_operator_report" -Action {
     & (Join-Path $ProjectRoot "TOOLS\GENERATE_FAMILY_OPERATOR_REPORT.ps1") | Out-Null
 }
 
+$steps += Invoke-Step -Name "apply_paper_live_runtime" -Action {
+    & (Join-Path $ProjectRoot "TOOLS\APPLY_SESSION_CAPITAL_COORDINATOR.ps1") -RuntimeProfile PAPER_LIVE | Out-Null
+}
+
 $steps += Invoke-Step -Name "generate_runtime_control_summary" -Action {
     & (Join-Path $ProjectRoot "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1") | Out-Null
 }
