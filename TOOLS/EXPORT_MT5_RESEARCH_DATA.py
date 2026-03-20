@@ -83,7 +83,10 @@ def export_frame(df: pd.DataFrame, stem: str, output_dir: Path) -> dict:
 
 
 def export_parquet_only(df: pd.DataFrame, stem: str, output_dir: Path) -> dict:
+    csv_path = output_dir / f"{stem}.csv"
     parquet_path = output_dir / f"{stem}.parquet"
+    if csv_path.exists():
+        csv_path.unlink()
     if df.empty:
         pd.DataFrame().to_parquet(parquet_path, index=False)
     else:
@@ -175,15 +178,49 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
 
     csv_files = sorted(qdm_export_root.glob("MB_*.csv"))
     if not csv_files:
-        pd.DataFrame().to_parquet(combined_parquet_path, index=False)
-        empty_meta = {
-            "rows": 0,
+        cached_entries = []
+        cached_parquet_paths = []
+        for export_name, entry in previous_files.items():
+            parquet_path_raw = entry.get("minute_parquet_path")
+            if not parquet_path_raw:
+                continue
+            parquet_path = Path(parquet_path_raw)
+            if not parquet_path.exists():
+                continue
+            cached_entries.append(entry)
+            cached_parquet_paths.append(str(parquet_path))
+
+        if not cached_parquet_paths:
+            pd.DataFrame().to_parquet(combined_parquet_path, index=False)
+            empty_meta = {
+                "rows": 0,
+                "csv_path": None,
+                "parquet_path": str(combined_parquet_path),
+                "file_count": 0,
+                "cache_manifest_path": str(cache_manifest_path),
+            }
+            return empty_meta, inventory
+
+        inventory = pd.DataFrame(cached_entries)
+        with duckdb.connect() as con:
+            file_list_sql = "[" + ", ".join(f"'{sql_quote(path)}'" for path in cached_parquet_paths) + "]"
+            con.execute(
+                f"""
+                COPY (
+                    SELECT * FROM read_parquet({file_list_sql})
+                ) TO '{sql_quote(str(combined_parquet_path))}' (FORMAT PARQUET, COMPRESSION ZSTD)
+                """
+            )
+            combined_rows = int(con.execute(f"SELECT COUNT(*) FROM read_parquet({file_list_sql})").fetchone()[0])
+
+        metadata = {
+            "rows": combined_rows,
             "csv_path": None,
             "parquet_path": str(combined_parquet_path),
-            "file_count": 0,
+            "file_count": len(cached_entries),
             "cache_manifest_path": str(cache_manifest_path),
         }
-        return empty_meta, inventory
+        return metadata, inventory
 
     with duckdb.connect() as con:
         for csv_path in csv_files:
@@ -333,10 +370,10 @@ def main() -> int:
     manifest["datasets"]["runtime_state"] = export_frame(runtime_state, "runtime_state_latest", datasets_dir)
 
     decision_events = collect_log_table(common_root, "decision_events.csv")
-    manifest["datasets"]["decision_events"] = export_frame(decision_events, "decision_events_latest", datasets_dir)
+    manifest["datasets"]["decision_events"] = export_parquet_only(decision_events, "decision_events_latest", datasets_dir)
 
     candidate_signals = collect_log_table(common_root, "candidate_signals.csv")
-    manifest["datasets"]["candidate_signals"] = export_frame(candidate_signals, "candidate_signals_latest", datasets_dir)
+    manifest["datasets"]["candidate_signals"] = export_parquet_only(candidate_signals, "candidate_signals_latest", datasets_dir)
 
     tuning_deckhand = collect_log_table(common_root, "tuning_deckhand.csv")
     manifest["datasets"]["tuning_deckhand"] = export_frame(tuning_deckhand, "tuning_deckhand_latest", datasets_dir)
