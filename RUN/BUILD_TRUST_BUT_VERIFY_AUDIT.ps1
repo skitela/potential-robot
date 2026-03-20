@@ -144,7 +144,16 @@ if ($null -ne $mt5Queue) {
 
     if ($null -ne $mt5Status) {
         $queueSymbol = [string]$mt5Queue.current_symbol
+        $queueState = [string]$mt5Queue.state
         $testerSymbol = [string]$mt5Status.current_symbol
+        $testerState = [string]$mt5Status.state
+
+        if ($testerState -eq "running" -and
+            $queueState -eq "running" -and
+            [string]::IsNullOrWhiteSpace($queueSymbol)) {
+            Add-Finding -Findings $findings -Severity "medium" -Component "mt5_queue" -Message "MT5 retest queue claims running but current_symbol is blank while tester is active."
+        }
+
         if (-not [string]::IsNullOrWhiteSpace($queueSymbol) -and
             -not [string]::IsNullOrWhiteSpace($testerSymbol) -and
             $freshness.mt5_retest_queue.fresh -and

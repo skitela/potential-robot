@@ -50,6 +50,21 @@ function Resolve-TerminalLogPath {
         return $PreferredPath
     }
 
+    $todayToken = Get-Date -Format "yyyyMMdd"
+    $todayLog = Join-Path $LogDir ($todayToken + ".log")
+    if (Test-Path -LiteralPath $todayLog) {
+        return $todayLog
+    }
+
+    $latestDated = Get-ChildItem -LiteralPath $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.BaseName -match '^\d{8}$' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($latestDated) {
+        return $latestDated.FullName
+    }
+
     $latest = Get-ChildItem -LiteralPath $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1

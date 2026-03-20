@@ -5,9 +5,35 @@ $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("=== LOCAL OPERATOR SUMMARY ===")
 $lines.Add("")
 
-$secondaryMt5LogPath = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\logs\20260319.log"
+$secondaryMt5LogDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\logs"
 $mt5TesterStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_tester_status_latest.json"
 $mt5RetestQueuePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_retest_queue_latest.json"
+
+function Resolve-SecondaryMt5LogPath {
+    param([string]$LogDir)
+
+    if (-not (Test-Path -LiteralPath $LogDir)) {
+        return $null
+    }
+
+    $todayLog = Join-Path $LogDir ((Get-Date -Format "yyyyMMdd") + ".log")
+    if (Test-Path -LiteralPath $todayLog) {
+        return $todayLog
+    }
+
+    $latestDated = Get-ChildItem -LiteralPath $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.BaseName -match '^\d{8}$' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($latestDated) {
+        return $latestDated.FullName
+    }
+
+    return $null
+}
+
+$secondaryMt5LogPath = Resolve-SecondaryMt5LogPath -LogDir $secondaryMt5LogDir
 
 $fxProcesses = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -in @("terminal64", "metatester64", "qdmcli", "python") })
 if ($fxProcesses.Count -gt 0) {

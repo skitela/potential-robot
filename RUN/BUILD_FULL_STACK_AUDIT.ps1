@@ -205,8 +205,16 @@ $mt5QueueFresh = @($freshness | Where-Object { $_.label -eq "mt5_retest_queue" }
 $mt5QueueConsistency = $true
 if ($mt5QueueFresh -and $null -ne $mt5TesterStatus -and $null -ne $mt5RetestQueue) {
     $queueSymbol = [string]$mt5RetestQueue.current_symbol
+    $queueState = [string]$mt5RetestQueue.state
     $testerSymbol = [string]$mt5TesterStatus.current_symbol
-    if (-not [string]::IsNullOrWhiteSpace($queueSymbol) -and
+    $testerState = [string]$mt5TesterStatus.state
+
+    if ($testerState -eq "running" -and
+        $queueState -eq "running" -and
+        [string]::IsNullOrWhiteSpace($queueSymbol)) {
+        $mt5QueueConsistency = $false
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($queueSymbol) -and
         -not [string]::IsNullOrWhiteSpace($testerSymbol) -and
         $queueSymbol -ne $testerSymbol) {
         $mt5QueueConsistency = $false
