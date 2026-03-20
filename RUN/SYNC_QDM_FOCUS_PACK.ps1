@@ -4,7 +4,9 @@ param(
     [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_focus_pack.csv",
     [string]$ResearchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe",
     [switch]$StopExistingQdm = $true,
-    [int]$IdleTimeoutSeconds = 14400
+    [int]$IdleTimeoutSeconds = 14400,
+    [int]$MinRefreshHours = 24,
+    [switch]$ForceUpdate
 )
 
 Set-StrictMode -Version Latest
@@ -96,12 +98,36 @@ conn.close()
     return @($symbols)
 }
 
+function Get-QdmHistoryCandidates {
+    param(
+        [string]$HistoryRoot,
+        [string]$Symbol,
+        [string]$Datatype
+    )
+
+    $symbolDir = Join-Path $HistoryRoot $Symbol
+    if (-not (Test-Path -LiteralPath $symbolDir)) {
+        return @()
+    }
+
+    $baseName = "{0}_{1}.dat" -f $Symbol, $Datatype
+    return @(
+        Get-ChildItem -LiteralPath $symbolDir -Force -ErrorAction SilentlyContinue |
+            Where-Object {
+                -not $_.PSIsContainer -and
+                ($_.Name -eq $baseName -or $_.Name -eq ($baseName + ".copy"))
+            } |
+            Sort-Object LastWriteTime -Descending
+    )
+}
+
 if ($StopExistingQdm) {
     Stop-QdmProcesses
     Wait-QdmIdle -TimeoutSeconds 60
 }
 
 $dataDbPath = Join-Path $QdmRoot "user\data\data.db"
+$historyRoot = Join-Path $QdmRoot "user\data\History"
 $existingSymbols = Get-QdmExistingSymbols -DatabasePath $dataDbPath -PythonExe $ResearchPython
 $rows = Import-Csv -LiteralPath $ProfilePath | Where-Object { $_.enabled -eq "1" }
 foreach ($row in $rows) {
@@ -119,8 +145,22 @@ foreach ($row in $rows) {
         $existingSymbols += $symbol
     }
 
-    # QDM CLI currently pulls full source history on update for these symbols,
-    # so date windows are applied later on export, not during the initial sync.
+    $historyCandidates = Get-QdmHistoryCandidates -HistoryRoot $historyRoot -Symbol $symbol -Datatype $datatype
+    if (-not $ForceUpdate -and $historyCandidates.Count -gt 0) {
+        $latestHistory = $historyCandidates[0]
+        $hoursSinceRefresh = ((Get-Date) - $latestHistory.LastWriteTime).TotalHours
+        if ($hoursSinceRefresh -lt $MinRefreshHours) {
+            Write-Host ("Skipping historical update: {0} (recent history file {1}, age {2:N1}h, threshold {3}h)" -f
+                $symbol,
+                $latestHistory.Name,
+                $hoursSinceRefresh,
+                $MinRefreshHours)
+            continue
+        }
+    }
+
+    # QDM CLI currently pulls broad source history on update for these symbols,
+    # so we throttle updates here and keep fine date windows only on export.
     Write-Host "Updating historical data: $symbol"
     & $qdmCli -data action=update "symbols=$symbol"
     Wait-QdmIdle -TimeoutSeconds $IdleTimeoutSeconds

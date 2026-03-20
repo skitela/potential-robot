@@ -1,7 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$LogRoot = "C:\TRADING_DATA\QDM\logs",
-    [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_weakest_pack.csv"
+    [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_weakest_pack.csv",
+    [int]$MinStartGapMinutes = 360
 )
 
 Set-StrictMode -Version Latest
@@ -22,6 +23,21 @@ if (-not (Test-Path -LiteralPath $ProfilePath)) {
 }
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
+
+$latestWeakestLog = Get-ChildItem -LiteralPath $LogRoot -Filter "qdm_weakest_sync_*.log" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if ($latestWeakestLog) {
+    $ageMinutes = ((Get-Date) - $latestWeakestLog.LastWriteTime).TotalMinutes
+    if ($ageMinutes -lt $MinStartGapMinutes) {
+        Write-Host ("Skipping QDM weakest sync start: latest run {0} is only {1:N1} minutes old (threshold {2} minutes)." -f
+            $latestWeakestLog.Name,
+            $ageMinutes,
+            $MinStartGapMinutes)
+        return
+    }
+}
 
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logPath = Join-Path $LogRoot "qdm_weakest_sync_$timestamp.log"
