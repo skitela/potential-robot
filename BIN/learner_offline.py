@@ -29,9 +29,11 @@ sys.dont_write_bytecode = True
 try:
     from .runtime_root import get_runtime_root
     from .unified_learning_pack import build_unified_learning_pack
+    from .training_scope import load_training_scope, filter_rows_by_scope, scope_summary
 except Exception:  # pragma: no cover
     from runtime_root import get_runtime_root
     from unified_learning_pack import build_unified_learning_pack
+    from training_scope import load_training_scope, filter_rows_by_scope, scope_summary
 
 from typing import Any, Dict, List, Optional, Tuple
 try:
@@ -1495,9 +1497,14 @@ def run_once(root: Path) -> int:
     since_iso = since.isoformat().replace("+00:00","Z")
 
     rows = fetch_closed_events(db_dir / "decision_events.sqlite", since_iso_utc=since_iso, limit=row_limit)
+    training_scope = load_training_scope(root)
+    rows_before_scope = len(rows)
+    rows = filter_rows_by_scope(rows, training_scope, symbol_key="symbol", window_key="window_id")
     meta_advice, report = build_advice(rows, window_days=window_days)
     try:
         meta_advice.setdefault("notes", []).append(f"load_mode={load_mode}")
+        if training_scope.get("enabled"):
+            meta_advice.setdefault("notes", []).append("free_window_tuning_scope=on")
     except Exception as e:
         cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
     report["resource_guard"] = {
@@ -1509,6 +1516,7 @@ def run_once(root: Path) -> int:
         "window_days_effective": int(window_days),
         "row_limit_effective": int(row_limit),
     }
+    report["training_scope"] = scope_summary(training_scope, rows_before=rows_before_scope, rows_after=len(rows))
 
     # Optional handoff from deterministic offline replay analytics.
     # This stage is strictly offline and never touches LIVE execution loop.
@@ -1638,7 +1646,10 @@ def run_once(root: Path) -> int:
     except Exception as e:
         cg.tlog(None, "WARN", "LEARN_EXC", "nonfatal exception swallowed", e)
 
-    logging.info(f"RUN_ONCE | rows={len(rows)} window_days={window_days} syms={len(report.get('syms') or [])}")
+    logging.info(
+        f"RUN_ONCE | rows={len(rows)} scope_rows_before={rows_before_scope} "
+        f"window_days={window_days} syms={len(report.get('syms') or [])}"
+    )
     return 0
 
 def main() -> None:

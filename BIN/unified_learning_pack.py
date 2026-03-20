@@ -11,8 +11,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
     from .runtime_root import get_runtime_root
+    from .training_scope import load_training_scope, symbol_in_scope, window_in_scope
 except Exception:  # pragma: no cover
     from runtime_root import get_runtime_root
+    from training_scope import load_training_scope, symbol_in_scope, window_in_scope
 
 UTC = dt.timezone.utc
 SCHEMA = "oanda_mt5.unified_learning_advice.v1"
@@ -283,9 +285,14 @@ def _source_feedback_payload(root: Path, *, lookback_days: int = 30) -> Dict[str
     except Exception:
         return out
 
+    training_scope = load_training_scope(root)
     for choice_A, window_id, window_phase, strategy_family, pnl_net, topk_json_raw in rows:
         symbol = _symbol_base(choice_A)
         if not symbol:
+            continue
+        if not symbol_in_scope(training_scope, symbol):
+            continue
+        if not window_in_scope(training_scope, symbol, window_id):
             continue
         pnl_val = _safe_float(pnl_net)
         influence = _extract_choice_runtime_influence(topk_json_raw, symbol)
@@ -683,13 +690,20 @@ def build_unified_learning_payload(root: Path, *, lab_data_root: Optional[Path] 
     gonogo = _safe_load_json(gonogo_path)
     progression = _safe_load_json(progression_path)
     source_feedback = _source_feedback_payload(root)
+    training_scope = load_training_scope(root)
+    if isinstance(source_feedback.get("by_symbol"), dict):
+        source_feedback["by_symbol"] = {
+            str(sym): row
+            for sym, row in source_feedback.get("by_symbol", {}).items()
+            if symbol_in_scope(training_scope, sym)
+        }
 
     learner_ranks = _rank_map(learner.get("ranks") if isinstance(learner.get("ranks"), list) else [])
     scout_ranks = _rank_map(scout.get("ranks") if isinstance(scout.get("ranks"), list) else [])
     stage1_eval_map = _extract_stage1_eval_map(stage1_eval)
     counterfactual_map, counterfactual_window_map, counterfactual_window_family_map = _extract_counterfactual_maps(cf_summary)
     stage1_apply_map = _extract_stage1_apply_map(stage1_apply)
-    scoped_symbols = _extract_strategy_scope(strategy, stage1_apply_map)
+    scoped_symbols = [sym for sym in _extract_strategy_scope(strategy, stage1_apply_map) if symbol_in_scope(training_scope, sym)]
     source_feedback_global = source_feedback.get("global") if isinstance(source_feedback.get("global"), dict) else {}
     source_feedback_by_symbol = source_feedback.get("by_symbol") if isinstance(source_feedback.get("by_symbol"), dict) else {}
 
@@ -698,6 +712,7 @@ def build_unified_learning_payload(root: Path, *, lab_data_root: Optional[Path] 
     symbol_universe.update(counterfactual_map.keys())
     symbol_universe.update(learner_ranks.keys())
     symbol_universe.update(scout_ranks.keys())
+    symbol_universe = {sym for sym in symbol_universe if symbol_in_scope(training_scope, sym)}
 
     instrument_rows: List[Dict[str, Any]] = []
     for sym in sorted(symbol_universe):
@@ -775,6 +790,13 @@ def build_unified_learning_payload(root: Path, *, lab_data_root: Optional[Path] 
             "scoped_symbols_n": int(len(scoped_symbols)),
             "instruments_n": int(len(instruments_payload)),
             "source_feedback": source_feedback_global,
+        },
+        "training_scope": {
+            "enabled": bool(training_scope.get("enabled", False)),
+            "allowed_symbols": list(training_scope.get("allowed_symbols") or []),
+            "active_symbols": list(training_scope.get("active_symbols") or []),
+            "secondary_symbols": list(training_scope.get("secondary_symbols") or []),
+            "shadow_only_symbols": list(training_scope.get("shadow_only_symbols") or []),
         },
         "runtime_light": runtime_light,
         "sources": sources,

@@ -31,10 +31,12 @@ try:
     from . import common_guards as cg
     from . import common_contract as cc
     from .unified_learning_pack import read_unified_runtime_advice
+    from .training_scope import load_training_scope, filter_rows_by_scope
 except Exception:  # pragma: no cover
     import common_guards as cg
     import common_contract as cc
     from unified_learning_pack import read_unified_runtime_advice
+    from training_scope import load_training_scope, filter_rows_by_scope
 
 import subprocess
 import re
@@ -1036,6 +1038,7 @@ def read_closed_events(db_path: Path, limit: int = 500) -> List[Dict[str, Any]]:
     try:
         rows = sqlite_fetchall_retry(conn, """
             SELECT event_id, ts_utc, choice_A, signal, verdict_light,
+                   window_id,
                    price_requests_trade, sys_used,
                    outcome_pnl_net, outcome_profit, outcome_commission, outcome_swap, outcome_fee,
                    outcome_closed_ts_utc
@@ -1052,14 +1055,15 @@ def read_closed_events(db_path: Path, limit: int = 500) -> List[Dict[str, Any]]:
                 "choice_A": r[2],
                 "signal": r[3],
                 "verdict_light": r[4],
-                "reqs_trade": int(r[5] or 0),
-                "sys_used": int(r[6] or 0),
-                "pnl_net": float(r[7] or 0.0),
-                "profit": float(r[8] or 0.0),
-                "commission": float(r[9] or 0.0),
-                "swap": float(r[10] or 0.0),
-                "fee": float(r[11] or 0.0),
-                "end_ts_utc": r[12],
+                "window_id": str(r[5] or "").strip().upper(),
+                "reqs_trade": int(r[6] or 0),
+                "sys_used": int(r[7] or 0),
+                "pnl_net": float(r[8] or 0.0),
+                "profit": float(r[9] or 0.0),
+                "commission": float(r[10] or 0.0),
+                "swap": float(r[11] or 0.0),
+                "fee": float(r[12] or 0.0),
+                "end_ts_utc": r[13],
             })
         return out
     finally:
@@ -1280,6 +1284,7 @@ def write_research(meta_dir: Path, research: Dict[str, Any]) -> None:
 def run_once(root: Path) -> int:
     dirs = ensure_dirs(root)
     meta = dirs["META"]; db = dirs["DB"]
+    training_scope = load_training_scope(root)
 
     # Fast-lane tiebreak: respond before heavy IO/DB/RSS
     fast_handled = process_tiebreak_fast(
@@ -1304,7 +1309,7 @@ def run_once(root: Path) -> int:
         if qa_light in {"GREEN", "YELLOW", "RED"}:
             metrics["qa_light"] = qa_light
         verdict = compute_verdict(metrics)
-        ranks = offline.get('ranks') or []
+        ranks = filter_rows_by_scope(offline.get('ranks') or [], training_scope, symbol_key="symbol")
         source_label = str(offline.get("source") or "offline_learner")
 
         _update_cached_stats(ranks=ranks, verdict=verdict, metrics_n=int(metrics.get("n") or 0))
@@ -1345,6 +1350,7 @@ def run_once(root: Path) -> int:
 
     # Read closed events -> Shadow-B append (from SafetyBot DB)
     events = read_closed_events(db / "decision_events.sqlite", limit=500)
+    events = filter_rows_by_scope(events, training_scope, symbol_key="choice_A", window_key="window_id")
 
     # Normalize to Shadow-B schema (PRICE-FREE): derive symbol + edge_fuel, drop noisy fields.
     # This is the actual "mini-learner" input stream.
@@ -1359,6 +1365,7 @@ def run_once(root: Path) -> int:
                 "ts_utc": e.get("ts_utc"),
                 "end_ts_utc": e.get("end_ts_utc"),
                 "symbol": sym,
+                "window_id": str(e.get("window_id") or "").strip().upper(),
                 "verdict_light": e.get("verdict_light"),
                 "reqs_trade": reqs_trade,
                 "pnl_net": pnl_net,
@@ -1373,6 +1380,7 @@ def run_once(root: Path) -> int:
 
     # Compute verdict from shadowb
     recs = read_shadowb(meta / "scout_shadowb.jsonl", limit=300)
+    recs = filter_rows_by_scope(recs, training_scope, symbol_key="symbol", window_key="window_id")
     metrics = build_metrics_from_shadowb(recs)
     verdict = compute_verdict(metrics)
 
@@ -1412,7 +1420,10 @@ def run_once(root: Path) -> int:
         cg.tlog(None, "WARN", "SCUD_EXC", "nonfatal exception swallowed", e)
         logging.warning(f"TIEBREAK_ERR {type(e).__name__}")
 
-    logging.info(f"RUN_ONCE | events={len(events)} appended={appended} verdict={verdict} n={metrics.get('n')}")
+    logging.info(
+        f"RUN_ONCE | events={len(events)} appended={appended} "
+        f"scope_symbols={len(training_scope.get('allowed_symbols') or [])} verdict={verdict} n={metrics.get('n')}"
+    )
     return 0
 
 def main():

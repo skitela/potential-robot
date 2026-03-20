@@ -217,7 +217,16 @@ function Write-JsonAtomic {
     )
     try {
         $json | Set-Content -Path $tmp -Encoding UTF8
-        Move-Item -Force $tmp $Path
+        if (Test-Path -LiteralPath $Path) {
+            try {
+                [System.IO.File]::Replace($tmp, $Path, $null, $true)
+            } catch {
+                [System.IO.File]::Copy($tmp, $Path, $true)
+                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            [System.IO.File]::Move($tmp, $Path)
+        }
     } finally {
         if (Test-Path -LiteralPath $tmp) {
             try { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } catch {}

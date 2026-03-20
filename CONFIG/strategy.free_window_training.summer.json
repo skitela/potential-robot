@@ -126,7 +126,7 @@
   "fixed_tp_points": 500,
   "free_window_training_profile_active": true,
   "free_window_training_profile_schema": "oanda_mt5.free_window_trade_runtime.v1",
-  "free_window_training_profile_season": "winter",
+  "free_window_training_profile_season": "summer",
   "fx_atr_points_max": 220.0,
   "fx_atr_points_min": 70.0,
   "fx_body_range_ratio_min": 0.48,
@@ -522,7 +522,6 @@
     "INDEX"
   ],
   "symbols_to_trade": [
-    "DE30",
     "US500",
     "GOLD"
   ],
@@ -549,9 +548,6 @@
   "trade_window_strict_group_routing": true,
   "trade_window_symbol_filter_enabled": true,
   "trade_window_symbol_intents": {
-    "TRAIN_DE30_AM_WINTER": [
-      "DE30"
-    ],
     "TRAIN_GOLD_PM": [
       "GOLD"
     ],
@@ -560,18 +556,6 @@
     ]
   },
   "trade_windows": {
-    "TRAIN_DE30_AM_WINTER": {
-      "anchor_tz": "Europe/Warsaw",
-      "end_hm": [
-        8,
-        45
-      ],
-      "group": "INDEX",
-      "start_hm": [
-        8,
-        0
-      ]
-    },
     "TRAIN_GOLD_PM": {
       "anchor_tz": "Europe/Warsaw",
       "end_hm": [

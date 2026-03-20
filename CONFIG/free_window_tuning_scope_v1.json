@@ -1,0 +1,63 @@
+{
+  "schema": "oanda_mt5.free_window_tuning_scope.v1",
+  "enabled": true,
+  "intent": "limit old-system learner, unified advisory, and SCUD to instruments that fit free time windows next to the new microbot fleet",
+  "strict_symbol_scope": true,
+  "strict_window_scope": true,
+  "active_symbols": [
+    "DE30.pro",
+    "US500.pro"
+  ],
+  "secondary_symbols": [
+    "GOLD.pro"
+  ],
+  "shadow_only_symbols": [
+    "USDJPY.pro"
+  ],
+  "window_fit_pl": {
+    "DE30.pro": "zima 08:00-08:45 PL",
+    "US500.pro": "20:00-21:59 PL",
+    "GOLD.pro": "20:00-21:59 PL jako drugi, lzejszy eksperyment",
+    "USDJPY.pro": "nocne pasy tylko shadow / obserwacja"
+  },
+  "windows_by_symbol": {
+    "DE30.pro": {
+      "active_window_ids": [
+        "TRAIN_DE30_AM_WINTER"
+      ],
+      "legacy_window_ids": [
+        "INDEX_EU"
+      ]
+    },
+    "US500.pro": {
+      "active_window_ids": [
+        "TRAIN_US500_PM"
+      ],
+      "legacy_window_ids": [
+        "INDEX_US"
+      ]
+    },
+    "GOLD.pro": {
+      "active_window_ids": [
+        "TRAIN_GOLD_PM"
+      ],
+      "legacy_window_ids": [
+        "METAL_PM"
+      ]
+    },
+    "USDJPY.pro": {
+      "active_window_ids": [
+        "TRAIN_USDJPY_SHADOW"
+      ],
+      "legacy_window_ids": [
+        "FX_ASIA"
+      ]
+    }
+  },
+  "notes": [
+    "Nowa flota mikro-botow pozostaje wlascicielem glownych okien scalpingowych.",
+    "Stary system ma sie uczyc tylko na instrumentach, ktore maja sens w wolnych oknach.",
+    "Scope jest lekki i dziala jako kontrakt symbol plus dozwolone okna.",
+    "Legacy windows zostaja tylko jako warm-start dla wiedzy historycznej, a nie jako docelowy rytm runtime."
+  ]
+}
