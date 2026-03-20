@@ -5,13 +5,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $registry = Get-Content -LiteralPath $registryPath -Encoding UTF8 | ConvertFrom-Json
 
 $updated = @()
 foreach ($item in $registry.symbols) {
-    $symbol = [string]$item.symbol
-    $codeSymbol = if ($item.PSObject.Properties.Name -contains "code_symbol" -and -not [string]::IsNullOrWhiteSpace([string]$item.code_symbol)) { [string]$item.code_symbol } else { $symbol }
+    $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $codeSymbol = Get-RegistryCodeSymbol -RegistryItem $item
     $magic = [string]([UInt64]$item.magic)
 
     $expertPath = Join-Path $ProjectRoot ("MQL5\Experts\MicroBots\MicroBot_{0}.mq5" -f $codeSymbol)

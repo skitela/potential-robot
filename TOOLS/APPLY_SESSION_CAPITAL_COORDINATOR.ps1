@@ -8,6 +8,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Ensure-Dir {
     param([string]$Path)
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
@@ -189,6 +192,7 @@ function Get-NormalizedSymbolCode {
 function Get-StateDirAliases {
     param(
         [string]$RegistrySymbol,
+        [string]$BrokerSymbol,
         [string]$CodeSymbol
     )
 
@@ -207,6 +211,12 @@ function Get-StateDirAliases {
     if (-not [string]::IsNullOrWhiteSpace($RegistrySymbol)) {
         $base = $RegistrySymbol.Split('.',2)[0]
         Add-Alias -Value $base
+    }
+
+    Add-Alias -Value $BrokerSymbol
+    if (-not [string]::IsNullOrWhiteSpace($BrokerSymbol)) {
+        $brokerBase = $BrokerSymbol.Split('.',2)[0]
+        Add-Alias -Value $brokerBase
     }
 
     Add-Alias -Value $CodeSymbol
@@ -583,14 +593,16 @@ $nowMinutes = ($nowPl.Hour * 60 + $nowPl.Minute)
 $symbolEntries = @()
 foreach ($item in $registry.symbols) {
     $codeSymbol = Get-NormalizedSymbolCode -RegistryItem $item
-    $registrySymbol = [string]$item.symbol
+    $registrySymbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $item
     $sessionProfile = [string]$item.session_profile
     $symbolEntries += [pscustomobject]@{
         registry_symbol = $registrySymbol
+        broker_symbol = $brokerSymbol
         code_symbol = $codeSymbol
         session_profile = $sessionProfile
         domain = (Resolve-DomainFromSessionProfile -SessionProfile $sessionProfile)
-        state_dir_aliases = @(Get-StateDirAliases -RegistrySymbol $registrySymbol -CodeSymbol $codeSymbol)
+        state_dir_aliases = @(Get-StateDirAliases -RegistrySymbol $registrySymbol -BrokerSymbol $brokerSymbol -CodeSymbol $codeSymbol)
     }
 }
 

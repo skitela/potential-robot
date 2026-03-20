@@ -67,6 +67,34 @@ function Get-TokenStatus {
     }
 }
 
+function Get-TokenStatusFromCandidates {
+    param(
+        [string[]]$TokenPaths,
+        [int]$MaxAgeSec
+    )
+
+    $checkedPaths = New-Object System.Collections.Generic.List[string]
+    foreach ($tokenPath in @($TokenPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        [void]$checkedPaths.Add($tokenPath)
+        $status = Get-TokenStatus -TokenPath $tokenPath -MaxAgeSec $MaxAgeSec
+        if ($status.present) {
+            $status | Add-Member -NotePropertyName "path" -NotePropertyValue $tokenPath -Force
+            $status | Add-Member -NotePropertyName "checked_paths" -NotePropertyValue @($checkedPaths) -Force
+            return $status
+        }
+    }
+
+    return [pscustomobject]@{
+        present = $false
+        valid = $false
+        stale = $true
+        age_sec = $null
+        reason = "TOKEN_MISSING"
+        path = $null
+        checked_paths = @($checkedPaths)
+    }
+}
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $variantPath = Join-Path $ProjectRoot "CONFIG\strategy_variant_registry.json"
 $registry = Get-Content -LiteralPath $registryPath -Encoding UTF8 | ConvertFrom-Json
@@ -86,6 +114,7 @@ $magicSet = New-Object System.Collections.Generic.HashSet[long]
 foreach ($item in $registry.symbols) {
     $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
     $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $item
+    $codeSymbol = Get-RegistryCodeSymbol -RegistryItem $item
     $expert = [string]$item.expert
     $preset = [string]$item.preset
     $registryMagic = [long]$item.magic
@@ -96,8 +125,11 @@ foreach ($item in $registry.symbols) {
     $presetPath = Join-Path $ProjectRoot ("MQL5\Presets\{0}" -f $preset)
     $expertMagic = Get-InputMagicFromExpert -ExpertPath $expertPath
     $presetMagic = Get-InputMagicFromPreset -PresetPath $presetPath
-    $tokenPath = Join-Path (Join-Path $commonRoot $symbol) $tokenName
-    $token = Get-TokenStatus -TokenPath $tokenPath -MaxAgeSec $TokenMaxAgeSec
+    $tokenPaths = @()
+    foreach ($alias in @($symbol, $brokerSymbol, $codeSymbol) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) {
+        $tokenPaths += (Join-Path (Join-Path $commonRoot $alias) $tokenName)
+    }
+    $token = Get-TokenStatusFromCandidates -TokenPaths $tokenPaths -MaxAgeSec $TokenMaxAgeSec
 
     $magicUnique = $magicSet.Add($registryMagic)
     if (-not $magicUnique) {
@@ -127,6 +159,8 @@ foreach ($item in $registry.symbols) {
         token_stale = $token.stale
         token_age_sec = $token.age_sec
         token_reason = $token.reason
+        token_path = $token.path
+        token_paths_checked = @($token.checked_paths)
     }
 }
 

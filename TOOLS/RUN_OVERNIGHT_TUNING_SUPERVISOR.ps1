@@ -12,6 +12,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Read-JsonOrNull {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -283,26 +286,13 @@ function Resolve-StateKey {
         [string]$CommonRoot
     )
 
-    $candidates = @()
-    $symbolProperty = [string]$RegistryItem.symbol
-    if (-not [string]::IsNullOrWhiteSpace($symbolProperty)) {
-        if ($symbolProperty.EndsWith(".pro")) {
-            $candidates += $symbolProperty.Substring(0, $symbolProperty.Length - 4)
-        }
-        $candidates += $symbolProperty
-    }
-
-    $codeSymbolProperty = $RegistryItem.PSObject.Properties["code_symbol"]
-    if ($null -ne $codeSymbolProperty -and -not [string]::IsNullOrWhiteSpace([string]$codeSymbolProperty.Value)) {
-        $candidates += [string]$codeSymbolProperty.Value
-    }
-
-    foreach ($candidate in $candidates | Select-Object -Unique) {
+    foreach ($candidate in @(Get-RegistrySymbolCandidates -RegistryItem $RegistryItem)) {
         if (Test-Path -LiteralPath (Join-Path $CommonRoot ("state\{0}" -f $candidate))) {
             return $candidate
         }
     }
 
+    $candidates = @(Get-RegistrySymbolCandidates -RegistryItem $RegistryItem)
     if ($candidates.Count -gt 0) {
         return $candidates[0]
     }

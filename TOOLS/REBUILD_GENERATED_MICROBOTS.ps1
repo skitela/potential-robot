@@ -7,14 +7,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\\microbots_registry.json"
 $registry = Get-Content -LiteralPath $registryPath -Encoding UTF8 | ConvertFrom-Json
 $scaffoldScript = Join-Path $ProjectRoot "TOOLS\\NEW_MICROBOT_SCAFFOLD.ps1"
 
 $rebuilt = @()
 foreach ($item in $registry.symbols) {
-    $symbol = [string]$item.symbol
-    $codeSymbol = if ($item.PSObject.Properties.Name -contains "code_symbol" -and -not [string]::IsNullOrWhiteSpace([string]$item.code_symbol)) { [string]$item.code_symbol } else { $symbol }
+    $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $codeSymbol = Get-RegistryCodeSymbol -RegistryItem $item
     $status = [string]$item.status
     $magic = [UInt64]$item.magic
     if (-not $IncludeReference -and $status -eq "compiled_verified" -and $symbol -eq "EURUSD") {

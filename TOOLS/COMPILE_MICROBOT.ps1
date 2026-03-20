@@ -9,6 +9,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Get-IniValue {
     param(
         [string[]]$Lines,
@@ -72,11 +75,11 @@ if ($Symbol) {
         throw "Missing registry: $registryPath"
     }
     $registry = Get-Content -Path $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $match = @($registry.symbols | Where-Object { $_.symbol -eq $Symbol } | Select-Object -First 1)
-    if (-not $match -or $match.Count -lt 1) {
+    $match = Find-RegistryEntryByAlias -Registry $registry -Alias $Symbol
+    if ($null -eq $match) {
         throw "Symbol not found in registry: $Symbol"
     }
-    $ExpertName = [string]$match[0].expert
+    $ExpertName = [string]$match.expert
 }
 $expertFile = "$ExpertName.mq5"
 $expertSource = Join-Path $projectPath ("MQL5\\Experts\\MicroBots\\{0}" -f $expertFile)

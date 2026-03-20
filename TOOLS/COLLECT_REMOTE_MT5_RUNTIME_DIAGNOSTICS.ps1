@@ -17,6 +17,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Read-RemoteTargetConfig {
     param(
         [string]$ConfigPath,
@@ -139,14 +142,9 @@ function Get-SymbolAliases {
     $aliases = New-Object System.Collections.Generic.List[string]
 
     foreach ($item in $registry.symbols) {
-        $rawSymbol = [string]$item.symbol
-        if (-not [string]::IsNullOrWhiteSpace($rawSymbol)) {
-            $aliases.Add(($rawSymbol -replace "\.pro$",""))
-        }
-        if ($item.PSObject.Properties.Name -contains "code_symbol") {
-            $codeSymbol = [string]$item.code_symbol
-            if (-not [string]::IsNullOrWhiteSpace($codeSymbol)) {
-                $aliases.Add($codeSymbol)
+        foreach ($candidate in @(Get-RegistrySymbolCandidates -RegistryItem $item)) {
+            if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                $aliases.Add($candidate)
             }
         }
     }

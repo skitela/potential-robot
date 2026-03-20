@@ -7,6 +7,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $evidenceDir = Join-Path $ProjectRoot "EVIDENCE"
 $jsonReport = Join-Path $evidenceDir "runtime_artifact_audit_report.json"
@@ -24,19 +27,9 @@ function Get-AllowedSymbolNames {
     $set = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
 
     foreach ($item in @($RegistrySymbols)) {
-        $rawSymbol = [string]$item.symbol
-        if (-not [string]::IsNullOrWhiteSpace($rawSymbol)) {
-            [void]$set.Add($rawSymbol)
-
-            if ($rawSymbol -match '\.pro$') {
-                [void]$set.Add(($rawSymbol -replace '\.pro$',''))
-            }
-        }
-
-        if ($item.PSObject.Properties.Name -contains "code_symbol") {
-            $codeSymbol = [string]$item.code_symbol
-            if (-not [string]::IsNullOrWhiteSpace($codeSymbol)) {
-                [void]$set.Add($codeSymbol)
+        foreach ($candidate in @(Get-RegistrySymbolCandidates -RegistryItem $item)) {
+            if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                [void]$set.Add($candidate)
             }
         }
     }
