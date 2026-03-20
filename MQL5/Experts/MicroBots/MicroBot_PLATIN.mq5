@@ -16,6 +16,7 @@
 #include "..\\..\\Include\\Core\\MbLatencyProfile.mqh"
 #include "..\\..\\Include\\Core\\MbBrokerProfilePlane.mqh"
 #include "..\\..\\Include\\Core\\MbExecutionSummaryPlane.mqh"
+#include "..\\..\\Include\\Core\\MbTesterTelemetry.mqh"
 #include "..\\..\\Include\\Core\\MbInformationalPolicyPlane.mqh"
 #include "..\\..\\Include\\Core\\MbExecutionPrecheck.mqh"
 #include "..\\..\\Include\\Core\\MbExecutionSend.mqh"
@@ -467,6 +468,26 @@ void OnTimer()
    MbSaveRuntimeState(g_state);
   }
 
+int OnTesterInit()
+  {
+   return MbTesterTelemetryOnInit(g_profile.symbol,(long)InpMagic);
+  }
+
+double OnTester()
+  {
+   return MbTesterTelemetryOnTester(g_profile,g_state,g_market,g_PLATIN_effective_tuning_policy,g_latency);
+  }
+
+void OnTesterPass()
+  {
+   MbTesterTelemetryOnPass(g_profile.symbol,(long)InpMagic);
+  }
+
+void OnTesterDeinit()
+  {
+   MbTesterTelemetryOnDeinit(g_profile.symbol,(long)InpMagic);
+  }
+
 void OnTick()
   {
    ulong tick_t0_us = GetMicrosecondCount();
@@ -908,7 +929,6 @@ void OnTradeTransaction(
          MbAppendHistoricalLearningObservation(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,"LIVE_DEAL_CLOSE");
      }
   }
-
 
 
 

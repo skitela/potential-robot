@@ -382,10 +382,16 @@ $candidateSignalsPath = Join-Path $sandboxRoot ("logs\{0}\candidate_signals.csv"
 $bucketSummaryPath = Join-Path $sandboxRoot ("logs\{0}\learning_bucket_summary_v1.csv" -f $storageAlias)
 $learningObservationsPath = Join-Path $sandboxRoot ("logs\{0}\learning_observations_v2.csv" -f $storageAlias)
 $tuningDeckhandPath = Join-Path $sandboxRoot ("logs\{0}\tuning_deckhand.csv" -f $storageAlias)
+$testerTelemetryPath = Join-Path $sandboxRoot ("state\{0}\tester_telemetry_latest.json" -f $storageAlias)
+$testerTelemetrySessionPath = Join-Path $sandboxRoot ("run\{0}\tester_telemetry_session.json" -f $storageAlias)
 
 $executionSummary = $null
 if (Test-Path -LiteralPath $executionSummaryPath) {
     $executionSummary = Get-Content -LiteralPath $executionSummaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+$testerTelemetry = $null
+if (Test-Path -LiteralPath $testerTelemetryPath) {
+    $testerTelemetry = Get-Content -LiteralPath $testerTelemetryPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
 $runtimeMap = Get-KeyValueCsvMap -Path $runtimeStatePath
@@ -516,6 +522,8 @@ $result = [ordered]@{
     test_duration         = $testDuration
     result_label          = $resultLabel
     restore_profile       = [bool]$RestoreMicrobotsProfile
+    tester_telemetry_path = $(if (Test-Path -LiteralPath $testerTelemetryPath) { $testerTelemetryPath } else { $null })
+    tester_telemetry_session_path = $(if (Test-Path -LiteralPath $testerTelemetrySessionPath) { $testerTelemetrySessionPath } else { $null })
 }
 
 $summary = [ordered]@{
@@ -541,6 +549,13 @@ $summary = [ordered]@{
     learning_sample_count     = [int](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_sample_count' -Default 0)
     learning_win_count        = [int](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_win_count' -Default 0)
     learning_loss_count       = [int](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_loss_count' -Default 0)
+    tester_custom_score       = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'custom_score' -Default 0.0)
+    tester_policy_revision    = [int](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'policy_revision' -Default 0)
+    tester_experiment_status  = [string](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'experiment_status' -Default '')
+    tester_trust_penalty      = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'trust_penalty' -Default 0.0)
+    tester_cost_penalty       = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'cost_penalty' -Default 0.0)
+    tester_execution_penalty  = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'execution_penalty' -Default 0.0)
+    tester_latency_penalty    = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'latency_penalty' -Default 0.0)
     paper_open_rows           = $paperOpenRows
     paper_score_gate_rows     = $paperScoreGateRows
     accepted_evaluated_rows   = $acceptedEvaluatedRows
@@ -551,6 +566,7 @@ $summary = [ordered]@{
     execution_summary_trust_reason = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_reason' -Default '')
     execution_summary_cost_pressure_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'cost_pressure_state' -Default '')
     execution_summary_execution_quality_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'execution_quality_state' -Default '')
+    tester_telemetry          = $testerTelemetry
     top_candidate_reasons     = $topCandidateReasons
     paper_open_by_setup_regime = $paperOpenBySetupRegime
     paper_close_stats         = $paperCloseStats
