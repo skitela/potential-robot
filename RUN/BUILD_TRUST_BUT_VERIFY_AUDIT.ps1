@@ -31,6 +31,53 @@ function Read-JsonFile {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
+function Read-TabFile {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    $map = [ordered]@{}
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        $parts = $line -split "`t", 2
+        if ($parts.Count -lt 2) {
+            continue
+        }
+
+        $map[$parts[0]] = $parts[1]
+    }
+
+    return [pscustomobject]$map
+}
+
+function ConvertTo-BoolLoose {
+    param($Value)
+
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $false
+    }
+
+    return @("1","true","yes","on") -contains $text.ToLowerInvariant()
+}
+
+function ConvertTo-DoubleLoose {
+    param($Value)
+
+    $text = [string]$Value
+    $number = 0.0
+    if ([double]::TryParse($text,[System.Globalization.NumberStyles]::Float,[System.Globalization.CultureInfo]::InvariantCulture,[ref]$number)) {
+        return $number
+    }
+
+    return 0.0
+}
+
 function Get-FileFreshness {
     param(
         [string]$Path,
@@ -78,6 +125,7 @@ $mt5QueuePath = Join-Path $opsRoot "mt5_retest_queue_latest.json"
 $autonomousPath = Join-Path $opsRoot "autonomous_90p_latest.json"
 $mlHintsPath = Join-Path $opsRoot "ml_tuning_hints_latest.json"
 $qdmProfilePath = Join-Path $opsRoot "qdm_weakest_profile_latest.json"
+$stateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state"
 
 $mt5Status = Read-JsonFile -Path $mt5StatusPath
 $mt5Queue = Read-JsonFile -Path $mt5QueuePath
@@ -110,6 +158,7 @@ $processState = [ordered]@{
 }
 
 $findings = New-Object System.Collections.Generic.List[object]
+$tuningSyncIssues = New-Object System.Collections.Generic.List[object]
 
 if ($wrapperState.supervisor -and -not $freshness.autonomous_90p.fresh) {
     Add-Finding -Findings $findings -Severity "high" -Component "supervisor" -Message "Supervisor wrapper is running but autonomous_90p_latest is stale."
@@ -167,6 +216,71 @@ if ($wrapperState.ml -and -not $freshness.ml_tuning_hints.fresh) {
     Add-Finding -Findings $findings -Severity "medium" -Component "ml" -Message "ML wrapper is active but ML hints are stale."
 }
 
+if (Test-Path -LiteralPath $stateRoot) {
+    $symbolDirs = @(
+        Get-ChildItem -LiteralPath $stateRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike "_*" }
+    )
+
+    foreach ($dir in $symbolDirs) {
+        $localPolicy = Read-TabFile -Path (Join-Path $dir.FullName "tuning_policy.csv")
+        $effectivePolicy = Read-TabFile -Path (Join-Path $dir.FullName "tuning_policy_effective.csv")
+        $executionSummary = Read-JsonFile -Path (Join-Path $dir.FullName "execution_summary.json")
+
+        if ($null -eq $localPolicy -or $null -eq $effectivePolicy -or $null -eq $executionSummary) {
+            continue
+        }
+
+        $paperRuntime = [bool]$executionSummary.paper_runtime_override_active
+        $localAcceptedRiskMasked = (
+            $paperRuntime -and
+            [string]$localPolicy.experiment_status -eq "ACCEPTED" -and
+            (
+                [string]$localPolicy.trust_reason_domain -eq "RISK" -or
+                [string]$localPolicy.trust_reason_class -eq "CONTRACT"
+            )
+        )
+
+        if (-not $localAcceptedRiskMasked) {
+            continue
+        }
+
+        $effectiveTrusted = ConvertTo-BoolLoose -Value $effectivePolicy.trusted_data
+        $localConfidenceCap = ConvertTo-DoubleLoose -Value $localPolicy.confidence_cap
+        $localRiskCap = ConvertTo-DoubleLoose -Value $localPolicy.risk_cap
+        $effectiveConfidenceCap = ConvertTo-DoubleLoose -Value $effectivePolicy.confidence_cap
+        $effectiveRiskCap = ConvertTo-DoubleLoose -Value $effectivePolicy.risk_cap
+
+        if (-not $effectiveTrusted) {
+            $issue = [pscustomobject]@{
+                symbol = $dir.Name
+                type = "accepted_policy_not_effective"
+                local_trust_reason = [string]$localPolicy.trust_reason
+                experiment_status = [string]$localPolicy.experiment_status
+            }
+            $tuningSyncIssues.Add($issue) | Out-Null
+            Add-Finding -Findings $findings -Severity "medium" -Component "tuning_sync" -Message ("{0}: accepted local paper policy is still not trusted in tuning_policy_effective." -f $dir.Name)
+        }
+
+        if (
+            $localConfidenceCap -gt 0.0 -and
+            $localRiskCap -gt 0.0 -and
+            ($effectiveConfidenceCap -le 0.0 -or $effectiveRiskCap -le 0.0)
+        ) {
+            $issue = [pscustomobject]@{
+                symbol = $dir.Name
+                type = "paper_caps_zeroed"
+                local_confidence_cap = $localConfidenceCap
+                local_risk_cap = $localRiskCap
+                effective_confidence_cap = $effectiveConfidenceCap
+                effective_risk_cap = $effectiveRiskCap
+            }
+            $tuningSyncIssues.Add($issue) | Out-Null
+            Add-Finding -Findings $findings -Severity "medium" -Component "tuning_sync" -Message ("{0}: effective paper caps are zeroed even though local accepted caps are positive." -f $dir.Name)
+        }
+    }
+}
+
 if ($processState.qdmcli -gt 0 -and -not $freshness.qdm_weakest_profile.fresh) {
     Add-Finding -Findings $findings -Severity "medium" -Component "qdm" -Message "QDM process is active but the weakest data profile is stale."
 }
@@ -205,6 +319,8 @@ $report.Add("wrapper_state", $wrapperState)
 $report.Add("process_state", $processState)
 $report.Add("mt5_status", $mt5Status)
 $report.Add("mt5_retest_queue", $mt5Queue)
+$report.Add("tuning_effective_sync_issue_count", $tuningSyncIssues.Count)
+$report.Add("tuning_effective_sync_issues", @($tuningSyncIssues | ForEach-Object { $_ }))
 $report.Add("finding_count", $findings.Count)
 $report.Add("findings", $findingsArray)
 
@@ -243,6 +359,17 @@ if ($null -ne $mt5Status) {
 }
 else {
     $lines.Add("- mt5 status not available")
+}
+$lines.Add("")
+$lines.Add("## Tuning Sync")
+$lines.Add("")
+if ($tuningSyncIssues.Count -eq 0) {
+    $lines.Add("- none")
+}
+else {
+    foreach ($issue in $tuningSyncIssues) {
+        $lines.Add(("- {0}: {1}" -f $issue.symbol, $issue.type))
+    }
 }
 $lines.Add("")
 $lines.Add("## Freshness")

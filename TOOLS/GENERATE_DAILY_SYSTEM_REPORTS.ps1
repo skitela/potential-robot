@@ -60,6 +60,39 @@ function Convert-FromUnixLocal {
     return [DateTimeOffset]::FromUnixTimeSeconds($Ts).ToLocalTime().DateTime
 }
 
+function Measure-SumOrZero {
+    param(
+        [object[]]$InputObject,
+        [string]$Property
+    )
+
+    $result = $InputObject | Measure-Object -Property $Property -Sum
+    if ($null -eq $result -or $null -eq $result.Sum) { return 0.0 }
+    return [double]$result.Sum
+}
+
+function Measure-AverageOrZero {
+    param(
+        [object[]]$InputObject,
+        [string]$Property
+    )
+
+    $result = $InputObject | Measure-Object -Property $Property -Average
+    if ($null -eq $result -or $null -eq $result.Average) { return 0.0 }
+    return [double]$result.Average
+}
+
+function Measure-MaximumOrZero {
+    param(
+        [object[]]$InputObject,
+        [string]$Property
+    )
+
+    $result = $InputObject | Measure-Object -Property $Property -Maximum
+    if ($null -eq $result -or $null -eq $result.Maximum) { return 0.0 }
+    return [double]$result.Maximum
+}
+
 function Get-SymbolCode {
     param($Item)
     if ($Item.PSObject.Properties.Name -contains "code_symbol" -and -not [string]::IsNullOrWhiteSpace([string]$Item.code_symbol)) {
@@ -261,11 +294,11 @@ foreach ($item in $registry.symbols) {
 $freshRows = @($rows | Where-Object { $_.swiezy })
 $activeRows = @($rows | Where-Object { $_.czas_pracy_dzis_s -gt 0 })
 $systemStart = ($rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.pracuje_od) } | Sort-Object pracuje_od | Select-Object -First 1).pracuje_od
-$netToday = [math]::Round((($rows | Measure-Object -Property netto_dzis -Sum).Sum), 2)
-$netYesterday = [math]::Round((($rows | Measure-Object -Property netto_wczoraj -Sum).Sum), 2)
-$winsToday = (($rows | Measure-Object -Property wygrane_dzis -Sum).Sum)
-$lossesToday = (($rows | Measure-Object -Property przegrane_dzis -Sum).Sum)
-$closesToday = (($rows | Measure-Object -Property zamkniecia_dzis -Sum).Sum)
+$netToday = [math]::Round((Measure-SumOrZero -InputObject $rows -Property netto_dzis), 2)
+$netYesterday = [math]::Round((Measure-SumOrZero -InputObject $rows -Property netto_wczoraj), 2)
+$winsToday = [int](Measure-SumOrZero -InputObject $rows -Property wygrane_dzis)
+$lossesToday = [int](Measure-SumOrZero -InputObject $rows -Property przegrane_dzis)
+$closesToday = [int](Measure-SumOrZero -InputObject $rows -Property zamkniecia_dzis)
 $winsYesterday = 0
 $lossesYesterday = 0
 $closesYesterday = 0
@@ -276,16 +309,16 @@ foreach ($item in $registry.symbols) {
     $lossesYesterday += $learning.losses_yesterday
     $closesYesterday += $learning.closes_yesterday
 }
-$opensToday = (($rows | Measure-Object -Property otwarcia_dzis -Sum).Sum)
-$avgPingRaw = ((@($rows | Where-Object { $_.ping_ms -gt 0 }) | Measure-Object -Property ping_ms -Average).Average)
-$avgLatencyRaw = ((@($rows | Where-Object { $_.latencja_sr_us -gt 0 }) | Measure-Object -Property latencja_sr_us -Average).Average)
+$opensToday = [int](Measure-SumOrZero -InputObject $rows -Property otwarcia_dzis)
+$avgPingRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.ping_ms -gt 0 }) -Property ping_ms
+$avgLatencyRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.latencja_sr_us -gt 0 }) -Property latencja_sr_us
 $avgPing = if ($null -ne $avgPingRaw) { [math]::Round($avgPingRaw, 2) } else { 0.0 }
 $avgLatencyUs = if ($null -ne $avgLatencyRaw) { [math]::Round($avgLatencyRaw, 2) } else { 0.0 }
-$maxLatencyUs = [math]::Round((($rows | Measure-Object -Property latencja_max_us -Maximum).Maximum), 2)
-$avgFreshness = [math]::Round((($rows | Measure-Object -Property swiezosc_s -Average).Average), 0)
-$maxFreshness = [math]::Round((($rows | Measure-Object -Property swiezosc_s -Maximum).Maximum), 0)
-$workTotal = (($rows | Measure-Object -Property czas_pracy_dzis_s -Sum).Sum)
-$workAvg = [math]::Round((($rows | Measure-Object -Property czas_pracy_dzis_s -Average).Average), 0)
+$maxLatencyUs = [math]::Round((Measure-MaximumOrZero -InputObject $rows -Property latencja_max_us), 2)
+$avgFreshness = [math]::Round((Measure-AverageOrZero -InputObject $rows -Property swiezosc_s), 0)
+$maxFreshness = [math]::Round((Measure-MaximumOrZero -InputObject $rows -Property swiezosc_s), 0)
+$workTotal = [long](Measure-SumOrZero -InputObject $rows -Property czas_pracy_dzis_s)
+$workAvg = [math]::Round((Measure-AverageOrZero -InputObject $rows -Property czas_pracy_dzis_s), 0)
 
 $systemState = if ($freshRows.Count -eq 0) { "PADL" } elseif ($freshRows.Count -lt $rows.Count) { "UWAGA" } else { "DZIALA" }
 $systemNote = switch ($systemState) {
@@ -297,18 +330,18 @@ $systemNote = switch ($systemState) {
 $familyRows = @(
     foreach ($familyGroup in ($rows | Group-Object rodzina | Sort-Object Name)) {
         $groupRows = @($familyGroup.Group)
-        $familyLatencyRaw = ((@($groupRows | Where-Object { $_.latencja_sr_us -gt 0 }) | Measure-Object -Property latencja_sr_us -Average).Average)
+        $familyLatencyRaw = Measure-AverageOrZero -InputObject @($groupRows | Where-Object { $_.latencja_sr_us -gt 0 }) -Property latencja_sr_us
         [pscustomobject]@{
             rodzina = $familyGroup.Name
             rodzina_label = Get-FamilyLabel -Family $familyGroup.Name
             instrumenty = $groupRows.Count
             swieze = @($groupRows | Where-Object { $_.swiezy }).Count
-            netto_dzis = [math]::Round((($groupRows | Measure-Object -Property netto_dzis -Sum).Sum), 2)
-            zmiana_do_wczoraj = [math]::Round((($groupRows | Measure-Object -Property zmiana_do_wczoraj -Sum).Sum), 2)
-            wygrane_dzis = (($groupRows | Measure-Object -Property wygrane_dzis -Sum).Sum)
-            przegrane_dzis = (($groupRows | Measure-Object -Property przegrane_dzis -Sum).Sum)
-            otwarcia_dzis = (($groupRows | Measure-Object -Property otwarcia_dzis -Sum).Sum)
-            ping_sr_ms = [math]::Round((($groupRows | Measure-Object -Property ping_ms -Average).Average), 2)
+            netto_dzis = [math]::Round((Measure-SumOrZero -InputObject $groupRows -Property netto_dzis), 2)
+            zmiana_do_wczoraj = [math]::Round((Measure-SumOrZero -InputObject $groupRows -Property zmiana_do_wczoraj), 2)
+            wygrane_dzis = [int](Measure-SumOrZero -InputObject $groupRows -Property wygrane_dzis)
+            przegrane_dzis = [int](Measure-SumOrZero -InputObject $groupRows -Property przegrane_dzis)
+            otwarcia_dzis = [int](Measure-SumOrZero -InputObject $groupRows -Property otwarcia_dzis)
+            ping_sr_ms = [math]::Round((Measure-AverageOrZero -InputObject $groupRows -Property ping_ms), 2)
             latencja_sr_us = if ($null -ne $familyLatencyRaw) { [math]::Round($familyLatencyRaw, 2) } else { 0.0 }
         }
     }

@@ -87,10 +87,20 @@ void MbBuildEffectiveTuningPolicy(
    MbTuningFamilyPolicyReset(out_family_policy);
    MbTuningCoordinatorStateReset(out_coordinator_state);
 
-   if(MbLoadTuningFamilyPolicy(family,out_family_policy))
+   bool family_loaded = MbLoadTuningFamilyPolicy(family,out_family_policy);
+   bool coordinator_loaded = MbLoadTuningCoordinatorState(out_coordinator_state);
+   bool paper_lab_active = ((family_loaded && out_family_policy.paper_mode_active) || (coordinator_loaded && out_coordinator_state.paper_mode_active));
+
+   if(family_loaded)
      {
-      effective_policy.confidence_cap = MathMin(effective_policy.confidence_cap,out_family_policy.dominant_confidence_cap);
-      effective_policy.risk_cap = MathMin(effective_policy.risk_cap,out_family_policy.dominant_risk_cap);
+      // Paper laboratory should keep learning even when live family guards are frozen.
+      // Family overlays that describe signal shape remain useful, but hard caps from
+      // live protection should not blind paper exploration.
+      if(!paper_lab_active)
+        {
+         effective_policy.confidence_cap = MathMin(effective_policy.confidence_cap,out_family_policy.dominant_confidence_cap);
+         effective_policy.risk_cap = MathMin(effective_policy.risk_cap,out_family_policy.dominant_risk_cap);
+        }
       effective_policy.breakout_global_tax = MbTuningOverlayClamp(
          effective_policy.breakout_global_tax + out_family_policy.breakout_family_tax,
          0.0,
@@ -107,11 +117,22 @@ void MbBuildEffectiveTuningPolicy(
       );
      }
 
-   if(MbLoadTuningCoordinatorState(out_coordinator_state))
+   if(coordinator_loaded && !paper_lab_active)
      {
       effective_policy.confidence_cap = MathMin(effective_policy.confidence_cap,out_coordinator_state.global_confidence_cap);
       effective_policy.risk_cap = MathMin(effective_policy.risk_cap,out_coordinator_state.global_risk_cap);
      }
+
+   // If the last accepted local experiment is being masked only by portfolio/fleet
+   // risk state, keep its signal filter active in paper runtime so the laboratory
+   // can continue to collect lessons without reopening live risk.
+   if(
+      paper_lab_active &&
+      !effective_policy.trusted_data &&
+      effective_policy.experiment_status == "ACCEPTED" &&
+      (effective_policy.trust_reason_domain == "RISK" || effective_policy.trust_reason_class == "CONTRACT")
+   )
+      effective_policy.trusted_data = true;
 
    MbApplyTuningGuardToLocalPolicy(family,effective_policy);
   }
