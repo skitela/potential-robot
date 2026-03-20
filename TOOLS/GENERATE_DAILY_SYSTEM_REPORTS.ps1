@@ -68,6 +68,41 @@ function Get-SymbolCode {
     return ([string]$Item.symbol) -replace '\.pro$',''
 }
 
+function Resolve-InstrumentRuntimeCode {
+    param(
+        $Item,
+        [string]$CommonFilesRoot
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if ($Item.PSObject.Properties.Name -contains "code_symbol" -and -not [string]::IsNullOrWhiteSpace([string]$Item.code_symbol)) {
+        [void]$candidates.Add([string]$Item.code_symbol)
+    }
+
+    if ($Item.PSObject.Properties.Name -contains "symbol" -and -not [string]::IsNullOrWhiteSpace([string]$Item.symbol)) {
+        $raw = [string]$Item.symbol
+        [void]$candidates.Add($raw)
+        [void]$candidates.Add(($raw -replace '\.pro$',''))
+    }
+
+    $unique = @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    foreach ($candidate in $unique) {
+        $clean = $candidate -replace '\.pro$',''
+        $statePath = Join-Path $CommonFilesRoot ("state\{0}\execution_summary.json" -f $clean)
+        $logPath = Join-Path $CommonFilesRoot ("logs\{0}\learning_observations_v2.csv" -f $clean)
+        if ((Test-Path -LiteralPath $statePath) -or (Test-Path -LiteralPath $logPath)) {
+            return $clean
+        }
+    }
+
+    if ($unique.Count -gt 0) {
+        return ($unique[0] -replace '\.pro$','')
+    }
+
+    return ""
+}
+
 function Get-LearningStats {
     param(
         [string]$Path,
@@ -166,7 +201,7 @@ $reportTs = $NowLocal.ToString("yyyyMMdd_HHmmss")
 
 $rows = @()
 foreach ($item in $registry.symbols) {
-    $code = Get-SymbolCode -Item $item
+    $code = Resolve-InstrumentRuntimeCode -Item $item -CommonFilesRoot $CommonFilesRoot
     $display = $code
     $family = [string]$item.session_profile
 
@@ -235,7 +270,7 @@ $winsYesterday = 0
 $lossesYesterday = 0
 $closesYesterday = 0
 foreach ($item in $registry.symbols) {
-    $code = Get-SymbolCode -Item $item
+    $code = Resolve-InstrumentRuntimeCode -Item $item -CommonFilesRoot $CommonFilesRoot
     $learning = Get-LearningStats -Path (Join-Path $CommonFilesRoot ("logs\{0}\learning_observations_v2.csv" -f $code)) -TodayStartTs $todayStartTsDefault -YesterdayStartTs $yesterdayStartTsDefault -NowTs $nowTs
     $winsYesterday += $learning.wins_yesterday
     $lossesYesterday += $learning.losses_yesterday

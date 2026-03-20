@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$VpsSyncEvidenceDir = "C:\OANDA_MT5_SYSTEM\EVIDENCE\vps_sync",
-    [string]$OutputDir = "C:\OANDA_MT5_SYSTEM\EVIDENCE\git_vps_gap",
+    [string]$VpsSyncEvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
+    [string]$OutputDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\VPS_SYNC_GAP",
     [string]$TerminalRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
     [datetime]$ReferenceDay = (Get-Date).Date.AddDays(-1)
 )
@@ -77,11 +77,16 @@ $commitsYesterday = @((Invoke-Git -Args @(
     "--pretty=format:%H|%ad|%s"
 )))
 
-$latestSyncJson = Get-ChildItem -LiteralPath $vpsSyncEvidenceResolved -Filter "mt5_virtual_hosting_sync_*.json" |
+$latestSyncJson = Get-ChildItem -LiteralPath $vpsSyncEvidenceResolved -Filter "paper_live_sync*.json" -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 if (-not $latestSyncJson) {
-    throw "No mt5_virtual_hosting_sync_*.json artifact found."
+    $latestSyncJson = Get-ChildItem -LiteralPath $vpsSyncEvidenceResolved -Filter "mt5_virtual_hosting_sync_*.json" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+}
+if (-not $latestSyncJson) {
+    throw "No paper_live_sync*.json or mt5_virtual_hosting_sync_*.json artifact found."
 }
 $latestSync = Get-Content -LiteralPath $latestSyncJson.FullName -Raw | ConvertFrom-Json
 $latestSyncTs = [datetimeoffset]::Parse($latestSync.ts_local)

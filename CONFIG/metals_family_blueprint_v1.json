@@ -130,11 +130,10 @@
       "https://www.oanda.com/eu-en/invest/trading-account"
     ],
     "local": [
-      "C:\\OANDA_MT5_SYSTEM\\CONFIG\\strategy.json",
-      "C:\\OANDA_MT5_SYSTEM\\BIN\\safetybot.py",
-      "C:\\OANDA_MT5_SYSTEM\\BIN\\scheduler.py",
-      "C:\\OANDA_MT5_SYSTEM\\DOCS\\TRADE_WINDOW_EXTENSIONS_V1.md",
-      "C:\\OANDA_MT5_SYSTEM\\DOCS\\SESSION_HANDOFF_2026-02-23_2348.md"
+      "C:\\MAKRO_I_MIKRO_BOT\\DOCS\\64_OANDA_MT5_METALS_FAMILY_RESEARCH_V1.md",
+      "C:\\MAKRO_I_MIKRO_BOT\\DOCS\\65_METALS_SESSION_AND_TIME_ARCHITECTURE_V1.md",
+      "C:\\MAKRO_I_MIKRO_BOT\\DOCS\\66_SESSION_WINDOW_MATRIX_V1.md",
+      "C:\\MAKRO_I_MIKRO_BOT\\DOCS\\67_OANDA_BROKER_BUDGETS_AND_WINDOW_LIMITS_V1.md"
     ]
   }
 }

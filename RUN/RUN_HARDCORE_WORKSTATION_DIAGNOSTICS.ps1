@@ -1,5 +1,5 @@
 param(
-    [string]$ReportRoot = "C:\OANDA_MT5_SYSTEM\EVIDENCE\workstation"
+    [string]$ReportRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\workstation"
 )
 
 Set-StrictMode -Version Latest

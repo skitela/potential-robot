@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ProjectBackupDir = "C:\MAKRO_I_MIKRO_BOT\BACKUP",
-    [string]$SessionBackupDir = "C:\OANDA_MT5_SYSTEM\BACKUPS",
+    [string]$SessionBackupDir = "C:\MAKRO_I_MIKRO_BOT\BACKUPS\SESSION",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\BACKUP_RETENTION",
     [int]$KeepProjectFullBackups = 5,
     [int]$KeepProjectPartialSnapshots = 1,

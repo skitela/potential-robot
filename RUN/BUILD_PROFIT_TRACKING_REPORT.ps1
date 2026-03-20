@@ -1,6 +1,6 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$RuntimeReviewPath = "C:\OANDA_MT5_SYSTEM\EVIDENCE\vps_sync\mt5_virtual_hosting_runtime_review_24h_compact_latest.json",
+    [string]$RuntimeReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$PriorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
     [string]$TesterEvidenceRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"

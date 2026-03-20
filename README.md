@@ -1,9 +1,8 @@
 # MAKRO_I_MIKRO_BOT
 
-Nowy projekt `100% MQL5` rozwijany rownolegle do:
+Nowy projekt `100% MQL5` jest teraz glownym aktywnym systemem.
 
-- `c:\OANDA_MT5_SYSTEM`
-- `C:\GLOBALNY HANDEL VER1\EURUSD`
+Historyczne repo i stare eksperymenty pozostaja tylko jako kontekst zrodlowy, a nie jako aktywna zaleznosc runtime.
 
 Cel projektu:
 

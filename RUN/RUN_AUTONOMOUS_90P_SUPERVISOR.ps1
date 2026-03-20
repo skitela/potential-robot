@@ -11,6 +11,9 @@ $priorityScript = Join-Path $ProjectRoot "RUN\BUILD_TUNING_PRIORITY_REPORT.ps1"
 $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $profitTrackingScript = Join-Path $ProjectRoot "RUN\BUILD_PROFIT_TRACKING_REPORT.ps1"
+$dailySystemReportScript = Join-Path $ProjectRoot "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+$paperLiveFeedbackScript = Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1"
+$hostingReportScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_HOSTING_DAILY_REPORT.ps1"
 $trustButVerifyScript = Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 $fullStackAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1"
@@ -21,6 +24,7 @@ $qdmWeakestScript = Join-Path $ProjectRoot "RUN\START_QDM_WEAKEST_SYNC_BACKGROUN
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
 $statusDir = Join-Path $ProjectRoot "EVIDENCE\OPS"
+$dailySystemReportPath = Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json"
 $secondaryMt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe"
 
 foreach ($path in @(
@@ -28,6 +32,9 @@ foreach ($path in @(
     $qdmProfileScript,
     $mlHintsScript,
     $profitTrackingScript,
+    $dailySystemReportScript,
+    $paperLiveFeedbackScript,
+    $hostingReportScript,
     $trustButVerifyScript,
     $snapshotScript,
     $fullStackAuditScript,
@@ -70,6 +77,16 @@ function Ensure-BackgroundTask {
 
     & $StarterPath | Out-Host
     return "started"
+}
+
+function Get-FileAgeSecondsOrMax {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [int]::MaxValue
+    }
+
+    return [int][math]::Round(((Get-Date) - (Get-Item -LiteralPath $Path).LastWriteTime).TotalSeconds)
 }
 
 function Invoke-SupervisorAction {
@@ -296,6 +313,27 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "perf_tuning" -Operation {
         & $perfScript -ThrottleInteractiveApps -MlPerfProfile "ConcurrentLab" | Out-Null
         "applied"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "daily_system_report" -Operation {
+        $dailyReportAge = Get-FileAgeSecondsOrMax -Path $dailySystemReportPath
+        if ($dailyReportAge -le 3600) {
+            return ("fresh age_s={0}" -f $dailyReportAge)
+        }
+
+        & $dailySystemReportScript | Out-Null
+        $dailyReportAge = Get-FileAgeSecondsOrMax -Path $dailySystemReportPath
+        "rebuilt age_s=$dailyReportAge"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "paper_live_feedback" -Operation {
+        & $paperLiveFeedbackScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "hosting_report" -Operation {
+        & $hostingReportScript | Out-Null
+        "rebuilt"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "priority_report" -Operation {

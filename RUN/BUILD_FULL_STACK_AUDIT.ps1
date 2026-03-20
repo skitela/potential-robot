@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$LegacyRoot = "C:\OANDA_MT5_SYSTEM",
+    [string]$PaperLiveFeedbackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
+    [string]$HostingHealthPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_hosting_daily_report_latest.json",
     [switch]$ApplyRuntimeCleanup,
     [switch]$ApplyLogRotation
 )
@@ -134,8 +135,9 @@ $freshness = @(
     Get-FileFreshness -Label "ml_tuning_hints" -Path (Join-Path $opsRoot "ml_tuning_hints_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_weakest_profile" -Path (Join-Path $opsRoot "qdm_weakest_profile_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
-    Get-FileFreshness -Label "vps_runtime_review" -Path (Join-Path $LegacyRoot "EVIDENCE\vps_sync\mt5_virtual_hosting_runtime_review_24h_compact_latest.json") -ThresholdSeconds (30 * 3600)
-    Get-FileFreshness -Label "vps_sync" -Path (Join-Path $LegacyRoot "EVIDENCE\vps_sync\mt5_virtual_hosting_sync_latest.json") -ThresholdSeconds (36 * 3600)
+    Get-FileFreshness -Label "daily_system_report" -Path (Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json") -ThresholdSeconds 5400
+    Get-FileFreshness -Label "paper_live_feedback" -Path $PaperLiveFeedbackPath -ThresholdSeconds 1800
+    Get-FileFreshness -Label "mt5_hosting_health" -Path $HostingHealthPath -ThresholdSeconds 1800
 )
 
 $mt5TesterStatus = Read-JsonFile -Path (Join-Path $opsRoot "mt5_tester_status_latest.json")
@@ -189,7 +191,11 @@ $essentialLocalLabels = @(
     "profit_tracking"
 )
 $localFresh = (@($freshness | Where-Object { $essentialLocalLabels -contains $_.label -and $_.fresh }).Count -eq $essentialLocalLabels.Count)
-$vpsFeedbackFresh = (@($freshness | Where-Object { $_.label -eq "vps_runtime_review" -and $_.fresh }).Count -eq 1)
+$paperLiveFeedbackFresh = (
+    @($freshness | Where-Object { $_.label -eq "daily_system_report" -and $_.fresh }).Count -eq 1 -and
+    @($freshness | Where-Object { $_.label -eq "paper_live_feedback" -and $_.fresh }).Count -eq 1 -and
+    @($freshness | Where-Object { $_.label -eq "mt5_hosting_health" -and $_.fresh }).Count -eq 1
+)
 $verificationClean = ($null -ne $trustButVerify -and [string]$trustButVerify.verdict -eq "OK")
 
 $mt5Running = ($null -ne $mt5TesterStatus -and [string]$mt5TesterStatus.state -eq "running")
@@ -222,7 +228,7 @@ if ($mt5QueueFresh -and $null -ne $mt5TesterStatus -and $null -ne $mt5RetestQueu
 }
 
 $syncAllowed = (
-    $vpsFeedbackFresh -and
+    $paperLiveFeedbackFresh -and
     $localFresh -and
     ($runtimeUnexpectedTotal -eq 0) -and
     ($rotationCandidateCount -eq 0) -and
@@ -232,8 +238,8 @@ $syncAllowed = (
 )
 
 $releaseVerdict = "READY_FOR_RELEASE"
-if (-not $vpsFeedbackFresh) {
-    $releaseVerdict = "PULL_SERVER_FEEDBACK_FIRST"
+if (-not $paperLiveFeedbackFresh) {
+    $releaseVerdict = "REFRESH_PAPER_LIVE_FEEDBACK_FIRST"
 }
 elseif (-not $localFresh) {
     $releaseVerdict = "FIX_LOCAL_LAB_FIRST"
@@ -259,7 +265,10 @@ $report = [ordered]@{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     project_root = $ProjectRoot
-    legacy_root = $LegacyRoot
+    paper_live_paths = [ordered]@{
+        feedback = $PaperLiveFeedbackPath
+        hosting_health = $HostingHealthPath
+    }
     cadence_policy = [ordered]@{
         pull_before_push = $true
         standard_feedback_cycle_hours = 24
@@ -313,7 +322,7 @@ $report = [ordered]@{
         }
     } else { $null }
     release_gate = [ordered]@{
-        vps_feedback_fresh = $vpsFeedbackFresh
+        paper_live_feedback_fresh = $paperLiveFeedbackFresh
         local_lab_fresh = $localFresh
         runtime_artifacts_clean = ($runtimeUnexpectedTotal -eq 0)
         runtime_logs_rotated = ($rotationCandidateCount -eq 0)
@@ -338,7 +347,7 @@ $lines.Add(("- sync_allowed: {0}" -f $report.release_gate.sync_allowed))
 $lines.Add("")
 $lines.Add("## Release Gate")
 $lines.Add("")
-$lines.Add(("- vps_feedback_fresh: {0}" -f $report.release_gate.vps_feedback_fresh))
+$lines.Add(("- paper_live_feedback_fresh: {0}" -f $report.release_gate.paper_live_feedback_fresh))
 $lines.Add(("- local_lab_fresh: {0}" -f $report.release_gate.local_lab_fresh))
 $lines.Add(("- runtime_artifacts_clean: {0}" -f $report.release_gate.runtime_artifacts_clean))
 $lines.Add(("- runtime_logs_rotated: {0}" -f $report.release_gate.runtime_logs_rotated))

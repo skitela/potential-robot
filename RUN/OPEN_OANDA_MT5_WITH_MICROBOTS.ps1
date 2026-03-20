@@ -8,8 +8,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$guardScript = "C:\OANDA_MT5_SYSTEM\TOOLS\mt5_risk_popup_guard.ps1"
-$guardStatus = "C:\OANDA_MT5_SYSTEM\RUN\mt5_risk_guard_status.json"
+$guardScript = Join-Path $projectRoot "TOOLS\mt5_risk_popup_guard.ps1"
+$guardStatus = Join-Path $projectRoot "EVIDENCE\OPS\mt5_risk_guard_status.json"
 $pythonScript = Join-Path $projectRoot "TOOLS\setup_mt5_microbots_profile.py"
 
 Get-Process terminal64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
