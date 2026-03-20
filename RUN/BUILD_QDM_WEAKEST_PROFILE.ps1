@@ -3,7 +3,7 @@ param(
     [string]$PriorityReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
     [string]$OutputPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_weakest_pack.csv",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
-    [int]$DesiredCount = 8
+    [int]$DesiredCount = 17
 )
 
 Set-StrictMode -Version Latest

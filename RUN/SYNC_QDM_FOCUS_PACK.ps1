@@ -128,8 +128,8 @@ if ($StopExistingQdm) {
 
 $dataDbPath = Join-Path $QdmRoot "user\data\data.db"
 $historyRoot = Join-Path $QdmRoot "user\data\History"
-$existingSymbols = Get-QdmExistingSymbols -DatabasePath $dataDbPath -PythonExe $ResearchPython
-$rows = Import-Csv -LiteralPath $ProfilePath | Where-Object { $_.enabled -eq "1" }
+$existingSymbols = @(Get-QdmExistingSymbols -DatabasePath $dataDbPath -PythonExe $ResearchPython)
+$rows = @(Import-Csv -LiteralPath $ProfilePath | Where-Object { $_.enabled -eq "1" })
 foreach ($row in $rows) {
     $symbol = $row.symbol.Trim()
     $datasource = $row.datasource.Trim()
@@ -145,7 +145,7 @@ foreach ($row in $rows) {
         $existingSymbols += $symbol
     }
 
-    $historyCandidates = Get-QdmHistoryCandidates -HistoryRoot $historyRoot -Symbol $symbol -Datatype $datatype
+    $historyCandidates = @(Get-QdmHistoryCandidates -HistoryRoot $historyRoot -Symbol $symbol -Datatype $datatype)
     if (-not $ForceUpdate -and $historyCandidates.Count -gt 0) {
         $latestHistory = $historyCandidates[0]
         $hoursSinceRefresh = ((Get-Date) - $latestHistory.LastWriteTime).TotalHours

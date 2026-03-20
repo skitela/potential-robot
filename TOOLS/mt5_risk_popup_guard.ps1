@@ -1,6 +1,7 @@
 param(
     [string]$Root = "C:\MAKRO_I_MIKRO_BOT",
     [string]$Mt5DataDir = "",
+    [string[]]$Mt5DataDirs = @(),
     [int]$PollMs = 1200
 )
 
@@ -135,6 +136,36 @@ function Resolve-Mt5DataDir {
     }
 
     return $bestDir
+}
+
+function Resolve-Mt5DataDirList {
+    param(
+        [string]$Primary = "",
+        [string[]]$Additional = @()
+    )
+
+    $resolved = New-Object System.Collections.Generic.List[string]
+
+    foreach ($candidate in @($Primary) + @($Additional)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        if (Test-Path $candidate) {
+            $path = (Resolve-Path $candidate).Path
+            if (-not $resolved.Contains($path)) {
+                [void]$resolved.Add($path)
+            }
+        }
+    }
+
+    if ($resolved.Count -eq 0) {
+        $auto = Resolve-Mt5DataDir -Preferred $Primary
+        if (-not [string]::IsNullOrWhiteSpace($auto) -and -not $resolved.Contains($auto)) {
+            [void]$resolved.Add($auto)
+        }
+    }
+
+    return @($resolved.ToArray())
 }
 
 function Read-NewLines {
@@ -380,6 +411,7 @@ $pidPath = Join-Path $runDir "mt5_risk_guard.pid"
 $state = [ordered]@{
     started_utc = (Get-Date).ToUniversalTime().ToString("o")
     mt5_data_dir = ""
+    mt5_data_dirs = @()
     accepted_events = 0
     rejected_events = 0
     popup_actions = 0
@@ -387,6 +419,7 @@ $state = [ordered]@{
     last_popup_action_utc = ""
     last_log_event = ""
     mt5_log = ""
+    mt5_logs = @()
 }
 
 [ordered]@{
@@ -398,24 +431,41 @@ $state = [ordered]@{
 
 Append-Line -Path $eventLog -Line ("[{0}] RISK_GUARD_START pid={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $PID)
 
-$mt5DataDirResolved = Resolve-Mt5DataDir -Preferred $Mt5DataDir
-$state.mt5_data_dir = $mt5DataDirResolved
-$mt5DirLogValue = if ([string]::IsNullOrWhiteSpace($mt5DataDirResolved)) { "<unresolved>" } else { $mt5DataDirResolved }
-Append-Line -Path $eventLog -Line ("[{0}] RISK_GUARD_MT5_DIR dir={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mt5DirLogValue)
+$mt5DataDirResolvedList = Resolve-Mt5DataDirList -Primary $Mt5DataDir -Additional $Mt5DataDirs
+$state.mt5_data_dirs = @($mt5DataDirResolvedList)
+$state.mt5_data_dir = if ($mt5DataDirResolvedList.Count -gt 0) { [string]$mt5DataDirResolvedList[0] } else { "" }
+$mt5DirLogValue = if ($mt5DataDirResolvedList.Count -eq 0) { "<unresolved>" } else { ($mt5DataDirResolvedList -join "; ") }
+Append-Line -Path $eventLog -Line ("[{0}] RISK_GUARD_MT5_DIRS dirs={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mt5DirLogValue)
 
 $lastActionByHwnd = @{}
 $offsets = @{}
 
 while ($true) {
     try {
-        if ([string]::IsNullOrWhiteSpace($mt5DataDirResolved) -or (-not (Test-Path $mt5DataDirResolved))) {
-            $mt5DataDirResolved = Resolve-Mt5DataDir -Preferred $Mt5DataDir
-            $state.mt5_data_dir = $mt5DataDirResolved
+        $needsRefresh = ($mt5DataDirResolvedList.Count -eq 0)
+        if (-not $needsRefresh) {
+            foreach ($dir in $mt5DataDirResolvedList) {
+                if ([string]::IsNullOrWhiteSpace($dir) -or (-not (Test-Path $dir))) {
+                    $needsRefresh = $true
+                    break
+                }
+            }
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($mt5DataDirResolved)) {
-            $mt5log = Join-Path $mt5DataDirResolved ("logs\" + (Get-Date -Format "yyyyMMdd") + ".log")
-            $state.mt5_log = $mt5log
+        if ($needsRefresh) {
+            $mt5DataDirResolvedList = Resolve-Mt5DataDirList -Primary $Mt5DataDir -Additional $Mt5DataDirs
+            $state.mt5_data_dirs = @($mt5DataDirResolvedList)
+            $state.mt5_data_dir = if ($mt5DataDirResolvedList.Count -gt 0) { [string]$mt5DataDirResolvedList[0] } else { "" }
+        }
+
+        $currentLogs = New-Object System.Collections.Generic.List[string]
+        foreach ($resolvedDir in @($mt5DataDirResolvedList)) {
+            if ([string]::IsNullOrWhiteSpace($resolvedDir)) {
+                continue
+            }
+
+            $mt5log = Join-Path $resolvedDir ("logs\" + (Get-Date -Format "yyyyMMdd") + ".log")
+            [void]$currentLogs.Add($mt5log)
             $newLines = Read-NewLines -Path $mt5log -Offsets $offsets
             foreach ($line in $newLines) {
                 $msg = [string]$line
@@ -423,14 +473,16 @@ while ($true) {
                 if ($msg -match "high risk investment warning has been accepted") {
                     $state.accepted_events = [int]$state.accepted_events + 1
                     $state.last_log_event = $msg
-                    Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_ACCEPTED {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
+                    Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_ACCEPTED dir={1} {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $resolvedDir, $msg)
                 } elseif ($msg -match "high risk investment warning has been rejected") {
                     $state.rejected_events = [int]$state.rejected_events + 1
                     $state.last_log_event = $msg
-                    Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_REJECTED {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
+                    Append-Line -Path $eventLog -Line ("[{0}] RISK_WARNING_REJECTED dir={1} {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $resolvedDir, $msg)
                 }
             }
         }
+        $state.mt5_logs = @($currentLogs.ToArray())
+        $state.mt5_log = if ($currentLogs.Count -gt 0) { [string]$currentLogs[0] } else { "" }
 
         $terminalPids = @(
             Get-Process -Name "terminal64" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id

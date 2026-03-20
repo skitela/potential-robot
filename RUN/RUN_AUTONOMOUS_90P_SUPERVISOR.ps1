@@ -10,6 +10,9 @@ $ErrorActionPreference = "Stop"
 $priorityScript = Join-Path $ProjectRoot "RUN\BUILD_TUNING_PRIORITY_REPORT.ps1"
 $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
+$researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
+$mt5QueueSyncScript = Join-Path $ProjectRoot "RUN\SYNC_MT5_RETEST_QUEUE_FROM_RESEARCH_PLAN.ps1"
+$tuningEffectiveRepairScript = Join-Path $ProjectRoot "RUN\REPAIR_TUNING_EFFECTIVE_SYNC.ps1"
 $profitTrackingScript = Join-Path $ProjectRoot "RUN\BUILD_PROFIT_TRACKING_REPORT.ps1"
 $dailySystemReportScript = Join-Path $ProjectRoot "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
 $paperLiveFeedbackScript = Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1"
@@ -19,6 +22,7 @@ $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 $fullStackAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1"
 $archiverScript = Join-Path $ProjectRoot "RUN\START_LOCAL_OPERATOR_ARCHIVER_BACKGROUND.ps1"
 $mt5WatcherScript = Join-Path $ProjectRoot "RUN\START_MT5_TESTER_STATUS_WATCHER_BACKGROUND.ps1"
+$mt5RiskGuardScript = Join-Path $ProjectRoot "RUN\START_MT5_RISK_POPUP_GUARD_BACKGROUND.ps1"
 $weakestBatchScript = Join-Path $ProjectRoot "RUN\START_WEAKEST_MT5_BATCH_BACKGROUND.ps1"
 $qdmWeakestScript = Join-Path $ProjectRoot "RUN\START_QDM_WEAKEST_SYNC_BACKGROUND.ps1"
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
@@ -31,6 +35,9 @@ foreach ($path in @(
     $priorityScript,
     $qdmProfileScript,
     $mlHintsScript,
+    $researchPlanScript,
+    $mt5QueueSyncScript,
+    $tuningEffectiveRepairScript,
     $profitTrackingScript,
     $dailySystemReportScript,
     $paperLiveFeedbackScript,
@@ -40,6 +47,7 @@ foreach ($path in @(
     $fullStackAuditScript,
     $archiverScript,
     $mt5WatcherScript,
+    $mt5RiskGuardScript,
     $weakestBatchScript,
     $qdmWeakestScript,
     $mlScript,
@@ -351,6 +359,21 @@ while ($true) {
         "rebuilt"
     } | Out-Null
 
+    Invoke-SupervisorAction -Actions $actions -Name "research_plan" -Operation {
+        & $researchPlanScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "mt5_queue_sync" -Operation {
+        & $mt5QueueSyncScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "tuning_effective_sync" -Operation {
+        $repair = & $tuningEffectiveRepairScript
+        "repaired count=$($repair.repaired_count)"
+    } | Out-Null
+
     Invoke-SupervisorAction -Actions $actions -Name "profit_tracking" -Operation {
         & $profitTrackingScript | Out-Null
         "rebuilt"
@@ -368,6 +391,13 @@ while ($true) {
             -Label "mt5_status_watcher" `
             -IsRunning { (Get-WrapperCount -Pattern "*mt5_tester_status_watcher_wrapper_*") -gt 0 } `
             -StarterPath $mt5WatcherScript
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "mt5_risk_guard" -Operation {
+        Ensure-BackgroundTask `
+            -Label "mt5_risk_guard" `
+            -IsRunning { (Get-WrapperCount -Pattern "*mt5_risk_popup_guard_wrapper_*") -gt 0 } `
+            -StarterPath $mt5RiskGuardScript
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "qdm" -Operation {

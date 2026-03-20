@@ -5,9 +5,11 @@ param(
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
     [int]$TimeoutSec = 7200,
+    [switch]$UseResearchPlan = $true,
+    [string]$ResearchPlanPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_intensive_research_plan_latest.json",
     [switch]$UsePriorityReport = $true,
     [string]$PriorityReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
-    [int]$PriorityCount = 8
+    [int]$PriorityCount = 17
 )
 
 Set-StrictMode -Version Latest
@@ -50,13 +52,12 @@ Write-Host "Preparing secondary MT5 weakest-first terminal..."
 & $priorityScript | Out-Host
 
 $symbols = @()
-if ($UsePriorityReport -and (Test-Path -LiteralPath $PriorityReportPath)) {
+if ($UseResearchPlan -and (Test-Path -LiteralPath $ResearchPlanPath)) {
     try {
-        $priorityReport = Get-Content -LiteralPath $PriorityReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $ranked = @($priorityReport.ranked_instruments)
+        $researchPlan = Get-Content -LiteralPath $ResearchPlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $symbols = @(
-            $ranked |
-                ForEach-Object { Normalize-SymbolAlias -Alias ([string]$_.symbol_alias) } |
+            @($researchPlan.tester_queue) |
+                ForEach-Object { Normalize-SymbolAlias -Alias ([string]$_) } |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
                 Select-Object -Unique -First $PriorityCount
         )
@@ -66,20 +67,49 @@ if ($UsePriorityReport -and (Test-Path -LiteralPath $PriorityReportPath)) {
     }
 }
 
+if ($UsePriorityReport -and (Test-Path -LiteralPath $PriorityReportPath)) {
+    try {
+        $priorityReport = Get-Content -LiteralPath $PriorityReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ranked = @($priorityReport.ranked_instruments)
+        if ($symbols.Count -eq 0) {
+            $symbols = @(
+                $ranked |
+                    ForEach-Object { Normalize-SymbolAlias -Alias ([string]$_.symbol_alias) } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    Select-Object -Unique -First $PriorityCount
+            )
+        }
+    }
+    catch {
+        if ($symbols.Count -eq 0) {
+            $symbols = @()
+        }
+    }
+}
+
 if ($symbols.Count -eq 0) {
     $symbols = @(
         "NZDUSD",
         "GBPJPY",
         "SILVER",
+        "PLATIN",
+        "DE30",
+        "GOLD",
         "EURAUD",
         "COPPERUS",
-        "PLATIN",
         "GBPAUD",
-        "EURJPY"
+        "AUDUSD",
+        "EURJPY",
+        "US500",
+        "USDJPY",
+        "USDCAD",
+        "USDCHF",
+        "EURUSD",
+        "GBPUSD"
     )
 }
 
-Write-Host ("Weakest-first symbol plan: {0}" -f ($symbols -join ", "))
+Write-Host ("MT5 research symbol plan: {0}" -f ($symbols -join ", "))
 
 $workers = @(
     "weakest_mt5_01",

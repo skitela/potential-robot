@@ -177,6 +177,29 @@ if (Test-Path -LiteralPath $qdmProfilePath) {
     }
 }
 
+$researchPlanPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_intensive_research_plan_latest.json"
+if (Test-Path -LiteralPath $researchPlanPath) {
+    $researchPlan = Get-Content -LiteralPath $researchPlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $slotItems = @($researchPlan.slot_plan)
+    if ($slotItems.Count -gt 0) {
+        $lines.Add("Current 20-minute intensive research plan:")
+        foreach ($item in $slotItems | Select-Object -First 6) {
+            $lines.Add(("- #{0} {1} [{2}] slot={3} qdm={4} mt5={5}" -f
+                $item.global_slot_index,
+                $item.symbol_alias,
+                $item.research_group,
+                $item.slot_pl,
+                $(if ($item.qdm_supported) { "yes" } else { "no" }),
+                $item.mt5_followup_reason))
+        }
+        $testerQueue = @($researchPlan.tester_queue)
+        if ($testerQueue.Count -gt 0) {
+            $lines.Add(("- mt5_queue_head: {0}" -f (($testerQueue | Select-Object -First 8) -join ", ")))
+        }
+        $lines.Add("")
+    }
+}
+
 $mt5Queue = $null
 if (Test-Path -LiteralPath $mt5RetestQueuePath) {
     $mt5Queue = Get-Content -LiteralPath $mt5RetestQueuePath -Raw -Encoding UTF8 | ConvertFrom-Json

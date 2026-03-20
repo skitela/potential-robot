@@ -9,6 +9,18 @@ double MbTuningOverlayClamp(const double value,const double lo,const double hi)
    return MathMax(lo,MathMin(hi,value));
   }
 
+bool MbKeepAcceptedPaperExperimentActive(
+   const bool paper_lab_active,
+   const MbTuningLocalPolicy &policy
+)
+  {
+   return (
+      paper_lab_active &&
+      policy.experiment_status == "ACCEPTED" &&
+      (policy.trust_reason_domain == "RISK" || policy.trust_reason_class == "CONTRACT")
+   );
+  }
+
 int MbGetAllTuningFamilies(string &out[])
   {
    ArrayResize(out,7);
@@ -90,6 +102,7 @@ void MbBuildEffectiveTuningPolicy(
    bool family_loaded = MbLoadTuningFamilyPolicy(family,out_family_policy);
    bool coordinator_loaded = MbLoadTuningCoordinatorState(out_coordinator_state);
    bool paper_lab_active = ((family_loaded && out_family_policy.paper_mode_active) || (coordinator_loaded && out_coordinator_state.paper_mode_active));
+   bool preserve_local_paper_caps = MbKeepAcceptedPaperExperimentActive(paper_lab_active,local_policy);
 
    if(family_loaded)
      {
@@ -126,13 +139,12 @@ void MbBuildEffectiveTuningPolicy(
    // If the last accepted local experiment is being masked only by portfolio/fleet
    // risk state, keep its signal filter active in paper runtime so the laboratory
    // can continue to collect lessons without reopening live risk.
-   if(
-      paper_lab_active &&
-      !effective_policy.trusted_data &&
-      effective_policy.experiment_status == "ACCEPTED" &&
-      (effective_policy.trust_reason_domain == "RISK" || effective_policy.trust_reason_class == "CONTRACT")
-   )
+   if(preserve_local_paper_caps)
+     {
       effective_policy.trusted_data = true;
+      effective_policy.confidence_cap = MathMax(effective_policy.confidence_cap,local_policy.confidence_cap);
+      effective_policy.risk_cap = MathMax(effective_policy.risk_cap,local_policy.risk_cap);
+     }
 
    MbApplyTuningGuardToLocalPolicy(family,effective_policy);
   }

@@ -4,7 +4,7 @@ param(
     [string]$MlMetricsPath = "C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json",
     [string]$StateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\STATE",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
-    [int]$TopCount = 8
+    [int]$TopCount = 17
 )
 
 Set-StrictMode -Version Latest
