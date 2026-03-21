@@ -45,6 +45,8 @@ input uint InpTimerSec = 5;
 input bool InpEnableLiveEntries = false;
 input bool InpPaperCollectMode = true;
 input string InpTradeComment = "MB_EURAUD";
+input bool InpEnableStrategyTesterSandbox = true;
+input string InpStrategyTesterSandboxTag = "EURAUD_AGENT";
 
 CTrade g_trade;
 MbRuntimeState g_state;
@@ -93,6 +95,19 @@ bool ShouldRunEURAUDTuningCycle(const datetime now)
 bool IsLocalPaperModeActive()
   {
    return MbIsEffectivePaperRuntimeActive(InpEnableLiveEntries,InpPaperCollectMode,g_runtime_control);
+  }
+
+void ConfigureEURAUDStrategyTesterSandbox()
+  {
+   if(!InpEnableStrategyTesterSandbox || !MbIsStrategyTesterRuntime())
+      return;
+
+   string sandbox_tag = MbCanonicalSymbol(g_profile.symbol);
+   string custom_tag = MbStoragePathSanitizeToken(InpStrategyTesterSandboxTag);
+   if(custom_tag != "" && custom_tag != "DEFAULT")
+      sandbox_tag += "_" + custom_tag;
+
+   MbEnableStrategyTesterSandbox(sandbox_tag);
   }
 
 void NormalizeEURAUDMarketPermissions()
@@ -276,6 +291,7 @@ int OnInit()
    if(!MbVerifyChartSymbol(g_profile.symbol))
       return(INIT_FAILED);
    g_profile.symbol = Symbol();
+   ConfigureEURAUDStrategyTesterSandbox();
    g_state.magic = InpMagic;
    g_state.symbol = g_profile.symbol;
    g_state.mode = MB_MODE_READY;

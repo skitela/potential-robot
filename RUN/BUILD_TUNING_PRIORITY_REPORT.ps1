@@ -39,6 +39,98 @@ function Get-FirstValue {
     return $null
 }
 
+function Test-ExpectedPaperMarketClosure {
+    param([object]$Summary)
+
+    if ($null -eq $Summary) {
+        return $false
+    }
+
+    $paperRuntime = [bool](Get-FirstValue -Object $Summary -Names @("paper_runtime_override_active"))
+    $terminalConnected = [bool](Get-FirstValue -Object $Summary -Names @("terminal_connected"))
+    $termTradeAllowed = [bool](Get-FirstValue -Object $Summary -Names @("term_trade_allowed"))
+    $rawTradePermissionsOk = [bool](Get-FirstValue -Object $Summary -Names @("raw_trade_permissions_ok"))
+    $tickAgeMs = [long](Get-FirstValue -Object $Summary -Names @("tick_age_ms"))
+    $execReason = [string](Get-FirstValue -Object $Summary -Names @("execution_quality_reason_code"))
+
+    if ($execReason -eq "MARKET_CLOSED_EXPECTED") {
+        return $true
+    }
+
+    return (
+        $paperRuntime -and
+        $terminalConnected -and
+        -not $termTradeAllowed -and
+        -not $rawTradePermissionsOk -and
+        $tickAgeMs -ge 15000
+    )
+}
+
+function Resolve-OperationalTrustState {
+    param(
+        [string]$TrustState,
+        [int]$SampleCount,
+        [bool]$ExpectedPaperClosure
+    )
+
+    if (-not $ExpectedPaperClosure) {
+        return $TrustState
+    }
+
+    if ($TrustState -eq "INFRASTRUCTURE_WEAK") {
+        if ($SampleCount -lt 50) {
+            return "LOW_SAMPLE"
+        }
+        return "MARKET_CLOSED_EXPECTED"
+    }
+
+    return $TrustState
+}
+
+function Resolve-OperationalTrustReason {
+    param(
+        [string]$TrustState,
+        [string]$TrustReason,
+        [int]$SampleCount,
+        [bool]$ExpectedPaperClosure
+    )
+
+    if (-not $ExpectedPaperClosure) {
+        return $TrustReason
+    }
+
+    if ($TrustState -eq "INFRASTRUCTURE_WEAK") {
+        if ($SampleCount -lt 50) {
+            return "LOW_SAMPLE"
+        }
+        return "MARKET_CLOSED_EXPECTED"
+    }
+
+    return $TrustReason
+}
+
+function Resolve-OperationalCostState {
+    param(
+        [string]$CostState,
+        [string]$CostReason,
+        [bool]$ExpectedPaperClosure
+    )
+
+    if (-not $ExpectedPaperClosure) {
+        return $CostState
+    }
+
+    if ($CostReason -eq "MARKET_CLOSED_EXPECTED") {
+        return "LOW"
+    }
+
+    if ($CostState -in @("NON_REPRESENTATIVE", "HIGH", "MEDIUM")) {
+        return "LOW"
+    }
+
+    return $CostState
+}
+
 function Get-TrustWeight {
     param([string]$TrustState)
     switch ($TrustState) {
@@ -116,6 +208,9 @@ function Get-RecommendedAction {
         [int]$Opens
     )
 
+    if ($TrustState -eq "MARKET_CLOSED_EXPECTED") {
+        return "utrzymac weekend research i nie traktowac zamknietego rynku jako awarii"
+    }
     if ($TrustState -eq "LOW_SAMPLE" -or $SampleCount -lt 50) {
         return "powiekszyc probke i dane historyczne, bez strojenia sygnalu"
     }
@@ -237,9 +332,15 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
     $trustState = [string](Get-FirstValue -Object $summary -Names @("trust_state"))
     $trustReason = [string](Get-FirstValue -Object $summary -Names @("trust_reason"))
     $costState = [string](Get-FirstValue -Object $summary -Names @("cost_pressure_state", "cost_state"))
+    $costReason = [string](Get-FirstValue -Object $summary -Names @("cost_pressure_reason_code", "cost_reason_code"))
     $sampleCount = [int](Get-FirstValue -Object $summary -Names @("learning_sample_count"))
     $bias = [double](Get-FirstValue -Object $summary -Names @("learning_bias"))
     $spreadPoints = [double](Get-FirstValue -Object $summary -Names @("spread_points", "spread_now"))
+    $expectedPaperClosure = Test-ExpectedPaperMarketClosure -Summary $summary
+
+    $trustState = Resolve-OperationalTrustState -TrustState $trustState -SampleCount $sampleCount -ExpectedPaperClosure $expectedPaperClosure
+    $trustReason = Resolve-OperationalTrustReason -TrustState ([string](Get-FirstValue -Object $summary -Names @("trust_state"))) -TrustReason $trustReason -SampleCount $sampleCount -ExpectedPaperClosure $expectedPaperClosure
+    $costState = Resolve-OperationalCostState -CostState $costState -CostReason $costReason -ExpectedPaperClosure $expectedPaperClosure
 
     $live = if ($liveMap.ContainsKey($alias)) { $liveMap[$alias] } else { $null }
     $liveNet = if ($null -ne $live) { [double]$live.net } else { 0.0 }
