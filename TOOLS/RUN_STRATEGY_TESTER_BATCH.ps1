@@ -8,7 +8,14 @@ param(
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
     [string]$BatchReportName = "strategy_tester_batch_latest",
-    [string]$EvidenceSubdir = ""
+    [string]$EvidenceSubdir = "",
+    [ValidateSet(0,1,2,3)]
+    [int]$Optimization = 0,
+    [ValidateSet(0,1,2,3,4,5,6,7)]
+    [int]$OptimizationCriterion = 6,
+    [switch]$SkipResearchRefresh,
+    [ValidateSet("ConcurrentLab", "OfflineMax", "Light")]
+    [string]$ResearchPerfProfile = "Light"
 )
 
 Set-StrictMode -Version Latest
@@ -72,7 +79,11 @@ for ($i = 0; $i -lt $SymbolAliases.Count; $i++) {
         -TimeoutSec $effectiveTimeoutSec `
         -FromDate $FromDate `
         -ToDate $ToDate `
-        -EvidenceSubdir $EvidenceSubdir
+        -EvidenceSubdir $EvidenceSubdir `
+        -Optimization $Optimization `
+        -OptimizationCriterion $OptimizationCriterion `
+        -SkipResearchRefresh:$SkipResearchRefresh `
+        -ResearchPerfProfile $ResearchPerfProfile
 
     if (Test-TesterRunNeedsRetry -Run $run) {
         $retryTimeoutSec = [Math]::Max($effectiveTimeoutSec, [int]($effectiveTimeoutSec * 1.5))
@@ -85,7 +96,11 @@ for ($i = 0; $i -lt $SymbolAliases.Count; $i++) {
             -TimeoutSec $retryTimeoutSec `
             -FromDate $FromDate `
             -ToDate $ToDate `
-            -EvidenceSubdir $EvidenceSubdir
+            -EvidenceSubdir $EvidenceSubdir `
+            -Optimization $Optimization `
+            -OptimizationCriterion $OptimizationCriterion `
+            -SkipResearchRefresh:$SkipResearchRefresh `
+            -ResearchPerfProfile $ResearchPerfProfile
     }
 
     $results += $run
@@ -103,6 +118,8 @@ $report = [ordered]@{
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     symbols          = $SymbolAliases
     worker_names     = $WorkerNames
+    optimization     = $Optimization
+    optimization_criterion = $OptimizationCriterion
     runs             = $results
     repeatability    = $repeatabilityReports
 }
@@ -119,7 +136,9 @@ $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding
 $mdLines = @(
     "# Strategy Tester Batch Latest",
     "",
-    ("- generated_at_utc: {0}" -f $report.generated_at_utc)
+    ("- generated_at_utc: {0}" -f $report.generated_at_utc),
+    ("- optimization: {0}" -f $report.optimization),
+    ("- optimization_criterion: {0}" -f $report.optimization_criterion)
 )
 foreach ($run in $results) {
     $mdLines += ("- {0} / {1}: {2}, duration={3}, balance={4}" -f $run.symbol_alias, $run.sandbox_name, $run.result_label, $run.test_duration, $run.final_balance)

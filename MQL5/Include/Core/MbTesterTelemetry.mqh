@@ -7,6 +7,7 @@
 #include "MbLatencyProfile.mqh"
 #include "MbTuningEpistemology.mqh"
 #include "MbTuningTypes.mqh"
+#include "MbTesterOptimizationInputs.mqh"
 
 string MbTesterTelemetryEscapeJson(const string value)
   {
@@ -544,7 +545,10 @@ int MbTesterTelemetryOnInit(const string symbol,const long magic)
    ArrayResize(g_mb_tester_telemetry_processed_passes,0);
    g_mb_tester_telemetry_filter_ready = false;
    if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      MbConfigureCommonOptimizationRanges();
       MbTesterTelemetryConfigureOptimizationFilter(magic,true);
+     }
    MbTesterTelemetryWriteSessionMarker(symbol,"tester_init",magic);
    return INIT_SUCCEEDED;
   }

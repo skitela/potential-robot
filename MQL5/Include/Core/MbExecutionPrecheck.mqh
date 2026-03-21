@@ -3,6 +3,7 @@
 
 #include "MbRuntimeTypes.mqh"
 #include "MbExecutionCommon.mqh"
+#include "MbTesterOptimizationInputs.mqh"
 
 bool MbShouldBypassExecutionPrecheckInPaper(const string reason_code)
   {
@@ -193,7 +194,10 @@ MbExecutionCheck MbBuildExecutionCheck(
    double expected_move_points = MathAbs(entry_price - tp_price) / _Point;
    double modeled_slippage_points = MbResolveModeledSlippagePoints(profile,snapshot);
    double modeled_commission_points = MbResolveModeledCommissionPoints(profile);
-   double safety_margin_points = MbResolveSafetyMarginPoints(snapshot);
+   double safety_margin_scale = MbResolveTesterSafetyMarginScale();
+   double edge_requirement_scale = MbResolveTesterEdgeRequirementScale();
+   double time_stop_scale = MbResolveTesterTimeStopScale();
+   double safety_margin_points = MbResolveSafetyMarginPoints(snapshot) * safety_margin_scale;
    double modeled_total_cost_points = snapshot.spread_points + modeled_slippage_points + modeled_commission_points + safety_margin_points;
    double benchmark_typical_move_points = 40.0;
    double benchmark_time_stop_points = 16.0;
@@ -206,6 +210,8 @@ MbExecutionCheck MbBuildExecutionCheck(
       benchmark_mfe_points,
       benchmark_mae_points
    );
+   benchmark_time_stop_points *= time_stop_scale;
+   double required_edge_points = modeled_total_cost_points * edge_requirement_scale;
 
    out.expected_move_points = expected_move_points;
    out.modeled_slippage_points = modeled_slippage_points;
@@ -218,16 +224,20 @@ MbExecutionCheck MbBuildExecutionCheck(
    out.benchmark_mae_points = benchmark_mae_points;
 
    out.diag = out.diag + StringFormat(
-      " expected_move=%.2f spread=%.2f slip=%.2f comm=%.2f safety=%.2f total_cost=%.2f bench_typical=%.2f bench_time_stop=%.2f bench_mfe=%.2f",
+      " expected_move=%.2f spread=%.2f slip=%.2f comm=%.2f safety=%.2f total_cost=%.2f required_edge=%.2f bench_typical=%.2f bench_time_stop=%.2f bench_mfe=%.2f safety_scale=%.2f edge_scale=%.2f time_scale=%.2f",
       expected_move_points,
       snapshot.spread_points,
       modeled_slippage_points,
       modeled_commission_points,
       safety_margin_points,
       modeled_total_cost_points,
+      required_edge_points,
       benchmark_typical_move_points,
       benchmark_time_stop_points,
-      benchmark_mfe_points
+      benchmark_mfe_points,
+      safety_margin_scale,
+      edge_requirement_scale,
+      time_stop_scale
    );
 
    if(modeled_total_cost_points >= benchmark_time_stop_points)
@@ -236,7 +246,7 @@ MbExecutionCheck MbBuildExecutionCheck(
       return out;
      }
 
-   if(expected_move_points <= modeled_total_cost_points)
+   if(expected_move_points <= required_edge_points)
      {
       out.reason = "NET_EDGE_TOO_SMALL";
       return out;
