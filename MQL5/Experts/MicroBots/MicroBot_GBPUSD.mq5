@@ -632,10 +632,12 @@ void OnTick()
      {
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
+      bool weak_candle = (signal.candle_quality_grade != "GOOD");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_gbpusd_rejection_poor_candle_gate = false;
       bool blocked_by_gbpusd_trend_chaos_bad_spread_gate = false;
+      bool blocked_by_gbpusd_breakout_chaos_bad_spread_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_gbpusd_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_gbpusd_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -665,29 +667,44 @@ void OnTick()
          signal.spread_regime == "BAD" &&
          (
             signal.confidence_bucket == "LOW" ||
-            poor_candle ||
+            weak_candle ||
             poor_renko
          )
       )
          blocked_by_gbpusd_trend_chaos_bad_spread_gate = true;
+      if(
+         signal.setup_type == "SETUP_BREAKOUT" &&
+         signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            weak_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_gbpusd_breakout_chaos_bad_spread_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
-         paper_gate_abs = 0.62;
-         if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE" || signal.confidence_bucket == "LOW")
-            paper_gate_abs = 0.72;
-         if(poor_candle && poor_renko)
-            paper_gate_abs = MathMax(paper_gate_abs,0.84);
-         else if(poor_candle)
-            paper_gate_abs = MathMax(paper_gate_abs,0.78);
+          paper_gate_abs = 0.62;
+          if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE" || signal.confidence_bucket == "LOW")
+             paper_gate_abs = 0.72;
+          if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD" && (weak_candle || poor_renko))
+             paper_gate_abs = MathMax(paper_gate_abs,0.82);
+          if(poor_candle && poor_renko)
+             paper_gate_abs = MathMax(paper_gate_abs,0.84);
+          else if(poor_candle)
+             paper_gate_abs = MathMax(paper_gate_abs,0.78);
         }
       else if(signal.setup_type == "SETUP_TREND")
         {
-         if(signal.market_regime == "CHAOS" && signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
-            paper_gate_abs = 0.46;
-         else if(signal.confidence_bucket == "LOW" && poor_candle)
-            paper_gate_abs = 0.30;
-         else if(signal.market_regime == "TREND" && signal.confidence_bucket != "LOW" && !poor_candle && !poor_renko)
-            paper_gate_abs = 0.24;
+          if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD" && (weak_candle || poor_renko))
+             paper_gate_abs = 0.44;
+          else if(signal.market_regime == "CHAOS" && signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
+             paper_gate_abs = 0.46;
+          else if(signal.confidence_bucket == "LOW" && poor_candle)
+             paper_gate_abs = 0.30;
+          else if(signal.market_regime == "TREND" && signal.confidence_bucket != "LOW" && !poor_candle && !poor_renko)
+             paper_gate_abs = 0.24;
         }
       else if(signal.setup_type == "SETUP_PULLBACK")
         {
@@ -711,6 +728,7 @@ void OnTick()
          !blocked_by_tuning_gate &&
          !blocked_by_gbpusd_rejection_poor_candle_gate &&
          !blocked_by_gbpusd_trend_chaos_bad_spread_gate &&
+         !blocked_by_gbpusd_breakout_chaos_bad_spread_gate &&
          MathAbs(signal.score) >= paper_gate_abs
       )
         {
@@ -722,6 +740,8 @@ void OnTick()
          signal.reason_code = "GBPUSD_REJECTION_POOR_CANDLE_BLOCK";
       else if(blocked_by_gbpusd_trend_chaos_bad_spread_gate)
          signal.reason_code = "GBPUSD_TREND_CHAOS_BAD_SPREAD_BLOCK";
+      else if(blocked_by_gbpusd_breakout_chaos_bad_spread_gate)
+         signal.reason_code = "GBPUSD_BREAKOUT_CHAOS_BAD_SPREAD_BLOCK";
      }
    AppendGBPUSDCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
