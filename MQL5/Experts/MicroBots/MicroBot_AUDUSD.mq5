@@ -638,12 +638,21 @@ void OnTick()
          blocked_by_tuning_gate = true;
       if(
          signal.setup_type == "SETUP_BREAKOUT" &&
-         (signal.market_regime == "BREAKOUT" || signal.market_regime == "TREND" || signal.market_regime == "CHAOS") &&
-         signal.spread_regime == "BAD" &&
          (
-            signal.confidence_bucket == "LOW" ||
-            poor_candle ||
-            poor_renko
+            (
+               (signal.market_regime == "BREAKOUT" || signal.market_regime == "TREND" || signal.market_regime == "CHAOS") &&
+               signal.spread_regime == "BAD" &&
+               (
+                  signal.confidence_bucket == "LOW" ||
+                  poor_candle ||
+                  poor_renko
+               )
+            ) ||
+            (
+               (signal.market_regime == "BREAKOUT" || signal.market_regime == "TREND") &&
+               poor_renko &&
+               signal.spread_regime != "GOOD"
+            )
          )
       )
          blocked_by_audusd_breakout_cost_gate = true;
