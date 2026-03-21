@@ -37,6 +37,80 @@ function Get-NearProfitWrapperProcesses {
     )
 }
 
+function Get-NearProfitRiskGuardProcesses {
+    return @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "powershell.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                $_.CommandLine -like "*near_profit_mt5_risk_popup_guard_wrapper_*"
+            }
+    )
+}
+
+function Ensure-NearProfitRiskPopupGuard {
+    param(
+        [string]$ProjectRootPath,
+        [string]$LabTerminalRoot,
+        [string]$LogRootPath
+    )
+
+    $guardScript = Join-Path $ProjectRootPath "TOOLS\mt5_risk_popup_guard.ps1"
+    if (-not (Test-Path -LiteralPath $guardScript)) {
+        throw "Near-profit MT5 risk popup guard script not found: $guardScript"
+    }
+
+    $existingGuards = @(Get-NearProfitRiskGuardProcesses)
+    if ($existingGuards.Count -gt 0) {
+        return [pscustomobject]@{
+            started = $false
+            reason = "already_running"
+            active_guard_count = $existingGuards.Count
+            log_path = ""
+        }
+    }
+
+    New-Item -ItemType Directory -Force -Path $LogRootPath | Out-Null
+
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $logPath = Join-Path $LogRootPath ("near_profit_mt5_risk_popup_guard_{0}.log" -f $timestamp)
+    $wrapperPath = Join-Path $env:TEMP ("near_profit_mt5_risk_popup_guard_wrapper_{0}.ps1" -f $timestamp)
+    $statusPath = Join-Path $ProjectRootPath "RUN\near_profit_mt5_risk_guard_status.json"
+    $eventLogPath = Join-Path $LogRootPath "near_profit_mt5_risk_guard.log"
+    $pidPath = Join-Path $ProjectRootPath "RUN\near_profit_mt5_risk_guard.pid"
+
+    $wrapperContent = @"
+`$ErrorActionPreference = 'Stop'
+Start-Transcript -Path '$logPath' -Force
+try {
+    & '$guardScript' -Root '$ProjectRootPath' -Mt5DataDir '$LabTerminalRoot' -PollMs 1200 -StatusPath '$statusPath' -EventLogPath '$eventLogPath' -PidPath '$pidPath'
+}
+finally {
+    Stop-Transcript
+}
+"@
+
+    Set-Content -LiteralPath $wrapperPath -Value $wrapperContent -Encoding UTF8
+
+    $proc = Start-Process -FilePath "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $wrapperPath) `
+        -WorkingDirectory $ProjectRootPath `
+        -PassThru
+
+    try {
+        $proc.PriorityClass = "AboveNormal"
+    }
+    catch {
+    }
+
+    return [pscustomobject]@{
+        started = $true
+        reason = "started"
+        active_guard_count = 1
+        log_path = $logPath
+    }
+}
+
 $batchScript = Join-Path $ProjectRoot "RUN\RUN_NEAR_PROFIT_OPTIMIZATION_BATCH.ps1"
 $statusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 $preparePortableLabScript = Join-Path $ProjectRoot "RUN\PREPARE_NEAR_PROFIT_PORTABLE_LAB.ps1"
@@ -51,6 +125,7 @@ if (-not (Test-Path -LiteralPath $ProfitTrackingPath)) {
 }
 
 $portableTerminal = $false
+$nearProfitRiskGuard = $null
 if ($UseDedicatedPortableLabLane) {
     if (-not (Test-Path -LiteralPath $preparePortableLabScript)) {
         throw "Near-profit portable lab prepare script not found: $preparePortableLabScript"
@@ -68,6 +143,7 @@ if ($UseDedicatedPortableLabLane) {
     $Mt5Exe = [string]$portableLab.mt5_exe
     $TerminalDataDir = [string]$portableLab.terminal_data_dir
     $portableTerminal = [bool]$portableLab.portable_terminal
+    $nearProfitRiskGuard = Ensure-NearProfitRiskPopupGuard -ProjectRootPath $ProjectRoot -LabTerminalRoot $TerminalDataDir -LogRootPath $LogRoot
 }
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
@@ -91,6 +167,8 @@ if ($existingWrappers.Count -gt 0) {
         started = $false
         reason = "wrapper_already_running"
         active_wrapper_count = $existingWrappers.Count
+        risk_guard_state = $(if ($null -ne $nearProfitRiskGuard) { [string]$nearProfitRiskGuard.reason } else { "" })
+        risk_guard_log = $(if ($null -ne $nearProfitRiskGuard) { [string]$nearProfitRiskGuard.log_path } else { "" })
     }
     return
 }
@@ -260,3 +338,6 @@ catch {
 
 Write-Host "Background near-profit optimization-after-idle started."
 Write-Host "Log: $logPath"
+if ($null -ne $nearProfitRiskGuard -and -not [string]::IsNullOrWhiteSpace([string]$nearProfitRiskGuard.log_path)) {
+    Write-Host "Near-profit risk guard log: $($nearProfitRiskGuard.log_path)"
+}

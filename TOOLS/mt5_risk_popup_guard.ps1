@@ -2,7 +2,10 @@ param(
     [string]$Root = "C:\MAKRO_I_MIKRO_BOT",
     [string]$Mt5DataDir = "",
     [string[]]$Mt5DataDirs = @(),
-    [int]$PollMs = 1200
+    [int]$PollMs = 1200,
+    [string]$StatusPath = "",
+    [string]$EventLogPath = "",
+    [string]$PidPath = ""
 )
 
 Set-StrictMode -Version Latest
@@ -404,9 +407,16 @@ $logDir = Join-Path $runtimeRoot "LOGS\monitor"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-$statusPath = Join-Path $runDir "mt5_risk_guard_status.json"
-$eventLog = Join-Path $logDir "mt5_risk_guard.log"
-$pidPath = Join-Path $runDir "mt5_risk_guard.pid"
+$statusPath = if ([string]::IsNullOrWhiteSpace($StatusPath)) { Join-Path $runDir "mt5_risk_guard_status.json" } else { $StatusPath }
+$eventLog = if ([string]::IsNullOrWhiteSpace($EventLogPath)) { Join-Path $logDir "mt5_risk_guard.log" } else { $EventLogPath }
+$pidPath = if ([string]::IsNullOrWhiteSpace($PidPath)) { Join-Path $runDir "mt5_risk_guard.pid" } else { $PidPath }
+
+foreach ($path in @($statusPath, $eventLog, $pidPath)) {
+    $parent = Split-Path -Parent $path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+}
 
 $state = [ordered]@{
     started_utc = (Get-Date).ToUniversalTime().ToString("o")
@@ -431,7 +441,7 @@ $state = [ordered]@{
 
 Append-Line -Path $eventLog -Line ("[{0}] RISK_GUARD_START pid={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $PID)
 
-$mt5DataDirResolvedList = Resolve-Mt5DataDirList -Primary $Mt5DataDir -Additional $Mt5DataDirs
+$mt5DataDirResolvedList = @(Resolve-Mt5DataDirList -Primary $Mt5DataDir -Additional $Mt5DataDirs)
 $state.mt5_data_dirs = @($mt5DataDirResolvedList)
 $state.mt5_data_dir = if ($mt5DataDirResolvedList.Count -gt 0) { [string]$mt5DataDirResolvedList[0] } else { "" }
 $mt5DirLogValue = if ($mt5DataDirResolvedList.Count -eq 0) { "<unresolved>" } else { ($mt5DataDirResolvedList -join "; ") }
@@ -453,7 +463,7 @@ while ($true) {
         }
 
         if ($needsRefresh) {
-            $mt5DataDirResolvedList = Resolve-Mt5DataDirList -Primary $Mt5DataDir -Additional $Mt5DataDirs
+            $mt5DataDirResolvedList = @(Resolve-Mt5DataDirList -Primary $Mt5DataDir -Additional $Mt5DataDirs)
             $state.mt5_data_dirs = @($mt5DataDirResolvedList)
             $state.mt5_data_dir = if ($mt5DataDirResolvedList.Count -gt 0) { [string]$mt5DataDirResolvedList[0] } else { "" }
         }
