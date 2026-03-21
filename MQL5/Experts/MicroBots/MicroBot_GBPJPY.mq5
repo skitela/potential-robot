@@ -608,6 +608,7 @@ void OnTick()
       bool blocked_by_tuning_gate = false;
       bool blocked_by_gbpjpy_range_dirty_gate = false;
       bool blocked_by_gbpjpy_range_chaos_bad_spread_gate = false;
+      bool blocked_by_gbpjpy_breakout_trend_cost_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_gbpjpy_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_gbpjpy_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -642,11 +643,29 @@ void OnTick()
          )
       )
          blocked_by_gbpjpy_range_chaos_bad_spread_gate = true;
+      if(
+         signal.setup_type == "SETUP_BREAKOUT" &&
+         signal.market_regime == "TREND" &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            poor_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_gbpjpy_breakout_trend_cost_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
          paper_gate_abs = 0.64;
          if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE" || signal.confidence_bucket == "LOW")
             paper_gate_abs = 0.74;
+         if(signal.market_regime == "TREND")
+           {
+            if(signal.confidence_bucket == "LOW" || poor_candle || poor_renko)
+               paper_gate_abs = MathMax(paper_gate_abs,0.80);
+            else if(signal.spread_regime != "GOOD")
+               paper_gate_abs = MathMax(paper_gate_abs,0.76);
+           }
         }
       else if(signal.setup_type == "SETUP_RANGE")
          paper_gate_abs = 0.19;
@@ -655,6 +674,7 @@ void OnTick()
          !blocked_by_tuning_gate &&
          !blocked_by_gbpjpy_range_dirty_gate &&
          !blocked_by_gbpjpy_range_chaos_bad_spread_gate &&
+         !blocked_by_gbpjpy_breakout_trend_cost_gate &&
          MathAbs(signal.score) >= paper_gate_abs
       )
         {
@@ -666,6 +686,8 @@ void OnTick()
          signal.reason_code = "GBPJPY_RANGE_CHAOS_DIRTY_FOREGROUND_BLOCK";
       else if(blocked_by_gbpjpy_range_chaos_bad_spread_gate)
          signal.reason_code = "GBPJPY_RANGE_CHAOS_BAD_SPREAD_BLOCK";
+      else if(blocked_by_gbpjpy_breakout_trend_cost_gate)
+         signal.reason_code = "GBPJPY_BREAKOUT_TREND_BAD_SPREAD_BLOCK";
      }
    AppendGBPJPYCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)

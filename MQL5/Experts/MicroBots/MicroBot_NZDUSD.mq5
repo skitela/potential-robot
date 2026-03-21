@@ -671,7 +671,15 @@ void OnTick()
             paper_gate_abs = MathMax(paper_gate_abs,0.78);
         }
       else if(signal.setup_type == "SETUP_RANGE")
+        {
          paper_gate_abs = 0.19;
+         if(signal.market_regime == "TREND" || signal.market_regime == "BREAKOUT")
+            paper_gate_abs = 0.30;
+         if(signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
+            paper_gate_abs = MathMax(paper_gate_abs,0.38);
+         else if(signal.confidence_bucket == "LOW" && (poor_candle || poor_renko))
+            paper_gate_abs = MathMax(paper_gate_abs,0.30);
+        }
 
       if(!blocked_by_tuning_gate && !blocked_by_nzdusd_breakout_dirty_gate && MathAbs(signal.score) >= paper_gate_abs)
         {
