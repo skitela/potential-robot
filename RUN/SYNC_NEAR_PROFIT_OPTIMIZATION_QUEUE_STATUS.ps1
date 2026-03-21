@@ -302,11 +302,28 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
         }
     }
     elseif ($null -ne $batchReport) {
-        $resolvedState = "completed"
-        $resolvedCompleted = @($batchReport.symbols)
-        $resolvedPending = @()
-        if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
-            $resolvedNote = "batch_report_available"
+        $batchReportItem = if (Test-Path -LiteralPath $BatchReportPath) { Get-Item -LiteralPath $BatchReportPath -ErrorAction SilentlyContinue } else { $null }
+        $batchReportFreshForCurrentWrapper = (
+            $null -ne $batchReportItem -and
+            (
+                $null -eq $logItem -or
+                $batchReportItem.LastWriteTime -ge $logItem.LastWriteTime.AddSeconds(-15)
+            )
+        )
+
+        if ($batchReportFreshForCurrentWrapper) {
+            $resolvedState = "completed"
+            $resolvedCompleted = @($batchReport.symbols)
+            $resolvedPending = @()
+            if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
+                $resolvedNote = "batch_report_available"
+            }
+        }
+        else {
+            $resolvedState = "stale"
+            if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
+                $resolvedNote = "stale_batch_report"
+            }
         }
     }
     elseif ($null -ne $logItem) {

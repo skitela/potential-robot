@@ -274,13 +274,46 @@ function Import-TabCsvWithRetry {
         } catch {
             $message = $_.Exception.Message
             $isLast = ($attempt -ge $MaxAttempts)
-            if ($message -notmatch 'being used by another process' -or $isLast) {
+            $isLockError = (
+                $message -match 'being used by another process' -or
+                $message -match 'used by another process' -or
+                $message -match 'używany przez inny proces' -or
+                $message -match 'cannot access the file'
+            )
+            if (-not $isLockError -or $isLast) {
                 throw
             }
             Start-Sleep -Milliseconds $DelayMs
         }
     }
     return @()
+}
+
+function Wait-ProcessTerminationGracefully {
+    param(
+        [int[]]$ProcessIds,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $ids = @($ProcessIds | Where-Object { $null -ne $_ } | Select-Object -Unique)
+    if ($ids.Count -le 0) {
+        return
+    }
+
+    $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+    do {
+        $alive = @(
+            $ids |
+                Where-Object {
+                    $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue)
+                }
+        )
+        if ($alive.Count -le 0) {
+            return
+        }
+
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
 }
 
 function Get-TesterRunOutcome {
@@ -488,7 +521,10 @@ try {
     foreach ($processIdToStop in @($trackedProcessId, $process.Id) | Where-Object { $null -ne $_ } | Select-Object -Unique) {
         Get-Process -Id $processIdToStop -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
+    Wait-ProcessTerminationGracefully -ProcessIds @($trackedProcessId, $process.Id) -TimeoutSeconds 30
 }
+
+Start-Sleep -Seconds 2
 
 $reportCandidates = @(
     (Join-Path $mt5ReportsDir ($runId + ".htm")),
