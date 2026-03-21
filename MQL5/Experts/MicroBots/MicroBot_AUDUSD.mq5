@@ -623,6 +623,7 @@ void OnTick()
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_audusd_dirty_range_gate = false;
+      bool blocked_by_audusd_breakout_cost_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_audusd_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_audusd_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -635,11 +636,36 @@ void OnTick()
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_RANGE" && g_audusd_effective_tuning_policy.range_confidence_floor > 0.0 && signal.confidence_score < g_audusd_effective_tuning_policy.range_confidence_floor)
          blocked_by_tuning_gate = true;
+      if(
+         signal.setup_type == "SETUP_BREAKOUT" &&
+         (signal.market_regime == "BREAKOUT" || signal.market_regime == "TREND") &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            poor_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_audusd_breakout_cost_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
          paper_gate_abs = 0.62;
          if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE" || signal.confidence_bucket == "LOW")
             paper_gate_abs = 0.72;
+         if(signal.market_regime == "BREAKOUT")
+           {
+            if(signal.confidence_bucket == "LOW" || poor_candle || poor_renko)
+               paper_gate_abs = MathMax(paper_gate_abs,0.80);
+            else if(signal.spread_regime != "GOOD")
+               paper_gate_abs = MathMax(paper_gate_abs,0.76);
+           }
+         else if(signal.market_regime == "TREND")
+           {
+            if(signal.confidence_bucket == "LOW" || poor_candle || poor_renko)
+               paper_gate_abs = MathMax(paper_gate_abs,0.78);
+            else if(signal.spread_regime != "GOOD")
+               paper_gate_abs = MathMax(paper_gate_abs,0.74);
+           }
        }
       else if(signal.setup_type == "SETUP_RANGE")
         {
@@ -652,6 +678,7 @@ void OnTick()
 
       if(!blocked_by_tuning_gate &&
          !blocked_by_audusd_dirty_range_gate &&
+         !blocked_by_audusd_breakout_cost_gate &&
          MathAbs(signal.score) >= paper_gate_abs)
         {
          signal.valid = true;
@@ -660,6 +687,8 @@ void OnTick()
         }
       else if(blocked_by_audusd_dirty_range_gate)
          signal.reason_code = "AUDUSD_RANGE_DIRTY_HYBRID_BLOCK";
+      else if(blocked_by_audusd_breakout_cost_gate)
+         signal.reason_code = "AUDUSD_BREAKOUT_COST_BAD_SPREAD_BLOCK";
      }
    AppendAUDUSDCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)

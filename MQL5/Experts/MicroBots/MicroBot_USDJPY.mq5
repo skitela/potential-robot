@@ -606,6 +606,7 @@ void OnTick()
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_usdjpy_breakout_chaos_gate = false;
+      bool blocked_by_usdjpy_range_chaos_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -643,15 +644,27 @@ void OnTick()
       else if(signal.setup_type == "SETUP_RANGE")
         {
          paper_gate_abs = 0.19;
+         if(
+            signal.market_regime == "CHAOS" &&
+            (
+               (signal.confidence_bucket == "LOW" && (poor_candle || poor_renko)) ||
+               (signal.spread_regime == "BAD" && (poor_candle || poor_renko))
+            )
+         )
+            blocked_by_usdjpy_range_chaos_gate = true;
+         if(signal.market_regime == "CHAOS")
+            paper_gate_abs = MathMax(paper_gate_abs,0.26);
          if(signal.market_regime == "TREND" || signal.market_regime == "BREAKOUT")
             paper_gate_abs = 0.30;
          if(signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
             paper_gate_abs = MathMax(paper_gate_abs,0.38);
          else if(signal.confidence_bucket == "LOW" && (poor_candle || poor_renko))
             paper_gate_abs = MathMax(paper_gate_abs,0.30);
+         if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD")
+            paper_gate_abs = MathMax(paper_gate_abs,0.32);
         }
 
-      if(!blocked_by_tuning_gate && !blocked_by_usdjpy_breakout_chaos_gate && MathAbs(signal.score) >= paper_gate_abs)
+      if(!blocked_by_tuning_gate && !blocked_by_usdjpy_breakout_chaos_gate && !blocked_by_usdjpy_range_chaos_gate && MathAbs(signal.score) >= paper_gate_abs)
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
@@ -659,6 +672,8 @@ void OnTick()
         }
       else if(blocked_by_usdjpy_breakout_chaos_gate)
          signal.reason_code = "USDJPY_BREAKOUT_CHAOS_POOR_CANDLE_BLOCK";
+      else if(blocked_by_usdjpy_range_chaos_gate)
+         signal.reason_code = "USDJPY_RANGE_CHAOS_DIRTY_FOREGROUND_BLOCK";
      }
    AppendUSDJPYCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
