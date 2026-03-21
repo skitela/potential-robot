@@ -634,6 +634,7 @@ void OnTick()
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_gbpusd_rejection_poor_candle_gate = false;
+      bool blocked_by_gbpusd_trend_chaos_bad_spread_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_gbpusd_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_gbpusd_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -657,6 +658,17 @@ void OnTick()
          )
       )
          blocked_by_gbpusd_rejection_poor_candle_gate = true;
+      if(
+         signal.setup_type == "SETUP_TREND" &&
+         signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            poor_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_gbpusd_trend_chaos_bad_spread_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
          paper_gate_abs = 0.62;
@@ -694,7 +706,12 @@ void OnTick()
             paper_gate_abs = MathMax(paper_gate_abs,0.28);
         }
 
-      if(!blocked_by_tuning_gate && !blocked_by_gbpusd_rejection_poor_candle_gate && MathAbs(signal.score) >= paper_gate_abs)
+      if(
+         !blocked_by_tuning_gate &&
+         !blocked_by_gbpusd_rejection_poor_candle_gate &&
+         !blocked_by_gbpusd_trend_chaos_bad_spread_gate &&
+         MathAbs(signal.score) >= paper_gate_abs
+      )
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
@@ -702,6 +719,8 @@ void OnTick()
         }
       else if(blocked_by_gbpusd_rejection_poor_candle_gate)
          signal.reason_code = "GBPUSD_REJECTION_POOR_CANDLE_BLOCK";
+      else if(blocked_by_gbpusd_trend_chaos_bad_spread_gate)
+         signal.reason_code = "GBPUSD_TREND_CHAOS_BAD_SPREAD_BLOCK";
      }
    AppendGBPUSDCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
