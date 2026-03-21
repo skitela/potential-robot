@@ -3,6 +3,7 @@
 
 #include "MbStorage.mqh"
 #include "MbExecutionCommon.mqh"
+#include "MbRuntimeKernel.mqh"
 
 string g_mb_trade_transaction_queue[];
 string g_mb_trade_transaction_queue_path = "";
@@ -83,11 +84,35 @@ bool MbTransactionMatchesLocalBot(
    const MqlTradeRequest &request
 )
   {
-   if(StringLen(request.symbol) > 0 && request.symbol == symbol && (ulong)request.magic == magic)
+   string local_symbol = MbCanonicalSymbol(symbol);
+   string request_symbol = MbCanonicalSymbol(request.symbol);
+   string trans_symbol = MbCanonicalSymbol(trans.symbol);
+
+   if(StringLen(request_symbol) > 0 && request_symbol == local_symbol && (ulong)request.magic == magic)
       return true;
 
-   if(trans.symbol == symbol)
-      return true;
+   if(trans.deal > 0 && HistoryDealSelect((ulong)trans.deal))
+     {
+      if(MbCanonicalSymbol(HistoryDealGetString((ulong)trans.deal,DEAL_SYMBOL)) == local_symbol &&
+         (ulong)HistoryDealGetInteger((ulong)trans.deal,DEAL_MAGIC) == magic)
+         return true;
+      return false;
+     }
+
+   if(trans.order > 0 && HistoryOrderSelect((ulong)trans.order))
+     {
+      if(MbCanonicalSymbol(HistoryOrderGetString((ulong)trans.order,ORDER_SYMBOL)) == local_symbol &&
+         (ulong)HistoryOrderGetInteger((ulong)trans.order,ORDER_MAGIC) == magic)
+         return true;
+      return false;
+     }
+
+   if(StringLen(trans_symbol) > 0 && trans_symbol == local_symbol)
+     {
+      // Do not attribute by symbol alone. Without request/order/deal magic the event
+      // is ambiguous and can poison local learning/execution feedback.
+      return false;
+     }
 
    return false;
   }
