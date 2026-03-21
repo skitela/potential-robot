@@ -305,13 +305,7 @@ int OnInit()
       return(INIT_FAILED);
 
    MbLoadRuntimeState(g_state);
-   if(IsLocalPaperModeActive())
-     {
-      g_state.halt = false;
-      g_state.close_only = false;
-      g_state.caution_mode = false;
-      g_state.mode = MB_MODE_READY;
-     }
+   MbNormalizePaperRuntimeState(g_state,IsLocalPaperModeActive());
    MbReadRuntimeControl(g_profile.symbol,g_profile.session_profile,g_runtime_control);
    MbApplyRuntimeControl(g_state,g_runtime_control);
    MbKillSwitchEvaluate(g_profile,g_state,g_kill_switch);
