@@ -14,21 +14,80 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-SymbolTimeoutSec {
+    param(
+        [string]$SymbolAlias,
+        [int]$DefaultTimeoutSec
+    )
+
+    $overrides = @{
+        "SILVER"    = 14400
+        "GOLD"      = 10800
+        "PLATIN"    = 10800
+        "COPPER-US" = 10800
+        "US500"     = 10800
+        "DE30"      = 10800
+    }
+
+    if ($overrides.ContainsKey($SymbolAlias)) {
+        return [Math]::Max($DefaultTimeoutSec, [int]$overrides[$SymbolAlias])
+    }
+
+    return $DefaultTimeoutSec
+}
+
+function Test-TesterRunNeedsRetry {
+    param([object]$Run)
+
+    if ($null -eq $Run) {
+        return $false
+    }
+
+    $resultLabel = [string]$Run.result_label
+    $sampleCount = 0
+    $paperRows = 0
+
+    try { $sampleCount = [int]$Run.learning_sample_count } catch { $sampleCount = 0 }
+    try { $paperRows = [int]$Run.paper_open_rows } catch { $paperRows = 0 }
+
+    return (
+        $resultLabel -eq "timed_out" -and
+        $sampleCount -le 0 -and
+        $paperRows -le 0
+    )
+}
+
 $results = @()
 $repeatabilityReports = @()
 for ($i = 0; $i -lt $SymbolAliases.Count; $i++) {
     $symbolAlias = $SymbolAliases[$i]
     $workerName = if ($i -lt $WorkerNames.Count) { $WorkerNames[$i] } else { "worker_$($i + 1)" }
+    $effectiveTimeoutSec = Get-SymbolTimeoutSec -SymbolAlias $symbolAlias -DefaultTimeoutSec $TimeoutSec
     $run = & (Join-Path $ProjectRoot "TOOLS\RUN_MICROBOT_STRATEGY_TESTER.ps1") `
         -ProjectRoot $ProjectRoot `
         -Mt5Exe $Mt5Exe `
         -TerminalDataDir $TerminalDataDir `
         -SymbolAlias $symbolAlias `
         -WorkerName $workerName `
-        -TimeoutSec $TimeoutSec `
+        -TimeoutSec $effectiveTimeoutSec `
         -FromDate $FromDate `
         -ToDate $ToDate `
         -EvidenceSubdir $EvidenceSubdir
+
+    if (Test-TesterRunNeedsRetry -Run $run) {
+        $retryTimeoutSec = [Math]::Max($effectiveTimeoutSec, [int]($effectiveTimeoutSec * 1.5))
+        $run = & (Join-Path $ProjectRoot "TOOLS\RUN_MICROBOT_STRATEGY_TESTER.ps1") `
+            -ProjectRoot $ProjectRoot `
+            -Mt5Exe $Mt5Exe `
+            -TerminalDataDir $TerminalDataDir `
+            -SymbolAlias $symbolAlias `
+            -WorkerName $workerName `
+            -TimeoutSec $retryTimeoutSec `
+            -FromDate $FromDate `
+            -ToDate $ToDate `
+            -EvidenceSubdir $EvidenceSubdir
+    }
+
     $results += $run
 
     try {
