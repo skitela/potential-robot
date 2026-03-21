@@ -8,12 +8,25 @@ string g_mb_incident_queue_path = "";
 
 void MbIncidentJournalInit(const string rel_path)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      g_mb_incident_queue_path = "";
+      ArrayResize(g_mb_incident_queue,0);
+      return;
+     }
+
    g_mb_incident_queue_path = rel_path;
    ArrayResize(g_mb_incident_queue,0);
   }
 
 void MbIncidentJournalFlush()
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      ArrayResize(g_mb_incident_queue,0);
+      return;
+     }
+
    int queued = ArraySize(g_mb_incident_queue);
    if(queued <= 0 || StringLen(g_mb_incident_queue_path) <= 0)
       return;
@@ -30,6 +43,9 @@ void MbIncidentJournalFlush()
 
 void MbIncidentJournalAppend(const string rel_path,const string payload)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      return;
+
    if(StringLen(g_mb_incident_queue_path) > 0 && rel_path == g_mb_incident_queue_path)
      {
       int next = ArraySize(g_mb_incident_queue);

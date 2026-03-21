@@ -364,6 +364,15 @@ void MbRunTuningDeckhand(
    MbTuningDeckhandReport &report
 )
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      MbTuningDeckhandReportReset(report);
+      report.serviced_at = TimeCurrent();
+      report.reason_code = "OPTIMIZATION_RUNTIME";
+      MbNormalizeReasonTriple(report.reason_code,report.normalized_reason);
+      return;
+     }
+
    MbTuningDeckhandReportReset(report);
    report.serviced_at = TimeCurrent();
    report.execution_pressure = state.execution_pressure;

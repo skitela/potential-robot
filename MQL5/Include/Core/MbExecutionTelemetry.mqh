@@ -43,12 +43,25 @@ void MbWriteExecutionTelemetryRecord(const int h,const MbExecutionTelemetryRecor
 
 void MbExecutionTelemetryInit(const string rel_path)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      g_mb_execution_telemetry_queue_path = "";
+      ArrayResize(g_mb_execution_telemetry_queue,0);
+      return;
+     }
+
    g_mb_execution_telemetry_queue_path = rel_path;
    ArrayResize(g_mb_execution_telemetry_queue,0);
   }
 
 void MbExecutionTelemetryFlush()
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      ArrayResize(g_mb_execution_telemetry_queue,0);
+      return;
+     }
+
    int queued = ArraySize(g_mb_execution_telemetry_queue);
    if(queued <= 0 || StringLen(g_mb_execution_telemetry_queue_path) <= 0)
       return;
@@ -76,6 +89,9 @@ void MbAppendExecutionTelemetry(
    const long retcode
 )
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      return;
+
    MbExecutionTelemetryRecord record;
    record.ts = ts;
    record.symbol = symbol;

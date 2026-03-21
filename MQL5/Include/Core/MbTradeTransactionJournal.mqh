@@ -10,12 +10,25 @@ string g_mb_trade_transaction_queue_path = "";
 
 void MbTradeTransactionJournalInit(const string rel_path)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      g_mb_trade_transaction_queue_path = "";
+      ArrayResize(g_mb_trade_transaction_queue,0);
+      return;
+     }
+
    g_mb_trade_transaction_queue_path = rel_path;
    ArrayResize(g_mb_trade_transaction_queue,0);
   }
 
 void MbTradeTransactionJournalFlush()
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      ArrayResize(g_mb_trade_transaction_queue,0);
+      return;
+     }
+
    int queued = ArraySize(g_mb_trade_transaction_queue);
    if(queued <= 0 || StringLen(g_mb_trade_transaction_queue_path) <= 0)
       return;
@@ -39,6 +52,9 @@ void MbAppendTradeTransactionEvent(
    const MqlTradeResult &result
 )
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      return;
+
    string payload = StringFormat(
       "{\"ts_utc\":%I64d,\"symbol\":\"%s\",\"magic\":%I64u,\"trans_type\":%d,\"order\":%I64u,\"deal\":%I64u,\"request_action\":%d,\"request_magic\":%I64u,\"request_symbol\":\"%s\",\"request_volume\":%.2f,\"request_price\":%.8f,\"result_retcode\":%I64d,\"result_retcode_name\":\"%s\",\"result_order\":%I64u,\"result_deal\":%I64u,\"result_price\":%.8f}",
       (long)TimeCurrent(),

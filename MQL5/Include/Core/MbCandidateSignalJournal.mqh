@@ -111,6 +111,13 @@ void MbWriteCandidateSignalRecord(const int h,const MbCandidateSignalRecord &rec
 
 void MbCandidateSignalJournalInit(const string rel_path)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      g_mb_candidate_queue_path = "";
+      ArrayResize(g_mb_candidate_queue,0);
+      return;
+     }
+
    g_mb_candidate_queue_path = rel_path;
    ArrayResize(g_mb_candidate_queue,0);
 
@@ -126,6 +133,12 @@ void MbCandidateSignalJournalInit(const string rel_path)
 
 void MbCandidateSignalJournalFlush()
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      ArrayResize(g_mb_candidate_queue,0);
+      return;
+     }
+
    int queued = ArraySize(g_mb_candidate_queue);
    if(queued <= 0 || StringLen(g_mb_candidate_queue_path) <= 0)
       return;
@@ -154,6 +167,9 @@ void MbAppendCandidateSignal(
    const double lots
 )
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      return;
+
    MbCandidateSignalRecord record;
    record.ts = ts;
    record.symbol = symbol;

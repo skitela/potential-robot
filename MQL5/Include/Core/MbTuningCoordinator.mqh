@@ -77,6 +77,12 @@ int MbLoadCoordinatorFamilyPolicies(const string &families[],MbTuningFamilyPolic
 
 bool MbRunTuningCoordinator(const string &families[],MbTuningCoordinatorState &state,string &out_reason)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      out_reason = "OPTIMIZATION_RUNTIME";
+      return false;
+     }
+
    out_reason = "NO_CHANGE";
    state.last_eval_at = TimeCurrent();
 

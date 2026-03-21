@@ -167,6 +167,12 @@ int MbBuildFamilySymbolSnapshots(const string family,const string &symbols[],MbT
 
 bool MbRunTuningFamilyAgent(const string family,const string &symbols[],MbTuningFamilyPolicy &policy,string &out_reason)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      out_reason = "OPTIMIZATION_RUNTIME";
+      return false;
+     }
+
    out_reason = "NO_CHANGE";
    policy.last_eval_at = TimeCurrent();
 

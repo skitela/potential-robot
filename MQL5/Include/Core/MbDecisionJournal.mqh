@@ -45,12 +45,25 @@ void MbWriteDecisionEventRecord(const int h,const MbDecisionEventRecord &record)
 
 void MbDecisionJournalInit(const string rel_path)
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      g_mb_decision_queue_path = "";
+      ArrayResize(g_mb_decision_queue,0);
+      return;
+     }
+
    g_mb_decision_queue_path = rel_path;
    ArrayResize(g_mb_decision_queue,0);
   }
 
 void MbDecisionJournalFlush()
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+     {
+      ArrayResize(g_mb_decision_queue,0);
+      return;
+     }
+
    int queued = ArraySize(g_mb_decision_queue);
    if(queued <= 0 || StringLen(g_mb_decision_queue_path) <= 0)
       return;
@@ -79,6 +92,9 @@ void MbAppendDecisionEvent(
    const long retcode
 )
   {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      return;
+
    MbDecisionEventRecord record;
    record.ts = ts;
    record.symbol = symbol;
