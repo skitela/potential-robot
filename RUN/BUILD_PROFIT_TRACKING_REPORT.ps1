@@ -52,11 +52,6 @@ function Test-MeaningfulTesterSummary {
         $trustState = [string]$Summary.trust_state
     }
 
-    $resultLabel = ""
-    if ($Summary.PSObject.Properties.Name -contains 'result_label') {
-        $resultLabel = [string]$Summary.result_label
-    }
-
     $pnl = Convert-ToDoubleOrNull $Summary.realized_pnl_lifetime
     $hasMaterialPnl = ($null -ne $pnl -and [math]::Abs($pnl) -ge 0.0000001)
 
@@ -69,10 +64,6 @@ function Test-MeaningfulTesterSummary {
     }
 
     if (($trustState -ne "") -and ($trustState -ne "OBSERVATIONS_MISSING")) {
-        return $true
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($resultLabel) -and $resultLabel -ne "successfully_finished") {
         return $true
     }
 
@@ -96,11 +87,6 @@ function Test-MeaningfulPriorityTesterBaseline {
         $trustState = [string]$Item.latest_tester_trust
     }
 
-    $resultLabel = ""
-    if ($Item.PSObject.Properties.Name -contains 'latest_tester_result') {
-        $resultLabel = [string]$Item.latest_tester_result
-    }
-
     $pnl = $null
     if ($Item.PSObject.Properties.Name -contains 'latest_tester_pnl') {
         $pnl = Convert-ToDoubleOrNull $Item.latest_tester_pnl
@@ -116,10 +102,6 @@ function Test-MeaningfulPriorityTesterBaseline {
     }
 
     if (($trustState -ne "") -and ($trustState -ne "OBSERVATIONS_MISSING")) {
-        return $true
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($resultLabel) -and $resultLabel -ne "successfully_finished") {
         return $true
     }
 
