@@ -97,13 +97,7 @@ bool IsLocalPaperModeActive()
 
 void NormalizeDE30MarketPermissions()
   {
-   bool effective_paper = IsLocalPaperModeActive();
-   g_state.paper_mode_active = effective_paper;
-   g_market.paper_runtime_override_active = effective_paper;
-   if(effective_paper)
-     {
-      g_market.trade_permissions_ok = true;
-     }
+   MbNormalizePaperRuntimeState(g_state,g_market,IsLocalPaperModeActive());
   }
 
 void AppendDE30DecisionEvent(
@@ -309,14 +303,7 @@ int OnInit()
    MbReadRuntimeControl(g_profile.symbol,g_profile.session_profile,g_runtime_control);
    MbApplyRuntimeControl(g_state,g_runtime_control);
    MbKillSwitchEvaluate(g_profile,g_state,g_kill_switch);
-   if(IsLocalPaperModeActive())
-     {
-      g_kill_switch.halt = false;
-      g_kill_switch.reason_code = "PAPER_MODE_ACTIVE";
-      g_state.halt = false;
-      g_state.close_only = false;
-      g_state.mode = MB_MODE_READY;
-     }
+   MbApplyPaperRuntimeOverride(g_state,g_market,g_kill_switch,IsLocalPaperModeActive());
    MbRefreshMarketSnapshot(g_profile,g_market);
    NormalizeDE30MarketPermissions();
    MbLatencyProfileInit(g_latency);
@@ -377,14 +364,7 @@ void OnTimer()
    MbReadRuntimeControl(g_profile.symbol,g_profile.session_profile,g_runtime_control);
    MbApplyRuntimeControl(g_state,g_runtime_control);
    MbKillSwitchEvaluate(g_profile,g_state,g_kill_switch);
-   if(IsLocalPaperModeActive())
-     {
-      g_kill_switch.halt = false;
-      g_kill_switch.reason_code = "PAPER_MODE_ACTIVE";
-      g_state.halt = false;
-      g_state.close_only = false;
-      g_state.mode = MB_MODE_READY;
-     }
+   MbApplyPaperRuntimeOverride(g_state,g_market,g_kill_switch,IsLocalPaperModeActive());
    MbRefreshMarketSnapshot(g_profile,g_market);
    NormalizeDE30MarketPermissions();
    if(g_kill_switch.halt)
