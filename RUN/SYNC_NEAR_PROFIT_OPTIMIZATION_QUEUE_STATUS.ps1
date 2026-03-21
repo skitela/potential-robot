@@ -5,6 +5,8 @@ param(
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$Mt5TesterStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_tester_status_latest.json",
     [string]$BatchReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json",
+    [bool]$UseDedicatedPortableLabLane = $true,
+    [string]$DedicatedLabTerminalRoot = "C:\TRADING_TOOLS\MT5_NEAR_PROFIT_LAB",
     [int]$NearProfitCount = 3,
     [string]$State,
     [string]$CurrentSymbol = "",
@@ -61,6 +63,35 @@ function Get-WrapperProcesses {
                 $_.CommandLine -like "*near_profit_optimization_after_idle_wrapper_*"
             }
     )
+}
+
+function Get-DedicatedLabProcessState {
+    param([string]$TerminalRoot)
+
+    if ([string]::IsNullOrWhiteSpace($TerminalRoot) -or -not (Test-Path -LiteralPath $TerminalRoot)) {
+        return [pscustomobject]@{
+            terminal_count = 0
+            metatester_count = 0
+            total_count = 0
+        }
+    }
+
+    $terminalRootFull = [System.IO.Path]::GetFullPath($TerminalRoot).TrimEnd('\')
+    $terminalRootPrefix = ($terminalRootFull + "\").ToLowerInvariant()
+    $matchingProcesses = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                ($_.Name -eq "terminal64.exe" -or $_.Name -eq "metatester64.exe") -and
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant().StartsWith($terminalRootPrefix))
+            }
+    )
+
+    return [pscustomobject]@{
+        terminal_count = @($matchingProcesses | Where-Object { $_.Name -eq "terminal64.exe" }).Count
+        metatester_count = @($matchingProcesses | Where-Object { $_.Name -eq "metatester64.exe" }).Count
+        total_count = $matchingProcesses.Count
+    }
 }
 
 function Parse-RunStamp {
@@ -129,6 +160,9 @@ function Write-StatusArtifacts {
     $lines.Add(("- current_symbol: {0}" -f $Status.current_symbol))
     $lines.Add(("- wrapper_running: {0}" -f $Status.wrapper_running))
     $lines.Add(("- active_wrapper_count: {0}" -f $Status.active_wrapper_count))
+    $lines.Add(("- dedicated_portable_lab_lane: {0}" -f $Status.dedicated_portable_lab_lane))
+    $lines.Add(("- dedicated_lab_terminal_count: {0}" -f $Status.dedicated_lab_terminal_count))
+    $lines.Add(("- dedicated_lab_metatester_count: {0}" -f $Status.dedicated_lab_metatester_count))
     $lines.Add(("- log_path: {0}" -f $Status.log_path))
     $lines.Add(("- batch_report_path: {0}" -f $Status.batch_report_path))
     if (-not [string]::IsNullOrWhiteSpace([string]$Status.current_note)) {
@@ -179,6 +213,8 @@ $latestMd = Join-Path $OpsEvidenceDir "near_profit_optimization_queue_latest.md"
 $selectedSymbols = @(Get-NearProfitSymbols -Path $ProfitTrackingPath -TopCount $NearProfitCount)
 $wrapperProcesses = @(Get-WrapperProcesses)
 $wrapperRunning = ($wrapperProcesses.Count -gt 0)
+$dedicatedLabProcessState = Get-DedicatedLabProcessState -TerminalRoot $DedicatedLabTerminalRoot
+$dedicatedLabHasActivity = ($dedicatedLabProcessState.total_count -gt 0)
 $logItem = Resolve-LogItem -Root $LogRoot -ExplicitPath $LogPath
 $mt5TesterStatus = Read-JsonFile -Path $Mt5TesterStatusPath
 $batchReport = Read-JsonFile -Path $BatchReportPath
@@ -202,7 +238,7 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
     $resolvedPending = @($selectedSymbols)
 
     if ($wrapperRunning) {
-        $resolvedState = "waiting_for_idle"
+        $resolvedState = if ($UseDedicatedPortableLabLane) { "running" } else { "waiting_for_idle" }
         $logStart = if ($null -ne $logItem) { $logItem.LastWriteTime } else { $null }
         $summaryFresh = (
             $null -ne $latestOptimizationSummaryItem -and
@@ -213,6 +249,20 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
             $resolvedCurrentSymbol = [string]$latestOptimizationSummary.symbol_alias
             if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
                 $resolvedNote = "optimization_lane_active_from_summary"
+            }
+        }
+        elseif ($UseDedicatedPortableLabLane) {
+            if ($dedicatedLabHasActivity) {
+                if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
+                    $resolvedNote = "portable_lab_lane_active"
+                }
+            }
+            elseif ([string]::IsNullOrWhiteSpace($resolvedNote)) {
+                $resolvedNote = "portable_lab_wrapper_running"
+            }
+
+            if ([string]::IsNullOrWhiteSpace($resolvedCurrentSymbol) -and @($resolvedPending).Count -gt 0) {
+                $resolvedCurrentSymbol = [string]$resolvedPending[0]
             }
         }
         elseif ($null -ne $mt5TesterStatus -and [string]$mt5TesterStatus.state -eq "running") {
@@ -264,6 +314,9 @@ $status = [ordered]@{
     near_profit_count = $NearProfitCount
     wrapper_running = $wrapperRunning
     active_wrapper_count = $wrapperProcesses.Count
+    dedicated_portable_lab_lane = $UseDedicatedPortableLabLane
+    dedicated_lab_terminal_count = $dedicatedLabProcessState.terminal_count
+    dedicated_lab_metatester_count = $dedicatedLabProcessState.metatester_count
     started_at_local = $resolvedStartedAt
     log_path = if ($null -ne $logItem) { $logItem.FullName } else { $LogPath }
     batch_report_path = $BatchReportPath

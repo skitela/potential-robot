@@ -141,6 +141,8 @@ Invoke-JsonAuditTool -ScriptPath $runtimeLogRotationScript -Parameters @{
 }
 Invoke-JsonAuditTool -ScriptPath $nearProfitQueueStatusScript -Parameters @{
     ProjectRoot = $ProjectRoot
+    UseDedicatedPortableLabLane = $true
+    DedicatedLabTerminalRoot = "C:\TRADING_TOOLS\MT5_NEAR_PROFIT_LAB"
 }
 
 $runtimeArtifactAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_artifact_audit_report.json")

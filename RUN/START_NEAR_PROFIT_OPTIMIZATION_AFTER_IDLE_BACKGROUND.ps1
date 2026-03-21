@@ -110,6 +110,8 @@ function Save-NearProfitQueueStatus {
         ProfitTrackingPath = '$ProfitTrackingPath'
         Mt5TesterStatusPath = '$mt5TesterStatusPath'
         BatchReportPath = '$batchReportPath'
+        UseDedicatedPortableLabLane = $skipIdleWaitLiteral
+        DedicatedLabTerminalRoot = '$DedicatedLabTerminalRoot'
         NearProfitCount = $NearProfitCount
         State = `$State
         CurrentSymbol = `$CurrentSymbol
