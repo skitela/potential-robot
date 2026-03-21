@@ -21,6 +21,19 @@ string MbRuntimeModeLabel(const MbRuntimeMode mode)
    return "UNKNOWN";
   }
 
+string MbRuntimeModeLabelForState(const MbRuntimeState &state)
+  {
+   if(state.halt)
+      return "BLOCKED";
+   if(state.paper_mode_active)
+      return "PAPER_ONLY";
+   if(state.close_only)
+      return "CLOSE_ONLY";
+   if(state.caution_mode)
+      return "CAUTION";
+   return MbRuntimeModeLabel(state.mode);
+  }
+
 int MbCooldownLeftSec(const MbRuntimeState &state)
   {
    if(state.cooldown_until <= 0 || TimeCurrent() >= state.cooldown_until)
@@ -52,7 +65,7 @@ bool MbFlushRuntimeStatus(const MbRuntimeState &state,const string reason_code)
    string payload = StringFormat(
       "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"runtime_mode\":\"%s\",\"caution_mode\":%s,\"close_only\":%s,\"halt\":%s,\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"ticks_seen\":%I64d,\"timer_cycles\":%I64d,\"execution_pressure\":%.4f,\"reason_code\":\"%s\",\"heartbeat_utc\":%I64d}",
       state.symbol,
-      MbRuntimeModeLabel(state.mode),
+      MbRuntimeModeLabelForState(state),
       MbJsonBool(state.caution_mode),
       MbJsonBool(state.close_only),
       MbJsonBool(state.halt),

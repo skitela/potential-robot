@@ -51,7 +51,7 @@ void MbFlushBrokerProfile(
       snapshot.vol_step,
       snapshot.vol_max,
       MbJsonBool(snapshot.valid),
-      MbRuntimeModeLabel(state.mode),
+      MbRuntimeModeLabelForState(state),
       MbCooldownLeftSec(state),
       MbIncidentPressure(state),
       (long)TimeCurrent()

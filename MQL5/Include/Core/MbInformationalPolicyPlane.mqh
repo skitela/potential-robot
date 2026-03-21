@@ -24,7 +24,7 @@ string MbBuildInformationalPolicyPayload(
       "{\"schema_version\":\"1.1\",\"symbol\":\"%s\",\"session_profile\":\"%s\",\"runtime_mode\":\"%s\",\"caution_mode\":%s,\"close_only\":%s,\"halt\":%s,\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"execution_pressure\":%.4f,\"learning_bias\":%.4f,\"learning_confidence\":%.4f,\"learning_sample_count\":%d,\"adaptive_risk_scale\":%.4f,\"coordinator_risk_cap\":%.4f,\"signal_confidence\":%.4f,\"signal_risk_multiplier\":%.4f,\"market_regime\":\"%s\",\"spread_regime\":\"%s\",\"execution_regime\":\"%s\",\"confidence_bucket\":\"%s\",\"last_setup_type\":\"%s\",\"candle_bias\":\"%s\",\"candle_quality_grade\":\"%s\",\"candle_score\":%.4f,\"renko_bias\":\"%s\",\"renko_quality_grade\":\"%s\",\"renko_score\":%.4f,\"renko_run_length\":%d,\"renko_reversal_flag\":%s,\"spread_points\":%.2f,\"tick_age_ms\":%I64d,\"terminal_connected\":%s,\"terminal_ping_ms\":%I64d,\"ticks_seen\":%I64d,\"timer_cycles\":%I64d,\"trade_permissions_ok\":%s,\"raw_trade_permissions_ok\":%s,\"paper_runtime_override_active\":%s,\"term_trade_allowed\":%s,\"mql_trade_allowed\":%s,\"account_trade_allowed\":%s,\"verdict_light\":\"%s\",\"reason_code\":\"%s\",\"reason_domain\":\"%s\",\"reason_class\":\"%s\",\"trust_state\":\"%s\",\"trust_reason\":\"%s\",\"execution_quality_state\":\"%s\",\"execution_quality_reason_code\":\"%s\",\"cost_pressure_state\":\"%s\",\"cost_pressure_reason_code\":\"%s\"}",
       profile.symbol,
       profile.session_profile,
-      MbRuntimeModeLabel(state.mode),
+      MbRuntimeModeLabelForState(state),
       MbJsonBool(state.caution_mode),
       MbJsonBool(state.close_only),
       MbJsonBool(state.halt),
