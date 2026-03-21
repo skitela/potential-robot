@@ -25,7 +25,8 @@ $ErrorActionPreference = "Stop"
 function Get-SymbolTimeoutSec {
     param(
         [string]$SymbolAlias,
-        [int]$DefaultTimeoutSec
+        [int]$DefaultTimeoutSec,
+        [int]$Optimization = 0
     )
 
     $overrides = @{
@@ -35,6 +36,25 @@ function Get-SymbolTimeoutSec {
         "COPPER-US" = 10800
         "US500"     = 10800
         "DE30"      = 10800
+    }
+
+    if ($Optimization -ne 0) {
+        $DefaultTimeoutSec = [Math]::Max($DefaultTimeoutSec, 14400)
+        $optimizationOverrides = @{
+            "NZDUSD"    = 21600
+            "GBPJPY"    = 21600
+            "AUDUSD"    = 14400
+            "COPPER-US" = 21600
+            "PLATIN"    = 21600
+            "SILVER"    = 21600
+            "GOLD"      = 21600
+            "US500"     = 21600
+            "DE30"      = 21600
+        }
+
+        if ($optimizationOverrides.ContainsKey($SymbolAlias)) {
+            return [Math]::Max($DefaultTimeoutSec, [int]$optimizationOverrides[$SymbolAlias])
+        }
     }
 
     if ($overrides.ContainsKey($SymbolAlias)) {
@@ -70,7 +90,7 @@ $repeatabilityReports = @()
 for ($i = 0; $i -lt $SymbolAliases.Count; $i++) {
     $symbolAlias = $SymbolAliases[$i]
     $workerName = if ($i -lt $WorkerNames.Count) { $WorkerNames[$i] } else { "worker_$($i + 1)" }
-    $effectiveTimeoutSec = Get-SymbolTimeoutSec -SymbolAlias $symbolAlias -DefaultTimeoutSec $TimeoutSec
+    $effectiveTimeoutSec = Get-SymbolTimeoutSec -SymbolAlias $symbolAlias -DefaultTimeoutSec $TimeoutSec -Optimization $Optimization
     $run = & (Join-Path $ProjectRoot "TOOLS\RUN_MICROBOT_STRATEGY_TESTER.ps1") `
         -ProjectRoot $ProjectRoot `
         -Mt5Exe $Mt5Exe `

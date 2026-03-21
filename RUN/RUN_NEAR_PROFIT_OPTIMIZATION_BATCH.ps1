@@ -7,7 +7,7 @@ param(
     [int]$NearProfitCount = 3,
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
-    [int]$TimeoutSec = 7200,
+    [int]$TimeoutSec = 14400,
     [ValidateSet(0,1,2,3)]
     [int]$Optimization = 2,
     [ValidateSet(0,1,2,3,4,5,6,7)]
