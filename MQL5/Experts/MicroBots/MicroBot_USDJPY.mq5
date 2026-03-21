@@ -648,7 +648,8 @@ void OnTick()
             signal.market_regime == "CHAOS" &&
             (
                (signal.confidence_bucket == "LOW" && (poor_candle || poor_renko)) ||
-               (signal.spread_regime == "BAD" && (poor_candle || poor_renko))
+               (signal.spread_regime == "BAD" && (poor_candle || poor_renko)) ||
+               (poor_candle && signal.renko_quality_grade == "GOOD")
             )
          )
             blocked_by_usdjpy_range_chaos_gate = true;
