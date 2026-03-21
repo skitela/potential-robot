@@ -230,6 +230,8 @@ function Save-NearProfitQueueStatus {
         Pending = `$Pending
         CurrentNote = `$CurrentNote
         LogPath = '$logPath'
+        StartedAtLocal = `$wrapperStartedAtLocal
+        RunTimeoutSec = $TimeoutSec
     }
 
     & '$statusScript' @statusArgs | Out-Null
@@ -281,6 +283,7 @@ function Wait-SecondaryMt5Idle {
 
 `$selectedSymbols = @($quotedSymbols)
 `$completed = New-Object System.Collections.Generic.List[string]
+`$wrapperStartedAtLocal = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
 
 Start-Transcript -Path '$logPath' -Force
 try {

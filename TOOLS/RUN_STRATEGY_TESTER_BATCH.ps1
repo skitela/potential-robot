@@ -164,7 +164,7 @@ $mdLines = @(
     ("- optimization_criterion: {0}" -f $report.optimization_criterion)
 )
 foreach ($run in $results) {
-    $mdLines += ("- {0} / {1}: {2}, duration={3}, balance={4}" -f $run.symbol_alias, $run.sandbox_name, $run.result_label, $run.test_duration, $run.final_balance)
+    $mdLines += ("- {0} / {1}: {2}, duration={3}, balance={4}, timeout_sec={5}" -f $run.symbol_alias, $run.sandbox_name, $run.result_label, $run.test_duration, $run.final_balance, $run.timeout_sec)
 }
 foreach ($item in $repeatabilityReports) {
     $mdLines += ("- repeatability {0}: {1}" -f $item.symbol_alias, $item.repeatability_status)

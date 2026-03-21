@@ -15,7 +15,8 @@ param(
     [string[]]$Pending = @(),
     [string]$CurrentNote = "",
     [string]$LogPath = "",
-    [string]$StartedAtLocal = ""
+    [string]$StartedAtLocal = "",
+    [int]$RunTimeoutSec = 0
 )
 
 Set-StrictMode -Version Latest
@@ -180,7 +181,68 @@ function Get-TextLineCount {
         return 0
     }
 
-    return [int](@(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue | Measure-Object -Line).Lines)
+    $stream = $null
+    $reader = $null
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $reader = New-Object System.IO.StreamReader($stream)
+        $count = 0
+        while ($null -ne $reader.ReadLine()) {
+            $count++
+        }
+        return [int]$count
+    }
+    catch {
+        return [int](@(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue | Measure-Object -Line).Lines)
+    }
+    finally {
+        if ($null -ne $reader) {
+            $reader.Dispose()
+        }
+        elseif ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+function Get-TextFileStats {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]@{
+            line_count = 0
+            locked = $false
+        }
+    }
+
+    $stream = $null
+    $reader = $null
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $reader = New-Object System.IO.StreamReader($stream)
+        $count = 0
+        while ($null -ne $reader.ReadLine()) {
+            $count++
+        }
+        return [pscustomobject]@{
+            line_count = [int]$count
+            locked = $false
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            line_count = 0
+            locked = $true
+        }
+    }
+    finally {
+        if ($null -ne $reader) {
+            $reader.Dispose()
+        }
+        elseif ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
 }
 
 function Resolve-ActiveSandboxState {
@@ -228,6 +290,10 @@ function Resolve-ActiveSandboxState {
     $decisionEventsItem = if (Test-Path -LiteralPath $decisionEventsPath) { Get-Item -LiteralPath $decisionEventsPath -ErrorAction SilentlyContinue } else { $null }
     $tuningExperimentsItem = if (Test-Path -LiteralPath $tuningExperimentsPath) { Get-Item -LiteralPath $tuningExperimentsPath -ErrorAction SilentlyContinue } else { $null }
     $testerPassItem = if (Test-Path -LiteralPath $testerPassPath) { Get-Item -LiteralPath $testerPassPath -ErrorAction SilentlyContinue } else { $null }
+    $candidateSignalStats = Get-TextFileStats -Path $candidateSignalsPath
+    $decisionEventStats = Get-TextFileStats -Path $decisionEventsPath
+    $tuningExperimentStats = Get-TextFileStats -Path $tuningExperimentsPath
+    $testerPassStats = Get-TextFileStats -Path $testerPassPath
 
     return [ordered]@{
         root_path = $sandboxRoot.FullName
@@ -246,13 +312,17 @@ function Resolve-ActiveSandboxState {
         learning_win_count = [int](0 + $runtimeState["learning_win_count"])
         learning_loss_count = [int](0 + $runtimeState["learning_loss_count"])
         realized_pnl_lifetime = [double](0 + $runtimeState["realized_pnl_lifetime"])
-        candidate_signal_rows = Get-TextLineCount -Path $candidateSignalsPath
+        candidate_signal_rows = $candidateSignalStats.line_count
+        candidate_signal_rows_locked = $candidateSignalStats.locked
         candidate_signal_bytes = if ($null -ne $candidateSignalsItem) { [long]$candidateSignalsItem.Length } else { 0L }
-        decision_event_rows = Get-TextLineCount -Path $decisionEventsPath
+        decision_event_rows = $decisionEventStats.line_count
+        decision_event_rows_locked = $decisionEventStats.locked
         decision_event_bytes = if ($null -ne $decisionEventsItem) { [long]$decisionEventsItem.Length } else { 0L }
-        tuning_experiment_rows = Get-TextLineCount -Path $tuningExperimentsPath
+        tuning_experiment_rows = $tuningExperimentStats.line_count
+        tuning_experiment_rows_locked = $tuningExperimentStats.locked
         tuning_experiment_bytes = if ($null -ne $tuningExperimentsItem) { [long]$tuningExperimentsItem.Length } else { 0L }
-        tester_pass_rows = Get-TextLineCount -Path $testerPassPath
+        tester_pass_rows = $testerPassStats.line_count
+        tester_pass_rows_locked = $testerPassStats.locked
         tester_pass_bytes = if ($null -ne $testerPassItem) { [long]$testerPassItem.Length } else { 0L }
         tester_session_present = (Test-Path -LiteralPath $testerSessionPath)
     }
@@ -316,6 +386,12 @@ function Write-StatusArtifacts {
     $lines.Add(("- near_profit_risk_guard_count: {0}" -f $Status.near_profit_risk_guard_count))
     $lines.Add(("- near_profit_risk_guard_accepted_events: {0}" -f $Status.near_profit_risk_guard_accepted_events))
     $lines.Add(("- near_profit_risk_guard_rejected_events: {0}" -f $Status.near_profit_risk_guard_rejected_events))
+    if ($Status.run_timeout_sec -gt 0) {
+        $lines.Add(("- run_timeout_sec: {0}" -f $Status.run_timeout_sec))
+        $lines.Add(("- run_elapsed_sec: {0}" -f $Status.run_elapsed_sec))
+        $lines.Add(("- run_remaining_sec: {0}" -f $Status.run_remaining_sec))
+        $lines.Add(("- run_timeout_near: {0}" -f $Status.run_timeout_near))
+    }
     $lines.Add(("- log_path: {0}" -f $Status.log_path))
     $lines.Add(("- batch_report_path: {0}" -f $Status.batch_report_path))
     if (-not [string]::IsNullOrWhiteSpace([string]$Status.current_note)) {
@@ -336,12 +412,16 @@ function Write-StatusArtifacts {
         $lines.Add(("- learning_sample_count: {0}" -f $Status.active_sandbox.learning_sample_count))
         $lines.Add(("- realized_pnl_lifetime: {0}" -f $Status.active_sandbox.realized_pnl_lifetime))
         $lines.Add(("- candidate_signal_rows: {0}" -f $Status.active_sandbox.candidate_signal_rows))
+        $lines.Add(("- candidate_signal_rows_locked: {0}" -f $Status.active_sandbox.candidate_signal_rows_locked))
         $lines.Add(("- candidate_signal_bytes: {0}" -f $Status.active_sandbox.candidate_signal_bytes))
         $lines.Add(("- decision_event_rows: {0}" -f $Status.active_sandbox.decision_event_rows))
+        $lines.Add(("- decision_event_rows_locked: {0}" -f $Status.active_sandbox.decision_event_rows_locked))
         $lines.Add(("- decision_event_bytes: {0}" -f $Status.active_sandbox.decision_event_bytes))
         $lines.Add(("- tuning_experiment_rows: {0}" -f $Status.active_sandbox.tuning_experiment_rows))
+        $lines.Add(("- tuning_experiment_rows_locked: {0}" -f $Status.active_sandbox.tuning_experiment_rows_locked))
         $lines.Add(("- tuning_experiment_bytes: {0}" -f $Status.active_sandbox.tuning_experiment_bytes))
         $lines.Add(("- tester_pass_rows: {0}" -f $Status.active_sandbox.tester_pass_rows))
+        $lines.Add(("- tester_pass_rows_locked: {0}" -f $Status.active_sandbox.tester_pass_rows_locked))
         $lines.Add(("- tester_pass_bytes: {0}" -f $Status.active_sandbox.tester_pass_bytes))
         $lines.Add(("- tester_session_present: {0}" -f $Status.active_sandbox.tester_session_present))
     }
@@ -386,6 +466,7 @@ New-Item -ItemType Directory -Force -Path $OpsEvidenceDir | Out-Null
 
 $latestJson = Join-Path $OpsEvidenceDir "near_profit_optimization_queue_latest.json"
 $latestMd = Join-Path $OpsEvidenceDir "near_profit_optimization_queue_latest.md"
+$previousStatus = Read-JsonFile -Path $latestJson
 
 $selectedSymbols = @(Get-NearProfitSymbols -Path $ProfitTrackingPath -TopCount $NearProfitCount)
 $wrapperProcesses = @(Get-WrapperProcesses)
@@ -407,9 +488,42 @@ $resolvedCompleted = @($Completed)
 $resolvedPending = @($Pending)
 $resolvedNote = $CurrentNote
 $resolvedStartedAt = $StartedAtLocal
+$resolvedRunTimeoutSec = $RunTimeoutSec
+
+if ([string]::IsNullOrWhiteSpace($resolvedStartedAt) -and $null -ne $previousStatus) {
+    $resolvedStartedAt = [string]$previousStatus.started_at_local
+}
+
+if (($resolvedRunTimeoutSec -le 0) -and $null -ne $previousStatus -and $previousStatus.PSObject.Properties.Name -contains "run_timeout_sec") {
+    $resolvedRunTimeoutSec = [int](0 + $previousStatus.run_timeout_sec)
+}
+
+if (($resolvedRunTimeoutSec -le 0) -and $wrapperRunning -and $UseDedicatedPortableLabLane) {
+    $resolvedRunTimeoutSec = 14400
+}
 
 if ([string]::IsNullOrWhiteSpace($resolvedStartedAt) -and $null -ne $logItem) {
     $resolvedStartedAt = $logItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+}
+
+$startedAtDate = $null
+if (-not [string]::IsNullOrWhiteSpace($resolvedStartedAt)) {
+    try {
+        $startedAtDate = [datetime]::ParseExact($resolvedStartedAt, "yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    catch {
+        $startedAtDate = $null
+    }
+}
+
+$runElapsedSec = 0
+if ($null -ne $startedAtDate) {
+    $runElapsedSec = [int][Math]::Max(0, ((Get-Date) - $startedAtDate).TotalSeconds)
+}
+
+$runRemainingSec = 0
+if ($resolvedRunTimeoutSec -gt 0) {
+    $runRemainingSec = [int]($resolvedRunTimeoutSec - $runElapsedSec)
 }
 
 if ([string]::IsNullOrWhiteSpace($resolvedState)) {
@@ -523,6 +637,10 @@ $status = [ordered]@{
     near_profit_risk_guard_rejected_events = if ($null -ne $nearProfitRiskGuardStatus) { [int](0 + $nearProfitRiskGuardStatus.rejected_events) } else { 0 }
     near_profit_risk_guard_last_popup_action_utc = if ($null -ne $nearProfitRiskGuardStatus) { [string]$nearProfitRiskGuardStatus.last_popup_action_utc } else { "" }
     started_at_local = $resolvedStartedAt
+    run_timeout_sec = $resolvedRunTimeoutSec
+    run_elapsed_sec = $runElapsedSec
+    run_remaining_sec = $runRemainingSec
+    run_timeout_near = ($resolvedRunTimeoutSec -gt 0 -and $runElapsedSec -ge [int]($resolvedRunTimeoutSec * 0.85))
     log_path = if ($null -ne $logItem) { $logItem.FullName } else { $LogPath }
     batch_report_path = $BatchReportPath
     batch_report_present = ($null -ne $batchReport)
