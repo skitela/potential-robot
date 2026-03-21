@@ -27,7 +27,7 @@ void MbFlushBrokerProfile(
       return;
 
    string payload = StringFormat(
-      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"session_profile\":\"%s\",\"terminal_connected\":%s,\"terminal_ping_ms\":%I64d,\"trade_permissions_ok\":%s,\"raw_trade_permissions_ok\":%s,\"paper_runtime_override_active\":%s,\"term_trade_allowed\":%s,\"mql_trade_allowed\":%s,\"account_trade_allowed\":%s,\"account_trade_mode\":%I64d,\"symbol_trade_mode\":%I64d,\"stops_level\":%d,\"freeze_level\":%d,\"spread_points\":%.2f,\"tick_time_msc\":%I64d,\"tick_age_ms\":%I64d,\"tick_value\":%.6f,\"tick_size\":%.8f,\"volume_min\":%.2f,\"volume_step\":%.2f,\"volume_max\":%.2f,\"cache_valid\":%s,\"runtime_mode\":\"%s\",\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"ts_utc\":%I64d}",
+      "{\"schema_version\":\"1.1\",\"symbol\":\"%s\",\"session_profile\":\"%s\",\"terminal_connected\":%s,\"terminal_ping_ms\":%I64d,\"trade_permissions_ok\":%s,\"raw_trade_permissions_ok\":%s,\"paper_runtime_override_active\":%s,\"term_trade_allowed\":%s,\"mql_trade_allowed\":%s,\"account_trade_allowed\":%s,\"account_trade_mode\":%I64d,\"symbol_trade_mode\":%I64d,\"stops_level\":%d,\"freeze_level\":%d,\"spread_points\":%.2f,\"tick_time_msc\":%I64d,\"tick_age_ms\":%I64d,\"tick_value\":%.6f,\"tick_size\":%.8f,\"volume_min\":%.2f,\"volume_step\":%.2f,\"volume_max\":%.2f,\"cache_valid\":%s,\"runtime_mode\":\"%s\",\"force_flatten\":%s,\"allowed_direction\":\"%s\",\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"ts_utc\":%I64d}",
       profile.symbol,
       profile.session_profile,
       MbJsonBool(snapshot.terminal_connected),
@@ -52,6 +52,8 @@ void MbFlushBrokerProfile(
       snapshot.vol_max,
       MbJsonBool(snapshot.valid),
       MbRuntimeModeLabelForState(state),
+      MbJsonBool(state.force_flatten),
+      MbResolveAllowedDirectionForState(state),
       MbCooldownLeftSec(state),
       MbIncidentPressure(state),
       (long)TimeCurrent()

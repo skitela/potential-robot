@@ -31,6 +31,7 @@ function Read-RuntimeControlFile {
         reason_code = ""
         risk_cap = 1.0
         force_flatten = $false
+        allowed_direction = "BOTH"
         halt = $false
         paper_only = $false
         close_only = $false
@@ -48,6 +49,7 @@ function Read-RuntimeControlFile {
             "reason_code" { $state.reason_code = [string]$parts[1] }
             "risk_cap" { $state.risk_cap = [double]$parts[1] }
             "force_flatten" { $state.force_flatten = ([int]$parts[1]) -ne 0 }
+            "allowed_direction" { $state.allowed_direction = [string]$parts[1] }
         }
     }
 
@@ -71,6 +73,7 @@ function Merge-RuntimeControlState {
         reason_code = ""
         risk_cap = [math]::Min([double]$SymbolControl.risk_cap, [double]$DomainControl.risk_cap)
         force_flatten = ([bool]$SymbolControl.force_flatten -or [bool]$DomainControl.force_flatten)
+        allowed_direction = [string]$(if (-not [string]::IsNullOrWhiteSpace([string]$SymbolControl.allowed_direction)) { $SymbolControl.allowed_direction } elseif (-not [string]::IsNullOrWhiteSpace([string]$DomainControl.allowed_direction)) { $DomainControl.allowed_direction } else { "BOTH" })
         source = "NONE"
     }
 
@@ -154,6 +157,8 @@ foreach ($item in $registry.symbols) {
         rodzina = $family
         requested_mode = [string]$effective.requested_mode
         reason_code = [string]$effective.reason_code
+        allowed_direction = [string]$effective.allowed_direction
+        force_flatten = [bool]$effective.force_flatten
         source = [string]$effective.source
     }
 }
@@ -170,7 +175,7 @@ $summary | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encodin
 
 $txt = @("RUNTIME CONTROL SUMMARY")
 foreach ($row in $rows) {
-    $txt += ("{0} | rodzina={1} | domena={2} | requested_mode={3} | source={4} | reason={5}" -f $row.para_walutowa, $row.rodzina, $row.domena, $row.requested_mode, $row.source, $row.reason_code)
+    $txt += ("{0} | rodzina={1} | domena={2} | requested_mode={3} | allowed_direction={4} | force_flatten={5} | source={6} | reason={7}" -f $row.para_walutowa, $row.rodzina, $row.domena, $row.requested_mode, $row.allowed_direction, $row.force_flatten, $row.source, $row.reason_code)
 }
 $txt | Set-Content -LiteralPath $txtPath -Encoding UTF8
 

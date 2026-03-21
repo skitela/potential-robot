@@ -225,7 +225,7 @@ bool MbTesterTelemetryWriteLatest(
      }
 
    string payload = StringFormat(
-      "{\"schema_version\":\"1.2\",\"symbol\":\"%s\",\"magic\":%I64d,\"runtime_mode\":\"%s\",\"session_profile\":\"%s\",\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"learning_win_count\":%d,\"learning_loss_count\":%d,\"win_rate\":%.6f,\"trust_state\":\"%s\",\"trust_reason\":\"%s\",\"trust_reason_domain\":\"%s\",\"trust_reason_class\":\"%s\",\"trust_penalty\":%.6f,\"cost_pressure_state\":\"%s\",\"cost_pressure_reason_code\":\"%s\",\"cost_penalty\":%.6f,\"execution_quality_state\":\"%s\",\"execution_quality_reason_code\":\"%s\",\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"execution_ok_ratio\":%.6f,\"avg_retries\":%.6f,\"avg_slippage_points\":%.6f,\"latency_samples\":%I64d,\"local_latency_us_avg\":%I64d,\"signal_confidence\":%.6f,\"learning_bias\":%.6f,\"policy_revision\":%d,\"policy_action_code\":\"%s\",\"experiment_status\":\"%s\",\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"trade_rights\":%s,\"paper_rights\":%s,\"observation_rights\":%s,\"paper_runtime_override_active\":%s,\"terminal_ping_ms\":%I64d,\"spread_points\":%.2f,\"generated_at_utc\":%I64d}",
+      "{\"schema_version\":\"1.3\",\"symbol\":\"%s\",\"magic\":%I64d,\"runtime_mode\":\"%s\",\"session_profile\":\"%s\",\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"learning_win_count\":%d,\"learning_loss_count\":%d,\"win_rate\":%.6f,\"trust_state\":\"%s\",\"trust_reason\":\"%s\",\"trust_reason_domain\":\"%s\",\"trust_reason_class\":\"%s\",\"trust_penalty\":%.6f,\"cost_pressure_state\":\"%s\",\"cost_pressure_reason_code\":\"%s\",\"cost_penalty\":%.6f,\"execution_quality_state\":\"%s\",\"execution_quality_reason_code\":\"%s\",\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"execution_ok_ratio\":%.6f,\"avg_retries\":%.6f,\"avg_slippage_points\":%.6f,\"latency_samples\":%I64d,\"local_latency_us_avg\":%I64d,\"signal_confidence\":%.6f,\"learning_bias\":%.6f,\"policy_revision\":%d,\"policy_action_code\":\"%s\",\"experiment_status\":\"%s\",\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"force_flatten\":%s,\"trade_rights\":%s,\"paper_rights\":%s,\"observation_rights\":%s,\"allowed_direction\":\"%s\",\"paper_runtime_override_active\":%s,\"terminal_ping_ms\":%I64d,\"spread_points\":%.2f,\"generated_at_utc\":%I64d}",
       MbTesterTelemetryEscapeJson(profile.symbol),
       (long)state.magic,
       MbRuntimeModeLabelForState(state),
@@ -260,9 +260,11 @@ bool MbTesterTelemetryWriteLatest(
       MbTesterTelemetryEscapeJson(policy.experiment_status),
       policy.confidence_cap,
       policy.risk_cap,
+      MbJsonBool(state.force_flatten),
       MbJsonBool(state.trade_rights),
       MbJsonBool(state.paper_rights),
       MbJsonBool(state.observation_rights),
+      MbTesterTelemetryEscapeJson(MbResolveAllowedDirectionForState(state)),
       MbJsonBool(snapshot.paper_runtime_override_active),
       snapshot.terminal_ping_last_ms,
       snapshot.spread_points,
@@ -358,7 +360,7 @@ bool MbTesterTelemetryWriteOptimizationLatest(
       return false;
 
    string output = StringFormat(
-      "{\"schema_version\":\"1.2\",\"symbol\":\"%s\",\"magic\":%I64d,\"runtime_mode\":\"OPTIMIZATION_PASS\",\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"win_rate\":%.6f,\"trust_penalty\":%.6f,\"cost_penalty\":%.6f,\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"policy_revision\":%d,\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"execution_ok_ratio\":%.6f,\"experiment_status\":\"OPTIMIZATION_PASS\",\"frame_name\":\"%s\",\"frame_pass\":%I64u,\"trade_rights\":false,\"paper_rights\":true,\"observation_rights\":true,\"optimization_inputs_count\":%u,\"optimization_inputs\":%s,\"generated_at_utc\":%I64d}",
+      "{\"schema_version\":\"1.3\",\"symbol\":\"%s\",\"magic\":%I64d,\"runtime_mode\":\"OPTIMIZATION_PASS\",\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"win_rate\":%.6f,\"trust_penalty\":%.6f,\"cost_penalty\":%.6f,\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"policy_revision\":%d,\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"execution_ok_ratio\":%.6f,\"experiment_status\":\"OPTIMIZATION_PASS\",\"frame_name\":\"%s\",\"frame_pass\":%I64u,\"force_flatten\":false,\"trade_rights\":false,\"paper_rights\":true,\"observation_rights\":true,\"allowed_direction\":\"BOTH\",\"optimization_inputs_count\":%u,\"optimization_inputs\":%s,\"generated_at_utc\":%I64d}",
       MbTesterTelemetryEscapeJson(symbol),
       magic,
       frame_value,
@@ -403,7 +405,7 @@ bool MbTesterTelemetryAppendOptimizationPass(
 
    FileSeek(handle,0,SEEK_END);
    string output = StringFormat(
-      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"magic\":%I64d,\"frame_name\":\"%s\",\"frame_id\":%I64d,\"frame_pass\":%I64u,\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"win_rate\":%.6f,\"trust_penalty\":%.6f,\"cost_penalty\":%.6f,\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"policy_revision\":%d,\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"execution_ok_ratio\":%.6f,\"optimization_inputs_count\":%u,\"optimization_inputs\":%s,\"generated_at_utc\":%I64d}",
+      "{\"schema_version\":\"1.1\",\"symbol\":\"%s\",\"magic\":%I64d,\"frame_name\":\"%s\",\"frame_id\":%I64d,\"frame_pass\":%I64u,\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"win_rate\":%.6f,\"trust_penalty\":%.6f,\"cost_penalty\":%.6f,\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"policy_revision\":%d,\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"execution_ok_ratio\":%.6f,\"force_flatten\":false,\"allowed_direction\":\"BOTH\",\"optimization_inputs_count\":%u,\"optimization_inputs\":%s,\"generated_at_utc\":%I64d}",
       MbTesterTelemetryEscapeJson(symbol),
       magic,
       MbTesterTelemetryEscapeJson(frame_name),

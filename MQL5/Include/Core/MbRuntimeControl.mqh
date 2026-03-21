@@ -33,11 +33,14 @@ bool MbIsEffectivePaperRuntimeActive(
 
 void MbRecalculateRuntimeControlRights(MbRuntimeControlState &state)
   {
+   state.allowed_direction = MbNormalizeAllowedDirection(state.allowed_direction);
+
    if(state.halt)
      {
       state.trade_rights = false;
       state.paper_rights = false;
       state.observation_rights = false;
+      state.allowed_direction = "NONE";
       return;
      }
 
@@ -46,6 +49,8 @@ void MbRecalculateRuntimeControlRights(MbRuntimeControlState &state)
      {
       state.trade_rights = false;
       state.paper_rights = true;
+      if(state.allowed_direction == "NONE" || state.allowed_direction == "FLAT_ONLY")
+         state.allowed_direction = "BOTH";
       return;
      }
 
@@ -53,11 +58,14 @@ void MbRecalculateRuntimeControlRights(MbRuntimeControlState &state)
      {
       state.trade_rights = false;
       state.paper_rights = false;
+      state.allowed_direction = "FLAT_ONLY";
       return;
      }
 
    state.trade_rights = true;
    state.paper_rights = false;
+   if(state.allowed_direction == "NONE" || state.allowed_direction == "FLAT_ONLY")
+      state.allowed_direction = "BOTH";
   }
 
 void MbApplyRuntimeRights(
@@ -126,6 +134,8 @@ void MbReadRuntimeControlFile(const string path,MbRuntimeControlState &out)
          out.risk_cap = StringToDouble(value);
       else if(key == "force_flatten")
          out.force_flatten = (StringToInteger(value) != 0);
+      else if(key == "allowed_direction")
+         out.allowed_direction = MbNormalizeAllowedDirection(value);
      }
    FileClose(h);
 
@@ -166,6 +176,7 @@ void MbApplyRuntimeControl(MbRuntimeState &state,const MbRuntimeControlState &co
    state.close_only = (control.close_only && !control.halt && !control.paper_only);
    state.force_flatten = control.force_flatten;
    state.coordinator_risk_cap = MathMax(0.0,MathMin(control.risk_cap,1.0));
+   state.allowed_direction = MbResolveAllowedDirectionForControl(control);
    MbApplyRuntimeRights(state,control.trade_rights,control.paper_rights,control.observation_rights);
 
    if(state.paper_mode_active)
@@ -174,6 +185,7 @@ void MbApplyRuntimeControl(MbRuntimeState &state,const MbRuntimeControlState &co
       state.close_only = false;
       state.caution_mode = false;
       state.mode = MB_MODE_READY;
+      state.allowed_direction = "BOTH";
       MbApplyRuntimeRights(state,false,true,true);
       return;
      }
@@ -181,6 +193,7 @@ void MbApplyRuntimeControl(MbRuntimeState &state,const MbRuntimeControlState &co
    if(state.halt)
      {
       state.mode = MB_MODE_BLOCKED;
+      state.allowed_direction = "NONE";
       MbApplyRuntimeRights(state,false,false,false);
       return;
      }
@@ -188,10 +201,12 @@ void MbApplyRuntimeControl(MbRuntimeState &state,const MbRuntimeControlState &co
    if(state.close_only)
      {
       state.mode = MB_MODE_CLOSE_ONLY;
+      state.allowed_direction = "FLAT_ONLY";
       MbApplyRuntimeRights(state,false,false,true);
       return;
      }
 
+   state.allowed_direction = MbNormalizeAllowedDirection(state.allowed_direction);
    state.mode = (state.caution_mode ? MB_MODE_CAUTION : MB_MODE_READY);
    MbApplyRuntimeRights(state,true,false,true);
   }
@@ -206,6 +221,7 @@ void MbNormalizePaperRuntimeState(MbRuntimeState &state,const bool paper_mode_ac
    state.close_only = false;
    state.caution_mode = false;
    state.mode = MB_MODE_READY;
+   state.allowed_direction = "BOTH";
    MbApplyRuntimeRights(state,false,true,true);
   }
 
@@ -217,6 +233,7 @@ void MbRefreshPaperTradeRights(MbRuntimeState &state,const bool paper_mode_activ
    state.halt = false;
    state.close_only = false;
    state.mode = MB_MODE_READY;
+    state.allowed_direction = "BOTH";
    MbApplyRuntimeRights(state,false,true,true);
   }
 

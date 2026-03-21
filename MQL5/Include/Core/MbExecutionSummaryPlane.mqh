@@ -27,7 +27,7 @@ void MbFlushExecutionSummary(
    if(h == INVALID_HANDLE)
       return;
    string payload = StringFormat(
-      "{\"schema_version\":\"1.2\",\"symbol\":\"%s\",\"runtime_mode\":\"%s\",\"session_profile\":\"%s\",\"reason_code\":\"%s\",\"reason_domain\":\"%s\",\"reason_class\":\"%s\",\"trust_state\":\"%s\",\"trust_reason\":\"%s\",\"execution_quality_state\":\"%s\",\"execution_quality_reason_code\":\"%s\",\"cost_pressure_state\":\"%s\",\"cost_pressure_reason_code\":\"%s\",\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"execution_pressure\":%.4f,\"learning_bias\":%.4f,\"learning_confidence\":%.4f,\"learning_sample_count\":%d,\"learning_win_count\":%d,\"learning_loss_count\":%d,\"adaptive_risk_scale\":%.4f,\"coordinator_risk_cap\":%.4f,\"signal_confidence\":%.4f,\"signal_risk_multiplier\":%.4f,\"trade_rights\":%s,\"paper_rights\":%s,\"observation_rights\":%s,\"market_regime\":\"%s\",\"spread_regime\":\"%s\",\"execution_regime\":\"%s\",\"confidence_bucket\":\"%s\",\"last_setup_type\":\"%s\",\"candle_bias\":\"%s\",\"candle_quality_grade\":\"%s\",\"candle_score\":%.4f,\"renko_bias\":\"%s\",\"renko_quality_grade\":\"%s\",\"renko_score\":%.4f,\"renko_run_length\":%d,\"renko_reversal_flag\":%s",
+      "{\"schema_version\":\"1.3\",\"symbol\":\"%s\",\"runtime_mode\":\"%s\",\"session_profile\":\"%s\",\"reason_code\":\"%s\",\"reason_domain\":\"%s\",\"reason_class\":\"%s\",\"trust_state\":\"%s\",\"trust_reason\":\"%s\",\"execution_quality_state\":\"%s\",\"execution_quality_reason_code\":\"%s\",\"cost_pressure_state\":\"%s\",\"cost_pressure_reason_code\":\"%s\",\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"execution_pressure\":%.4f,\"learning_bias\":%.4f,\"learning_confidence\":%.4f,\"learning_sample_count\":%d,\"learning_win_count\":%d,\"learning_loss_count\":%d,\"adaptive_risk_scale\":%.4f,\"coordinator_risk_cap\":%.4f,\"signal_confidence\":%.4f,\"signal_risk_multiplier\":%.4f,\"force_flatten\":%s,\"trade_rights\":%s,\"paper_rights\":%s,\"observation_rights\":%s,\"allowed_direction\":\"%s\",\"market_regime\":\"%s\",\"spread_regime\":\"%s\",\"execution_regime\":\"%s\",\"confidence_bucket\":\"%s\",\"last_setup_type\":\"%s\",\"candle_bias\":\"%s\",\"candle_quality_grade\":\"%s\",\"candle_score\":%.4f,\"renko_bias\":\"%s\",\"renko_quality_grade\":\"%s\",\"renko_score\":%.4f,\"renko_run_length\":%d,\"renko_reversal_flag\":%s",
       profile.symbol,
       MbRuntimeModeLabelForState(state),
       profile.session_profile,
@@ -52,9 +52,11 @@ void MbFlushExecutionSummary(
       state.coordinator_risk_cap,
       state.signal_confidence,
       state.signal_risk_multiplier,
+      MbJsonBool(state.force_flatten),
       MbJsonBool(state.trade_rights),
       MbJsonBool(state.paper_rights),
       MbJsonBool(state.observation_rights),
+      MbResolveAllowedDirectionForState(state),
       state.market_regime,
       state.spread_regime,
       state.execution_regime,

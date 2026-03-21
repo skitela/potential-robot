@@ -120,6 +120,7 @@ bool MbSaveRuntimeState(MbRuntimeState &state)
    FileWrite(h,"close_only",(state.close_only ? 1 : 0));
    FileWrite(h,"force_flatten",(state.force_flatten ? 1 : 0));
    FileWrite(h,"halt",(state.halt ? 1 : 0));
+   FileWrite(h,"allowed_direction",state.allowed_direction);
     FileWrite(h,"market_regime",state.market_regime);
     FileWrite(h,"spread_regime",state.spread_regime);
     FileWrite(h,"execution_regime",state.execution_regime);
@@ -201,6 +202,7 @@ bool MbLoadRuntimeState(MbRuntimeState &state)
       else if(key == "close_only") state.close_only = (StringToInteger(value) != 0);
       else if(key == "force_flatten") state.force_flatten = (StringToInteger(value) != 0);
       else if(key == "halt") state.halt = (StringToInteger(value) != 0);
+      else if(key == "allowed_direction") state.allowed_direction = MbNormalizeAllowedDirection(value);
       else if(key == "market_regime") state.market_regime = value;
       else if(key == "spread_regime") state.spread_regime = value;
       else if(key == "execution_regime") state.execution_regime = value;

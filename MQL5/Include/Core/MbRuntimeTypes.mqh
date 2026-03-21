@@ -80,6 +80,7 @@ struct MbRuntimeState
    bool close_only;
    bool force_flatten;
    bool halt;
+   string allowed_direction;
    string market_regime;
    string spread_regime;
    string execution_regime;
@@ -252,6 +253,7 @@ struct MbRuntimeControlState
    double risk_cap;
    string requested_mode;
    string reason_code;
+   string allowed_direction;
   };
 
 struct MbKillSwitchState
@@ -269,6 +271,43 @@ struct MbRateGuardState
    bool halt;
    string reason_code;
   };
+
+string MbNormalizeAllowedDirection(const string raw_allowed_direction)
+  {
+   string normalized = raw_allowed_direction;
+   StringToUpper(normalized);
+
+   if(normalized == "BUY" || normalized == "LONG")
+      return "BUY_ONLY";
+   if(normalized == "SELL" || normalized == "SHORT")
+      return "SELL_ONLY";
+   if(normalized == "NONE" || normalized == "BLOCKED")
+      return "NONE";
+   if(normalized == "FLAT" || normalized == "FLAT_ONLY" || normalized == "CLOSE_ONLY")
+      return "FLAT_ONLY";
+   if(normalized == "BUY_ONLY" || normalized == "SELL_ONLY" || normalized == "BOTH")
+      return normalized;
+
+   return "BOTH";
+  }
+
+string MbResolveAllowedDirectionForState(const MbRuntimeState &state)
+  {
+   if(state.halt)
+      return "NONE";
+   if(state.close_only)
+      return "FLAT_ONLY";
+   return MbNormalizeAllowedDirection(state.allowed_direction);
+  }
+
+string MbResolveAllowedDirectionForControl(const MbRuntimeControlState &state)
+  {
+   if(state.halt)
+      return "NONE";
+   if(state.close_only)
+      return "FLAT_ONLY";
+   return MbNormalizeAllowedDirection(state.allowed_direction);
+  }
 
 void MbRuntimeReset(MbRuntimeState &state)
   {
@@ -334,6 +373,7 @@ void MbRuntimeReset(MbRuntimeState &state)
    state.close_only = false;
    state.force_flatten = false;
    state.halt = false;
+   state.allowed_direction = "BOTH";
    state.market_regime = "UNKNOWN";
    state.spread_regime = "UNKNOWN";
    state.execution_regime = "UNKNOWN";
@@ -490,6 +530,7 @@ void MbRuntimeControlStateReset(MbRuntimeControlState &state)
    state.risk_cap = 1.0;
    state.requested_mode = "RUN";
    state.reason_code = "OK";
+   state.allowed_direction = "BOTH";
   }
 
 void MbKillSwitchStateReset(MbKillSwitchState &state)
