@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$Mt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe",
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
+    [switch]$PortableTerminal,
     [string[]]$SymbolAliases = @("GBPUSD","USDCAD","USDCHF"),
     [int]$TimeoutSec = 3600,
     [string[]]$WorkerNames = @("worker_main_1","worker_main_2","worker_main_3"),
@@ -74,6 +75,7 @@ for ($i = 0; $i -lt $SymbolAliases.Count; $i++) {
         -ProjectRoot $ProjectRoot `
         -Mt5Exe $Mt5Exe `
         -TerminalDataDir $TerminalDataDir `
+        -PortableTerminal:$PortableTerminal `
         -SymbolAlias $symbolAlias `
         -WorkerName $workerName `
         -TimeoutSec $effectiveTimeoutSec `
@@ -91,6 +93,7 @@ for ($i = 0; $i -lt $SymbolAliases.Count; $i++) {
             -ProjectRoot $ProjectRoot `
             -Mt5Exe $Mt5Exe `
             -TerminalDataDir $TerminalDataDir `
+            -PortableTerminal:$PortableTerminal `
             -SymbolAlias $symbolAlias `
             -WorkerName $workerName `
             -TimeoutSec $retryTimeoutSec `

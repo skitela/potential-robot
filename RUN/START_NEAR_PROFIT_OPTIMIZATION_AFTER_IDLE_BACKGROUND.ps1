@@ -2,6 +2,9 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$Mt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe",
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
+    [bool]$UseDedicatedPortableLabLane = $true,
+    [string]$DedicatedLabTerminalRoot = "C:\TRADING_TOOLS\MT5_NEAR_PROFIT_LAB",
+    [string]$DedicatedLabSourceTerminalOrigin = "C:\Program Files\MetaTrader 5",
     [string]$LogRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\optimization_lab\logs",
     [string]$OpsEvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
@@ -25,6 +28,7 @@ $ErrorActionPreference = "Stop"
 
 $batchScript = Join-Path $ProjectRoot "RUN\RUN_NEAR_PROFIT_OPTIMIZATION_BATCH.ps1"
 $statusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
+$preparePortableLabScript = Join-Path $ProjectRoot "RUN\PREPARE_NEAR_PROFIT_PORTABLE_LAB.ps1"
 if (-not (Test-Path -LiteralPath $batchScript)) {
     throw "Near-profit optimization batch script not found: $batchScript"
 }
@@ -33,6 +37,26 @@ if (-not (Test-Path -LiteralPath $statusScript)) {
 }
 if (-not (Test-Path -LiteralPath $ProfitTrackingPath)) {
     throw "Profit tracking file not found: $ProfitTrackingPath"
+}
+
+$portableTerminal = $false
+if ($UseDedicatedPortableLabLane) {
+    if (-not (Test-Path -LiteralPath $preparePortableLabScript)) {
+        throw "Near-profit portable lab prepare script not found: $preparePortableLabScript"
+    }
+
+    $portableLab = & $preparePortableLabScript `
+        -ProjectRoot $ProjectRoot `
+        -SourceTerminalOrigin $DedicatedLabSourceTerminalOrigin `
+        -LabTerminalRoot $DedicatedLabTerminalRoot
+
+    if ($null -eq $portableLab) {
+        throw "Near-profit portable lab preparation returned no result."
+    }
+
+    $Mt5Exe = [string]$portableLab.mt5_exe
+    $TerminalDataDir = [string]$portableLab.terminal_data_dir
+    $portableTerminal = [bool]$portableLab.portable_terminal
 }
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
@@ -61,6 +85,10 @@ $metaTesterExe = Join-Path (Split-Path -Parent $Mt5Exe) "metatester64.exe"
 $batchReportPath = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json"
 $mt5TesterStatusPath = Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json"
 $quotedSymbols = ($selectedSymbols | ForEach-Object { "'{0}'" -f $_ }) -join ", "
+$awaitingIdleNote = if ($UseDedicatedPortableLabLane) { "awaiting_near_profit_lab_idle" } else { "awaiting_secondary_mt5_idle" }
+$busyIdleNote = if ($UseDedicatedPortableLabLane) { "near_profit_lab_busy" } else { "secondary_mt5_busy" }
+$portableTerminalLiteral = if ($portableTerminal) { '$true' } else { '$false' }
+$skipResearchRefreshLiteral = if ($SkipResearchRefresh) { '$true' } else { '$false' }
 
 $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'
@@ -74,20 +102,23 @@ function Save-NearProfitQueueStatus {
         [string]`$CurrentNote = ''
     )
 
-    & '$statusScript' `
-        -ProjectRoot '$ProjectRoot' `
-        -OpsEvidenceDir '$OpsEvidenceDir' `
-        -LogRoot '$LogRoot' `
-        -ProfitTrackingPath '$ProfitTrackingPath' `
-        -Mt5TesterStatusPath '$mt5TesterStatusPath' `
-        -BatchReportPath '$batchReportPath' `
-        -NearProfitCount $NearProfitCount `
-        -State `$State `
-        -CurrentSymbol `$CurrentSymbol `
-        -Completed `$Completed `
-        -Pending `$Pending `
-        -CurrentNote `$CurrentNote `
-        -LogPath '$logPath' | Out-Null
+    `$statusArgs = @{
+        ProjectRoot = '$ProjectRoot'
+        OpsEvidenceDir = '$OpsEvidenceDir'
+        LogRoot = '$LogRoot'
+        ProfitTrackingPath = '$ProfitTrackingPath'
+        Mt5TesterStatusPath = '$mt5TesterStatusPath'
+        BatchReportPath = '$batchReportPath'
+        NearProfitCount = $NearProfitCount
+        State = `$State
+        CurrentSymbol = `$CurrentSymbol
+        Completed = `$Completed
+        Pending = `$Pending
+        CurrentNote = `$CurrentNote
+        LogPath = '$logPath'
+    }
+
+    & '$statusScript' @statusArgs | Out-Null
 }
 
 function Wait-SecondaryMt5Idle {
@@ -127,7 +158,7 @@ function Wait-SecondaryMt5Idle {
             return
         }
 
-        Save-NearProfitQueueStatus -State 'waiting_for_idle' -CurrentSymbol `$CurrentSymbol -Completed `$Completed -Pending `$Pending -CurrentNote 'secondary_mt5_busy'
+        Save-NearProfitQueueStatus -State 'waiting_for_idle' -CurrentSymbol `$CurrentSymbol -Completed `$Completed -Pending `$Pending -CurrentNote '$busyIdleNote'
         Start-Sleep -Seconds 15
     }
 
@@ -139,29 +170,33 @@ function Wait-SecondaryMt5Idle {
 
 Start-Transcript -Path '$logPath' -Force
 try {
-    Save-NearProfitQueueStatus -State 'waiting_for_idle' -Completed @() -Pending `$selectedSymbols -CurrentNote 'awaiting_secondary_mt5_idle'
+    Save-NearProfitQueueStatus -State 'waiting_for_idle' -Completed @() -Pending `$selectedSymbols -CurrentNote '$awaitingIdleNote'
     Wait-SecondaryMt5Idle -TerminalExe '$Mt5Exe' -MetaTesterExe '$metaTesterExe' -TimeoutSeconds $IdleTimeoutSeconds -Completed @() -Pending `$selectedSymbols -CurrentSymbol ''
 
     Save-NearProfitQueueStatus -State 'running' -Completed @() -Pending @() -CurrentNote 'near_profit_batch_started'
 
-    & '$batchScript' `
-        -ProjectRoot '$ProjectRoot' `
-        -Mt5Exe '$Mt5Exe' `
-        -TerminalDataDir '$TerminalDataDir' `
-        -ProfitTrackingPath '$ProfitTrackingPath' `
-        -NearProfitCount $NearProfitCount `
-        -FromDate '$FromDate' `
-        -ToDate '$ToDate' `
-        -TimeoutSec $TimeoutSec `
-        -Optimization $Optimization `
-        -OptimizationCriterion $OptimizationCriterion `
-        -SkipResearchRefresh:$([bool]$SkipResearchRefresh) `
-        -ResearchPerfProfile '$ResearchPerfProfile' | Out-Host
+    `$batchArgs = @{
+        ProjectRoot = '$ProjectRoot'
+        Mt5Exe = '$Mt5Exe'
+        TerminalDataDir = '$TerminalDataDir'
+        PortableTerminal = $portableTerminalLiteral
+        ProfitTrackingPath = '$ProfitTrackingPath'
+        NearProfitCount = $NearProfitCount
+        FromDate = '$FromDate'
+        ToDate = '$ToDate'
+        TimeoutSec = $TimeoutSec
+        Optimization = $Optimization
+        OptimizationCriterion = $OptimizationCriterion
+        SkipResearchRefresh = $skipResearchRefreshLiteral
+        ResearchPerfProfile = '$ResearchPerfProfile'
+    }
+
+    & '$batchScript' @batchArgs | Out-Host
 
     Save-NearProfitQueueStatus -State 'completed' -Completed `$selectedSymbols -Pending @() -CurrentNote ''
 }
 catch {
-    Save-NearProfitQueueStatus -State 'failed' -Completed @() -Pending `$selectedSymbols -CurrentNote ([string]$_.Exception.Message)
+    Save-NearProfitQueueStatus -State 'failed' -Completed @() -Pending `$selectedSymbols -CurrentNote ([string]`$_.Exception.Message)
     throw
 }
 finally {

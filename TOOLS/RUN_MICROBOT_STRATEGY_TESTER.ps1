@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$Mt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe",
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
+    [switch]$PortableTerminal,
     [Parameter(Mandatory = $true)]
     [string]$SymbolAlias,
     [string]$Symbol = "",
@@ -343,10 +344,14 @@ if ([string]::IsNullOrWhiteSpace($EvidenceSubdir) -and -not [string]::IsNullOrWh
 }
 $evidenceDir = Resolve-EvidenceDir -ProjectRootPath $ProjectRoot -Subdir $EvidenceSubdir
 $mt5Root = Split-Path -Parent $Mt5Exe
-$mt5ReportsDir = Join-Path $mt5Root "reports"
-$terminalHash = Split-Path $TerminalDataDir -Leaf
-$metaQuotesRoot = Split-Path (Split-Path $TerminalDataDir -Parent) -Parent
-$testerAgentsRoot = Join-Path $metaQuotesRoot ("Tester\" + $terminalHash)
+$mt5ReportsDir = if ($PortableTerminal) { Join-Path $TerminalDataDir "reports" } else { Join-Path $mt5Root "reports" }
+$testerAgentsRoot = if ($PortableTerminal) {
+    Join-Path $TerminalDataDir "Tester"
+} else {
+    $terminalHash = Split-Path $TerminalDataDir -Leaf
+    $metaQuotesRoot = Split-Path (Split-Path $TerminalDataDir -Parent) -Parent
+    Join-Path $metaQuotesRoot ("Tester\" + $terminalHash)
+}
 $configPath = Join-Path $runDir ($runId + ".ini")
 $testerLogDir = Join-Path $TerminalDataDir "Tester\logs"
 $terminalLogDir = Join-Path $TerminalDataDir "logs"
@@ -412,7 +417,11 @@ Stop-MatchingTerminalProcesses -ExecutablePath $Mt5Exe
 Start-Sleep -Seconds 2
 
 $runLaunchedAt = Get-Date
-$process = Start-Process -FilePath $Mt5Exe -ArgumentList @("/config:$configPath") -PassThru
+$terminalArgs = @("/config:$configPath")
+if ($PortableTerminal) {
+    $terminalArgs += "/portable"
+}
+$process = Start-Process -FilePath $Mt5Exe -ArgumentList $terminalArgs -PassThru
 $trackedProcessId = $null
 for ($attempt = 1; $attempt -le 40; $attempt++) {
     $trackedProcessId = Get-MatchingTerminalProcessId -ExecutablePath $Mt5Exe -ConfigPath $configPath
@@ -651,6 +660,7 @@ $result = [ordered]@{
     config_path           = $configPath
     mt5_exe               = $Mt5Exe
     terminal_data_dir     = $TerminalDataDir
+    portable_terminal     = [bool]$PortableTerminal
     symbol                = $Symbol
     expert_name           = $ExpertName
     expert_path           = $ExpertPath

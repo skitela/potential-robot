@@ -3,6 +3,7 @@ param(
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$Mt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe",
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
+    [switch]$PortableTerminal,
     [int]$NearProfitCount = 3,
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
@@ -46,6 +47,7 @@ for ($i = 0; $i -lt $symbolAliases.Count; $i++) {
     -ProjectRoot $ProjectRoot `
     -Mt5Exe $Mt5Exe `
     -TerminalDataDir $TerminalDataDir `
+    -PortableTerminal:$PortableTerminal `
     -SymbolAliases $symbolAliases `
     -WorkerNames $workerNames `
     -TimeoutSec $TimeoutSec `
