@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$Mt5Exe = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe",
-    [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
+    [string]$Mt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe",
+    [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
     [Parameter(Mandatory = $true)]
     [string]$SymbolAlias,
     [string]$Symbol = "",
@@ -12,6 +12,11 @@ param(
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
     [int]$Model = 4,
+    [ValidateSet(0,1,2,3)]
+    [int]$Optimization = 0,
+    [ValidateSet(0,1,2,3,4,5,6,7)]
+    [int]$OptimizationCriterion = 6,
+    [string]$ExpertParameters = "",
     [double]$Deposit = 10000.0,
     [int]$Leverage = 100,
     [int]$TimeoutSec = 1800,
@@ -95,6 +100,43 @@ function Resolve-EvidenceDir {
         return $base
     }
     return (Join-Path $base $Subdir)
+}
+
+function Resolve-ExpertParametersPath {
+    param(
+        [string]$ProjectRootPath,
+        [string]$ExpertName,
+        [string]$ExplicitPath
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        if ([System.IO.Path]::IsPathRooted($ExplicitPath)) {
+            if (Test-Path -LiteralPath $ExplicitPath) {
+                return (Resolve-Path -LiteralPath $ExplicitPath).Path
+            }
+            throw "ExpertParameters file not found: $ExplicitPath"
+        }
+
+        $candidatePaths = @(
+            (Join-Path $ProjectRootPath $ExplicitPath),
+            (Join-Path $ProjectRootPath ("MQL5\\Presets\\{0}" -f $ExplicitPath))
+        )
+
+        foreach ($candidate in $candidatePaths) {
+            if (Test-Path -LiteralPath $candidate) {
+                return (Resolve-Path -LiteralPath $candidate).Path
+            }
+        }
+
+        throw "ExpertParameters file not found relative to project: $ExplicitPath"
+    }
+
+    $defaultPreset = Join-Path $ProjectRootPath ("MQL5\\Presets\\{0}_Live.set" -f $ExpertName)
+    if (Test-Path -LiteralPath $defaultPreset) {
+        return (Resolve-Path -LiteralPath $defaultPreset).Path
+    }
+
+    return ""
 }
 
 function Resolve-TesterSymbol {
@@ -274,9 +316,19 @@ $testerAgentsRoot = Join-Path $metaQuotesRoot ("Tester\" + $terminalHash)
 $configPath = Join-Path $runDir ($runId + ".ini")
 $testerLogDir = Join-Path $TerminalDataDir "Tester\logs"
 $terminalLogDir = Join-Path $TerminalDataDir "logs"
+$testerProfilesDir = Join-Path $TerminalDataDir "MQL5\Profiles\Tester"
 $reportBaseRel = "reports\" + $runId
 $sandboxName = "MAKRO_I_MIKRO_BOT_TESTER_${storageAlias}_${sanitizedTag}"
 $sandboxRoot = Join-Path (Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Files") $sandboxName
+New-Item -ItemType Directory -Force -Path $testerProfilesDir | Out-Null
+
+$expertParametersSourcePath = Resolve-ExpertParametersPath -ProjectRootPath $ProjectRoot -ExpertName $ExpertName -ExplicitPath $ExpertParameters
+$expertParametersTargetName = ""
+if (-not [string]::IsNullOrWhiteSpace($expertParametersSourcePath)) {
+    $expertParametersTargetName = "{0}_{1}.set" -f $runId, [System.IO.Path]::GetFileNameWithoutExtension($expertParametersSourcePath)
+    $expertParametersTargetPath = Join-Path $testerProfilesDir $expertParametersTargetName
+    Copy-Item -LiteralPath $expertParametersSourcePath -Destination $expertParametersTargetPath -Force
+}
 
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
@@ -288,10 +340,12 @@ New-Item -ItemType Directory -Force -Path $mt5ReportsDir | Out-Null
 $config = @"
 [Tester]
 Expert=$ExpertPath
+ExpertParameters=$expertParametersTargetName
 Symbol=$Symbol
 Period=$Period
 Model=$Model
-Optimization=0
+Optimization=$Optimization
+OptimizationCriterion=$OptimizationCriterion
 FromDate=$FromDate
 ToDate=$ToDate
 ForwardMode=0
@@ -433,6 +487,7 @@ $learningObservationsPath = Join-Path $sandboxRoot ("logs\{0}\learning_observati
 $tuningDeckhandPath = Join-Path $sandboxRoot ("logs\{0}\tuning_deckhand.csv" -f $storageAlias)
 $testerTelemetryPath = Join-Path $sandboxRoot ("state\{0}\tester_telemetry_latest.json" -f $storageAlias)
 $testerTelemetrySessionPath = Join-Path $sandboxRoot ("run\{0}\tester_telemetry_session.json" -f $storageAlias)
+$testerOptimizationPassesPath = Join-Path $sandboxRoot ("run\{0}\tester_optimization_passes.jsonl" -f $storageAlias)
 
 $executionSummary = $null
 if (Test-Path -LiteralPath $executionSummaryPath) {
@@ -441,6 +496,11 @@ if (Test-Path -LiteralPath $executionSummaryPath) {
 $testerTelemetry = $null
 if (Test-Path -LiteralPath $testerTelemetryPath) {
     $testerTelemetry = Get-Content -LiteralPath $testerTelemetryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
+$testerOptimizationPassCount = 0
+if (Test-Path -LiteralPath $testerOptimizationPassesPath) {
+    $testerOptimizationPassCount = @(Get-Content -LiteralPath $testerOptimizationPassesPath -ErrorAction SilentlyContinue | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
 }
 
 $runtimeMap = Get-KeyValueCsvMap -Path $runtimeStatePath
@@ -562,6 +622,10 @@ $result = [ordered]@{
     expert_path           = $ExpertPath
     from_date             = $FromDate
     to_date               = $ToDate
+    optimization          = $Optimization
+    optimization_criterion = $OptimizationCriterion
+    expert_parameters_source_path = $(if ($expertParametersSourcePath -ne "") { $expertParametersSourcePath } else { $null })
+    expert_parameters_profile_name = $(if ($expertParametersTargetName -ne "") { $expertParametersTargetName } else { $null })
     model                 = $Model
     timed_out             = $timedOut
     reports_copied        = $copiedReports
@@ -574,6 +638,8 @@ $result = [ordered]@{
     restore_profile       = [bool]$RestoreMicrobotsProfile
     tester_telemetry_path = $(if (Test-Path -LiteralPath $testerTelemetryPath) { $testerTelemetryPath } else { $null })
     tester_telemetry_session_path = $(if (Test-Path -LiteralPath $testerTelemetrySessionPath) { $testerTelemetrySessionPath } else { $null })
+    tester_optimization_passes_path = $(if (Test-Path -LiteralPath $testerOptimizationPassesPath) { $testerOptimizationPassesPath } else { $null })
+    tester_optimization_pass_count = $testerOptimizationPassCount
 }
 
 $summary = [ordered]@{
@@ -585,6 +651,9 @@ $summary = [ordered]@{
     expert_name               = $ExpertName
     from_date                 = $FromDate
     to_date                   = $ToDate
+    optimization              = $Optimization
+    optimization_criterion    = $OptimizationCriterion
+    expert_parameters_profile_name = $expertParametersTargetName
     final_balance             = $finalBalance
     test_duration             = $testDuration
     result_label              = $resultLabel
@@ -618,6 +687,8 @@ $summary = [ordered]@{
     execution_summary_cost_pressure_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'cost_pressure_state' -Default '')
     execution_summary_execution_quality_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'execution_quality_state' -Default '')
     tester_telemetry          = $testerTelemetry
+    tester_optimization_passes_path = $(if (Test-Path -LiteralPath $testerOptimizationPassesPath) { $testerOptimizationPassesPath } else { $null })
+    tester_optimization_pass_count = $testerOptimizationPassCount
     top_candidate_reasons     = $topCandidateReasons
     paper_open_by_setup_regime = $paperOpenBySetupRegime
     paper_close_stats         = $paperCloseStats

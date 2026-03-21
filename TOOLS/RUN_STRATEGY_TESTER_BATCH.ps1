@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$Mt5Exe = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe",
-    [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
+    [string]$Mt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe",
+    [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
     [string[]]$SymbolAliases = @("GBPUSD","USDCAD","USDCHF"),
     [int]$TimeoutSec = 3600,
     [string[]]$WorkerNames = @("worker_main_1","worker_main_2","worker_main_3"),

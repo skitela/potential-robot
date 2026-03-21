@@ -99,6 +99,7 @@ $candidatePath = Join-Path $symbolDir "candidate_signals.csv"
 $bucketPath = Join-Path $symbolDir "learning_bucket_summary_v1.csv"
 $observationsPath = Join-Path $symbolDir "learning_observations_v2.csv"
 $deckhandPath = Join-Path $symbolDir "tuning_deckhand.csv"
+$optimizationPassesPath = Join-Path $SandboxRoot ("run\{0}\tester_optimization_passes.jsonl" -f $SymbolAlias)
 $summaryPath = Join-Path $EvidenceDir ($RunId + "_summary.json")
 
 $candidateRows = @(Read-TsvRows -Path $candidatePath)
@@ -158,6 +159,11 @@ if (@($deckhandRows).Count -gt 0) {
     $deckhandSnapshot = $deckhandRows[-1]
 }
 
+$optimizationPassCount = 0
+if (Test-Path -LiteralPath $optimizationPassesPath) {
+    $optimizationPassCount = @(Get-Content -LiteralPath $optimizationPassesPath -ErrorAction SilentlyContinue | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+}
+
 $testerReadiness = Get-TesterReadiness -Summary $summary -DeckhandSnapshot $deckhandSnapshot
 
 $knowledge = [ordered]@{
@@ -171,6 +177,8 @@ $knowledge = [ordered]@{
     paper_close_stats        = $closeStats
     weakest_observation_patterns = $weakPatterns
     deckhand_snapshot        = $deckhandSnapshot
+    tester_optimization_passes_path = $(if (Test-Path -LiteralPath $optimizationPassesPath) { $optimizationPassesPath } else { $null })
+    tester_optimization_pass_count = $optimizationPassCount
 }
 
 $jsonPath = Join-Path $EvidenceDir ($RunId + "_knowledge.json")
@@ -184,6 +192,7 @@ $mdLines = @(
     ("- trust: {0} / {1}" -f $summary.trust_state, $summary.trust_reason),
     ("- cost: {0}" -f $summary.cost_pressure_state),
     ("- tester_custom_score: {0}" -f $summary.tester_custom_score),
+    ("- tester_optimization_pass_count: {0}" -f $optimizationPassCount),
     ("- samples: {0}" -f $summary.learning_sample_count),
     ("- wins/losses: {0}/{1}" -f $summary.learning_win_count, $summary.learning_loss_count),
     ("- paper_open_rows: {0}" -f $summary.paper_open_rows),
