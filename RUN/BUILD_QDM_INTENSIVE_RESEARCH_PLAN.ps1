@@ -359,6 +359,7 @@ foreach ($groupName in $groupOrder) {
             qdm_datasource = if ($null -ne $qdmEntry) { [string]$qdmEntry.datasource } else { "" }
             qdm_export_name = if ($null -ne $qdmEntry) { [string]$qdmEntry.mt5_export_name } else { "" }
             qdm_note = if ($null -ne $qdmEntry) { "supported" } elseif ($qdmSkippedMap.ContainsKey($alias)) { [string]$qdmSkippedMap[$alias] } else { "no_qdm_mapping" }
+            research_data_lane = if ($null -ne $qdmEntry) { "QDM_PLUS_MT5" } else { "MT5_RUNTIME_TESTER_FALLBACK" }
             slot_minutes = $SlotMinutes
             slot_index_in_group = [int]$slot.slot_index
             slot_window_id = [string]$slot.slot_window_id
@@ -470,6 +471,7 @@ foreach ($groupName in $groupOrder) {
             $row.live_net_24h,
             $row.ml_risk_score,
             $qdmState))
+        $lines.Add(("  research_lane: {0}" -f $row.research_data_lane))
         $lines.Add(("  focus: {0}" -f $row.focus_objective))
         $lines.Add(("  mt5_followup: {0}" -f $row.mt5_followup_reason))
         $lines.Add(("  ml_hint: {0}" -f $row.ml_first_hint))

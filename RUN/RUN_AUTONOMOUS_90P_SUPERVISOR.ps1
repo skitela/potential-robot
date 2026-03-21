@@ -12,6 +12,8 @@ $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
 $mt5QueueSyncScript = Join-Path $ProjectRoot "RUN\SYNC_MT5_RETEST_QUEUE_FROM_RESEARCH_PLAN.ps1"
+$applyLaptopRuntimeScript = Join-Path $ProjectRoot "RUN\APPLY_LAPTOP_RESEARCH_RUNTIME.ps1"
+$tripleLoopAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MICROBOT_TRIPLE_LOOP_AUDIT.ps1"
 $tuningEffectiveRepairScript = Join-Path $ProjectRoot "RUN\REPAIR_TUNING_EFFECTIVE_SYNC.ps1"
 $profitTrackingScript = Join-Path $ProjectRoot "RUN\BUILD_PROFIT_TRACKING_REPORT.ps1"
 $dailySystemReportScript = Join-Path $ProjectRoot "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
@@ -37,6 +39,8 @@ foreach ($path in @(
     $mlHintsScript,
     $researchPlanScript,
     $mt5QueueSyncScript,
+    $applyLaptopRuntimeScript,
+    $tripleLoopAuditScript,
     $tuningEffectiveRepairScript,
     $profitTrackingScript,
     $dailySystemReportScript,
@@ -211,6 +215,12 @@ function Write-SupervisorStatus {
         $mt5Queue = Get-Content -LiteralPath $mt5QueuePath -Raw -Encoding UTF8 | ConvertFrom-Json
     }
 
+    $tripleLoopAuditPath = Join-Path $statusDir "microbot_triple_loop_audit_latest.json"
+    $tripleLoopAudit = $null
+    if (Test-Path -LiteralPath $tripleLoopAuditPath) {
+        $tripleLoopAudit = Get-Content -LiteralPath $tripleLoopAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
     $status = [ordered]@{
         generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         cycle = $Cycle
@@ -307,6 +317,19 @@ function Write-SupervisorStatus {
     else {
         $lines.Add("- queue status not available")
     }
+    $lines.Add("")
+    $lines.Add("## Triple Loop Audit")
+    $lines.Add("")
+    if ($null -ne $tripleLoopAudit) {
+        $lines.Add(("- critical_count: {0}" -f $tripleLoopAudit.summary.critical_count))
+        $lines.Add(("- warning_count: {0}" -f $tripleLoopAudit.summary.warning_count))
+        foreach ($item in @($tripleLoopAudit.symbol_reports | Sort-Object @{ Expression = { $_.severity_counts.critical } ; Descending = $true }, @{ Expression = { $_.severity_counts.warning } ; Descending = $true }, symbol_alias | Select-Object -First 4)) {
+            $lines.Add(("- {0}: critical={1}, warning={2}" -f $item.symbol_alias, $item.severity_counts.critical, $item.severity_counts.warning))
+        }
+    }
+    else {
+        $lines.Add("- triple loop audit not available")
+    }
     ($lines -join "`r`n") | Set-Content -LiteralPath $mdLatest -Encoding UTF8
 }
 
@@ -364,6 +387,11 @@ while ($true) {
         "rebuilt"
     } | Out-Null
 
+    Invoke-SupervisorAction -Actions $actions -Name "laptop_runtime" -Operation {
+        & $applyLaptopRuntimeScript | Out-Null
+        "applied"
+    } | Out-Null
+
     Invoke-SupervisorAction -Actions $actions -Name "mt5_queue_sync" -Operation {
         & $mt5QueueSyncScript | Out-Null
         "rebuilt"
@@ -376,6 +404,11 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "profit_tracking" -Operation {
         & $profitTrackingScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "triple_loop_audit" -Operation {
+        & $tripleLoopAuditScript | Out-Null
         "rebuilt"
     } | Out-Null
 

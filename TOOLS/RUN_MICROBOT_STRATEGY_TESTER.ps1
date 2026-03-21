@@ -209,6 +209,7 @@ if (-not $entry) {
     throw "SymbolAlias not found in registry: $SymbolAlias"
 }
 
+$canonicalAlias = Get-RegistryCanonicalSymbol -RegistryItem $entry
 $entryCodeSymbol = if ($entry.PSObject.Properties.Name -contains 'code_symbol') { [string]$entry.code_symbol } else { "" }
 $resolvedAlias = Convert-ToSandboxToken $(if (-not [string]::IsNullOrWhiteSpace($entryCodeSymbol)) { $entryCodeSymbol } else { Get-RegistryCanonicalSymbol -RegistryItem $entry })
 $storageAlias = Convert-ToSandboxToken (Get-RegistryCanonicalSymbol -RegistryItem $entry)
@@ -501,7 +502,8 @@ if ($RestoreMicrobotsProfile) {
 $result = [ordered]@{
     run_id                = $runId
     generated_at_utc      = (Get-Date).ToUniversalTime().ToString("o")
-    symbol_alias          = $resolvedAlias
+    symbol_alias          = $canonicalAlias
+    code_symbol           = $resolvedAlias
     storage_alias         = $storageAlias
     sandbox_name          = $sandboxName
     config_path           = $configPath
@@ -528,7 +530,8 @@ $result = [ordered]@{
 
 $summary = [ordered]@{
     run_id                    = $runId
-    symbol_alias              = $resolvedAlias
+    symbol_alias              = $canonicalAlias
+    code_symbol               = $resolvedAlias
     storage_alias             = $storageAlias
     symbol                    = $Symbol
     expert_name               = $ExpertName

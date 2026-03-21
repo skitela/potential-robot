@@ -121,6 +121,19 @@ function Get-QdmHistoryCandidates {
     )
 }
 
+function Get-QdmUsableHistoryCandidates {
+    param(
+        [object[]]$Candidates,
+        [long]$MinimumBytes = 10485760
+    )
+
+    return @(
+        $Candidates |
+            Where-Object { $_.Length -ge $MinimumBytes } |
+            Sort-Object LastWriteTime -Descending
+    )
+}
+
 if ($StopExistingQdm) {
     Stop-QdmProcesses
     Wait-QdmIdle -TimeoutSeconds 60
@@ -146,6 +159,18 @@ foreach ($row in $rows) {
     }
 
     $historyCandidates = @(Get-QdmHistoryCandidates -HistoryRoot $historyRoot -Symbol $symbol -Datatype $datatype)
+    $usableHistoryCandidates = @(Get-QdmUsableHistoryCandidates -Candidates $historyCandidates)
+    if (-not $ForceUpdate -and $usableHistoryCandidates.Count -gt 0) {
+        $bestHistory = $usableHistoryCandidates[0]
+        $hoursSinceRefresh = ((Get-Date) - $bestHistory.LastWriteTime).TotalHours
+        Write-Host ("Skipping historical update: {0} (history already present on disk: {1}, size {2:N1} MB, age {3:N1}h; use -ForceUpdate to refresh)" -f
+            $symbol,
+            $bestHistory.Name,
+            ($bestHistory.Length / 1MB),
+            $hoursSinceRefresh)
+        continue
+    }
+
     if (-not $ForceUpdate -and $historyCandidates.Count -gt 0) {
         $latestHistory = $historyCandidates[0]
         $hoursSinceRefresh = ((Get-Date) - $latestHistory.LastWriteTime).TotalHours

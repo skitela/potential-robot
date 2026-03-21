@@ -15,6 +15,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $prepareScript = Join-Path $ProjectRoot "RUN\PREPARE_MT5_LAB_TERMINAL.ps1"
 $batchScript = Join-Path $ProjectRoot "TOOLS\RUN_STRATEGY_TESTER_BATCH.ps1"
 $priorityScript = Join-Path $ProjectRoot "RUN\APPLY_LAB_PROCESS_PRIORITIES.ps1"
@@ -24,27 +27,47 @@ foreach ($path in @($prepareScript, $batchScript, $priorityScript)) {
     }
 }
 
+function Get-Registry {
+    param([string]$RegistryPath)
+
+    if (-not (Test-Path -LiteralPath $RegistryPath)) {
+        throw "Registry not found: $RegistryPath"
+    }
+
+    return (Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+}
+
 function Normalize-SymbolAlias {
-    param([string]$Alias)
+    param(
+        [object]$Registry,
+        [string]$Alias
+    )
 
     if ([string]::IsNullOrWhiteSpace($Alias)) {
         return $null
     }
 
     $trimmed = $Alias.Trim()
+
+    $entry = Find-RegistryEntryByAlias -Registry $Registry -Alias $trimmed
+    if ($null -ne $entry) {
+        return (Get-RegistryCanonicalSymbol -RegistryItem $entry)
+    }
+
     $map = @{
-        "COPPER-US" = "COPPERUS"
         "USA500.IDX" = "US500"
         "XAUUSD" = "GOLD"
         "XAGUSD" = "SILVER"
     }
-
     if ($map.ContainsKey($trimmed)) {
         return $map[$trimmed]
     }
 
-    return ($trimmed -replace '[^A-Z0-9]', '')
+    return $trimmed
 }
+
+$registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
+$registry = Get-Registry -RegistryPath $registryPath
 
 Write-Host "Preparing secondary MT5 weakest-first terminal..."
 & $prepareScript -ProjectRoot $ProjectRoot -TerminalOrigin (Split-Path -Parent $Mt5Exe) -TerminalDataDir $TerminalDataDir | Out-Host
@@ -57,7 +80,7 @@ if ($UseResearchPlan -and (Test-Path -LiteralPath $ResearchPlanPath)) {
         $researchPlan = Get-Content -LiteralPath $ResearchPlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $symbols = @(
             @($researchPlan.tester_queue) |
-                ForEach-Object { Normalize-SymbolAlias -Alias ([string]$_) } |
+                ForEach-Object { Normalize-SymbolAlias -Registry $registry -Alias ([string]$_) } |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
                 Select-Object -Unique -First $PriorityCount
         )
@@ -74,7 +97,7 @@ if ($UsePriorityReport -and (Test-Path -LiteralPath $PriorityReportPath)) {
         if ($symbols.Count -eq 0) {
             $symbols = @(
                 $ranked |
-                    ForEach-Object { Normalize-SymbolAlias -Alias ([string]$_.symbol_alias) } |
+                    ForEach-Object { Normalize-SymbolAlias -Registry $registry -Alias ([string]$_.symbol_alias) } |
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
                     Select-Object -Unique -First $PriorityCount
             )
@@ -96,7 +119,7 @@ if ($symbols.Count -eq 0) {
         "DE30",
         "GOLD",
         "EURAUD",
-        "COPPERUS",
+        "COPPER-US",
         "GBPAUD",
         "AUDUSD",
         "EURJPY",

@@ -265,6 +265,11 @@ function Refresh-Panel {
                 $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(201,128,18)
                 $statusBadge.ForeColor = [System.Drawing.Color]::White
             }
+            "RYNEK_ZAMKNIETY" {
+                $statusBadge.Text = "RYNEK ZAMKNIETY"
+                $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(39,89,136)
+                $statusBadge.ForeColor = [System.Drawing.Color]::White
+            }
             default {
                 $statusBadge.Text = "PADL"
                 $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(183,32,32)

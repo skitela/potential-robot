@@ -32,12 +32,12 @@
     },
     "LAPTOP_RESEARCH": {
       "notes": [
-        "Laptop research remains conservative by default; broader research orchestration is handled outside the domain runtime guard."
+        "Laptop research should keep collecting and learning outside trade windows and during the weekend close."
       ],
       "rules_override": {
-        "sleep_requested_mode": "CLOSE_ONLY",
-        "prewarm_requested_mode": "CLOSE_ONLY",
-        "observation_requested_mode": "CLOSE_ONLY",
+        "sleep_requested_mode": "PAPER_ONLY",
+        "prewarm_requested_mode": "PAPER_ONLY",
+        "observation_requested_mode": "PAPER_ONLY",
         "trade_requested_mode": "RUN",
         "paper_requested_mode": "PAPER_ONLY"
       }

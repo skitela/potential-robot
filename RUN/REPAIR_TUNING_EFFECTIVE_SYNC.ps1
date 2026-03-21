@@ -7,7 +7,11 @@ $ErrorActionPreference = "Stop"
 
 $stateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state"
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
+$runtimeControlSummaryPath = Join-Path $ProjectRoot "EVIDENCE\runtime_control_summary.json"
+$registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 New-Item -ItemType Directory -Force -Path $opsRoot | Out-Null
+
+. (Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1")
 
 function Read-TabMap {
     param([string]$Path)
@@ -56,6 +60,25 @@ function Read-JsonFile {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
+function Get-OptionalPropertyValue {
+    param(
+        $Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object) {
+        return $Default
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $Default
+    }
+
+    return $property.Value
+}
+
 function ConvertTo-BoolLoose {
     param($Value)
 
@@ -81,6 +104,8 @@ function ConvertTo-DoubleLoose {
 }
 
 $repaired = New-Object System.Collections.Generic.List[object]
+$runtimeControlSummary = Read-JsonFile -Path $runtimeControlSummaryPath
+$registry = Read-JsonFile -Path $registryPath
 
 if (Test-Path -LiteralPath $stateRoot) {
     $symbolDirs = @(
@@ -89,6 +114,14 @@ if (Test-Path -LiteralPath $stateRoot) {
     )
 
     foreach ($dir in $symbolDirs) {
+        $registryItem = $null
+        if ($null -ne $registry) {
+            $registryItem = Find-RegistryEntryByAlias -Registry $registry -Alias $dir.Name
+        }
+        $canonicalSymbol = if ($null -ne $registryItem) { Get-RegistryCanonicalSymbol -RegistryItem $registryItem } else { ([string]$dir.Name -replace '\.pro$','') }
+        $runtimeSummaryEntry = @((Get-OptionalPropertyValue -Object $runtimeControlSummary -Name "kontrola" @()) | Where-Object { [string]$_.para_walutowa -eq $canonicalSymbol } | Select-Object -First 1)
+        $effectiveRequestedMode = if ($runtimeSummaryEntry.Count -gt 0) { [string]$runtimeSummaryEntry[0].requested_mode } else { "" }
+
         $localPath = Join-Path $dir.FullName "tuning_policy.csv"
         $effectivePath = Join-Path $dir.FullName "tuning_policy_effective.csv"
         $executionSummaryPath = Join-Path $dir.FullName "execution_summary.json"
@@ -102,6 +135,7 @@ if (Test-Path -LiteralPath $stateRoot) {
         }
 
         $paperRuntime = [bool]$executionSummary.paper_runtime_override_active
+        $researchPaperMode = ($effectiveRequestedMode -eq "PAPER_ONLY")
         $acceptedRiskMasked = (
             $paperRuntime -and
             [string]$localPolicy["experiment_status"] -eq "ACCEPTED" -and
@@ -111,7 +145,7 @@ if (Test-Path -LiteralPath $stateRoot) {
             )
         )
 
-        if (-not $acceptedRiskMasked) {
+        if (-not $acceptedRiskMasked -and -not $researchPaperMode) {
             continue
         }
 
@@ -143,11 +177,11 @@ if (Test-Path -LiteralPath $stateRoot) {
         if ($changed) {
             Write-TabMap -Path $effectivePath -Map $effectivePolicy
             $repaired.Add([pscustomobject]@{
-                symbol = $dir.Name
+                symbol = $canonicalSymbol
                 trusted_data = $effectivePolicy["trusted_data"]
                 confidence_cap = $effectivePolicy["confidence_cap"]
                 risk_cap = $effectivePolicy["risk_cap"]
-                source = "local_policy"
+                source = $(if ($acceptedRiskMasked) { "accepted_paper_local_policy" } else { "laptop_research_runtime" })
             }) | Out-Null
         }
     }

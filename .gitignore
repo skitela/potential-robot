@@ -22,6 +22,8 @@ Thumbs.db
 
 # Wygenerowane kopie i logi narzedzi
 /TOOLS/*.bak_*
+/TOOLS/qdm_missing_only_blocked.json
+/TOOLS/qdm_missing_only_pack.csv
 *.log
 *.zip
 *.tmp

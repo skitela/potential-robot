@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$LogRoot = "C:\TRADING_DATA\QDM\logs",
-    [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_weakest_pack.csv",
+    [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_missing_only_pack.csv",
     [int]$MinStartGapMinutes = 360
 )
 
@@ -9,17 +9,27 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $syncScript = Join-Path $ProjectRoot "RUN\SYNC_QDM_FOCUS_PACK.ps1"
-$buildProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
+$buildProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1"
 if (-not (Test-Path -LiteralPath $syncScript)) {
     throw "QDM sync script not found: $syncScript"
 }
 if (-not (Test-Path -LiteralPath $buildProfileScript)) {
-    throw "QDM weakest profile builder not found: $buildProfileScript"
+    throw "QDM missing-only profile builder not found: $buildProfileScript"
 }
 
 & $buildProfileScript -ProjectRoot $ProjectRoot -OutputPath $ProfilePath | Out-Null
 if (-not (Test-Path -LiteralPath $ProfilePath)) {
-    throw "QDM weakest profile was not generated: $ProfilePath"
+    throw "QDM missing-only profile was not generated: $ProfilePath"
+}
+
+$profileRows = @(
+    Import-Csv -LiteralPath $ProfilePath |
+        Where-Object { [string]$_.enabled -eq "1" -and -not [string]::IsNullOrWhiteSpace([string]$_.symbol) }
+)
+
+if ($profileRows.Count -eq 0) {
+    Write-Host "Skipping QDM missing-only sync start: no missing symbols detected."
+    return
 }
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null

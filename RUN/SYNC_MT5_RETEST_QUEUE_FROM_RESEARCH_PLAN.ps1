@@ -9,6 +9,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 function Read-JsonOrNull {
     param([string]$Path)
 
@@ -29,7 +32,37 @@ function Get-FileAgeSecondsOrNull {
     return [int][math]::Round(((Get-Date) - (Get-Item -LiteralPath $Path).LastWriteTime).TotalSeconds)
 }
 
+function Get-Registry {
+    param([string]$RegistryPath)
+
+    if (-not (Test-Path -LiteralPath $RegistryPath)) {
+        throw "Registry not found: $RegistryPath"
+    }
+
+    return (Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+}
+
+function Normalize-RegistryAlias {
+    param(
+        [object]$Registry,
+        [string]$Alias
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Alias)) {
+        return ""
+    }
+
+    $entry = Find-RegistryEntryByAlias -Registry $Registry -Alias $Alias.Trim()
+    if ($null -ne $entry) {
+        return [string](Get-RegistryCanonicalSymbol -RegistryItem $entry)
+    }
+
+    return $Alias.Trim()
+}
+
 New-Item -ItemType Directory -Force -Path $OpsEvidenceDir | Out-Null
+$registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
+$registry = Get-Registry -RegistryPath $registryPath
 
 $researchPlan = Read-JsonOrNull -Path $ResearchPlanPath
 $mt5Status = Read-JsonOrNull -Path $Mt5StatusPath
@@ -37,13 +70,17 @@ $batchReport = Read-JsonOrNull -Path $BatchReportPath
 
 $queueSymbols = @()
 if ($null -ne $researchPlan) {
-    $queueSymbols = @($researchPlan.tester_queue | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $queueSymbols = @(
+        $researchPlan.tester_queue |
+            ForEach-Object { Normalize-RegistryAlias -Registry $registry -Alias ([string]$_) } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
 }
 
 $confirmedCompleted = New-Object System.Collections.Generic.List[string]
 if ($null -ne $batchReport) {
     foreach ($run in @($batchReport.runs)) {
-        $symbolAlias = [string]$run.symbol_alias
+        $symbolAlias = Normalize-RegistryAlias -Registry $registry -Alias ([string]$run.symbol_alias)
         if ([string]::IsNullOrWhiteSpace($symbolAlias)) {
             continue
         }
@@ -60,7 +97,7 @@ if ($null -ne $batchReport) {
 $currentSymbol = ""
 $testerState = ""
 if ($null -ne $mt5Status) {
-    $currentSymbol = [string]$mt5Status.current_symbol
+    $currentSymbol = Normalize-RegistryAlias -Registry $registry -Alias ([string]$mt5Status.current_symbol)
     $testerState = [string]$mt5Status.state
 }
 

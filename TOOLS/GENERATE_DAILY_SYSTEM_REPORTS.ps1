@@ -10,7 +10,9 @@ function Read-KeyValueCsv {
     param([string]$Path)
     $map = @{}
     if (-not (Test-Path -LiteralPath $Path)) { return $map }
-    foreach ($row in (Import-Csv -Delimiter "`t" -Header key,value -Path $Path)) {
+    $content = Read-SharedText -Path $Path
+    if ([string]::IsNullOrWhiteSpace($content)) { return $map }
+    foreach ($row in ($content | ConvertFrom-Csv -Delimiter "`t" -Header key,value)) {
         if ($null -ne $row.key -and $row.key -ne "key") {
             $map[[string]$row.key] = [string]$row.value
         }
@@ -21,7 +23,31 @@ function Read-KeyValueCsv {
 function Read-JsonOrNull {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    try { return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json } catch { return $null }
+    try {
+        $content = Read-SharedText -Path $Path
+        if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+        return $content | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
+function Read-SharedText {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+
+    $fileStream = $null
+    $reader = $null
+    try {
+        $fileStream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $reader = New-Object System.IO.StreamReader($fileStream, [System.Text.Encoding]::UTF8, $true)
+        return $reader.ReadToEnd()
+    }
+    finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        elseif ($null -ne $fileStream) { $fileStream.Dispose() }
+    }
 }
 
 function To-DoubleOrZero {
@@ -157,7 +183,10 @@ function Get-LearningStats {
 
     if (-not (Test-Path -LiteralPath $Path)) { return $stats }
 
-    foreach ($row in (Import-Csv -Delimiter "`t" -Path $Path)) {
+    $content = Read-SharedText -Path $Path
+    if ([string]::IsNullOrWhiteSpace($content)) { return $stats }
+
+    foreach ($row in ($content | ConvertFrom-Csv -Delimiter "`t")) {
         $ts = To-LongOrZero $row.ts
         if ($ts -lt $YesterdayStartTs -or $ts -gt $NowTs) { continue }
 
@@ -193,7 +222,10 @@ function Get-DecisionStats {
 
     if (-not (Test-Path -LiteralPath $Path)) { return $stats }
 
-    foreach ($row in (Import-Csv -Delimiter "`t" -Path $Path)) {
+    $content = Read-SharedText -Path $Path
+    if ([string]::IsNullOrWhiteSpace($content)) { return $stats }
+
+    foreach ($row in ($content | ConvertFrom-Csv -Delimiter "`t")) {
         $ts = To-LongOrZero $row.ts
         if ($ts -lt $TodayStartTs) { continue }
         if ([string]$row.phase -eq "PAPER_OPEN" -and [string]$row.verdict -eq "OK") {
@@ -279,6 +311,9 @@ foreach ($item in $registry.symbols) {
         zamkniecia_dzis = $learning.closes_today
         wygrane_dzis = $learning.wins_today
         przegrane_dzis = $learning.losses_today
+        zamkniecia_wczoraj = $learning.closes_yesterday
+        wygrane_wczoraj = $learning.wins_yesterday
+        przegrane_wczoraj = $learning.losses_yesterday
         otwarcia_dzis = $decision.opens_today
         skutecznosc_dzis_proc = if ($learning.closes_today -gt 0) { [math]::Round(($learning.wins_today / $learning.closes_today) * 100.0, 1) } else { 0.0 }
         ping_ms = [math]::Round($pingMs, 2)
@@ -294,21 +329,20 @@ foreach ($item in $registry.symbols) {
 $freshRows = @($rows | Where-Object { $_.swiezy })
 $activeRows = @($rows | Where-Object { $_.czas_pracy_dzis_s -gt 0 })
 $systemStart = ($rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.pracuje_od) } | Sort-Object pracuje_od | Select-Object -First 1).pracuje_od
+$latestHeartbeatRow = $rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.ostatni_heartbeat) } | Sort-Object swiezosc_s | Select-Object -First 1
+$latestHeartbeatLocal = if ($null -ne $latestHeartbeatRow) { [string]$latestHeartbeatRow.ostatni_heartbeat } else { "" }
+$weekendClosureExpected =
+    ($NowLocal.DayOfWeek -in @([System.DayOfWeek]::Saturday, [System.DayOfWeek]::Sunday)) -and
+    ($freshRows.Count -eq 0) -and
+    ($null -ne $latestHeartbeatRow)
 $netToday = [math]::Round((Measure-SumOrZero -InputObject $rows -Property netto_dzis), 2)
 $netYesterday = [math]::Round((Measure-SumOrZero -InputObject $rows -Property netto_wczoraj), 2)
 $winsToday = [int](Measure-SumOrZero -InputObject $rows -Property wygrane_dzis)
 $lossesToday = [int](Measure-SumOrZero -InputObject $rows -Property przegrane_dzis)
 $closesToday = [int](Measure-SumOrZero -InputObject $rows -Property zamkniecia_dzis)
-$winsYesterday = 0
-$lossesYesterday = 0
-$closesYesterday = 0
-foreach ($item in $registry.symbols) {
-    $code = Resolve-InstrumentRuntimeCode -Item $item -CommonFilesRoot $CommonFilesRoot
-    $learning = Get-LearningStats -Path (Join-Path $CommonFilesRoot ("logs\{0}\learning_observations_v2.csv" -f $code)) -TodayStartTs $todayStartTsDefault -YesterdayStartTs $yesterdayStartTsDefault -NowTs $nowTs
-    $winsYesterday += $learning.wins_yesterday
-    $lossesYesterday += $learning.losses_yesterday
-    $closesYesterday += $learning.closes_yesterday
-}
+$winsYesterday = [int](Measure-SumOrZero -InputObject $rows -Property wygrane_wczoraj)
+$lossesYesterday = [int](Measure-SumOrZero -InputObject $rows -Property przegrane_wczoraj)
+$closesYesterday = [int](Measure-SumOrZero -InputObject $rows -Property zamkniecia_wczoraj)
 $opensToday = [int](Measure-SumOrZero -InputObject $rows -Property otwarcia_dzis)
 $avgPingRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.ping_ms -gt 0 }) -Property ping_ms
 $avgLatencyRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.latencja_sr_us -gt 0 }) -Property latencja_sr_us
@@ -320,10 +354,13 @@ $maxFreshness = [math]::Round((Measure-MaximumOrZero -InputObject $rows -Propert
 $workTotal = [long](Measure-SumOrZero -InputObject $rows -Property czas_pracy_dzis_s)
 $workAvg = [math]::Round((Measure-AverageOrZero -InputObject $rows -Property czas_pracy_dzis_s), 0)
 
-$systemState = if ($freshRows.Count -eq 0) { "PADL" } elseif ($freshRows.Count -lt $rows.Count) { "UWAGA" } else { "DZIALA" }
+$systemState = if ($freshRows.Count -eq 0) {
+    if ($weekendClosureExpected) { "RYNEK_ZAMKNIETY" } else { "PADL" }
+} elseif ($freshRows.Count -lt $rows.Count) { "UWAGA" } else { "DZIALA" }
 $systemNote = switch ($systemState) {
     "DZIALA" { "{0}/{1} instrumentow ma swiezy heartbeat." -f $freshRows.Count, $rows.Count }
     "UWAGA" { "{0}/{1} instrumentow ma swiezy heartbeat, ale czesc danych jest przeterminowana." -f $freshRows.Count, $rows.Count }
+    "RYNEK_ZAMKNIETY" { "Brak swiezych heartbeatow jest zgodny z zamknietym rynkiem weekendowym. Ostatni heartbeat: $latestHeartbeatLocal." }
     default { "Brak swiezych heartbeatow. System wymaga pilnej kontroli." }
 }
 
@@ -357,6 +394,7 @@ $summary = [ordered]@{
     liczba_nieswiezych = $rows.Count - $freshRows.Count
     liczba_pracujacych_dzis = $activeRows.Count
     system_pracuje_od = $systemStart
+    ostatni_heartbeat_globalny = $latestHeartbeatLocal
     laczny_czas_pracy_dzis_s = $workTotal
     laczny_czas_pracy_dzis_label = Format-Duration -Seconds $workTotal
     sredni_czas_pracy_na_instrument_s = $workAvg

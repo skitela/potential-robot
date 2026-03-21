@@ -176,50 +176,32 @@ function Get-QdmSpec {
         }
         "DE30" {
             return [pscustomobject]@{
-                supported = $true
-                symbol = "DEU.IDX"
-                datasource = "dukascopy"
-                datatype = "TICK"
-                date_from = "2018.01.01"
-                date_to = ""
-                mt5_export_name = "MB_DE30_DUKA"
-                notes = "weakest_dynamic_live"
+                supported = $false
+                reason = "current QDM dataset does not materialize usable DEU.IDX history on disk; keep DE30 on MT5/runtime fallback"
             }
         }
         "COPPER-US" {
             return [pscustomobject]@{
-                supported = $true
-                symbol = "COPPER.CMD"
-                datasource = "dukascopy"
-                datatype = "TICK"
-                date_from = "2018.01.01"
-                date_to = ""
-                mt5_export_name = "MB_COPPER_DUKA"
-                notes = "weakest_dynamic_live"
+                supported = $false
+                reason = "current QDM dataset does not materialize usable COPPER.CMD history on disk; keep COPPER-US on MT5/runtime fallback"
             }
         }
         "COPPERUS" {
             return [pscustomobject]@{
-                supported = $true
-                symbol = "COPPER.CMD"
-                datasource = "dukascopy"
-                datatype = "TICK"
-                date_from = "2018.01.01"
-                date_to = ""
-                mt5_export_name = "MB_COPPER_DUKA"
-                notes = "weakest_dynamic_live"
+                supported = $false
+                reason = "current QDM dataset does not materialize usable COPPER.CMD history on disk; keep COPPER-US on MT5/runtime fallback"
             }
         }
         "PLATIN" {
             return [pscustomobject]@{
                 supported = $false
-                reason = "no stable QDM datasource mapped in our current flow; XPTUSD is present only on non-dukascopy sources"
+                reason = "no stable QDM datasource mapped in our current flow; keep PLATIN on MT5/runtime fallback"
             }
         }
         "US500" {
             return [pscustomobject]@{
                 supported = $false
-                reason = "USA500.IDX add failed earlier in QDM; keep out of weakest sync until datasource is stabilized"
+                reason = "current QDM dataset does not contain usable US500 index history in this flow; keep US500 on MT5/runtime fallback"
             }
         }
         default {
