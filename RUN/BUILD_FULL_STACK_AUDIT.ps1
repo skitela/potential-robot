@@ -16,11 +16,13 @@ New-Item -ItemType Directory -Force -Path $opsRoot | Out-Null
 $runtimeArtifactAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_AND_CLEAN_RUNTIME_ARTIFACTS.ps1"
 $runtimePersistenceAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_RUNTIME_PERSISTENCE.ps1"
 $runtimeLogRotationScript = Join-Path $ProjectRoot "TOOLS\ROTATE_RUNTIME_LOGS.ps1"
+$nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 
 foreach ($path in @(
     $runtimeArtifactAuditScript,
     $runtimePersistenceAuditScript,
-    $runtimeLogRotationScript
+    $runtimeLogRotationScript,
+    $nearProfitQueueStatusScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required audit tool not found: $path"
@@ -137,6 +139,9 @@ Invoke-JsonAuditTool -ScriptPath $runtimeLogRotationScript -Parameters @{
     ProjectRoot = $ProjectRoot
     Apply = [bool]$ApplyLogRotation
 }
+Invoke-JsonAuditTool -ScriptPath $nearProfitQueueStatusScript -Parameters @{
+    ProjectRoot = $ProjectRoot
+}
 
 $runtimeArtifactAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_artifact_audit_report.json")
 $runtimePersistenceAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_persistence_audit_report.json")
@@ -149,6 +154,7 @@ $freshness = @(
     Get-FileFreshness -Label "trust_but_verify" -Path (Join-Path $opsRoot "trust_but_verify_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "tuning_priority" -Path (Join-Path $opsRoot "tuning_priority_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "mt5_retest_queue" -Path (Join-Path $opsRoot "mt5_retest_queue_latest.json") -ThresholdSeconds 900
+    Get-FileFreshness -Label "near_profit_optimization_queue" -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "ml_tuning_hints" -Path (Join-Path $opsRoot "ml_tuning_hints_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_weakest_profile" -Path (Join-Path $opsRoot "qdm_weakest_profile_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
@@ -164,6 +170,7 @@ $localSnapshot = Read-JsonFile -Path (Join-Path $opsRoot "local_operator_snapsho
 $autonomousStatus = Read-JsonFile -Path (Join-Path $opsRoot "autonomous_90p_latest.json")
 $trustButVerify = Read-JsonFile -Path (Join-Path $opsRoot "trust_but_verify_latest.json")
 $profitTracking = Read-JsonFile -Path (Join-Path $opsRoot "profit_tracking_latest.json")
+$nearProfitQueue = Read-JsonFile -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json")
 $researchManifest = Read-JsonFile -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json")
 
 $runtimeUnexpectedTotal = 0
@@ -189,6 +196,7 @@ $wrapperState = [ordered]@{
     qdm_weakest = ((Get-WrapperCount -Pattern "*qdm_weakest_sync_wrapper_*") -gt 0)
     ml = ((Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0)
     weakest_mt5 = ((Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*") -gt 0 -or (Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*") -gt 0)
+    near_profit_optimization = ((Get-WrapperCount -Pattern "*near_profit_optimization_after_idle_wrapper_*") -gt 0)
     mt5_status_watcher = ((Get-WrapperCount -Pattern "*mt5_tester_status_watcher_wrapper_*") -gt 0)
 }
 
@@ -227,6 +235,7 @@ $labBusy = (
 )
 
 $mt5QueueFresh = @($freshness | Where-Object { $_.label -eq "mt5_retest_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "mt5_retest_queue" })[0].fresh)
+$nearProfitQueueFresh = @($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" })[0].fresh)
 $researchExportFresh = @($freshness | Where-Object { $_.label -eq "research_export_manifest" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "research_export_manifest" })[0].fresh)
 $mt5QueueConsistency = $true
 if ($mt5QueueFresh -and $null -ne $mt5TesterStatus -and $null -ne $mt5RetestQueue) {
@@ -320,6 +329,14 @@ $report = [ordered]@{
                 run_stamp = $mt5TesterStatus.run_stamp
             }
         } else { $null }
+        near_profit_optimization = if ($null -ne $nearProfitQueue) {
+            [ordered]@{
+                state = $nearProfitQueue.state
+                current_symbol = $nearProfitQueue.current_symbol
+                selected_symbols = @($nearProfitQueue.selected_symbols)
+                pending = @($nearProfitQueue.pending)
+            }
+        } else { $null }
     }
     freshness = @($freshness)
     cleanliness = [ordered]@{
@@ -347,6 +364,7 @@ $report = [ordered]@{
     consistency = [ordered]@{
         mt5_retest_queue_fresh = $mt5QueueFresh
         mt5_retest_queue_consistent_with_tester = $mt5QueueConsistency
+        near_profit_optimization_queue_fresh = $nearProfitQueueFresh
         research_export_manifest_fresh = $researchExportFresh
     }
     research_pipeline = [ordered]@{
@@ -422,6 +440,7 @@ $lines.Add("## Consistency")
 $lines.Add("")
 $lines.Add(("- mt5_retest_queue_fresh: {0}" -f $report.consistency.mt5_retest_queue_fresh))
 $lines.Add(("- mt5_retest_queue_consistent_with_tester: {0}" -f $report.consistency.mt5_retest_queue_consistent_with_tester))
+$lines.Add(("- near_profit_optimization_queue_fresh: {0}" -f $report.consistency.near_profit_optimization_queue_fresh))
 $lines.Add(("- research_export_manifest_fresh: {0}" -f $report.consistency.research_export_manifest_fresh))
 $lines.Add("")
 $lines.Add("## Research Pipeline")
