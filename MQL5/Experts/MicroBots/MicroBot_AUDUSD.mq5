@@ -107,7 +107,11 @@ void ConfigureAUDUSDStrategyTesterSandbox()
    if(!InpEnableStrategyTesterSandbox || !MbIsStrategyTesterRuntime())
       return;
 
-   string sandbox_tag = MbCanonicalSymbol(g_profile.symbol);
+   string base_symbol = g_profile.symbol;
+   if(StringLen(MbCanonicalSymbol(base_symbol)) <= 0)
+      base_symbol = Symbol();
+
+   string sandbox_tag = MbCanonicalSymbol(base_symbol);
    string custom_tag = MbStoragePathSanitizeToken(InpStrategyTesterSandboxTag);
    if(custom_tag != "" && custom_tag != "DEFAULT")
       sandbox_tag += "_" + custom_tag;
@@ -464,21 +468,25 @@ void OnTimer()
 
 int OnTesterInit()
   {
+   ConfigureAUDUSDStrategyTesterSandbox();
    return MbTesterTelemetryOnInit(g_profile.symbol,(long)InpMagic);
   }
 
 double OnTester()
   {
+   ConfigureAUDUSDStrategyTesterSandbox();
    return MbTesterTelemetryOnTester(g_profile,g_state,g_market,g_audusd_effective_tuning_policy,g_latency);
   }
 
 void OnTesterPass()
   {
+   ConfigureAUDUSDStrategyTesterSandbox();
    MbTesterTelemetryOnPass(g_profile.symbol,(long)InpMagic);
   }
 
 void OnTesterDeinit()
   {
+   ConfigureAUDUSDStrategyTesterSandbox();
    MbTesterTelemetryOnDeinit(g_profile.symbol,(long)InpMagic);
   }
 

@@ -3,6 +3,7 @@ param(
     [string]$ServerName = "OANDATMS-MT5",
     [string]$ExpertName = "MicroBot_EURUSD",
     [string]$Symbol = "",
+    [string]$PortableLabRoot = "C:\TRADING_TOOLS\MT5_NEAR_PROFIT_LAB",
     [switch]$CopySourcesToTerminal
 )
 
@@ -66,6 +67,48 @@ function Resolve-MetaEditor {
         (Join-Path $env:ProgramFiles "OANDA TMS MT5 Terminal\\MetaEditor64.exe")
     ) | Where-Object { $_ -and (Test-Path $_) }
     return ($candidates | Select-Object -First 1)
+}
+
+function Sync-CompiledExpertToPortableLab {
+    param(
+        [string]$SourceTerminalDataDir,
+        [string]$PortableLabRootPath,
+        [string]$CompiledExpertName
+    )
+
+    $result = [ordered]@{
+        attempted = $false
+        target_path = $null
+        synced = $false
+        skipped_reason = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PortableLabRootPath) -or -not (Test-Path -LiteralPath $PortableLabRootPath)) {
+        $result.skipped_reason = "portable_lab_missing"
+        return [pscustomobject]$result
+    }
+
+    $sourcePath = Join-Path $SourceTerminalDataDir ("MQL5\\Experts\\MicroBots\\{0}.ex5" -f $CompiledExpertName)
+    if (-not (Test-Path -LiteralPath $sourcePath)) {
+        $result.skipped_reason = "compiled_expert_missing"
+        return [pscustomobject]$result
+    }
+
+    $targetDir = Join-Path $PortableLabRootPath "MQL5\\Experts\\MicroBots"
+    $targetPath = Join-Path $targetDir ("{0}.ex5" -f $CompiledExpertName)
+    $result.attempted = $true
+    $result.target_path = $targetPath
+
+    try {
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force -ErrorAction Stop
+        $result.synced = $true
+        return [pscustomobject]$result
+    }
+    catch {
+        $result.skipped_reason = $_.Exception.Message
+        return [pscustomobject]$result
+    }
 }
 
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
@@ -161,6 +204,10 @@ $result = [ordered]@{
     copied_sources = [bool]$shouldCopySources
     compile_log = $compileLog
     compile_ok = $compileOk
+}
+
+if ($compileOk) {
+    $result.portable_lab_sync = Sync-CompiledExpertToPortableLab -SourceTerminalDataDir $terminalDataDir -PortableLabRootPath $PortableLabRoot -CompiledExpertName $ExpertName
 }
 
 $result | ConvertTo-Json -Depth 5
