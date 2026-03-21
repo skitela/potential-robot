@@ -9,6 +9,32 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Remove-PathWithRetry {
+    param(
+        [string]$Path,
+        [int]$MaxAttempts = 8,
+        [int]$DelayMs = 500
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            return $true
+        }
+
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            if ($attempt -ge $MaxAttempts) {
+                throw
+            }
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+
+    return (-not (Test-Path -LiteralPath $Path))
+}
+
 function Convert-ToSandboxToken {
     param([string]$Value)
     $chars = $Value.ToCharArray() | ForEach-Object {
@@ -35,8 +61,7 @@ $sandboxPath = Join-Path $CommonFilesRoot $sandboxName
 $removed = $false
 
 if (Test-Path -LiteralPath $sandboxPath) {
-    Remove-Item -LiteralPath $sandboxPath -Recurse -Force
-    $removed = $true
+    $removed = Remove-PathWithRetry -Path $sandboxPath
 }
 
 $report = [ordered]@{

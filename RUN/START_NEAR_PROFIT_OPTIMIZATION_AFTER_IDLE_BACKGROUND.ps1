@@ -87,6 +87,7 @@ $mt5TesterStatusPath = Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json"
 $quotedSymbols = ($selectedSymbols | ForEach-Object { "'{0}'" -f $_ }) -join ", "
 $awaitingIdleNote = if ($UseDedicatedPortableLabLane) { "awaiting_near_profit_lab_idle" } else { "awaiting_secondary_mt5_idle" }
 $busyIdleNote = if ($UseDedicatedPortableLabLane) { "near_profit_lab_busy" } else { "secondary_mt5_busy" }
+$skipIdleWaitLiteral = if ($UseDedicatedPortableLabLane) { '$true' } else { '$false' }
 $portableTerminalLiteral = if ($portableTerminal) { '$true' } else { '$false' }
 $skipResearchRefreshLiteral = if ($SkipResearchRefresh) { '$true' } else { '$false' }
 
@@ -170,8 +171,13 @@ function Wait-SecondaryMt5Idle {
 
 Start-Transcript -Path '$logPath' -Force
 try {
-    Save-NearProfitQueueStatus -State 'waiting_for_idle' -Completed @() -Pending `$selectedSymbols -CurrentNote '$awaitingIdleNote'
-    Wait-SecondaryMt5Idle -TerminalExe '$Mt5Exe' -MetaTesterExe '$metaTesterExe' -TimeoutSeconds $IdleTimeoutSeconds -Completed @() -Pending `$selectedSymbols -CurrentSymbol ''
+    if (-not $skipIdleWaitLiteral) {
+        Save-NearProfitQueueStatus -State 'waiting_for_idle' -Completed @() -Pending `$selectedSymbols -CurrentNote '$awaitingIdleNote'
+        Wait-SecondaryMt5Idle -TerminalExe '$Mt5Exe' -MetaTesterExe '$metaTesterExe' -TimeoutSeconds $IdleTimeoutSeconds -Completed @() -Pending `$selectedSymbols -CurrentSymbol ''
+    }
+    else {
+        Save-NearProfitQueueStatus -State 'running' -Completed @() -Pending `$selectedSymbols -CurrentNote 'portable_lab_lane_ready'
+    }
 
     Save-NearProfitQueueStatus -State 'running' -Completed @() -Pending @() -CurrentNote 'near_profit_batch_started'
 
