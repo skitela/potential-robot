@@ -72,13 +72,28 @@ double MbStrategyClamp(const double value,const double lo,const double hi)
    return MathMax(lo,MathMin(hi,value));
   }
 
-bool MbStrategyCopyLastValue(const int handle,double &out_value)
+bool MbStrategyCopyStableValue(const int handle,const int shift,double &out_value)
   {
-   double buf[1];
-   if(CopyBuffer(handle,0,0,1,buf) < 1)
+   if(handle == INVALID_HANDLE)
       return false;
+
+   int bars_ready = BarsCalculated(handle);
+   if(bars_ready <= shift)
+      return false;
+
+   double buf[1];
+   if(CopyBuffer(handle,0,shift,1,buf) < 1)
+      return false;
+
    out_value = buf[0];
    return true;
+  }
+
+bool MbStrategyCopyLastValue(const int handle,double &out_value)
+  {
+   // Shared strategy hot-path should consume the last closed bar, not the current
+   // forming one. This keeps indicator reads aligned with new-bar decisions.
+   return MbStrategyCopyStableValue(handle,1,out_value);
   }
 
 bool MbStrategyResolveNewBar(

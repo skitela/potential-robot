@@ -4,6 +4,34 @@
 #include "MbRuntimeTypes.mqh"
 #include "MbExecutionCommon.mqh"
 
+double MbResolveModeledCommissionPoints(const MbSymbolProfile &profile)
+  {
+   string family = profile.session_profile;
+   if(StringFind(family,"FX_",0) == 0)
+      return 0.6;
+   if(family == "INDEX_EU" || family == "INDEX_US")
+      return 1.2;
+   if(family == "METALS_SPOT_PM")
+      return 1.5;
+   if(family == "METALS_FUTURES")
+      return 2.0;
+   return 0.8;
+  }
+
+double MbResolveModeledSlippagePoints(const MbSymbolProfile &profile,const MbMarketSnapshot &snapshot)
+  {
+   double deviation_component = MathMax(0.5,(double)profile.deviation_points * 0.15);
+   double ping_component = 0.5;
+   if(snapshot.terminal_ping_last_ms > 0)
+      ping_component = MathMin(5.0,(double)snapshot.terminal_ping_last_ms / 25.0);
+   return MathMax(deviation_component,ping_component);
+  }
+
+double MbResolveSafetyMarginPoints(const MbMarketSnapshot &snapshot)
+  {
+   return MathMax(2.0,snapshot.spread_points * 0.15);
+  }
+
 MbExecutionCheck MbBuildExecutionCheck(
    const MbSymbolProfile &profile,
    const MbMarketSnapshot &snapshot,
@@ -62,6 +90,28 @@ MbExecutionCheck MbBuildExecutionCheck(
          out.diag = out.diag + StringFormat(" quote_diff_pct=%.4f",quote_diff_pct);
          return out;
         }
+     }
+
+   double expected_move_points = MathAbs(entry_price - tp_price) / _Point;
+   double modeled_slippage_points = MbResolveModeledSlippagePoints(profile,snapshot);
+   double modeled_commission_points = MbResolveModeledCommissionPoints(profile);
+   double safety_margin_points = MbResolveSafetyMarginPoints(snapshot);
+   double modeled_total_cost_points = snapshot.spread_points + modeled_slippage_points + modeled_commission_points + safety_margin_points;
+
+   out.diag = out.diag + StringFormat(
+      " expected_move=%.2f spread=%.2f slip=%.2f comm=%.2f safety=%.2f total_cost=%.2f",
+      expected_move_points,
+      snapshot.spread_points,
+      modeled_slippage_points,
+      modeled_commission_points,
+      safety_margin_points,
+      modeled_total_cost_points
+   );
+
+   if(expected_move_points <= modeled_total_cost_points)
+     {
+      out.reason = "NET_EDGE_TOO_SMALL";
+      return out;
      }
 
    MqlTradeRequest req;
