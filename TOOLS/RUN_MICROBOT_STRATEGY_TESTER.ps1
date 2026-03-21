@@ -383,6 +383,28 @@ if (-not $entry) {
     throw "SymbolAlias not found in registry: $SymbolAlias"
 }
 
+function Get-OptimizationReportRowCount {
+    param([string[]]$ReportPaths)
+
+    foreach ($reportPath in @($ReportPaths)) {
+        if ([string]::IsNullOrWhiteSpace($reportPath) -or -not (Test-Path -LiteralPath $reportPath)) {
+            continue
+        }
+
+        try {
+            $content = Get-Content -LiteralPath $reportPath -Raw -ErrorAction Stop
+            $rowMatches = [regex]::Matches($content, "<Row>", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Count
+            if ($rowMatches -gt 0) {
+                return [Math]::Max(0, ($rowMatches - 1))
+            }
+        }
+        catch {
+        }
+    }
+
+    return 0
+}
+
 $canonicalAlias = Get-RegistryCanonicalSymbol -RegistryItem $entry
 $entryCodeSymbol = if ($entry.PSObject.Properties.Name -contains 'code_symbol') { [string]$entry.code_symbol } else { "" }
 $resolvedAlias = Convert-ToSandboxToken $(if (-not [string]::IsNullOrWhiteSpace($entryCodeSymbol)) { $entryCodeSymbol } else { Get-RegistryCanonicalSymbol -RegistryItem $entry })
@@ -594,8 +616,12 @@ $runOutcome = Get-TesterRunOutcome -LogPaths $copiedTesterLogs -ExpertName $Expe
 $finalBalance = $runOutcome.final_balance
 $testDuration = $runOutcome.test_duration
 $resultLabel = $runOutcome.result_label
+ $optimizationResultRows = 0
 if ($timedOut -and [string]::IsNullOrWhiteSpace($resultLabel)) {
     $resultLabel = "timed_out"
+}
+if ($Optimization -ne 0) {
+    $optimizationResultRows = Get-OptimizationReportRowCount -ReportPaths $copiedReports
 }
 
 $executionSummaryPath = Join-Path $sandboxRoot ("state\{0}\execution_summary.json" -f $storageAlias)
@@ -745,6 +771,7 @@ $result = [ordered]@{
     optimization          = $Optimization
     optimization_criterion = $OptimizationCriterion
     timeout_sec           = $TimeoutSec
+    optimization_result_rows = $optimizationResultRows
     expert_parameters_source_path = $(if ($expertParametersSourcePath -ne "") { $expertParametersSourcePath } else { $null })
     expert_parameters_profile_name = $(if ($expertParametersTargetName -ne "") { $expertParametersTargetName } else { $null })
     model                 = $Model
@@ -775,6 +802,7 @@ $summary = [ordered]@{
     optimization              = $Optimization
     optimization_criterion    = $OptimizationCriterion
     timeout_sec               = $TimeoutSec
+    optimization_result_rows  = $optimizationResultRows
     expert_parameters_profile_name = $expertParametersTargetName
     final_balance             = $finalBalance
     test_duration             = $testDuration
