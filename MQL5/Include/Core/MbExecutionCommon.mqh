@@ -1,6 +1,8 @@
 #ifndef MB_EXECUTION_COMMON_INCLUDED
 #define MB_EXECUTION_COMMON_INCLUDED
 
+#include "MbRuntimeTypes.mqh"
+
 double MbClamp(const double value,const double lo,const double hi)
   {
    return MathMax(lo,MathMin(hi,value));
@@ -114,7 +116,106 @@ string MbIncidentSeverityFromRetcode(const long retcode_num,const string retcode
       return "ERROR";
    if(n <= 0)
       return "ERROR";
-   return "WARN";
+  return "WARN";
+  }
+
+double MbResolvePaperRiskLotsFloor(const MbMarketSnapshot &snapshot)
+  {
+   return MathMax(snapshot.vol_min,snapshot.vol_step);
+  }
+
+bool MbShouldBypassRiskMarginGuardInPaper(
+   const bool paper_mode_active,
+   const MbSignalDecision &signal,
+   const bool risk_allowed,
+   const string reason_code
+)
+  {
+   return (paper_mode_active && signal.valid && !risk_allowed && reason_code == "MARGIN_GUARD");
+  }
+
+void MbApplyPaperRiskMarginGuardBypass(
+   const bool paper_mode_active,
+   const MbSignalDecision &signal,
+   const MbMarketSnapshot &snapshot,
+   bool &risk_allowed,
+   string &reason_code,
+   double &lots
+)
+  {
+   if(!MbShouldBypassRiskMarginGuardInPaper(paper_mode_active,signal,risk_allowed,reason_code))
+      return;
+
+   risk_allowed = true;
+   reason_code = "PAPER_IGNORE_MARGIN_GUARD";
+   lots = MbResolvePaperRiskLotsFloor(snapshot);
+  }
+
+bool MbShouldBypassMinLotBlockInPaper(
+   const bool paper_mode_active,
+   const MbSignalDecision &signal,
+   const bool risk_allowed,
+   const double lots
+)
+  {
+   return (paper_mode_active && signal.valid && !risk_allowed && lots <= 0.0);
+  }
+
+void MbApplyPaperMinLotBlockBypass(
+   const bool paper_mode_active,
+   const MbSignalDecision &signal,
+   const MbMarketSnapshot &snapshot,
+   bool &risk_allowed,
+   string &reason_code,
+   double &lots
+)
+  {
+   if(!MbShouldBypassMinLotBlockInPaper(paper_mode_active,signal,risk_allowed,lots))
+      return;
+
+   risk_allowed = true;
+   reason_code = "PAPER_IGNORE_MIN_LOT_BLOCK";
+   lots = MbResolvePaperRiskLotsFloor(snapshot);
+  }
+
+bool MbShouldApplyPaperMinLotFloor(
+   const bool paper_mode_active,
+   const MbSignalDecision &signal,
+   const bool risk_allowed,
+   const double lots
+)
+  {
+   return (paper_mode_active && signal.valid && risk_allowed && lots <= 0.0);
+  }
+
+void MbApplyPaperMinLotFloor(
+   const bool paper_mode_active,
+   const MbSignalDecision &signal,
+   const MbMarketSnapshot &snapshot,
+   const bool risk_allowed,
+   string &reason_code,
+   double &lots
+)
+  {
+   if(!MbShouldApplyPaperMinLotFloor(paper_mode_active,signal,risk_allowed,lots))
+      return;
+
+   lots = MbResolvePaperRiskLotsFloor(snapshot);
+   reason_code = "PAPER_IGNORE_MIN_LOT_FLOOR";
+  }
+
+void MbNormalizeRiskContractBlockAfterSizing(
+   const MbSignalDecision &signal,
+   bool &risk_allowed,
+   string &reason_code,
+   const double lots
+)
+  {
+   if(!signal.valid || lots > 0.0)
+      return;
+
+   risk_allowed = false;
+   reason_code = "RISK_CONTRACT_BLOCK";
   }
 
 #endif

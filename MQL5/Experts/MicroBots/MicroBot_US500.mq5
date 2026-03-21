@@ -663,24 +663,25 @@ void OnTick()
       MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
    US500LocalRiskPlan risk_plan;
    BuildUS500RiskPlan(g_state,g_market,risk_plan);
-   if(IsLocalPaperModeActive() && signal.valid && !risk_plan.allowed && risk_plan.reason_code == "MARGIN_GUARD")
-     {
-      risk_plan.allowed = true;
-      risk_plan.reason_code = "PAPER_IGNORE_MARGIN_GUARD";
-      risk_plan.lots = MathMax(g_market.vol_min,g_market.vol_step);
-     }
+   MbApplyPaperRiskMarginGuardBypass(
+      IsLocalPaperModeActive(),
+      signal,
+      g_market,
+      risk_plan.allowed,
+      risk_plan.reason_code,
+      risk_plan.lots
+   );
    if(signal.valid)
       risk_plan.lots = MbApplyRiskMultiplierToLots(g_market,risk_plan.lots,signal.risk_multiplier);
-   if(IsLocalPaperModeActive() && signal.valid && risk_plan.allowed && risk_plan.lots <= 0.0)
-     {
-      risk_plan.lots = MathMax(g_market.vol_min,g_market.vol_step);
-      risk_plan.reason_code = "PAPER_IGNORE_MIN_LOT_FLOOR";
-     }
-   if(signal.valid && risk_plan.lots <= 0.0)
-     {
-      risk_plan.allowed = false;
-      risk_plan.reason_code = "RISK_CONTRACT_BLOCK";
-     }
+   MbApplyPaperMinLotFloor(
+      IsLocalPaperModeActive(),
+      signal,
+      g_market,
+      risk_plan.allowed,
+      risk_plan.reason_code,
+      risk_plan.lots
+   );
+   MbNormalizeRiskContractBlockAfterSizing(signal,risk_plan.allowed,risk_plan.reason_code,risk_plan.lots);
    if(signal.valid && !risk_plan.allowed)
      {
       AppendUS500CandidateEvent(now,"SIZE_BLOCK",false,risk_plan.reason_code,signal,0.0);
