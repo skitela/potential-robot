@@ -26,6 +26,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-NearProfitWrapperProcesses {
+    return @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "powershell.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                $_.CommandLine -like "*near_profit_optimization_after_idle_wrapper_*"
+            }
+    )
+}
+
 $batchScript = Join-Path $ProjectRoot "RUN\RUN_NEAR_PROFIT_OPTIMIZATION_BATCH.ps1"
 $statusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 $preparePortableLabScript = Join-Path $ProjectRoot "RUN\PREPARE_NEAR_PROFIT_PORTABLE_LAB.ps1"
@@ -61,6 +72,28 @@ if ($UseDedicatedPortableLabLane) {
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $OpsEvidenceDir | Out-Null
+
+$existingWrappers = @(Get-NearProfitWrapperProcesses)
+if ($existingWrappers.Count -gt 0) {
+    & $statusScript `
+        -ProjectRoot $ProjectRoot `
+        -OpsEvidenceDir $OpsEvidenceDir `
+        -LogRoot $LogRoot `
+        -ProfitTrackingPath $ProfitTrackingPath `
+        -Mt5TesterStatusPath (Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json") `
+        -BatchReportPath (Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json") `
+        -UseDedicatedPortableLabLane $UseDedicatedPortableLabLane `
+        -DedicatedLabTerminalRoot $DedicatedLabTerminalRoot `
+        -NearProfitCount $NearProfitCount `
+        -CurrentNote "near_profit_wrapper_already_running" | Out-Null
+
+    [pscustomobject]@{
+        started = $false
+        reason = "wrapper_already_running"
+        active_wrapper_count = $existingWrappers.Count
+    }
+    return
+}
 
 $profitTracking = Get-Content -LiteralPath $ProfitTrackingPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $nearProfit = @($profitTracking.near_profit | Sort-Object priority_rank, symbol_alias)
