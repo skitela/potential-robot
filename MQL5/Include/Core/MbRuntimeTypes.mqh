@@ -69,6 +69,9 @@ struct MbRuntimeState
    int renko_run_length;
    bool renko_reversal_flag;
    bool paper_mode_active;
+   bool trade_rights;
+   bool paper_rights;
+   bool observation_rights;
    bool kill_switch_cached_halt;
    bool kill_switch_cached_present;
    bool capital_core_contract_present;
@@ -147,6 +150,15 @@ struct MbExecutionCheck
    ENUM_ORDER_TYPE_FILLING filling;
    long order_check_retcode;
    double margin_required;
+   double expected_move_points;
+   double modeled_slippage_points;
+   double modeled_commission_points;
+   double safety_margin_points;
+   double modeled_total_cost_points;
+   double benchmark_typical_move_points;
+   double benchmark_time_stop_points;
+   double benchmark_mfe_points;
+   double benchmark_mae_points;
    string reason;
    string diag;
   };
@@ -234,6 +246,9 @@ struct MbRuntimeControlState
    bool close_only;
    bool paper_only;
    bool force_flatten;
+   bool trade_rights;
+   bool paper_rights;
+   bool observation_rights;
    double risk_cap;
    string requested_mode;
    string reason_code;
@@ -308,6 +323,9 @@ void MbRuntimeReset(MbRuntimeState &state)
    state.renko_run_length = 0;
    state.renko_reversal_flag = false;
    state.paper_mode_active = false;
+   state.trade_rights = true;
+   state.paper_rights = false;
+   state.observation_rights = true;
    state.kill_switch_cached_halt = false;
    state.kill_switch_cached_present = false;
    state.capital_core_contract_present = false;
@@ -386,6 +404,15 @@ void MbExecutionCheckReset(MbExecutionCheck &check)
    check.filling = ORDER_FILLING_RETURN;
    check.order_check_retcode = 0;
    check.margin_required = 0.0;
+   check.expected_move_points = 0.0;
+   check.modeled_slippage_points = 0.0;
+   check.modeled_commission_points = 0.0;
+   check.safety_margin_points = 0.0;
+   check.modeled_total_cost_points = 0.0;
+   check.benchmark_typical_move_points = 0.0;
+   check.benchmark_time_stop_points = 0.0;
+   check.benchmark_mfe_points = 0.0;
+   check.benchmark_mae_points = 0.0;
    check.reason = "UNKNOWN";
    check.diag = "";
   }
@@ -457,6 +484,9 @@ void MbRuntimeControlStateReset(MbRuntimeControlState &state)
    state.close_only = false;
    state.paper_only = false;
    state.force_flatten = false;
+   state.trade_rights = true;
+   state.paper_rights = false;
+   state.observation_rights = true;
    state.risk_cap = 1.0;
    state.requested_mode = "RUN";
    state.reason_code = "OK";

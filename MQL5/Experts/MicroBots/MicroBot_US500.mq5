@@ -355,6 +355,7 @@ void OnDeinit(const int reason)
    MbExecutionTelemetryFlush();
    MbIncidentJournalFlush();
    MbTradeTransactionJournalFlush();
+   MbTesterTelemetryFinalizeSingleRun(g_profile,g_state,g_market,g_US500_effective_tuning_policy,g_latency);
    MbLatencyProfileFlush(g_latency,g_latency_log_path);
    MbSavePaperPosition(g_profile.symbol,g_paper_position);
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);

@@ -45,6 +45,21 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def discover_related_common_roots(common_root: Path) -> list[Path]:
+    roots: list[Path] = []
+    if common_root.exists():
+        roots.append(common_root)
+
+    parent = common_root.parent
+    prefix = common_root.name + "_TESTER_"
+    if parent.exists():
+        for path in sorted(parent.glob(f"{prefix}*")):
+            if path.is_dir():
+                roots.append(path)
+
+    return roots
+
+
 def read_tsv(path: Path) -> pd.DataFrame:
     try:
         return pd.read_csv(path, sep="\t", low_memory=False)
@@ -110,6 +125,53 @@ def collect_runtime_state(common_root: Path) -> pd.DataFrame:
         data["_source_path"] = str(summary_path)
         data["_symbol_dir"] = summary_path.parent.name
         records.append(data)
+    return flatten_records(records)
+
+
+def collect_state_jsons(common_roots: Iterable[Path], file_name: str) -> pd.DataFrame:
+    records = []
+    for common_root in common_roots:
+        state_root = common_root / "state"
+        if not state_root.exists():
+            continue
+        for json_path in state_root.glob(f"*\\{file_name}"):
+            data = read_json_file(json_path)
+            if not data:
+                continue
+            data["_source_path"] = str(json_path)
+            data["_symbol_dir"] = json_path.parent.name
+            data["_root_path"] = str(common_root)
+            data["_root_name"] = common_root.name
+            data["_root_kind"] = "tester_sandbox" if common_root.name.startswith("MAKRO_I_MIKRO_BOT_TESTER_") else "runtime_root"
+            records.append(data)
+    return flatten_records(records)
+
+
+def collect_jsonl_table(common_roots: Iterable[Path], scope_dir: str, file_name: str) -> pd.DataFrame:
+    records = []
+    for common_root in common_roots:
+        root = common_root / scope_dir
+        if not root.exists():
+            continue
+        for jsonl_path in root.glob(f"*\\{file_name}"):
+            try:
+                lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                payload["_source_path"] = str(jsonl_path)
+                payload["_symbol_dir"] = jsonl_path.parent.name
+                payload["_root_path"] = str(common_root)
+                payload["_root_name"] = common_root.name
+                payload["_root_kind"] = "tester_sandbox" if common_root.name.startswith("MAKRO_I_MIKRO_BOT_TESTER_") else "runtime_root"
+                records.append(payload)
     return flatten_records(records)
 
 
@@ -353,6 +415,7 @@ def main() -> int:
     args = parse_args()
     project_root = Path(args.project_root)
     common_root = Path(args.common_root)
+    related_common_roots = discover_related_common_roots(common_root)
     output_root = Path(args.output_root)
     qdm_export_root = Path(args.qdm_export_root)
     datasets_dir = ensure_dir(output_root / "datasets")
@@ -362,12 +425,19 @@ def main() -> int:
     manifest: dict[str, object] = {
         "project_root": str(project_root),
         "common_root": str(common_root),
+        "related_common_roots": [str(path) for path in related_common_roots],
         "output_root": str(output_root),
         "datasets": {},
     }
 
     runtime_state = collect_runtime_state(common_root)
     manifest["datasets"]["runtime_state"] = export_frame(runtime_state, "runtime_state_latest", datasets_dir)
+
+    tester_telemetry = collect_state_jsons(related_common_roots, "tester_telemetry_latest.json")
+    manifest["datasets"]["tester_telemetry"] = export_frame(tester_telemetry, "tester_telemetry_latest", datasets_dir)
+
+    tester_pass_frames = collect_jsonl_table(related_common_roots, "run", "tester_optimization_passes.jsonl")
+    manifest["datasets"]["tester_pass_frames"] = export_parquet_only(tester_pass_frames, "tester_pass_frames_latest", datasets_dir)
 
     decision_events = collect_log_table(common_root, "decision_events.csv")
     manifest["datasets"]["decision_events"] = export_parquet_only(decision_events, "decision_events_latest", datasets_dir)
@@ -396,6 +466,8 @@ def main() -> int:
         duckdb_path,
         {
             "runtime_state": (datasets_dir / "runtime_state_latest.parquet", int(manifest["datasets"]["runtime_state"]["rows"])),
+            "tester_telemetry": (datasets_dir / "tester_telemetry_latest.parquet", int(manifest["datasets"]["tester_telemetry"]["rows"])),
+            "tester_pass_frames": (datasets_dir / "tester_pass_frames_latest.parquet", int(manifest["datasets"]["tester_pass_frames"]["rows"])),
             "decision_events": (datasets_dir / "decision_events_latest.parquet", int(manifest["datasets"]["decision_events"]["rows"])),
             "candidate_signals": (datasets_dir / "candidate_signals_latest.parquet", int(manifest["datasets"]["candidate_signals"]["rows"])),
             "tuning_deckhand": (datasets_dir / "tuning_deckhand_latest.parquet", int(manifest["datasets"]["tuning_deckhand"]["rows"])),

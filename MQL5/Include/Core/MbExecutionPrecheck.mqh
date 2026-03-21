@@ -207,6 +207,16 @@ MbExecutionCheck MbBuildExecutionCheck(
       benchmark_mae_points
    );
 
+   out.expected_move_points = expected_move_points;
+   out.modeled_slippage_points = modeled_slippage_points;
+   out.modeled_commission_points = modeled_commission_points;
+   out.safety_margin_points = safety_margin_points;
+   out.modeled_total_cost_points = modeled_total_cost_points;
+   out.benchmark_typical_move_points = benchmark_typical_move_points;
+   out.benchmark_time_stop_points = benchmark_time_stop_points;
+   out.benchmark_mfe_points = benchmark_mfe_points;
+   out.benchmark_mae_points = benchmark_mae_points;
+
    out.diag = out.diag + StringFormat(
       " expected_move=%.2f spread=%.2f slip=%.2f comm=%.2f safety=%.2f total_cost=%.2f bench_typical=%.2f bench_time_stop=%.2f bench_mfe=%.2f",
       expected_move_points,

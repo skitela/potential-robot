@@ -72,6 +72,9 @@ function Resolve-TrustFallback {
     )
 
     switch ($TrustState) {
+        "MARKET_CLOSED_EXPECTED" {
+            return @{ domain = "MARKET"; class = "SCHEDULED_CLOSURE"; code = "MARKET_CLOSED_EXPECTED"; source = "trust_state" }
+        }
         "PAPER_CONVERSION_BLOCKED" {
             $code = if ($ReasonCode -ne "") { $ReasonCode } else { "PAPER_CONVERSION_BLOCKED" }
             return @{ domain = "RISK"; class = "CONTRACT"; code = $code; source = "trust_state" }
@@ -83,6 +86,9 @@ function Resolve-TrustFallback {
         "LOW_SAMPLE" { return @{ domain = "DATA"; class = "TRUST"; code = "LOW_SAMPLE"; source = "trust_state" } }
         "OBSERVATIONS_MISSING" { return @{ domain = "DATA"; class = "TRUST"; code = "OBSERVATIONS_MISSING"; source = "trust_state" } }
         "INFRASTRUCTURE_WEAK" {
+            if ($ReasonCode -eq "MARKET_CLOSED_EXPECTED") {
+                return @{ domain = "MARKET"; class = "SCHEDULED_CLOSURE"; code = "MARKET_CLOSED_EXPECTED"; source = "trust_state" }
+            }
             $code = if ($ReasonCode -ne "") { $ReasonCode } else { "INFRASTRUCTURE_WEAK" }
             return @{ domain = "INFRA"; class = "HEALTH"; code = $code; source = "trust_state" }
         }

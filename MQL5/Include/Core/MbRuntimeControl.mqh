@@ -31,6 +31,47 @@ bool MbIsEffectivePaperRuntimeActive(
    return (!live_entries_enabled || paper_collect_mode || control.paper_only);
   }
 
+void MbRecalculateRuntimeControlRights(MbRuntimeControlState &state)
+  {
+   if(state.halt)
+     {
+      state.trade_rights = false;
+      state.paper_rights = false;
+      state.observation_rights = false;
+      return;
+     }
+
+   state.observation_rights = true;
+   if(state.paper_only)
+     {
+      state.trade_rights = false;
+      state.paper_rights = true;
+      return;
+     }
+
+   if(state.close_only)
+     {
+      state.trade_rights = false;
+      state.paper_rights = false;
+      return;
+     }
+
+   state.trade_rights = true;
+   state.paper_rights = false;
+  }
+
+void MbApplyRuntimeRights(
+   MbRuntimeState &state,
+   const bool trade_rights,
+   const bool paper_rights,
+   const bool observation_rights
+)
+  {
+   state.trade_rights = trade_rights;
+   state.paper_rights = paper_rights;
+   state.observation_rights = observation_rights;
+  }
+
 void MbMergeRuntimeControl(MbRuntimeControlState &io_target,const MbRuntimeControlState &overlay)
   {
    io_target.risk_cap = MathMin(io_target.risk_cap,MathMax(0.0,overlay.risk_cap));
@@ -43,6 +84,7 @@ void MbMergeRuntimeControl(MbRuntimeControlState &io_target,const MbRuntimeContr
       io_target.close_only = false;
       io_target.requested_mode = "HALT";
       io_target.reason_code = overlay.reason_code;
+      MbRecalculateRuntimeControlRights(io_target);
       return;
      }
 
@@ -52,6 +94,7 @@ void MbMergeRuntimeControl(MbRuntimeControlState &io_target,const MbRuntimeContr
       io_target.close_only = false;
       io_target.requested_mode = "PAPER_ONLY";
       io_target.reason_code = overlay.reason_code;
+      MbRecalculateRuntimeControlRights(io_target);
       return;
      }
 
@@ -61,6 +104,8 @@ void MbMergeRuntimeControl(MbRuntimeControlState &io_target,const MbRuntimeContr
       io_target.requested_mode = "CLOSE_ONLY";
       io_target.reason_code = overlay.reason_code;
      }
+
+   MbRecalculateRuntimeControlRights(io_target);
   }
 
 void MbReadRuntimeControlFile(const string path,MbRuntimeControlState &out)
@@ -92,6 +137,8 @@ void MbReadRuntimeControlFile(const string path,MbRuntimeControlState &out)
       out.paper_only = true;
    else if(mode == "CLOSE_ONLY")
       out.close_only = true;
+
+   MbRecalculateRuntimeControlRights(out);
   }
 
 void MbReadRuntimeControl(const string symbol,MbRuntimeControlState &out)
@@ -119,6 +166,7 @@ void MbApplyRuntimeControl(MbRuntimeState &state,const MbRuntimeControlState &co
    state.close_only = (control.close_only && !control.halt && !control.paper_only);
    state.force_flatten = control.force_flatten;
    state.coordinator_risk_cap = MathMax(0.0,MathMin(control.risk_cap,1.0));
+   MbApplyRuntimeRights(state,control.trade_rights,control.paper_rights,control.observation_rights);
 
    if(state.paper_mode_active)
      {
@@ -126,22 +174,26 @@ void MbApplyRuntimeControl(MbRuntimeState &state,const MbRuntimeControlState &co
       state.close_only = false;
       state.caution_mode = false;
       state.mode = MB_MODE_READY;
+      MbApplyRuntimeRights(state,false,true,true);
       return;
      }
 
    if(state.halt)
      {
       state.mode = MB_MODE_BLOCKED;
+      MbApplyRuntimeRights(state,false,false,false);
       return;
      }
 
    if(state.close_only)
      {
       state.mode = MB_MODE_CLOSE_ONLY;
+      MbApplyRuntimeRights(state,false,false,true);
       return;
      }
 
    state.mode = (state.caution_mode ? MB_MODE_CAUTION : MB_MODE_READY);
+   MbApplyRuntimeRights(state,true,false,true);
   }
 
 void MbNormalizePaperRuntimeState(MbRuntimeState &state,const bool paper_mode_active)
@@ -154,6 +206,7 @@ void MbNormalizePaperRuntimeState(MbRuntimeState &state,const bool paper_mode_ac
    state.close_only = false;
    state.caution_mode = false;
    state.mode = MB_MODE_READY;
+   MbApplyRuntimeRights(state,false,true,true);
   }
 
 void MbRefreshPaperTradeRights(MbRuntimeState &state,const bool paper_mode_active)
@@ -164,6 +217,7 @@ void MbRefreshPaperTradeRights(MbRuntimeState &state,const bool paper_mode_activ
    state.halt = false;
    state.close_only = false;
    state.mode = MB_MODE_READY;
+   MbApplyRuntimeRights(state,false,true,true);
   }
 
 void MbNormalizePaperRuntimeState(

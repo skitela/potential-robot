@@ -38,6 +38,11 @@ bool MbIsStrategyTesterRuntime()
    return (MQLInfoInteger(MQL_TESTER) != 0 || MQLInfoInteger(MQL_OPTIMIZATION) != 0);
   }
 
+bool MbHasStrategyTesterSandbox()
+  {
+   return (StringFind(MbRootPath(),"MAKRO_I_MIKRO_BOT_TESTER_") == 0);
+  }
+
 void MbEnableStrategyTesterSandbox(const string sandbox_tag)
   {
    string sanitized = MbStoragePathSanitizeToken(sandbox_tag);

@@ -34,6 +34,49 @@ double MbTesterTelemetryClamp(const double value,const double min_value,const do
    return MathMax(min_value,MathMin(max_value,value));
   }
 
+ulong g_mb_tester_telemetry_processed_passes[];
+bool g_mb_tester_telemetry_filter_ready = false;
+
+double MbTesterTelemetryPayloadValue(const double &payload[],const int index,const double default_value = 0.0)
+  {
+   if(index < 0 || index >= ArraySize(payload))
+      return default_value;
+   return payload[index];
+  }
+
+bool MbTesterTelemetryHasProcessedPass(const ulong pass)
+  {
+   for(int i = 0; i < ArraySize(g_mb_tester_telemetry_processed_passes); ++i)
+     {
+      if(g_mb_tester_telemetry_processed_passes[i] == pass)
+         return true;
+     }
+   return false;
+  }
+
+void MbTesterTelemetryMarkProcessedPass(const ulong pass)
+  {
+   if(pass == 0 || MbTesterTelemetryHasProcessedPass(pass))
+      return;
+
+   int next = ArraySize(g_mb_tester_telemetry_processed_passes);
+   ArrayResize(g_mb_tester_telemetry_processed_passes,next + 1);
+   g_mb_tester_telemetry_processed_passes[next] = pass;
+  }
+
+string MbTesterTelemetryInputsJson(const string &inputs[],const uint input_count)
+  {
+   string json = "[";
+   for(uint i = 0; i < input_count; ++i)
+     {
+      if(i > 0)
+         json += ",";
+      json += "\"" + MbTesterTelemetryEscapeJson(inputs[(int)i]) + "\"";
+     }
+   json += "]";
+   return json;
+  }
+
 double MbTesterTelemetryWinRate(const MbRuntimeState &state)
   {
    if(state.learning_sample_count <= 0)
@@ -181,7 +224,7 @@ bool MbTesterTelemetryWriteLatest(
      }
 
    string payload = StringFormat(
-      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"magic\":%I64d,\"runtime_mode\":\"%s\",\"session_profile\":\"%s\",\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"learning_win_count\":%d,\"learning_loss_count\":%d,\"win_rate\":%.6f,\"trust_state\":\"%s\",\"trust_reason\":\"%s\",\"trust_reason_domain\":\"%s\",\"trust_reason_class\":\"%s\",\"trust_penalty\":%.6f,\"cost_pressure_state\":\"%s\",\"cost_pressure_reason_code\":\"%s\",\"cost_penalty\":%.6f,\"execution_quality_state\":\"%s\",\"execution_quality_reason_code\":\"%s\",\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"execution_ok_ratio\":%.6f,\"avg_retries\":%.6f,\"avg_slippage_points\":%.6f,\"latency_samples\":%I64d,\"local_latency_us_avg\":%I64d,\"signal_confidence\":%.6f,\"learning_bias\":%.6f,\"policy_revision\":%d,\"policy_action_code\":\"%s\",\"experiment_status\":\"%s\",\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"paper_runtime_override_active\":%s,\"terminal_ping_ms\":%I64d,\"spread_points\":%.2f,\"generated_at_utc\":%I64d}",
+      "{\"schema_version\":\"1.2\",\"symbol\":\"%s\",\"magic\":%I64d,\"runtime_mode\":\"%s\",\"session_profile\":\"%s\",\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"learning_win_count\":%d,\"learning_loss_count\":%d,\"win_rate\":%.6f,\"trust_state\":\"%s\",\"trust_reason\":\"%s\",\"trust_reason_domain\":\"%s\",\"trust_reason_class\":\"%s\",\"trust_penalty\":%.6f,\"cost_pressure_state\":\"%s\",\"cost_pressure_reason_code\":\"%s\",\"cost_penalty\":%.6f,\"execution_quality_state\":\"%s\",\"execution_quality_reason_code\":\"%s\",\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"execution_ok_ratio\":%.6f,\"avg_retries\":%.6f,\"avg_slippage_points\":%.6f,\"latency_samples\":%I64d,\"local_latency_us_avg\":%I64d,\"signal_confidence\":%.6f,\"learning_bias\":%.6f,\"policy_revision\":%d,\"policy_action_code\":\"%s\",\"experiment_status\":\"%s\",\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"trade_rights\":%s,\"paper_rights\":%s,\"observation_rights\":%s,\"paper_runtime_override_active\":%s,\"terminal_ping_ms\":%I64d,\"spread_points\":%.2f,\"generated_at_utc\":%I64d}",
       MbTesterTelemetryEscapeJson(profile.symbol),
       (long)state.magic,
       MbRuntimeModeLabelForState(state),
@@ -216,6 +259,9 @@ bool MbTesterTelemetryWriteLatest(
       MbTesterTelemetryEscapeJson(policy.experiment_status),
       policy.confidence_cap,
       policy.risk_cap,
+      MbJsonBool(state.trade_rights),
+      MbJsonBool(state.paper_rights),
+      MbJsonBool(state.observation_rights),
       MbJsonBool(snapshot.paper_runtime_override_active),
       snapshot.terminal_ping_last_ms,
       snapshot.spread_points,
@@ -295,6 +341,136 @@ bool MbTesterTelemetryAppendPassSummary(
    return true;
   }
 
+bool MbTesterTelemetryWriteOptimizationLatest(
+   const string symbol,
+   const long magic,
+   const ulong pass,
+   const string frame_name,
+   const double frame_value,
+   const double &payload[],
+   const string &inputs[],
+   const uint input_count
+)
+  {
+   int handle = FileOpen(MbStateFilePath(symbol,"tester_telemetry_latest.json"), FILE_COMMON | FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   string output = StringFormat(
+      "{\"schema_version\":\"1.2\",\"symbol\":\"%s\",\"magic\":%I64d,\"runtime_mode\":\"OPTIMIZATION_PASS\",\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"win_rate\":%.6f,\"trust_penalty\":%.6f,\"cost_penalty\":%.6f,\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"policy_revision\":%d,\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"execution_ok_ratio\":%.6f,\"experiment_status\":\"OPTIMIZATION_PASS\",\"frame_name\":\"%s\",\"frame_pass\":%I64u,\"trade_rights\":false,\"paper_rights\":true,\"observation_rights\":true,\"optimization_inputs_count\":%u,\"optimization_inputs\":%s,\"generated_at_utc\":%I64d}",
+      MbTesterTelemetryEscapeJson(symbol),
+      magic,
+      frame_value,
+      MbTesterTelemetryPayloadValue(payload,1),
+      (int)MbTesterTelemetryPayloadValue(payload,2),
+      MbTesterTelemetryPayloadValue(payload,3),
+      MbTesterTelemetryPayloadValue(payload,4),
+      MbTesterTelemetryPayloadValue(payload,5),
+      MbTesterTelemetryPayloadValue(payload,6),
+      MbTesterTelemetryPayloadValue(payload,7),
+      (int)MbTesterTelemetryPayloadValue(payload,8),
+      MbTesterTelemetryPayloadValue(payload,9),
+      MbTesterTelemetryPayloadValue(payload,10),
+      MbTesterTelemetryPayloadValue(payload,11,1.0),
+      MbTesterTelemetryEscapeJson(frame_name),
+      pass,
+      input_count,
+      MbTesterTelemetryInputsJson(inputs,input_count),
+      (long)TimeTradeServer()
+   );
+
+   FileWriteString(handle,output);
+   FileClose(handle);
+   return true;
+  }
+
+bool MbTesterTelemetryAppendOptimizationPass(
+   const string symbol,
+   const long magic,
+   const ulong pass,
+   const string frame_name,
+   const long frame_id,
+   const double frame_value,
+   const double &payload[],
+   const string &inputs[],
+   const uint input_count
+)
+  {
+   int handle = FileOpen(MbRunFilePath(symbol,"tester_optimization_passes.jsonl"), FILE_COMMON | FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   FileSeek(handle,0,SEEK_END);
+   string output = StringFormat(
+      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"magic\":%I64d,\"frame_name\":\"%s\",\"frame_id\":%I64d,\"frame_pass\":%I64u,\"custom_score\":%.6f,\"realized_pnl_lifetime\":%.6f,\"learning_sample_count\":%d,\"win_rate\":%.6f,\"trust_penalty\":%.6f,\"cost_penalty\":%.6f,\"execution_penalty\":%.6f,\"latency_penalty\":%.6f,\"policy_revision\":%d,\"confidence_cap\":%.6f,\"risk_cap\":%.6f,\"execution_ok_ratio\":%.6f,\"optimization_inputs_count\":%u,\"optimization_inputs\":%s,\"generated_at_utc\":%I64d}",
+      MbTesterTelemetryEscapeJson(symbol),
+      magic,
+      MbTesterTelemetryEscapeJson(frame_name),
+      frame_id,
+      pass,
+      frame_value,
+      MbTesterTelemetryPayloadValue(payload,1),
+      (int)MbTesterTelemetryPayloadValue(payload,2),
+      MbTesterTelemetryPayloadValue(payload,3),
+      MbTesterTelemetryPayloadValue(payload,4),
+      MbTesterTelemetryPayloadValue(payload,5),
+      MbTesterTelemetryPayloadValue(payload,6),
+      MbTesterTelemetryPayloadValue(payload,7),
+      (int)MbTesterTelemetryPayloadValue(payload,8),
+      MbTesterTelemetryPayloadValue(payload,9),
+      MbTesterTelemetryPayloadValue(payload,10),
+      MbTesterTelemetryPayloadValue(payload,11,1.0),
+      input_count,
+      MbTesterTelemetryInputsJson(inputs,input_count),
+      (long)TimeTradeServer()
+   );
+
+   FileWriteString(handle,output + "\n");
+   FileClose(handle);
+   return true;
+  }
+
+bool MbTesterTelemetryConfigureOptimizationFilter(const long magic,const bool force_reset = false)
+  {
+   if(MQLInfoInteger(MQL_OPTIMIZATION) == 0)
+      return false;
+
+   if(force_reset || !g_mb_tester_telemetry_filter_ready)
+      g_mb_tester_telemetry_filter_ready = FrameFilter("MICROBOT_PASS_V1",magic);
+   return g_mb_tester_telemetry_filter_ready;
+  }
+
+void MbTesterTelemetryCollectOptimizationPasses(const string symbol,const long magic,const bool force_reset_filter = false)
+  {
+   if(!MbIsStrategyTesterRuntime() || MQLInfoInteger(MQL_OPTIMIZATION) == 0)
+      return;
+
+   string resolved_symbol = MbTesterTelemetryResolveSymbol(symbol);
+   if(!MbStorageInit(resolved_symbol))
+      return;
+
+   if(!MbTesterTelemetryConfigureOptimizationFilter(magic,force_reset_filter))
+      return;
+
+   ulong pass = 0;
+   string name = "";
+   long id = 0;
+   double value = 0.0;
+   double payload[];
+   while(FrameNext(pass,name,id,value,payload))
+     {
+      if(MbTesterTelemetryHasProcessedPass(pass))
+         continue;
+
+      string inputs[];
+      uint input_count = 0;
+      FrameInputs(pass,inputs,input_count);
+      MbTesterTelemetryAppendOptimizationPass(resolved_symbol,magic,pass,name,id,value,payload,inputs,input_count);
+      MbTesterTelemetryWriteOptimizationLatest(resolved_symbol,magic,pass,name,value,payload,inputs,input_count);
+      MbTesterTelemetryMarkProcessedPass(pass);
+     }
+  }
+
 bool MbTesterTelemetryWriteSessionMarker(const string symbol,const string stage,const long magic)
   {
    string resolved_symbol = MbTesterTelemetryResolveSymbol(symbol);
@@ -319,11 +495,56 @@ bool MbTesterTelemetryWriteSessionMarker(const string symbol,const string stage,
    return true;
   }
 
+bool MbTesterTelemetryFinalizeSingleRun(
+   const MbSymbolProfile &profile,
+   const MbRuntimeState &state,
+   const MbMarketSnapshot &snapshot,
+   const MbTuningLocalPolicy &policy,
+   const MbLatencyProfile &latency
+)
+  {
+   if((!MbIsStrategyTesterRuntime() && !MbHasStrategyTesterSandbox()) || MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      return false;
+
+   MbExecutionSummary summary;
+   MbBuildExecutionSummary(latency,summary);
+
+   MbReasonTriple normalized_reason;
+   MbExecutionQualityState execution_quality;
+   MbCostPressureState cost_pressure;
+   MbBuildRuntimeEpistemicSnapshot(profile.symbol,state,snapshot,policy,"TESTER_FINALIZE",normalized_reason,execution_quality,cost_pressure);
+
+   double trust_penalty = MbTesterTelemetryTrustPenalty(policy);
+   double cost_penalty = MbTesterTelemetryCostPenalty(cost_pressure);
+   double execution_penalty = MbTesterTelemetryExecutionPenalty(state,summary);
+   double latency_penalty = MbTesterTelemetryLatencyPenalty(summary);
+   double sample_bonus = MbTesterTelemetrySampleBonus(state);
+   double win_rate_bonus = MbTesterTelemetryWinRateBonus(state);
+
+   double custom_score =
+      state.realized_pnl_lifetime +
+      sample_bonus +
+      win_rate_bonus -
+      trust_penalty -
+      cost_penalty -
+      execution_penalty -
+      latency_penalty;
+
+   MbTesterTelemetryWriteLatest(profile,state,snapshot,policy,latency,normalized_reason,execution_quality,cost_pressure,summary,custom_score,trust_penalty,cost_penalty,execution_penalty,latency_penalty);
+   MbTesterTelemetryAppendPassSummary(profile,state,policy,execution_quality,cost_pressure,summary,custom_score,trust_penalty,cost_penalty,execution_penalty,latency_penalty);
+   MbTesterTelemetryWriteSessionMarker(profile.symbol,"tester_single_run_finalize",(long)state.magic);
+   return true;
+  }
+
 int MbTesterTelemetryOnInit(const string symbol,const long magic)
   {
    if(!MbIsStrategyTesterRuntime())
       return INIT_SUCCEEDED;
 
+   ArrayResize(g_mb_tester_telemetry_processed_passes,0);
+   g_mb_tester_telemetry_filter_ready = false;
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      MbTesterTelemetryConfigureOptimizationFilter(magic,true);
    MbTesterTelemetryWriteSessionMarker(symbol,"tester_init",magic);
    return INIT_SUCCEEDED;
   }
@@ -392,6 +613,7 @@ void MbTesterTelemetryOnPass(const string symbol,const long magic)
    if(MQLInfoInteger(MQL_OPTIMIZATION) == 0)
       return;
 
+   MbTesterTelemetryCollectOptimizationPasses(symbol,magic,false);
    MbTesterTelemetryWriteSessionMarker(symbol,"tester_pass",magic);
   }
 
@@ -400,6 +622,8 @@ void MbTesterTelemetryOnDeinit(const string symbol,const long magic)
    if(!MbIsStrategyTesterRuntime())
       return;
 
+   if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
+      MbTesterTelemetryCollectOptimizationPasses(symbol,magic,true);
    MbTesterTelemetryWriteSessionMarker(symbol,"tester_deinit",magic);
   }
 

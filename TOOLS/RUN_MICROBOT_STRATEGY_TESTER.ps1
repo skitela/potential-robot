@@ -42,6 +42,33 @@ function Stop-MatchingTerminalProcesses {
         }
 }
 
+function Get-MatchingTerminalProcessId {
+    param(
+        [string]$ExecutablePath,
+        [string]$ConfigPath
+    )
+
+    $normalizedTarget = [System.IO.Path]::GetFullPath($ExecutablePath).ToLowerInvariant()
+    $normalizedConfig = [System.IO.Path]::GetFullPath($ConfigPath).ToLowerInvariant()
+
+    $match = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "terminal64.exe" -and
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq $normalizedTarget) -and
+            -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+            $_.CommandLine.ToLowerInvariant().Contains($normalizedConfig)
+        } |
+        Sort-Object CreationDate -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $match) {
+        return $null
+    }
+
+    return [int]$match.ProcessId
+}
+
 function Convert-ToSandboxToken {
     param([string]$Value)
     $chars = $Value.ToCharArray() | ForEach-Object {
@@ -296,13 +323,34 @@ if (Test-Path -LiteralPath $testerAgentsRoot) {
 Stop-MatchingTerminalProcesses -ExecutablePath $Mt5Exe
 Start-Sleep -Seconds 2
 
+$runLaunchedAt = Get-Date
 $process = Start-Process -FilePath $Mt5Exe -ArgumentList @("/config:$configPath") -PassThru
+$trackedProcessId = $null
+for ($attempt = 1; $attempt -le 40; $attempt++) {
+    $trackedProcessId = Get-MatchingTerminalProcessId -ExecutablePath $Mt5Exe -ConfigPath $configPath
+    if ($null -ne $trackedProcessId) {
+        break
+    }
+
+    if (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) {
+        $trackedProcessId = $process.Id
+    }
+
+    Start-Sleep -Milliseconds 500
+}
+
 $timedOut = $false
 try {
-    Wait-Process -Id $process.Id -Timeout $TimeoutSec -ErrorAction Stop
+    if ($null -ne $trackedProcessId) {
+        Wait-Process -Id $trackedProcessId -Timeout $TimeoutSec -ErrorAction Stop
+    } else {
+        Wait-Process -Id $process.Id -Timeout $TimeoutSec -ErrorAction Stop
+    }
 } catch {
     $timedOut = $true
-    Get-Process -Id $process.Id -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    foreach ($pid in @($trackedProcessId, $process.Id) | Where-Object { $null -ne $_ } | Select-Object -Unique) {
+        Get-Process -Id $pid -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $reportCandidates = @(

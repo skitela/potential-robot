@@ -109,6 +109,9 @@ bool MbSaveRuntimeState(MbRuntimeState &state)
    FileWrite(h,"renko_run_length",state.renko_run_length);
    FileWrite(h,"renko_reversal_flag",(state.renko_reversal_flag ? 1 : 0));
    FileWrite(h,"paper_mode_active",(state.paper_mode_active ? 1 : 0));
+   FileWrite(h,"trade_rights",(state.trade_rights ? 1 : 0));
+   FileWrite(h,"paper_rights",(state.paper_rights ? 1 : 0));
+   FileWrite(h,"observation_rights",(state.observation_rights ? 1 : 0));
    FileWrite(h,"kill_switch_cached_halt",(state.kill_switch_cached_halt ? 1 : 0));
    FileWrite(h,"kill_switch_cached_present",(state.kill_switch_cached_present ? 1 : 0));
    FileWrite(h,"capital_core_contract_present",(state.capital_core_contract_present ? 1 : 0));
@@ -187,6 +190,9 @@ bool MbLoadRuntimeState(MbRuntimeState &state)
       else if(key == "renko_run_length") state.renko_run_length = (int)StringToInteger(value);
       else if(key == "renko_reversal_flag") state.renko_reversal_flag = (StringToInteger(value) != 0);
       else if(key == "paper_mode_active") state.paper_mode_active = (StringToInteger(value) != 0);
+      else if(key == "trade_rights") state.trade_rights = (StringToInteger(value) != 0);
+      else if(key == "paper_rights") state.paper_rights = (StringToInteger(value) != 0);
+      else if(key == "observation_rights") state.observation_rights = (StringToInteger(value) != 0);
       else if(key == "kill_switch_cached_halt") state.kill_switch_cached_halt = (StringToInteger(value) != 0);
       else if(key == "kill_switch_cached_present") state.kill_switch_cached_present = (StringToInteger(value) != 0);
       else if(key == "capital_core_contract_present") state.capital_core_contract_present = (StringToInteger(value) != 0);

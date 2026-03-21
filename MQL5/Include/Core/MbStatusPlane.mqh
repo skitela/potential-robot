@@ -63,12 +63,15 @@ bool MbFlushRuntimeStatus(const MbRuntimeState &state,const string reason_code)
    if(h == INVALID_HANDLE)
       return false;
    string payload = StringFormat(
-      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"runtime_mode\":\"%s\",\"caution_mode\":%s,\"close_only\":%s,\"halt\":%s,\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"ticks_seen\":%I64d,\"timer_cycles\":%I64d,\"execution_pressure\":%.4f,\"reason_code\":\"%s\",\"heartbeat_utc\":%I64d}",
+      "{\"schema_version\":\"1.1\",\"symbol\":\"%s\",\"runtime_mode\":\"%s\",\"caution_mode\":%s,\"close_only\":%s,\"halt\":%s,\"trade_rights\":%s,\"paper_rights\":%s,\"observation_rights\":%s,\"cooldown_left_sec\":%d,\"incident_pressure\":%d,\"ticks_seen\":%I64d,\"timer_cycles\":%I64d,\"execution_pressure\":%.4f,\"reason_code\":\"%s\",\"heartbeat_utc\":%I64d}",
       state.symbol,
       MbRuntimeModeLabelForState(state),
       MbJsonBool(state.caution_mode),
       MbJsonBool(state.close_only),
       MbJsonBool(state.halt),
+      MbJsonBool(state.trade_rights),
+      MbJsonBool(state.paper_rights),
+      MbJsonBool(state.observation_rights),
       MbCooldownLeftSec(state),
       MbIncidentPressure(state),
       state.ticks_seen,
