@@ -39,6 +39,37 @@ function Get-FirstValue {
     return $null
 }
 
+function Test-MeaningfulTesterSummary {
+    param([object]$Summary)
+
+    if ($null -eq $Summary) {
+        return $false
+    }
+
+    $sampleCount = [int](Get-FirstValue -Object $Summary -Names @("learning_sample_count"))
+    $trustState = [string](Get-FirstValue -Object $Summary -Names @("trust_state"))
+    $resultLabel = [string](Get-FirstValue -Object $Summary -Names @("result_label"))
+    $pnlValue = [double](Get-FirstValue -Object $Summary -Names @("realized_pnl_lifetime"))
+
+    if ($sampleCount -gt 0) {
+        return $true
+    }
+
+    if ([math]::Abs($pnlValue) -ge 0.0000001) {
+        return $true
+    }
+
+    if (($trustState -ne "") -and ($trustState -ne "OBSERVATIONS_MISSING")) {
+        return $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($resultLabel) -and $resultLabel -ne "successfully_finished") {
+        return $true
+    }
+
+    return $false
+}
+
 function Test-ExpectedPaperMarketClosure {
     param([object]$Summary)
 
@@ -252,23 +283,14 @@ function Get-LatestTesterSummaries {
                 if ([string]::IsNullOrWhiteSpace($alias)) {
                     return
                 }
+                if (-not (Test-MeaningfulTesterSummary -Summary $summary)) {
+                    return
+                }
                 $resultLabel = [string](Get-FirstValue -Object $summary -Names @("result_label"))
                 $trustState = [string](Get-FirstValue -Object $summary -Names @("trust_state"))
                 $sampleCount = [int](Get-FirstValue -Object $summary -Names @("learning_sample_count"))
                 $biasValue = [double](Get-FirstValue -Object $summary -Names @("learning_bias"))
                 $pnlValue = [double](Get-FirstValue -Object $summary -Names @("realized_pnl_lifetime"))
-                $isEmptySummary = (
-                    [string]::IsNullOrWhiteSpace($trustState) -and
-                    $sampleCount -le 0 -and
-                    [math]::Abs($biasValue) -lt 0.0000001 -and
-                    (
-                        $null -eq $pnlValue -or
-                        [math]::Abs($pnlValue) -lt 0.0000001
-                    )
-                )
-                if ($isEmptySummary) {
-                    return
-                }
                 if ($map.ContainsKey($alias)) {
                     return
                 }
