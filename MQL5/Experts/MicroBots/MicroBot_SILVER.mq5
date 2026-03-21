@@ -289,7 +289,7 @@ int OnInit()
       return(INIT_FAILED);
 
    MbLoadRuntimeState(g_state);
-   if(!InpEnableLiveEntries || IsLocalPaperModeActive())
+   if(IsLocalPaperModeActive())
      {
       g_state.halt = false;
       g_state.close_only = false;
@@ -794,7 +794,7 @@ void OnTick()
          return;
         }
       AppendSILVERDecisionEvent(now,"EXEC_PRECHECK","READY","PRECHECK_OK",g_market.spread_points,signal.score,risk_plan.lots,0,false);
-      if(!InpEnableLiveEntries || IsLocalPaperModeActive())
+      if(IsLocalPaperModeActive())
         {
          if(IsLocalPaperModeActive())
            {
