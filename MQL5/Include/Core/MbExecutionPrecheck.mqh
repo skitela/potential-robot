@@ -48,6 +48,25 @@ bool MbVolumeWithinSymbolConstraints(const MbMarketSnapshot &snapshot,const doub
    return true;
   }
 
+bool MbSignalSideAllowedByTradeMode(const MbMarketSnapshot &snapshot,const MbSignalSide side,string &reason_code)
+  {
+   reason_code = "OK";
+
+   if(side == MB_SIGNAL_BUY && snapshot.symbol_trade_mode == (long)SYMBOL_TRADE_MODE_SHORTONLY)
+     {
+      reason_code = "SYMBOL_BUY_BLOCKED_BY_TRADE_MODE";
+      return false;
+     }
+
+   if(side == MB_SIGNAL_SELL && snapshot.symbol_trade_mode == (long)SYMBOL_TRADE_MODE_LONGONLY)
+     {
+      reason_code = "SYMBOL_SELL_BLOCKED_BY_TRADE_MODE";
+      return false;
+     }
+
+   return true;
+  }
+
 double MbResolveModeledCommissionPoints(const MbSymbolProfile &profile)
   {
    string family = profile.session_profile;
@@ -111,6 +130,14 @@ MbExecutionCheck MbBuildExecutionCheck(
    if(!snapshot.valid)
      {
       out.reason = "SNAPSHOT_INVALID";
+      return out;
+     }
+
+   string trade_mode_reason = "OK";
+   if(!MbSignalSideAllowedByTradeMode(snapshot,side,trade_mode_reason))
+     {
+      out.reason = trade_mode_reason;
+      out.diag = StringFormat(" symbol_trade_mode=%I64d",(long)snapshot.symbol_trade_mode);
       return out;
      }
 

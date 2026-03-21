@@ -3,6 +3,15 @@
 
 #include "MbRuntimeTypes.mqh"
 
+bool MbSymbolTradeModeAllowsEntries(const long symbol_trade_mode)
+  {
+   if(symbol_trade_mode == (long)SYMBOL_TRADE_MODE_DISABLED)
+      return false;
+   if(symbol_trade_mode == (long)SYMBOL_TRADE_MODE_CLOSEONLY)
+      return false;
+   return true;
+  }
+
 void MbRefreshMarketSnapshot(const MbSymbolProfile &profile,MbMarketSnapshot &snapshot)
   {
    MqlTick tick;
@@ -38,7 +47,7 @@ void MbRefreshMarketSnapshot(const MbSymbolProfile &profile,MbMarketSnapshot &sn
    SymbolInfoDouble(profile.symbol,SYMBOL_VOLUME_MAX,snapshot.vol_max);
 
    snapshot.raw_trade_permissions_ok = (snapshot.term_trade_allowed && snapshot.mql_trade_allowed && snapshot.account_trade_allowed);
-   snapshot.trade_permissions_ok = snapshot.raw_trade_permissions_ok;
+   snapshot.trade_permissions_ok = (snapshot.raw_trade_permissions_ok && MbSymbolTradeModeAllowsEntries(snapshot.symbol_trade_mode));
    snapshot.diag = StringFormat(
       "conn=%d ping_ms=%I64d term=%d mql=%d acc=%d raw=%d acc_mode=%I64d sym_mode=%I64d stops=%d freeze=%d tick_age_ms=%I64d vol_min=%.2f step=%.2f",
       (int)snapshot.terminal_connected,
