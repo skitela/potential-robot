@@ -617,6 +617,7 @@ void OnTick()
      {
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
+      bool weak_candle = (signal.candle_quality_grade != "GOOD");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_usdchf_trend_chaos_dirty_gate = false;
@@ -636,17 +637,23 @@ void OnTick()
       if(
          signal.setup_type == "SETUP_TREND" &&
          signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
          signal.confidence_bucket == "LOW" &&
-         poor_candle &&
-         poor_renko
+         (
+            weak_candle ||
+            poor_renko
+         )
       )
          blocked_by_usdchf_trend_chaos_dirty_gate = true;
       if(
          signal.setup_type == "SETUP_REJECTION" &&
          signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
          signal.confidence_bucket == "LOW" &&
-         poor_candle &&
-         poor_renko
+         (
+            weak_candle ||
+            poor_renko
+         )
       )
          blocked_by_usdchf_rejection_chaos_dirty_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && poor_candle && poor_renko)
@@ -667,7 +674,9 @@ void OnTick()
         }
       else if(signal.setup_type == "SETUP_TREND")
         {
-         if(signal.market_regime == "CHAOS" && signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
+         if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD" && signal.confidence_bucket == "LOW" && (weak_candle || poor_renko))
+            paper_gate_abs = 0.44;
+         else if(signal.market_regime == "CHAOS" && signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
             paper_gate_abs = 0.38;
          else if(signal.confidence_bucket == "LOW" && poor_candle)
             paper_gate_abs = 0.28;
@@ -677,6 +686,8 @@ void OnTick()
          paper_gate_abs = 0.19;
          if(signal.market_regime == "CHAOS")
             paper_gate_abs = MathMax(paper_gate_abs,0.24);
+         if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD" && signal.confidence_bucket == "LOW" && (weak_candle || poor_renko))
+            paper_gate_abs = MathMax(paper_gate_abs,0.34);
          if(signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
             paper_gate_abs = MathMax(paper_gate_abs,0.30);
         }
