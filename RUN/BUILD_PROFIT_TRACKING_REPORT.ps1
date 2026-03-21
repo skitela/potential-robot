@@ -35,6 +35,97 @@ function Normalize-Alias {
     return (($Value.ToUpperInvariant()) -replace '[^A-Z0-9]+', '')
 }
 
+function Test-MeaningfulTesterSummary {
+    param([object]$Summary)
+
+    if ($null -eq $Summary) {
+        return $false
+    }
+
+    $sampleCount = 0
+    if ($Summary.PSObject.Properties.Name -contains 'learning_sample_count') {
+        $sampleCount = [int]$Summary.learning_sample_count
+    }
+
+    $trustState = ""
+    if ($Summary.PSObject.Properties.Name -contains 'trust_state') {
+        $trustState = [string]$Summary.trust_state
+    }
+
+    $resultLabel = ""
+    if ($Summary.PSObject.Properties.Name -contains 'result_label') {
+        $resultLabel = [string]$Summary.result_label
+    }
+
+    $pnl = Convert-ToDoubleOrNull $Summary.realized_pnl_lifetime
+    $hasMaterialPnl = ($null -ne $pnl -and [math]::Abs($pnl) -ge 0.0000001)
+
+    if ($sampleCount -gt 0) {
+        return $true
+    }
+
+    if ($hasMaterialPnl) {
+        return $true
+    }
+
+    if (($trustState -ne "") -and ($trustState -ne "OBSERVATIONS_MISSING")) {
+        return $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($resultLabel) -and $resultLabel -ne "successfully_finished") {
+        return $true
+    }
+
+    return $false
+}
+
+function Test-MeaningfulPriorityTesterBaseline {
+    param([object]$Item)
+
+    if ($null -eq $Item) {
+        return $false
+    }
+
+    $sampleCount = 0
+    if ($Item.PSObject.Properties.Name -contains 'latest_tester_sample') {
+        $sampleCount = [int]$Item.latest_tester_sample
+    }
+
+    $trustState = ""
+    if ($Item.PSObject.Properties.Name -contains 'latest_tester_trust') {
+        $trustState = [string]$Item.latest_tester_trust
+    }
+
+    $resultLabel = ""
+    if ($Item.PSObject.Properties.Name -contains 'latest_tester_result') {
+        $resultLabel = [string]$Item.latest_tester_result
+    }
+
+    $pnl = $null
+    if ($Item.PSObject.Properties.Name -contains 'latest_tester_pnl') {
+        $pnl = Convert-ToDoubleOrNull $Item.latest_tester_pnl
+    }
+    $hasMaterialPnl = ($null -ne $pnl -and [math]::Abs($pnl) -ge 0.0000001)
+
+    if ($sampleCount -gt 0) {
+        return $true
+    }
+
+    if ($hasMaterialPnl) {
+        return $true
+    }
+
+    if (($trustState -ne "") -and ($trustState -ne "OBSERVATIONS_MISSING")) {
+        return $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($resultLabel) -and $resultLabel -ne "successfully_finished") {
+        return $true
+    }
+
+    return $false
+}
+
 function Get-BestTesterBySymbol {
     param([string]$Root)
 
@@ -46,6 +137,10 @@ function Get-BestTesterBySymbol {
             $summary = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
         }
         catch {
+            continue
+        }
+
+        if (-not (Test-MeaningfulTesterSummary -Summary $summary)) {
             continue
         }
 
@@ -127,11 +222,16 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
     }
 
     $bestTesterPnl = if ($tester) { $tester.pnl } else { Convert-ToDoubleOrNull $item.latest_tester_pnl }
+    $hasMeaningfulPriorityBaseline = Test-MeaningfulPriorityTesterBaseline -Item $item
     $hasTesterBaseline = $false
     if ($tester) {
         $hasTesterBaseline = $true
     }
-    elseif (($item.PSObject.Properties.Name -contains 'latest_tester_path') -and -not [string]::IsNullOrWhiteSpace([string]$item.latest_tester_path)) {
+    elseif (
+        $hasMeaningfulPriorityBaseline -and
+        ($item.PSObject.Properties.Name -contains 'latest_tester_path') -and
+        -not [string]::IsNullOrWhiteSpace([string]$item.latest_tester_path)
+    ) {
         $hasTesterBaseline = $true
     }
     $hasLiveActivity = ($null -ne $liveOpens -and $liveOpens -gt 0)
@@ -156,9 +256,9 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
         live_losses_24h   = $liveLosses
         live_neutral_24h  = $liveNeutral
         live_net_24h      = $liveNet
-        best_tester_pnl   = $bestTesterPnl
-        best_tester_trust = if ($tester) { $tester.trust_state } else { [string]$item.latest_tester_trust }
-        best_tester_path  = if ($tester) { $tester.source_path } else { [string]$item.latest_tester_path }
+        best_tester_pnl   = if ($hasTesterBaseline) { $bestTesterPnl } else { $null }
+        best_tester_trust = if ($tester) { $tester.trust_state } elseif ($hasTesterBaseline) { [string]$item.latest_tester_trust } else { "" }
+        best_tester_path  = if ($tester) { $tester.source_path } elseif ($hasTesterBaseline) { [string]$item.latest_tester_path } else { "" }
         recommended_action = [string]$item.recommended_action
         priority_rank     = [int]$item.rank
     }
