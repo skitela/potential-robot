@@ -20,6 +20,20 @@ bool MbIsForefieldDirtyReason(const string raw_reason_code)
    );
   }
 
+bool MbIsExpectedPaperMarketClosure(const MbMarketSnapshot &market)
+  {
+   // In laptop/paper research we still want the bots and tuning loop alive
+   // when the broker market is closed. A stale tick after a normal weekend
+   // close is not the same thing as execution infrastructure being broken.
+   return (
+      market.paper_runtime_override_active &&
+      market.terminal_connected &&
+      !market.term_trade_allowed &&
+      !market.raw_trade_permissions_ok &&
+      market.tick_age_ms >= 15000
+   );
+  }
+
 void MbResolveTrustThresholds(
    const string symbol,
    double &out_min_conversion_ratio,
@@ -274,6 +288,13 @@ void MbEvaluateExecutionQualityState(
       return;
      }
 
+   if(MbIsExpectedPaperMarketClosure(market))
+     {
+      out.state = "GOOD";
+      out.reason_code = "MARKET_CLOSED_EXPECTED";
+      return;
+     }
+
    if(market.tick_age_ms >= 15000)
      {
       out.state = "BAD";
@@ -354,6 +375,13 @@ void MbEvaluateCostPressureState(
    out.spread_vs_time_stop = effective_spread_points / MathMax(1.0,time_stop_points);
    out.spread_vs_mfe = effective_spread_points / MathMax(1.0,mfe_points);
    out.spread_vs_mae = effective_spread_points / MathMax(1.0,mae_points);
+
+   if(MbIsExpectedPaperMarketClosure(market))
+     {
+      out.state = "LOW";
+      out.reason_code = "MARKET_CLOSED_EXPECTED";
+      return;
+     }
 
    double worst_ratio = MathMax(
       MathMax(out.spread_vs_typical_move,out.spread_vs_time_stop),
