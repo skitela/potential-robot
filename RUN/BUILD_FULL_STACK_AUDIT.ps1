@@ -340,6 +340,16 @@ $report = [ordered]@{
                 risk_guard_running = $nearProfitQueue.near_profit_risk_guard_running
                 risk_guard_count = $nearProfitQueue.near_profit_risk_guard_count
                 risk_guard_rejected_events = $nearProfitQueue.near_profit_risk_guard_rejected_events
+                active_sandbox = if ($nearProfitQueue.PSObject.Properties.Name -contains "active_sandbox") { $nearProfitQueue.active_sandbox } else { $null }
+                sandbox_progress_visible = (
+                    $nearProfitQueue.PSObject.Properties.Name -contains "active_sandbox" -and
+                    $null -ne $nearProfitQueue.active_sandbox -and
+                    (
+                        [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'candidate_signal_rows' -Default 0) -gt 0 -or
+                        [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'decision_event_rows' -Default 0) -gt 0 -or
+                        [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'tester_pass_rows' -Default 0) -gt 0
+                    )
+                )
             }
         } else { $null }
     }
@@ -439,6 +449,30 @@ if ($null -ne $report.lab_health.mt5_tester) {
 }
 else {
     $lines.Add("- mt5 tester status not available")
+}
+$lines.Add("")
+$lines.Add("## Near Profit Lane")
+$lines.Add("")
+if ($null -ne $report.lab_health.near_profit_optimization) {
+    $lines.Add(("- state: {0}" -f $report.lab_health.near_profit_optimization.state))
+    $lines.Add(("- current_symbol: {0}" -f $report.lab_health.near_profit_optimization.current_symbol))
+    $lines.Add(("- risk_guard_running: {0}" -f $report.lab_health.near_profit_optimization.risk_guard_running))
+    $lines.Add(("- risk_guard_rejected_events: {0}" -f $report.lab_health.near_profit_optimization.risk_guard_rejected_events))
+    $lines.Add(("- sandbox_progress_visible: {0}" -f $report.lab_health.near_profit_optimization.sandbox_progress_visible))
+    if ($null -ne $report.lab_health.near_profit_optimization.active_sandbox) {
+        $lines.Add(("- heartbeat_fresh: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.heartbeat_fresh))
+        $lines.Add(("- heartbeat_age_sec: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.heartbeat_age_sec))
+        $lines.Add(("- ticks_seen: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.ticks_seen))
+        $lines.Add(("- learning_sample_count: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.learning_sample_count))
+        $lines.Add(("- realized_pnl_lifetime: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.realized_pnl_lifetime))
+        $lines.Add(("- candidate_signal_rows: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.candidate_signal_rows))
+        $lines.Add(("- decision_event_rows: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.decision_event_rows))
+        $lines.Add(("- tuning_experiment_rows: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.tuning_experiment_rows))
+        $lines.Add(("- tester_pass_rows: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.tester_pass_rows))
+    }
+}
+else {
+    $lines.Add("- near-profit lane status not available")
 }
 $lines.Add("")
 $lines.Add("## Consistency")

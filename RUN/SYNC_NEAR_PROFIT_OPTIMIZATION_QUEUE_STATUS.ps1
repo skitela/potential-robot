@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$OpsEvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [string]$LogRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\optimization_lab\logs",
+    [string]$CommonFilesRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files",
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$Mt5TesterStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_tester_status_latest.json",
     [string]$BatchReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json",
@@ -120,6 +121,143 @@ function Parse-RunStamp {
     }
 }
 
+function Convert-ToCanonicalSymbol {
+    param([string]$Symbol)
+
+    if ([string]::IsNullOrWhiteSpace($Symbol)) {
+        return ""
+    }
+
+    $canonical = $Symbol.Trim().ToUpperInvariant()
+    $dotIndex = $canonical.IndexOf(".")
+    if ($dotIndex -gt 0) {
+        $canonical = $canonical.Substring(0, $dotIndex)
+    }
+    return $canonical
+}
+
+function Read-KeyValueTsvMap {
+    param([string]$Path)
+
+    $map = @{}
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $map
+    }
+
+    foreach ($line in Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        $parts = $line -split "`t", 2
+        if ($parts.Count -ne 2) {
+            continue
+        }
+        $map[[string]$parts[0]] = [string]$parts[1]
+    }
+
+    return $map
+}
+
+function Convert-FromUnixTimeOrNull {
+    param([object]$Value)
+
+    try {
+        $seconds = [long]$Value
+        if ($seconds -le 0) {
+            return $null
+        }
+        return [DateTimeOffset]::FromUnixTimeSeconds($seconds)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-TextLineCount {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return 0
+    }
+
+    return [int](@(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue | Measure-Object -Line).Lines)
+}
+
+function Resolve-ActiveSandboxState {
+    param(
+        [string]$Root,
+        [string]$CurrentSymbol
+    )
+
+    $canonical = Convert-ToCanonicalSymbol -Symbol $CurrentSymbol
+    if ([string]::IsNullOrWhiteSpace($canonical) -or -not (Test-Path -LiteralPath $Root)) {
+        return $null
+    }
+
+    $sandboxRoot = Get-ChildItem -Path $Root -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like ("MAKRO_I_MIKRO_BOT_TESTER_{0}_*" -f $canonical) } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $sandboxRoot) {
+        return $null
+    }
+
+    $stateDir = Join-Path $sandboxRoot.FullName ("state\{0}" -f $canonical)
+    $logDir = Join-Path $sandboxRoot.FullName ("logs\{0}" -f $canonical)
+    $runDir = Join-Path $sandboxRoot.FullName ("run\{0}" -f $canonical)
+    $runtimeStatePath = Join-Path $stateDir "runtime_state.csv"
+    $runtimeStatusPath = Join-Path $stateDir "runtime_status.json"
+    $heartbeatPath = Join-Path $stateDir "heartbeat.txt"
+    $candidateSignalsPath = Join-Path $logDir "candidate_signals.csv"
+    $decisionEventsPath = Join-Path $logDir "decision_events.csv"
+    $tuningExperimentsPath = Join-Path $logDir "tuning_experiments.csv"
+    $testerPassPath = Join-Path $runDir "tester_optimization_passes.jsonl"
+    $testerSessionPath = Join-Path $runDir "tester_telemetry_session.json"
+
+    $runtimeState = Read-KeyValueTsvMap -Path $runtimeStatePath
+    $heartbeatMarket = Convert-FromUnixTimeOrNull -Value $runtimeState["last_heartbeat_at"]
+    $lastTick = Convert-FromUnixTimeOrNull -Value $runtimeState["last_tick_at"]
+    $heartbeatItem = if (Test-Path -LiteralPath $heartbeatPath) { Get-Item -LiteralPath $heartbeatPath -ErrorAction SilentlyContinue } else { $null }
+    $heartbeatAgeSec = if ($null -ne $heartbeatItem) {
+        [int][Math]::Max(0, ((Get-Date) - $heartbeatItem.LastWriteTime).TotalSeconds)
+    } else {
+        [int]::MaxValue
+    }
+    $candidateSignalsItem = if (Test-Path -LiteralPath $candidateSignalsPath) { Get-Item -LiteralPath $candidateSignalsPath -ErrorAction SilentlyContinue } else { $null }
+    $decisionEventsItem = if (Test-Path -LiteralPath $decisionEventsPath) { Get-Item -LiteralPath $decisionEventsPath -ErrorAction SilentlyContinue } else { $null }
+    $tuningExperimentsItem = if (Test-Path -LiteralPath $tuningExperimentsPath) { Get-Item -LiteralPath $tuningExperimentsPath -ErrorAction SilentlyContinue } else { $null }
+    $testerPassItem = if (Test-Path -LiteralPath $testerPassPath) { Get-Item -LiteralPath $testerPassPath -ErrorAction SilentlyContinue } else { $null }
+
+    return [ordered]@{
+        root_path = $sandboxRoot.FullName
+        root_name = $sandboxRoot.Name
+        runtime_state_path = $runtimeStatePath
+        runtime_status_path = $runtimeStatusPath
+        heartbeat_path = $heartbeatPath
+        heartbeat_at_local = if ($null -ne $heartbeatItem) { $heartbeatItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } else { "" }
+        heartbeat_age_sec = $heartbeatAgeSec
+        heartbeat_fresh = ($heartbeatAgeSec -le 300)
+        market_heartbeat_at_local = if ($null -ne $heartbeatMarket) { $heartbeatMarket.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") } else { "" }
+        market_last_tick_at_local = if ($null -ne $lastTick) { $lastTick.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") } else { "" }
+        ticks_seen = [int](0 + $runtimeState["ticks_seen"])
+        timer_cycles = [int](0 + $runtimeState["timer_cycles"])
+        learning_sample_count = [int](0 + $runtimeState["learning_sample_count"])
+        learning_win_count = [int](0 + $runtimeState["learning_win_count"])
+        learning_loss_count = [int](0 + $runtimeState["learning_loss_count"])
+        realized_pnl_lifetime = [double](0 + $runtimeState["realized_pnl_lifetime"])
+        candidate_signal_rows = Get-TextLineCount -Path $candidateSignalsPath
+        candidate_signal_bytes = if ($null -ne $candidateSignalsItem) { [long]$candidateSignalsItem.Length } else { 0L }
+        decision_event_rows = Get-TextLineCount -Path $decisionEventsPath
+        decision_event_bytes = if ($null -ne $decisionEventsItem) { [long]$decisionEventsItem.Length } else { 0L }
+        tuning_experiment_rows = Get-TextLineCount -Path $tuningExperimentsPath
+        tuning_experiment_bytes = if ($null -ne $tuningExperimentsItem) { [long]$tuningExperimentsItem.Length } else { 0L }
+        tester_pass_rows = Get-TextLineCount -Path $testerPassPath
+        tester_pass_bytes = if ($null -ne $testerPassItem) { [long]$testerPassItem.Length } else { 0L }
+        tester_session_present = (Test-Path -LiteralPath $testerSessionPath)
+    }
+}
+
 function Resolve-LogItem {
     param(
         [string]$Root,
@@ -182,6 +320,30 @@ function Write-StatusArtifacts {
     $lines.Add(("- batch_report_path: {0}" -f $Status.batch_report_path))
     if (-not [string]::IsNullOrWhiteSpace([string]$Status.current_note)) {
         $lines.Add(("- current_note: {0}" -f $Status.current_note))
+    }
+    if ($null -ne $Status.active_sandbox) {
+        $lines.Add("")
+        $lines.Add("## Active Sandbox")
+        $lines.Add("")
+        $lines.Add(("- root_name: {0}" -f $Status.active_sandbox.root_name))
+        $lines.Add(("- heartbeat_at_local: {0}" -f $Status.active_sandbox.heartbeat_at_local))
+        $lines.Add(("- heartbeat_age_sec: {0}" -f $Status.active_sandbox.heartbeat_age_sec))
+        $lines.Add(("- heartbeat_fresh: {0}" -f $Status.active_sandbox.heartbeat_fresh))
+        $lines.Add(("- market_heartbeat_at_local: {0}" -f $Status.active_sandbox.market_heartbeat_at_local))
+        $lines.Add(("- market_last_tick_at_local: {0}" -f $Status.active_sandbox.market_last_tick_at_local))
+        $lines.Add(("- ticks_seen: {0}" -f $Status.active_sandbox.ticks_seen))
+        $lines.Add(("- timer_cycles: {0}" -f $Status.active_sandbox.timer_cycles))
+        $lines.Add(("- learning_sample_count: {0}" -f $Status.active_sandbox.learning_sample_count))
+        $lines.Add(("- realized_pnl_lifetime: {0}" -f $Status.active_sandbox.realized_pnl_lifetime))
+        $lines.Add(("- candidate_signal_rows: {0}" -f $Status.active_sandbox.candidate_signal_rows))
+        $lines.Add(("- candidate_signal_bytes: {0}" -f $Status.active_sandbox.candidate_signal_bytes))
+        $lines.Add(("- decision_event_rows: {0}" -f $Status.active_sandbox.decision_event_rows))
+        $lines.Add(("- decision_event_bytes: {0}" -f $Status.active_sandbox.decision_event_bytes))
+        $lines.Add(("- tuning_experiment_rows: {0}" -f $Status.active_sandbox.tuning_experiment_rows))
+        $lines.Add(("- tuning_experiment_bytes: {0}" -f $Status.active_sandbox.tuning_experiment_bytes))
+        $lines.Add(("- tester_pass_rows: {0}" -f $Status.active_sandbox.tester_pass_rows))
+        $lines.Add(("- tester_pass_bytes: {0}" -f $Status.active_sandbox.tester_pass_bytes))
+        $lines.Add(("- tester_session_present: {0}" -f $Status.active_sandbox.tester_session_present))
     }
     $lines.Add("")
     $lines.Add("## Selected")
@@ -338,6 +500,8 @@ if (@($resolvedPending).Count -eq 0 -and @($selectedSymbols).Count -gt 0 -and $r
     $resolvedPending = @($selectedSymbols | Where-Object { @($resolvedCompleted) -notcontains $_ })
 }
 
+$activeSandbox = Resolve-ActiveSandboxState -Root $CommonFilesRoot -CurrentSymbol $resolvedCurrentSymbol
+
 $status = [ordered]@{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
@@ -364,6 +528,7 @@ $status = [ordered]@{
     batch_report_present = ($null -ne $batchReport)
     mt5_status_path = $Mt5TesterStatusPath
     current_note = $resolvedNote
+    active_sandbox = $activeSandbox
 }
 
 Write-StatusArtifacts -Status $status -JsonPath $latestJson -MdPath $latestMd
