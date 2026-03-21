@@ -751,13 +751,7 @@ void OnTick()
 
       if(IsLocalPaperModeActive() && signal.valid && !exec_check.allowed)
         {
-         bool paper_precheck_bypass =
-            exec_check.reason == "ORDER_CHECK_FAIL" ||
-            exec_check.reason == "ORDER_CHECK_REJECT" ||
-            exec_check.reason == "ORDER_CALC_MARGIN_FAIL" ||
-            exec_check.reason == "MARGIN_REQUIRED_EXCEEDED" ||
-            exec_check.reason == "QUOTE_TOLERANCE_EXCEEDED";
-         if(paper_precheck_bypass)
+         if(MbShouldBypassExecutionPrecheckInPaper(exec_check.reason))
            {
             AppendGBPAUDDecisionEvent(
                now,
@@ -771,9 +765,7 @@ void OnTick()
                true,
                30
             );
-            exec_check.allowed = true;
-            exec_check.reason = "PAPER_PRECHECK_BYPASS_OK";
-            exec_check.order_check_retcode = 0;
+            MbMarkExecutionPrecheckBypassedForPaper(exec_check);
          }
         }
 

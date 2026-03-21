@@ -4,6 +4,24 @@
 #include "MbRuntimeTypes.mqh"
 #include "MbExecutionCommon.mqh"
 
+bool MbShouldBypassExecutionPrecheckInPaper(const string reason_code)
+  {
+   return (
+      reason_code == "ORDER_CHECK_FAIL" ||
+      reason_code == "ORDER_CHECK_REJECT" ||
+      reason_code == "ORDER_CALC_MARGIN_FAIL" ||
+      reason_code == "MARGIN_REQUIRED_EXCEEDED" ||
+      reason_code == "QUOTE_TOLERANCE_EXCEEDED"
+   );
+  }
+
+void MbMarkExecutionPrecheckBypassedForPaper(MbExecutionCheck &check)
+  {
+   check.allowed = true;
+   check.reason = "PAPER_PRECHECK_BYPASS_OK";
+   check.order_check_retcode = 0;
+  }
+
 bool MbVolumeWithinSymbolConstraints(const MbMarketSnapshot &snapshot,const double lots,string &reason_code,string &diag_suffix)
   {
    reason_code = "OK";
