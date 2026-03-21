@@ -65,6 +65,17 @@ function Get-WrapperProcesses {
     )
 }
 
+function Get-NearProfitRiskGuardProcesses {
+    return @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "powershell.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                $_.CommandLine -like "*near_profit_mt5_risk_popup_guard_wrapper_*"
+            }
+    )
+}
+
 function Get-DedicatedLabProcessState {
     param([string]$TerminalRoot)
 
@@ -163,6 +174,10 @@ function Write-StatusArtifacts {
     $lines.Add(("- dedicated_portable_lab_lane: {0}" -f $Status.dedicated_portable_lab_lane))
     $lines.Add(("- dedicated_lab_terminal_count: {0}" -f $Status.dedicated_lab_terminal_count))
     $lines.Add(("- dedicated_lab_metatester_count: {0}" -f $Status.dedicated_lab_metatester_count))
+    $lines.Add(("- near_profit_risk_guard_running: {0}" -f $Status.near_profit_risk_guard_running))
+    $lines.Add(("- near_profit_risk_guard_count: {0}" -f $Status.near_profit_risk_guard_count))
+    $lines.Add(("- near_profit_risk_guard_accepted_events: {0}" -f $Status.near_profit_risk_guard_accepted_events))
+    $lines.Add(("- near_profit_risk_guard_rejected_events: {0}" -f $Status.near_profit_risk_guard_rejected_events))
     $lines.Add(("- log_path: {0}" -f $Status.log_path))
     $lines.Add(("- batch_report_path: {0}" -f $Status.batch_report_path))
     if (-not [string]::IsNullOrWhiteSpace([string]$Status.current_note)) {
@@ -213,6 +228,9 @@ $latestMd = Join-Path $OpsEvidenceDir "near_profit_optimization_queue_latest.md"
 $selectedSymbols = @(Get-NearProfitSymbols -Path $ProfitTrackingPath -TopCount $NearProfitCount)
 $wrapperProcesses = @(Get-WrapperProcesses)
 $wrapperRunning = ($wrapperProcesses.Count -gt 0)
+$nearProfitRiskGuardProcesses = @(Get-NearProfitRiskGuardProcesses)
+$nearProfitRiskGuardStatusPath = Join-Path $ProjectRoot "RUN\near_profit_mt5_risk_guard_status.json"
+$nearProfitRiskGuardStatus = Read-JsonFile -Path $nearProfitRiskGuardStatusPath
 $dedicatedLabProcessState = Get-DedicatedLabProcessState -TerminalRoot $DedicatedLabTerminalRoot
 $dedicatedLabHasActivity = ($dedicatedLabProcessState.total_count -gt 0)
 $logItem = Resolve-LogItem -Root $LogRoot -ExplicitPath $LogPath
@@ -317,6 +335,12 @@ $status = [ordered]@{
     dedicated_portable_lab_lane = $UseDedicatedPortableLabLane
     dedicated_lab_terminal_count = $dedicatedLabProcessState.terminal_count
     dedicated_lab_metatester_count = $dedicatedLabProcessState.metatester_count
+    near_profit_risk_guard_running = ($nearProfitRiskGuardProcesses.Count -gt 0)
+    near_profit_risk_guard_count = $nearProfitRiskGuardProcesses.Count
+    near_profit_risk_guard_status_path = $nearProfitRiskGuardStatusPath
+    near_profit_risk_guard_accepted_events = if ($null -ne $nearProfitRiskGuardStatus) { [int](0 + $nearProfitRiskGuardStatus.accepted_events) } else { 0 }
+    near_profit_risk_guard_rejected_events = if ($null -ne $nearProfitRiskGuardStatus) { [int](0 + $nearProfitRiskGuardStatus.rejected_events) } else { 0 }
+    near_profit_risk_guard_last_popup_action_utc = if ($null -ne $nearProfitRiskGuardStatus) { [string]$nearProfitRiskGuardStatus.last_popup_action_utc } else { "" }
     started_at_local = $resolvedStartedAt
     log_path = if ($null -ne $logItem) { $logItem.FullName } else { $LogPath }
     batch_report_path = $BatchReportPath

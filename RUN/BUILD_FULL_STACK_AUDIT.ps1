@@ -337,6 +337,9 @@ $report = [ordered]@{
                 current_symbol = $nearProfitQueue.current_symbol
                 selected_symbols = @($nearProfitQueue.selected_symbols)
                 pending = @($nearProfitQueue.pending)
+                risk_guard_running = $nearProfitQueue.near_profit_risk_guard_running
+                risk_guard_count = $nearProfitQueue.near_profit_risk_guard_count
+                risk_guard_rejected_events = $nearProfitQueue.near_profit_risk_guard_rejected_events
             }
         } else { $null }
     }
