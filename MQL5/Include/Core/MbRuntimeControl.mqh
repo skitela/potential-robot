@@ -110,6 +110,69 @@ void MbApplyRuntimeControl(MbRuntimeState &state,const MbRuntimeControlState &co
    state.close_only = (control.close_only && !control.halt && !control.paper_only);
    state.force_flatten = control.force_flatten;
    state.coordinator_risk_cap = MathMax(0.0,MathMin(control.risk_cap,1.0));
+
+   if(state.paper_mode_active)
+     {
+      state.halt = false;
+      state.close_only = false;
+      state.caution_mode = false;
+      state.mode = MB_MODE_READY;
+      return;
+     }
+
+   if(state.halt)
+     {
+      state.mode = MB_MODE_BLOCKED;
+      return;
+     }
+
+   if(state.close_only)
+     {
+      state.mode = MB_MODE_CLOSE_ONLY;
+      return;
+     }
+
+   state.mode = (state.caution_mode ? MB_MODE_CAUTION : MB_MODE_READY);
+  }
+
+void MbNormalizePaperRuntimeState(MbRuntimeState &state,const bool paper_mode_active)
+  {
+   state.paper_mode_active = paper_mode_active;
+   if(!paper_mode_active)
+      return;
+
+   state.halt = false;
+   state.close_only = false;
+   state.caution_mode = false;
+   state.mode = MB_MODE_READY;
+  }
+
+void MbNormalizePaperRuntimeState(
+   MbRuntimeState &state,
+   MbMarketSnapshot &snapshot,
+   const bool paper_mode_active
+)
+  {
+   MbNormalizePaperRuntimeState(state,paper_mode_active);
+   snapshot.paper_runtime_override_active = paper_mode_active;
+   if(!paper_mode_active)
+      return;
+   snapshot.trade_permissions_ok = true;
+  }
+
+void MbApplyPaperRuntimeOverride(
+   MbRuntimeState &state,
+   MbMarketSnapshot &snapshot,
+   MbKillSwitchState &kill_switch,
+   const bool paper_mode_active
+)
+  {
+   MbNormalizePaperRuntimeState(state,snapshot,paper_mode_active);
+   if(!paper_mode_active)
+      return;
+
+   kill_switch.halt = false;
+   kill_switch.reason_code = "PAPER_MODE_ACTIVE";
   }
 
 #endif
