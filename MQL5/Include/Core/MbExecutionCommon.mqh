@@ -8,6 +8,77 @@ double MbClamp(const double value,const double lo,const double hi)
    return MathMax(lo,MathMin(hi,value));
   }
 
+void MbResolveCostBenchmarks(
+   const string family,
+   double &out_typical_move_points,
+   double &out_time_stop_points,
+   double &out_mfe_points,
+   double &out_mae_points
+)
+  {
+   out_typical_move_points = 40.0;
+   out_time_stop_points = 16.0;
+   out_mfe_points = 28.0;
+   out_mae_points = 18.0;
+
+   if(family == "FX_MAIN")
+     {
+      out_typical_move_points = 52.0;
+      out_time_stop_points = 24.0;
+      out_mfe_points = 38.0;
+      out_mae_points = 26.0;
+      return;
+     }
+   if(family == "FX_ASIA")
+     {
+      out_typical_move_points = 36.0;
+      out_time_stop_points = 15.0;
+      out_mfe_points = 24.0;
+      out_mae_points = 16.0;
+      return;
+     }
+   if(family == "FX_CROSS")
+     {
+      out_typical_move_points = 58.0;
+      out_time_stop_points = 22.0;
+      out_mfe_points = 36.0;
+      out_mae_points = 24.0;
+      return;
+     }
+   if(family == "METALS_SPOT_PM")
+     {
+      out_typical_move_points = 180.0;
+      out_time_stop_points = 75.0;
+      out_mfe_points = 130.0;
+      out_mae_points = 90.0;
+      return;
+     }
+   if(family == "METALS_FUTURES")
+     {
+      out_typical_move_points = 130.0;
+      out_time_stop_points = 55.0;
+      out_mfe_points = 95.0;
+      out_mae_points = 70.0;
+      return;
+     }
+   if(family == "INDEX_EU")
+     {
+      out_typical_move_points = 90.0;
+      out_time_stop_points = 38.0;
+      out_mfe_points = 72.0;
+      out_mae_points = 48.0;
+      return;
+     }
+   if(family == "INDEX_US")
+     {
+      out_typical_move_points = 70.0;
+      out_time_stop_points = 30.0;
+      out_mfe_points = 54.0;
+      out_mae_points = 38.0;
+      return;
+     }
+  }
+
 string MbClassifyRetcode(const long retcode)
   {
    switch((int)retcode)

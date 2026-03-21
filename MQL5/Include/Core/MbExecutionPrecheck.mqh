@@ -195,16 +195,36 @@ MbExecutionCheck MbBuildExecutionCheck(
    double modeled_commission_points = MbResolveModeledCommissionPoints(profile);
    double safety_margin_points = MbResolveSafetyMarginPoints(snapshot);
    double modeled_total_cost_points = snapshot.spread_points + modeled_slippage_points + modeled_commission_points + safety_margin_points;
+   double benchmark_typical_move_points = 40.0;
+   double benchmark_time_stop_points = 16.0;
+   double benchmark_mfe_points = 28.0;
+   double benchmark_mae_points = 18.0;
+   MbResolveCostBenchmarks(
+      profile.session_profile,
+      benchmark_typical_move_points,
+      benchmark_time_stop_points,
+      benchmark_mfe_points,
+      benchmark_mae_points
+   );
 
    out.diag = out.diag + StringFormat(
-      " expected_move=%.2f spread=%.2f slip=%.2f comm=%.2f safety=%.2f total_cost=%.2f",
+      " expected_move=%.2f spread=%.2f slip=%.2f comm=%.2f safety=%.2f total_cost=%.2f bench_typical=%.2f bench_time_stop=%.2f bench_mfe=%.2f",
       expected_move_points,
       snapshot.spread_points,
       modeled_slippage_points,
       modeled_commission_points,
       safety_margin_points,
-      modeled_total_cost_points
+      modeled_total_cost_points,
+      benchmark_typical_move_points,
+      benchmark_time_stop_points,
+      benchmark_mfe_points
    );
+
+   if(modeled_total_cost_points >= benchmark_time_stop_points)
+     {
+      out.reason = "NET_EDGE_TOO_SMALL_FOR_TIME_STOP";
+      return out;
+     }
 
    if(expected_move_points <= modeled_total_cost_points)
      {
