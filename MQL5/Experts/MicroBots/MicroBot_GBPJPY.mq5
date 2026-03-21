@@ -606,6 +606,7 @@ void OnTick()
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_gbpjpy_range_dirty_gate = false;
+      bool blocked_by_gbpjpy_range_chaos_bad_spread_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_gbpjpy_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_gbpjpy_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -629,6 +630,17 @@ void OnTick()
          )
       )
          blocked_by_gbpjpy_range_dirty_gate = true;
+      if(
+         signal.setup_type == "SETUP_RANGE" &&
+         signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            poor_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_gbpjpy_range_chaos_bad_spread_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
          paper_gate_abs = 0.64;
@@ -638,7 +650,12 @@ void OnTick()
       else if(signal.setup_type == "SETUP_RANGE")
          paper_gate_abs = 0.19;
 
-      if(!blocked_by_tuning_gate && !blocked_by_gbpjpy_range_dirty_gate && MathAbs(signal.score) >= paper_gate_abs)
+      if(
+         !blocked_by_tuning_gate &&
+         !blocked_by_gbpjpy_range_dirty_gate &&
+         !blocked_by_gbpjpy_range_chaos_bad_spread_gate &&
+         MathAbs(signal.score) >= paper_gate_abs
+      )
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
@@ -646,6 +663,8 @@ void OnTick()
         }
       else if(blocked_by_gbpjpy_range_dirty_gate)
          signal.reason_code = "GBPJPY_RANGE_CHAOS_DIRTY_FOREGROUND_BLOCK";
+      else if(blocked_by_gbpjpy_range_chaos_bad_spread_gate)
+         signal.reason_code = "GBPJPY_RANGE_CHAOS_BAD_SPREAD_BLOCK";
      }
    AppendGBPJPYCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
