@@ -22,6 +22,15 @@ string MbDomainRuntimeControlPath(const string domain)
    return MbDomainStateDir(domain) + "\\runtime_control.csv";
   }
 
+bool MbIsEffectivePaperRuntimeActive(
+   const bool live_entries_enabled,
+   const bool paper_collect_mode,
+   const MbRuntimeControlState &control
+)
+  {
+   return (!live_entries_enabled || paper_collect_mode || control.paper_only);
+  }
+
 void MbMergeRuntimeControl(MbRuntimeControlState &io_target,const MbRuntimeControlState &overlay)
   {
    io_target.risk_cap = MathMin(io_target.risk_cap,MathMax(0.0,overlay.risk_cap));

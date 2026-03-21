@@ -92,7 +92,7 @@ bool ShouldRunSILVERTuningCycle(const datetime now)
 
 bool IsLocalPaperModeActive()
   {
-   return (InpPaperCollectMode || g_runtime_control.paper_only);
+   return MbIsEffectivePaperRuntimeActive(InpEnableLiveEntries,InpPaperCollectMode,g_runtime_control);
   }
 
 void NormalizeSILVERMarketPermissions()
