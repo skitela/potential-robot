@@ -76,6 +76,41 @@ function Resolve-TerminalLogPath {
     return $PreferredPath
 }
 
+function Resolve-PreviousDatedLogPath {
+    param(
+        [string]$CurrentLogPath,
+        [string]$LogDir
+    )
+
+    if (-not (Test-Path -LiteralPath $LogDir)) {
+        return $null
+    }
+
+    $currentFullPath = ""
+    if (-not [string]::IsNullOrWhiteSpace($CurrentLogPath)) {
+        try {
+            $currentFullPath = [System.IO.Path]::GetFullPath($CurrentLogPath)
+        }
+        catch {
+            $currentFullPath = $CurrentLogPath
+        }
+    }
+
+    $previous = Get-ChildItem -LiteralPath $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.BaseName -match '^\d{8}$' -and
+            ([string]::IsNullOrWhiteSpace($currentFullPath) -or $_.FullName -ne $currentFullPath)
+        } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($previous) {
+        return $previous.FullName
+    }
+
+    return $null
+}
+
 function Get-LogLineTimestamp {
     param(
         [string]$Line,
@@ -121,6 +156,7 @@ function Test-WatchedTerminalRunning {
 function Get-Mt5TesterStatus {
     param(
         [string]$LogPath,
+        [string]$LogDir,
         [string]$WatchedTerminalPath,
         [int]$StaleMinutes
     )
@@ -131,6 +167,7 @@ function Get-Mt5TesterStatus {
         state                = "idle"
         current_symbol       = ""
         run_stamp            = ""
+        launch_context_log_path = ""
         latest_progress_pct  = $null
         latest_progress_line = ""
         result_label         = ""
@@ -165,11 +202,30 @@ function Get-Mt5TesterStatus {
     }
 
     $launchIndex = -1
+    $launchContextPath = $LogPath
+    if (-not $launchInfo) {
+        $previousLogPath = Resolve-PreviousDatedLogPath -CurrentLogPath $LogPath -LogDir $LogDir
+        if (-not [string]::IsNullOrWhiteSpace($previousLogPath) -and (Test-Path -LiteralPath $previousLogPath)) {
+            $previousLines = @(Get-Content -LiteralPath $previousLogPath -Tail 400 -ErrorAction SilentlyContinue)
+            $previousLaunchInfo = Get-LastMatchInfo -Lines $previousLines -Predicate {
+                param($line)
+                $line -match 'launched with .+\\strategy_tester\\([a-z0-9_]+)_strategy_tester_([0-9_]+)\.ini'
+            }
+            if ($previousLaunchInfo) {
+                $launchInfo = [pscustomobject]@{
+                    index = -1
+                    line  = $previousLaunchInfo.line
+                }
+                $launchContextPath = $previousLogPath
+            }
+        }
+    }
     if ($launchInfo) {
         $launchIndex = $launchInfo.index
         $launchMatch = [regex]::Match($launchInfo.line, 'launched with .+\\strategy_tester\\([a-z0-9_]+)_strategy_tester_([0-9_]+)\.ini')
         $status.current_symbol = $launchMatch.Groups[1].Value.ToUpperInvariant()
         $status.run_stamp = $launchMatch.Groups[2].Value
+        $status.launch_context_log_path = $launchContextPath
     }
 
     $progressInfo = $null
@@ -282,6 +338,9 @@ function Save-Mt5TesterStatus {
     $lines.Add(("- state: {0}" -f $Status.state))
     $lines.Add(("- current_symbol: {0}" -f $Status.current_symbol))
     $lines.Add(("- run_stamp: {0}" -f $Status.run_stamp))
+    if (-not [string]::IsNullOrWhiteSpace([string]$Status.launch_context_log_path)) {
+        $lines.Add(("- launch_context_log_path: {0}" -f $Status.launch_context_log_path))
+    }
     if ($null -ne $Status.latest_progress_pct) {
         $lines.Add(("- latest_progress_pct: {0}" -f $Status.latest_progress_pct))
     }
@@ -321,7 +380,7 @@ function Save-Mt5TesterStatus {
 
 while ($true) {
     $resolvedLogPath = Resolve-TerminalLogPath -PreferredPath $TerminalLogPath -LogDir $TerminalLogDir
-    $status = Get-Mt5TesterStatus -LogPath $resolvedLogPath -WatchedTerminalPath $WatchedTerminalPath -StaleMinutes $StaleMinutes
+    $status = Get-Mt5TesterStatus -LogPath $resolvedLogPath -LogDir $TerminalLogDir -WatchedTerminalPath $WatchedTerminalPath -StaleMinutes $StaleMinutes
     Save-Mt5TesterStatus -Status $status -LatestJsonPath $latestJsonPath -LatestMdPath $latestMdPath -EventRoot $eventRoot
     Start-Sleep -Seconds $PollSeconds
 }

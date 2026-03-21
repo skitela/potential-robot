@@ -27,6 +27,45 @@ function Get-HostingTerminalLogs {
         Where-Object { $_.FullName -match 'hosting\.6797020\.terminal' }
 }
 
+function Resolve-HostingLogSelection {
+    param([string]$PreferredDateStamp)
+
+    $preferred = @(Get-HostingTerminalLogs -DateStamp $PreferredDateStamp)
+    if (@($preferred).Count -gt 0) {
+        return [pscustomobject]@{
+            RequestedDateStamp = $PreferredDateStamp
+            ResolvedDateStamp  = $PreferredDateStamp
+            FallbackApplied    = $false
+            Files              = @($preferred)
+        }
+    }
+
+    $latest = Get-ChildItem -Path 'C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal' -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.FullName -match 'hosting\.6797020\.terminal' -and
+            $_.BaseName -match '^\d{8}$'
+        } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($latest) {
+        $resolvedDateStamp = $latest.BaseName
+        return [pscustomobject]@{
+            RequestedDateStamp = $PreferredDateStamp
+            ResolvedDateStamp  = $resolvedDateStamp
+            FallbackApplied    = ($resolvedDateStamp -ne $PreferredDateStamp)
+            Files              = @(Get-HostingTerminalLogs -DateStamp $resolvedDateStamp)
+        }
+    }
+
+    return [pscustomobject]@{
+        RequestedDateStamp = $PreferredDateStamp
+        ResolvedDateStamp  = $PreferredDateStamp
+        FallbackApplied    = $false
+        Files              = @()
+    }
+}
+
 function Get-CanonicalLogs {
     param([System.IO.FileInfo[]]$Files)
     $rows = foreach ($file in $Files) {
@@ -137,9 +176,10 @@ function Load-JsonOrNull {
     return $null
 }
 
-$terminalLogs = @(Get-HostingTerminalLogs -DateStamp $DateStamp)
+$logSelection = Resolve-HostingLogSelection -PreferredDateStamp $DateStamp
+$terminalLogs = @($logSelection.Files)
 if (-not $terminalLogs) {
-    throw "No hosting terminal logs found for date stamp $DateStamp"
+    throw "No hosting terminal logs found for requested date stamp $DateStamp or any fallback day"
 }
 
 $canonical = @(Get-CanonicalLogs -Files $terminalLogs)
@@ -229,7 +269,9 @@ $cpuSymbolValues = @($parsed.RamStats | ForEach-Object CpuSymbols)
 
 $summary = [pscustomobject]@{
     generated_local = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    date_stamp = $DateStamp
+    requested_date_stamp = $logSelection.RequestedDateStamp
+    date_stamp = $logSelection.ResolvedDateStamp
+    fallback_to_latest_available = [bool]$logSelection.FallbackApplied
     canonical_terminal_log = $selected.CanonicalPath
     duplicate_terminal_log_count = $selected.DuplicateCount
     duplicate_terminal_log_paths = @($selected.DuplicatePaths)
@@ -271,7 +313,10 @@ $md = New-Object System.Collections.Generic.List[string]
 $md.Add('# Raport Dzienny MT5 Hosting')
 $md.Add('')
 $md.Add("Wygenerowano lokalnie: $($summary.generated_local)")
-$md.Add("Data logu hostingu: $DateStamp")
+$md.Add("Data logu hostingu: $($summary.date_stamp)")
+if ($summary.fallback_to_latest_available) {
+    $md.Add("Prosba o date stamp $($summary.requested_date_stamp) zostala obsluzona fallbackiem do najnowszego dostepnego logu.")
+}
 $md.Add('')
 $md.Add('## Werdykt')
 $md.Add('')
