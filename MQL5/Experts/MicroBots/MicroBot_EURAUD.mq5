@@ -627,6 +627,7 @@ void OnTick()
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
+      bool weak_candle = (signal.candle_quality_grade != "GOOD");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_euraud_range_dirty_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_euraud_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
@@ -644,9 +645,9 @@ void OnTick()
       if(
          signal.setup_type == "SETUP_RANGE" &&
          signal.market_regime == "CHAOS" &&
-         poor_candle &&
          signal.confidence_bucket == "LOW" &&
-         signal.spread_regime == "BAD"
+         signal.spread_regime == "BAD" &&
+         (weak_candle || poor_renko)
       )
          blocked_by_euraud_range_dirty_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
@@ -656,7 +657,13 @@ void OnTick()
             paper_gate_abs = 0.72;
         }
       else if(signal.setup_type == "SETUP_RANGE")
+        {
          paper_gate_abs = 0.19;
+         if(signal.market_regime == "CHAOS")
+            paper_gate_abs = MathMax(paper_gate_abs,0.24);
+         if(signal.market_regime == "CHAOS" && signal.confidence_bucket == "LOW")
+            paper_gate_abs = MathMax(paper_gate_abs,0.28);
+        }
 
       if(!blocked_by_tuning_gate && !blocked_by_euraud_range_dirty_gate && MathAbs(signal.score) >= paper_gate_abs)
         {
