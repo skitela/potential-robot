@@ -23,6 +23,10 @@ param(
     [string]$WorkerName = "",
     [string]$EvidenceSubdir = "",
     [switch]$SkipKnowledgeExport,
+    [switch]$SkipResearchRefresh,
+    [string]$ResearchOutputRoot = "C:\TRADING_DATA\RESEARCH",
+    [ValidateSet("ConcurrentLab", "OfflineMax", "Light")]
+    [string]$ResearchPerfProfile = "Light",
     [switch]$RestoreMicrobotsProfile
 )
 
@@ -188,6 +192,36 @@ function Get-SafeObjectValue {
         return $Object.$PropertyName
     }
     return $Default
+}
+
+function Read-JsonFile {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-LatestWriteTimeUtc {
+    param([string[]]$Paths)
+
+    $latest = [datetime]::MinValue
+    foreach ($path in @($Paths)) {
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $writeTime = (Get-Item -LiteralPath $path).LastWriteTimeUtc
+        if ($writeTime -gt $latest) {
+            $latest = $writeTime
+        }
+    }
+    return $latest
 }
 
 function Import-TabCsvWithRetry {
@@ -699,6 +733,17 @@ $summary = [ordered]@{
 $jsonPath = Join-Path $evidenceDir ($runId + ".json")
 $txtPath = Join-Path $evidenceDir ($runId + ".txt")
 $summaryPath = Join-Path $evidenceDir ($runId + "_summary.json")
+
+$knowledgeJsonPath = Join-Path $evidenceDir ($runId + "_knowledge.json")
+$researchManifestPath = Join-Path $ResearchOutputRoot "reports\research_export_manifest_latest.json"
+$researchRefreshStatus = "SKIPPED_NOT_REQUIRED"
+$researchRefreshNeeded = $false
+$researchRefreshRan = $false
+$researchRefreshError = $null
+$researchManifest = $null
+$researchTesterTelemetryRows = 0
+$researchTesterPassRows = 0
+
 $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
 $result | Out-String | Set-Content -LiteralPath $txtPath -Encoding UTF8
 $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
@@ -711,5 +756,71 @@ if (-not $SkipKnowledgeExport) {
         -EvidenceDir $evidenceDir `
         -SandboxRoot $sandboxRoot | Out-Null
 }
+
+if ($SkipResearchRefresh) {
+    $researchRefreshStatus = "SKIPPED_BY_FLAG"
+}
+elseif ($SkipKnowledgeExport) {
+    $researchRefreshStatus = "SKIPPED_WITHOUT_KNOWLEDGE_EXPORT"
+}
+elseif ($Optimization -ne 0 -or $testerOptimizationPassCount -gt 0) {
+    $researchRefreshStatus = "PENDING"
+    $researchRefreshNeeded = $true
+}
+
+if ($researchRefreshNeeded) {
+    $refreshScriptPath = Join-Path $ProjectRoot "RUN\REFRESH_MICROBOT_RESEARCH_DATA.ps1"
+    $manifestWriteTimeUtc = if (Test-Path -LiteralPath $researchManifestPath) { (Get-Item -LiteralPath $researchManifestPath).LastWriteTimeUtc } else { [datetime]::MinValue }
+    $evidenceWriteTimeUtc = Get-LatestWriteTimeUtc -Paths @(
+        $summaryPath,
+        $knowledgeJsonPath,
+        $testerTelemetryPath,
+        $testerTelemetrySessionPath,
+        $testerOptimizationPassesPath
+    )
+    $researchRefreshNeeded = ($evidenceWriteTimeUtc -gt $manifestWriteTimeUtc)
+    if (-not $researchRefreshNeeded) {
+        $researchRefreshStatus = "SKIPPED_UP_TO_DATE"
+    }
+    else {
+        try {
+            & $refreshScriptPath -ProjectRoot $ProjectRoot -OutputRoot $ResearchOutputRoot -PerfProfile $ResearchPerfProfile | Out-Null
+            $researchRefreshRan = $true
+            $researchRefreshStatus = "REFRESHED"
+        }
+        catch {
+            $researchRefreshError = $_.Exception.Message
+            $researchRefreshStatus = "FAILED"
+        }
+    }
+}
+
+$researchManifest = Read-JsonFile -Path $researchManifestPath
+if ($null -ne $researchManifest -and $researchManifest.PSObject.Properties.Name -contains "datasets") {
+    $datasets = $researchManifest.datasets
+    if ($null -ne $datasets -and $datasets.PSObject.Properties.Name -contains "tester_telemetry") {
+        $researchTesterTelemetryRows = [int](Get-SafeObjectValue -Object $datasets.tester_telemetry -PropertyName 'rows' -Default 0)
+    }
+    if ($null -ne $datasets -and $datasets.PSObject.Properties.Name -contains "tester_pass_frames") {
+        $researchTesterPassRows = [int](Get-SafeObjectValue -Object $datasets.tester_pass_frames -PropertyName 'rows' -Default 0)
+    }
+}
+
+$result['research_export_manifest_path'] = $(if (Test-Path -LiteralPath $researchManifestPath) { $researchManifestPath } else { $null })
+$result['research_export_status'] = $researchRefreshStatus
+$result['research_export_refreshed'] = $researchRefreshRan
+$result['research_export_error'] = $researchRefreshError
+$result['research_export_tester_telemetry_rows'] = $researchTesterTelemetryRows
+$result['research_export_tester_pass_rows'] = $researchTesterPassRows
+
+$summary['research_export_manifest_path'] = $(if (Test-Path -LiteralPath $researchManifestPath) { $researchManifestPath } else { $null })
+$summary['research_export_status'] = $researchRefreshStatus
+$summary['research_export_refreshed'] = $researchRefreshRan
+$summary['research_export_error'] = $researchRefreshError
+$summary['research_export_tester_telemetry_rows'] = $researchTesterTelemetryRows
+$summary['research_export_tester_pass_rows'] = $researchTesterPassRows
+
+$result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+$summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
 
 $result

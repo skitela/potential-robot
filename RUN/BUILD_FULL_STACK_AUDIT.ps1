@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$PaperLiveFeedbackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$HostingHealthPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_hosting_daily_report_latest.json",
+    [string]$ResearchRoot = "C:\TRADING_DATA\RESEARCH",
     [switch]$ApplyRuntimeCleanup,
     [switch]$ApplyLogRotation
 )
@@ -92,6 +93,22 @@ function Read-JsonFile {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
+function Get-SafeObjectValue {
+    param(
+        [object]$Object,
+        [string]$PropertyName,
+        $Default = $null
+    )
+
+    if ($null -eq $Object) {
+        return $Default
+    }
+    if ($Object.PSObject.Properties.Name -contains $PropertyName) {
+        return $Object.$PropertyName
+    }
+    return $Default
+}
+
 $gitStatusLines = @()
 $gitDirtyCount = 0
 $gitTrackedCount = 0
@@ -135,6 +152,7 @@ $freshness = @(
     Get-FileFreshness -Label "ml_tuning_hints" -Path (Join-Path $opsRoot "ml_tuning_hints_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_weakest_profile" -Path (Join-Path $opsRoot "qdm_weakest_profile_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "daily_system_report" -Path (Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json") -ThresholdSeconds 5400
     Get-FileFreshness -Label "paper_live_feedback" -Path $PaperLiveFeedbackPath -ThresholdSeconds 1800
     Get-FileFreshness -Label "mt5_hosting_health" -Path $HostingHealthPath -ThresholdSeconds 1800
@@ -146,6 +164,7 @@ $localSnapshot = Read-JsonFile -Path (Join-Path $opsRoot "local_operator_snapsho
 $autonomousStatus = Read-JsonFile -Path (Join-Path $opsRoot "autonomous_90p_latest.json")
 $trustButVerify = Read-JsonFile -Path (Join-Path $opsRoot "trust_but_verify_latest.json")
 $profitTracking = Read-JsonFile -Path (Join-Path $opsRoot "profit_tracking_latest.json")
+$researchManifest = Read-JsonFile -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json")
 
 $runtimeUnexpectedTotal = 0
 if ($null -ne $runtimeArtifactAudit) {
@@ -208,6 +227,7 @@ $labBusy = (
 )
 
 $mt5QueueFresh = @($freshness | Where-Object { $_.label -eq "mt5_retest_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "mt5_retest_queue" })[0].fresh)
+$researchExportFresh = @($freshness | Where-Object { $_.label -eq "research_export_manifest" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "research_export_manifest" })[0].fresh)
 $mt5QueueConsistency = $true
 if ($mt5QueueFresh -and $null -ne $mt5TesterStatus -and $null -ne $mt5RetestQueue) {
     $queueSymbol = [string]$mt5RetestQueue.current_symbol
@@ -225,6 +245,20 @@ if ($mt5QueueFresh -and $null -ne $mt5TesterStatus -and $null -ne $mt5RetestQueu
         $queueSymbol -ne $testerSymbol) {
         $mt5QueueConsistency = $false
     }
+}
+
+$researchTesterTelemetryRows = 0
+$researchTesterPassFrameRows = 0
+$researchTesterSummaryRows = 0
+$researchTesterKnowledgeRows = 0
+$researchOptimizationTelemetryVisible = $false
+if ($null -ne $researchManifest -and $researchManifest.PSObject.Properties.Name -contains "datasets") {
+    $datasets = $researchManifest.datasets
+    $researchTesterTelemetryRows = [int](Get-SafeObjectValue -Object (Get-SafeObjectValue -Object $datasets -PropertyName 'tester_telemetry' -Default $null) -PropertyName 'rows' -Default 0)
+    $researchTesterPassFrameRows = [int](Get-SafeObjectValue -Object (Get-SafeObjectValue -Object $datasets -PropertyName 'tester_pass_frames' -Default $null) -PropertyName 'rows' -Default 0)
+    $researchTesterSummaryRows = [int](Get-SafeObjectValue -Object (Get-SafeObjectValue -Object $datasets -PropertyName 'tester_summary' -Default $null) -PropertyName 'rows' -Default 0)
+    $researchTesterKnowledgeRows = [int](Get-SafeObjectValue -Object (Get-SafeObjectValue -Object $datasets -PropertyName 'tester_knowledge' -Default $null) -PropertyName 'rows' -Default 0)
+    $researchOptimizationTelemetryVisible = ($researchTesterPassFrameRows -gt 0)
 }
 
 $syncAllowed = (
@@ -313,6 +347,16 @@ $report = [ordered]@{
     consistency = [ordered]@{
         mt5_retest_queue_fresh = $mt5QueueFresh
         mt5_retest_queue_consistent_with_tester = $mt5QueueConsistency
+        research_export_manifest_fresh = $researchExportFresh
+    }
+    research_pipeline = [ordered]@{
+        manifest_present = ($null -ne $researchManifest)
+        export_fresh = $researchExportFresh
+        tester_telemetry_rows = $researchTesterTelemetryRows
+        tester_pass_frame_rows = $researchTesterPassFrameRows
+        tester_summary_rows = $researchTesterSummaryRows
+        tester_knowledge_rows = $researchTesterKnowledgeRows
+        optimization_telemetry_visible = $researchOptimizationTelemetryVisible
     }
     verification = if ($null -ne $trustButVerify) {
         [ordered]@{
@@ -378,6 +422,17 @@ $lines.Add("## Consistency")
 $lines.Add("")
 $lines.Add(("- mt5_retest_queue_fresh: {0}" -f $report.consistency.mt5_retest_queue_fresh))
 $lines.Add(("- mt5_retest_queue_consistent_with_tester: {0}" -f $report.consistency.mt5_retest_queue_consistent_with_tester))
+$lines.Add(("- research_export_manifest_fresh: {0}" -f $report.consistency.research_export_manifest_fresh))
+$lines.Add("")
+$lines.Add("## Research Pipeline")
+$lines.Add("")
+$lines.Add(("- manifest_present: {0}" -f $report.research_pipeline.manifest_present))
+$lines.Add(("- export_fresh: {0}" -f $report.research_pipeline.export_fresh))
+$lines.Add(("- tester_telemetry_rows: {0}" -f $report.research_pipeline.tester_telemetry_rows))
+$lines.Add(("- tester_pass_frame_rows: {0}" -f $report.research_pipeline.tester_pass_frame_rows))
+$lines.Add(("- tester_summary_rows: {0}" -f $report.research_pipeline.tester_summary_rows))
+$lines.Add(("- tester_knowledge_rows: {0}" -f $report.research_pipeline.tester_knowledge_rows))
+$lines.Add(("- optimization_telemetry_visible: {0}" -f $report.research_pipeline.optimization_telemetry_visible))
 $lines.Add("")
 $lines.Add("## Trust But Verify")
 $lines.Add("")
