@@ -3,6 +3,11 @@
 #property description "MicroBot AUDUSD scaffold."
 
 #include <Trade/Trade.mqh>
+#define MB_TESTER_OPT_INPUTS_DECLARE_EXTERNALLY
+input double InpTesterSafetyMarginScale = 1.00;
+input double InpTesterEdgeRequirementScale = 1.00;
+input double InpTesterTimeStopScale = 1.00;
+#include "..\\..\\Include\\Core\\MbTesterOptimizationInputs.mqh"
 #include "..\\..\\Include\\Core\\MbRuntimeTypes.mqh"
 #include "..\\..\\Include\\Core\\MbRuntimeKernel.mqh"
 #include "..\\..\\Include\\Core\\MbStorage.mqh"

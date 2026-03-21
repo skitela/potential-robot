@@ -144,6 +144,43 @@ function Resolve-ExpertParametersPath {
     return ""
 }
 
+function Set-OptimizationRangesInPreset {
+    param([string]$PresetPath)
+
+    if ([string]::IsNullOrWhiteSpace($PresetPath)) {
+        return
+    }
+
+    $lines = @()
+    if (Test-Path -LiteralPath $PresetPath) {
+        $lines = @(Get-Content -LiteralPath $PresetPath -Encoding Default -ErrorAction SilentlyContinue)
+    }
+
+    $desired = [ordered]@{
+        "InpTesterSafetyMarginScale" = "InpTesterSafetyMarginScale=1.00||0.50||0.25||2.00||Y"
+        "InpTesterEdgeRequirementScale" = "InpTesterEdgeRequirementScale=1.00||0.75||0.25||2.25||Y"
+        "InpTesterTimeStopScale" = "InpTesterTimeStopScale=1.00||0.75||0.25||2.25||Y"
+    }
+
+    foreach ($key in $desired.Keys) {
+        $replacement = [string]$desired[$key]
+        $matched = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -like "$key=*") {
+                $lines[$i] = $replacement
+                $matched = $true
+                break
+            }
+        }
+
+        if (-not $matched) {
+            $lines += $replacement
+        }
+    }
+
+    Set-Content -LiteralPath $PresetPath -Value $lines -Encoding Default
+}
+
 function Resolve-TesterSymbol {
     param(
         [object]$RegistryItem,
@@ -367,6 +404,9 @@ if (-not [string]::IsNullOrWhiteSpace($expertParametersSourcePath)) {
     $expertParametersTargetName = "{0}_{1}.set" -f $runId, [System.IO.Path]::GetFileNameWithoutExtension($expertParametersSourcePath)
     $expertParametersTargetPath = Join-Path $testerProfilesDir $expertParametersTargetName
     Copy-Item -LiteralPath $expertParametersSourcePath -Destination $expertParametersTargetPath -Force
+    if ($Optimization -ne 0) {
+        Set-OptimizationRangesInPreset -PresetPath $expertParametersTargetPath
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
@@ -445,8 +485,8 @@ try {
     }
 } catch {
     $timedOut = $true
-    foreach ($pid in @($trackedProcessId, $process.Id) | Where-Object { $null -ne $_ } | Select-Object -Unique) {
-        Get-Process -Id $pid -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    foreach ($processIdToStop in @($trackedProcessId, $process.Id) | Where-Object { $null -ne $_ } | Select-Object -Unique) {
+        Get-Process -Id $processIdToStop -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
 }
 

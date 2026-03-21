@@ -1,8 +1,11 @@
+#ifndef MB_TESTER_OPTIMIZATION_INPUTS_INCLUDED
 #define MB_TESTER_OPTIMIZATION_INPUTS_INCLUDED
 
-sinput double InpTesterSafetyMarginScale = 1.00;
-sinput double InpTesterEdgeRequirementScale = 1.00;
-sinput double InpTesterTimeStopScale = 1.00;
+#ifndef MB_TESTER_OPT_INPUTS_DECLARE_EXTERNALLY
+input double InpTesterSafetyMarginScale = 1.00;
+input double InpTesterEdgeRequirementScale = 1.00;
+input double InpTesterTimeStopScale = 1.00;
+#endif
 
 double MbClampTesterOptimizationScale(const double value)
   {
@@ -49,3 +52,5 @@ bool MbConfigureCommonOptimizationRanges()
    ok = (ParameterSetRange("InpTesterTimeStopScale",true,InpTesterTimeStopScale,0.75,0.25,2.25) && ok);
    return ok;
   }
+
+#endif
