@@ -604,8 +604,12 @@ void OnTick()
      {
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
+      bool weak_candle = (signal.candle_quality_grade != "GOOD");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
+      bool blocked_by_eurjpy_range_chaos_bad_spread_gate = false;
+      bool blocked_by_eurjpy_breakout_chaos_bad_spread_gate = false;
+      bool blocked_by_eurjpy_trend_chaos_bad_spread_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_eurjpy_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT" && g_eurjpy_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
@@ -618,21 +622,81 @@ void OnTick()
          blocked_by_tuning_gate = true;
       if(signal.setup_type == "SETUP_RANGE" && g_eurjpy_effective_tuning_policy.range_confidence_floor > 0.0 && signal.confidence_score < g_eurjpy_effective_tuning_policy.range_confidence_floor)
          blocked_by_tuning_gate = true;
+      if(
+         signal.setup_type == "SETUP_RANGE" &&
+         signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            weak_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_eurjpy_range_chaos_bad_spread_gate = true;
+      if(
+         signal.setup_type == "SETUP_BREAKOUT" &&
+         signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            weak_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_eurjpy_breakout_chaos_bad_spread_gate = true;
+      if(
+         signal.setup_type == "SETUP_TREND" &&
+         signal.market_regime == "CHAOS" &&
+         signal.spread_regime == "BAD" &&
+         (
+            signal.confidence_bucket == "LOW" ||
+            weak_candle ||
+            poor_renko
+         )
+      )
+         blocked_by_eurjpy_trend_chaos_bad_spread_gate = true;
       if(signal.setup_type == "SETUP_BREAKOUT")
         {
          paper_gate_abs = 0.64;
-         if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE" || signal.confidence_bucket == "LOW")
-            paper_gate_abs = 0.74;
+          if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE" || signal.confidence_bucket == "LOW")
+             paper_gate_abs = 0.74;
+         if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD" && (weak_candle || poor_renko))
+            paper_gate_abs = MathMax(paper_gate_abs,0.82);
         }
       else if(signal.setup_type == "SETUP_RANGE")
+        {
          paper_gate_abs = 0.19;
+         if(signal.market_regime == "CHAOS")
+            paper_gate_abs = MathMax(paper_gate_abs,0.28);
+         if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD" && (weak_candle || poor_renko || signal.confidence_bucket == "LOW"))
+            paper_gate_abs = MathMax(paper_gate_abs,0.42);
+        }
+      else if(signal.setup_type == "SETUP_TREND")
+        {
+         if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD" && (weak_candle || poor_renko || signal.confidence_bucket == "LOW"))
+            paper_gate_abs = 0.44;
+         else if(signal.market_regime == "CHAOS")
+            paper_gate_abs = 0.30;
+        }
 
-      if(!blocked_by_tuning_gate && MathAbs(signal.score) >= paper_gate_abs)
+      if(
+         !blocked_by_tuning_gate &&
+         !blocked_by_eurjpy_range_chaos_bad_spread_gate &&
+         !blocked_by_eurjpy_breakout_chaos_bad_spread_gate &&
+         !blocked_by_eurjpy_trend_chaos_bad_spread_gate &&
+         MathAbs(signal.score) >= paper_gate_abs
+      )
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
          signal.reason_code = "PAPER_SCORE_GATE";
         }
+      else if(blocked_by_eurjpy_range_chaos_bad_spread_gate)
+         signal.reason_code = "EURJPY_RANGE_CHAOS_BAD_SPREAD_BLOCK";
+      else if(blocked_by_eurjpy_breakout_chaos_bad_spread_gate)
+         signal.reason_code = "EURJPY_BREAKOUT_CHAOS_BAD_SPREAD_BLOCK";
+      else if(blocked_by_eurjpy_trend_chaos_bad_spread_gate)
+         signal.reason_code = "EURJPY_TREND_CHAOS_BAD_SPREAD_BLOCK";
      }
    AppendEURJPYCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
