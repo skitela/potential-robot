@@ -156,6 +156,16 @@ void MbNormalizePaperRuntimeState(MbRuntimeState &state,const bool paper_mode_ac
    state.mode = MB_MODE_READY;
   }
 
+void MbRefreshPaperTradeRights(MbRuntimeState &state,const bool paper_mode_active)
+  {
+   if(!paper_mode_active)
+      return;
+
+   state.halt = false;
+   state.close_only = false;
+   state.mode = MB_MODE_READY;
+  }
+
 void MbNormalizePaperRuntimeState(
    MbRuntimeState &state,
    MbMarketSnapshot &snapshot,

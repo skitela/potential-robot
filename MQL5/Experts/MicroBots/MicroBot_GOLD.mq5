@@ -481,12 +481,7 @@ void OnTick()
    if(!IsLocalPaperModeActive())
       MbMarkPriceProbe(g_state);
    MbRuntimeOnTick(g_state);
-   if(IsLocalPaperModeActive())
-     {
-      g_state.halt = false;
-      g_state.close_only = false;
-      g_state.mode = MB_MODE_READY;
-     }
+   MbRefreshPaperTradeRights(g_state,IsLocalPaperModeActive());
    MbRefreshTickSnapshot(g_profile,g_market);
    NormalizeGOLDMarketPermissions();
    if(IsLocalPaperModeActive())
@@ -591,12 +586,7 @@ void OnTick()
      }
 
    MbSignalDecision signal;
-   if(IsLocalPaperModeActive())
-     {
-      g_state.halt = false;
-      g_state.close_only = false;
-      g_state.mode = MB_MODE_READY;
-     }
+   MbRefreshPaperTradeRights(g_state,IsLocalPaperModeActive());
    EvaluateGOLDStrategy(g_state,g_profile,g_market,signal);
    if(signal.setup_type != "NONE")
      {
