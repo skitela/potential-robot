@@ -4,6 +4,50 @@
 #include "MbRuntimeTypes.mqh"
 #include "MbExecutionCommon.mqh"
 
+bool MbVolumeWithinSymbolConstraints(const MbMarketSnapshot &snapshot,const double lots,string &reason_code,string &diag_suffix)
+  {
+   reason_code = "OK";
+   diag_suffix = "";
+
+   if(snapshot.vol_min > 0.0 && lots < (snapshot.vol_min - 1e-9))
+     {
+      reason_code = "LOTS_BELOW_MIN";
+      diag_suffix = StringFormat(" vol_min=%.4f",snapshot.vol_min);
+      return false;
+     }
+
+   if(snapshot.vol_max > 0.0 && lots > (snapshot.vol_max + 1e-9))
+     {
+      reason_code = "LOTS_ABOVE_MAX";
+      diag_suffix = StringFormat(" vol_max=%.4f",snapshot.vol_max);
+      return false;
+     }
+
+   if(snapshot.vol_step > 0.0)
+     {
+      double origin = (snapshot.vol_min > 0.0 ? snapshot.vol_min : 0.0);
+      double relative = lots - origin;
+      if(relative < -1e-9)
+        {
+         reason_code = "LOTS_BELOW_MIN";
+         diag_suffix = StringFormat(" vol_min=%.4f",snapshot.vol_min);
+         return false;
+        }
+
+      double steps = relative / snapshot.vol_step;
+      double nearest_steps = MathRound(steps);
+      double distance = MathAbs(steps - nearest_steps);
+      if(distance > 1e-6)
+        {
+         reason_code = "LOTS_STEP_INVALID";
+         diag_suffix = StringFormat(" vol_step=%.4f lots=%.4f",snapshot.vol_step,lots);
+         return false;
+        }
+     }
+
+   return true;
+  }
+
 double MbResolveModeledCommissionPoints(const MbSymbolProfile &profile)
   {
    string family = profile.session_profile;
@@ -67,6 +111,15 @@ MbExecutionCheck MbBuildExecutionCheck(
    if(!snapshot.valid)
      {
       out.reason = "SNAPSHOT_INVALID";
+      return out;
+     }
+
+   string volume_reason = "OK";
+   string volume_diag = "";
+   if(!MbVolumeWithinSymbolConstraints(snapshot,lots,volume_reason,volume_diag))
+     {
+      out.reason = volume_reason;
+      out.diag = "volume_guard" + volume_diag;
       return out;
      }
 
