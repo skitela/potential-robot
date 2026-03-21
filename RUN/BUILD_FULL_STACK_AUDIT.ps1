@@ -347,7 +347,14 @@ $report = [ordered]@{
                     (
                         [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'candidate_signal_rows' -Default 0) -gt 0 -or
                         [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'decision_event_rows' -Default 0) -gt 0 -or
-                        [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'tester_pass_rows' -Default 0) -gt 0
+                        [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'tester_pass_rows' -Default 0) -gt 0 -or
+                        [long](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'candidate_signal_bytes' -Default 0) -gt 0 -or
+                        [long](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'decision_event_bytes' -Default 0) -gt 0 -or
+                        [long](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'tuning_experiment_bytes' -Default 0) -gt 0 -or
+                        (
+                            [bool](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'heartbeat_fresh' -Default $false) -and
+                            [int](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'timer_cycles' -Default 0) -gt 0
+                        )
                     )
                 )
             }
