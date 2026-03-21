@@ -93,6 +93,25 @@ function Resolve-LogItem {
         Select-Object -First 1
 }
 
+function Resolve-LatestOptimizationRunSummaryItem {
+    param([string]$BatchReportPath)
+
+    if ([string]::IsNullOrWhiteSpace($BatchReportPath)) {
+        return $null
+    }
+
+    $dir = Split-Path -Parent $BatchReportPath
+    if ([string]::IsNullOrWhiteSpace($dir) -or -not (Test-Path -LiteralPath $dir)) {
+        return $null
+    }
+
+    $batchReportName = [System.IO.Path]::GetFileName($BatchReportPath)
+    return Get-ChildItem -Path $dir -Filter "*_summary.json" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $batchReportName } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+}
+
 function Write-StatusArtifacts {
     param(
         [hashtable]$Status,
@@ -163,6 +182,8 @@ $wrapperRunning = ($wrapperProcesses.Count -gt 0)
 $logItem = Resolve-LogItem -Root $LogRoot -ExplicitPath $LogPath
 $mt5TesterStatus = Read-JsonFile -Path $Mt5TesterStatusPath
 $batchReport = Read-JsonFile -Path $BatchReportPath
+$latestOptimizationSummaryItem = Resolve-LatestOptimizationRunSummaryItem -BatchReportPath $BatchReportPath
+$latestOptimizationSummary = if ($null -ne $latestOptimizationSummaryItem) { Read-JsonFile -Path $latestOptimizationSummaryItem.FullName } else { $null }
 
 $resolvedState = $State
 $resolvedCurrentSymbol = $CurrentSymbol
@@ -182,9 +203,20 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
 
     if ($wrapperRunning) {
         $resolvedState = "waiting_for_idle"
-        if ($null -ne $mt5TesterStatus -and [string]$mt5TesterStatus.state -eq "running") {
+        $logStart = if ($null -ne $logItem) { $logItem.LastWriteTime } else { $null }
+        $summaryFresh = (
+            $null -ne $latestOptimizationSummaryItem -and
+            (($null -eq $logStart) -or $latestOptimizationSummaryItem.LastWriteTime -ge $logStart.AddSeconds(-15))
+        )
+        if ($summaryFresh -and $null -ne $latestOptimizationSummary) {
+            $resolvedState = "running"
+            $resolvedCurrentSymbol = [string]$latestOptimizationSummary.symbol_alias
+            if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
+                $resolvedNote = "optimization_lane_active_from_summary"
+            }
+        }
+        elseif ($null -ne $mt5TesterStatus -and [string]$mt5TesterStatus.state -eq "running") {
             $runStampDate = Parse-RunStamp -RunStamp ([string]$mt5TesterStatus.run_stamp)
-            $logStart = if ($null -ne $logItem) { $logItem.LastWriteTime } else { $null }
             $resolvedCurrentSymbol = [string]$mt5TesterStatus.current_symbol
 
             if ($null -ne $runStampDate -and $null -ne $logStart -and $runStampDate -ge $logStart.AddMinutes(-1)) {
