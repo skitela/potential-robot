@@ -12,6 +12,24 @@ enum MbGuardVerdict
    MB_GUARD_HALT = 2
   };
 
+bool MbShouldBypassMarketGuardInPaper(const bool paper_mode_active,const string reason_code)
+  {
+   if(!paper_mode_active)
+      return false;
+
+   return (
+      reason_code == "OUTSIDE_TRADE_WINDOW" ||
+      reason_code == "MARGIN_FREE_LOW" ||
+      reason_code == "SPREAD_CAP_EXCEEDED" ||
+      reason_code == "TRADE_DISABLED"
+   );
+  }
+
+bool MbPaperMarketGuardClearsHalt(const string reason_code)
+  {
+   return (reason_code == "MARGIN_FREE_LOW" || reason_code == "TRADE_DISABLED");
+  }
+
 bool MbEntryFrequencyOk(const MbSymbolProfile &profile,const MbRuntimeState &state,string &reason_code)
   {
    if(state.last_trade_attempt > 0 && (TimeCurrent() - state.last_trade_attempt) < profile.min_seconds_between_entries)
