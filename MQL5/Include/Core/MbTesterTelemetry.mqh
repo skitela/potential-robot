@@ -37,6 +37,7 @@ double MbTesterTelemetryClamp(const double value,const double min_value,const do
 
 ulong g_mb_tester_telemetry_processed_passes[];
 bool g_mb_tester_telemetry_filter_ready = false;
+ulong g_mb_tester_telemetry_agent_pass_counter = 0;
 
 double MbTesterTelemetryPayloadValue(const double &payload[],const int index,const double default_value = 0.0)
   {
@@ -76,6 +77,15 @@ string MbTesterTelemetryInputsJson(const string &inputs[],const uint input_count
      }
    json += "]";
    return json;
+  }
+
+void MbTesterTelemetryCollectCurrentOptimizationInputs(string &inputs[],uint &input_count)
+  {
+   ArrayResize(inputs,3);
+   inputs[0] = StringFormat("InpTesterSafetyMarginScale=%.4f",MbResolveTesterSafetyMarginScale());
+   inputs[1] = StringFormat("InpTesterEdgeRequirementScale=%.4f",MbResolveTesterEdgeRequirementScale());
+   inputs[2] = StringFormat("InpTesterTimeStopScale=%.4f",MbResolveTesterTimeStopScale());
+   input_count = 3;
   }
 
 double MbTesterTelemetryWinRate(const MbRuntimeState &state)
@@ -546,6 +556,7 @@ int MbTesterTelemetryOnInit(const string symbol,const long magic)
 
    ArrayResize(g_mb_tester_telemetry_processed_passes,0);
    g_mb_tester_telemetry_filter_ready = false;
+   g_mb_tester_telemetry_agent_pass_counter = 0;
    if(MQLInfoInteger(MQL_OPTIMIZATION) != 0)
      {
       MbConfigureCommonOptimizationRanges();
@@ -603,6 +614,20 @@ double MbTesterTelemetryOnTester(
       payload[9] = policy.confidence_cap;
       payload[10] = policy.risk_cap;
       payload[11] = (summary.execution_attempt_count > 0 ? (double)summary.execution_ok_count / (double)summary.execution_attempt_count : 1.0);
+
+      string inputs[];
+      uint input_count = 0;
+      MbTesterTelemetryCollectCurrentOptimizationInputs(inputs,input_count);
+      string resolved_symbol = MbTesterTelemetryResolveSymbol(profile.symbol);
+      if(MbStorageInit(resolved_symbol))
+        {
+         g_mb_tester_telemetry_agent_pass_counter++;
+         ulong synthetic_pass = g_mb_tester_telemetry_agent_pass_counter;
+         MbTesterTelemetryAppendOptimizationPass(resolved_symbol,(long)state.magic,synthetic_pass,"MICROBOT_AGENT_PASS_V1",(long)synthetic_pass,custom_score,payload,inputs,input_count);
+         MbTesterTelemetryWriteOptimizationLatest(resolved_symbol,(long)state.magic,synthetic_pass,"MICROBOT_AGENT_PASS_V1",custom_score,payload,inputs,input_count);
+         MbTesterTelemetryWriteSessionMarker(resolved_symbol,"tester_agent_pass",(long)state.magic);
+        }
+
       FrameAdd("MICROBOT_PASS_V1",(long)state.magic,custom_score,payload);
      }
    else
