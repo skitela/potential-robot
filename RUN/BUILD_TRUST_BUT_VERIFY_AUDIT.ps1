@@ -155,6 +155,14 @@ $processState = [ordered]@{
                 $_.ExecutablePath -eq "C:\Program Files\MetaTrader 5\terminal64.exe"
             }
     ).Count
+    secondary_metatester = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "metatester64.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                $_.ExecutablePath -eq "C:\Program Files\MetaTrader 5\metatester64.exe"
+            }
+    ).Count
 }
 
 $findings = New-Object System.Collections.Generic.List[object]
@@ -171,10 +179,15 @@ if ($wrapperState.mt5_status_watcher -and -not $freshness.mt5_status.fresh) {
 if ($null -ne $mt5Status) {
     $mt5State = [string]$mt5Status.state
     $watchedTerminalRunning = [bool]$mt5Status.watched_terminal_running
+    $watchedMetaTesterRunning = $false
+    if ($mt5Status.PSObject.Properties.Name -contains "watched_metatester_running") {
+        $watchedMetaTesterRunning = [bool]$mt5Status.watched_metatester_running
+    }
+    $watchedExecutorRunning = $watchedTerminalRunning -or $watchedMetaTesterRunning -or ($processState.secondary_metatester -gt 0)
     $currentSymbol = [string]$mt5Status.current_symbol
 
-    if ($mt5State -eq "running" -and -not $watchedTerminalRunning) {
-        Add-Finding -Findings $findings -Severity "high" -Component "mt5_status" -Message "MT5 status says running, but the watched tester terminal is not running."
+    if ($mt5State -eq "running" -and -not $watchedExecutorRunning) {
+        Add-Finding -Findings $findings -Severity "high" -Component "mt5_status" -Message "MT5 status says running, but neither watched tester terminal nor its metatester executor is running."
     }
 
     if ($mt5State -eq "stale") {

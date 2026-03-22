@@ -153,6 +153,29 @@ function Test-WatchedTerminalRunning {
     return (@($processes).Count -gt 0)
 }
 
+function Test-WatchedMetaTesterRunning {
+    param([string]$TerminalExecutablePath)
+
+    if ([string]::IsNullOrWhiteSpace($TerminalExecutablePath)) {
+        return $false
+    }
+
+    $metaTesterPath = Join-Path (Split-Path -Parent $TerminalExecutablePath) "metatester64.exe"
+    if (-not (Test-Path -LiteralPath $metaTesterPath)) {
+        return $false
+    }
+
+    $normalized = $metaTesterPath.ToLowerInvariant()
+    $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "metatester64.exe" -and
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            $_.ExecutablePath.ToLowerInvariant() -eq $normalized
+        }
+
+    return (@($processes).Count -gt 0)
+}
+
 function Get-Mt5TesterStatus {
     param(
         [string]$LogPath,
@@ -175,6 +198,8 @@ function Get-Mt5TesterStatus {
         latest_result_line   = ""
         last_activity_at_local = ""
         watched_terminal_running = $false
+        watched_metatester_running = $false
+        watched_executor_running = $false
         stale_minutes          = $StaleMinutes
         signature            = ""
     }
@@ -188,6 +213,8 @@ function Get-Mt5TesterStatus {
     $logItem = Get-Item -LiteralPath $LogPath -ErrorAction Stop
     $logDate = $logItem.LastWriteTime.Date
     $status.watched_terminal_running = Test-WatchedTerminalRunning -ExecutablePath $WatchedTerminalPath
+    $status.watched_metatester_running = Test-WatchedMetaTesterRunning -TerminalExecutablePath $WatchedTerminalPath
+    $status.watched_executor_running = ($status.watched_terminal_running -or $status.watched_metatester_running)
 
     $lines = @(Get-Content -LiteralPath $LogPath -Tail 250 -ErrorAction SilentlyContinue)
     if ($lines.Count -eq 0) {
@@ -288,7 +315,7 @@ function Get-Mt5TesterStatus {
     }
     elseif ($launchInfo) {
         $status.state = "running"
-        if (-not $status.watched_terminal_running) {
+        if (-not $status.watched_executor_running) {
             $minutesSinceActivity = if ($lastActivityAt) {
                 [math]::Round(((Get-Date) - $lastActivityAt).TotalMinutes, 1)
             } else {
