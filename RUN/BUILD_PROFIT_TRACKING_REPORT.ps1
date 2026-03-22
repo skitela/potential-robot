@@ -87,6 +87,25 @@ function Get-EffectiveTesterSummaryResultLabel {
     return [string](Get-FirstValue -Object $Summary -Names @("raw_result_label"))
 }
 
+function Get-EffectiveTesterSummaryOptimizationInputs {
+    param([object]$Summary)
+
+    if ($null -eq $Summary) {
+        return @()
+    }
+
+    $telemetry = Get-FirstValue -Object $Summary -Names @("tester_telemetry")
+    $passCount = [int](Get-FirstValue -Object $Summary -Names @("tester_optimization_pass_count"))
+    $experimentStatus = [string](Get-FirstValue -Object $telemetry -Names @("experiment_status"))
+    $optimizationInputs = @(Get-FirstValue -Object $telemetry -Names @("optimization_inputs"))
+
+    if (($passCount -gt 0 -or $experimentStatus -eq "OPTIMIZATION_PASS") -and $optimizationInputs.Count -gt 0) {
+        return @($optimizationInputs | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
+    return @()
+}
+
 function Test-MeaningfulTesterSummary {
     param([object]$Summary)
 
@@ -183,7 +202,7 @@ function Get-BestTesterBySymbol {
             continue
         }
 
-        $pnl = Convert-ToDoubleOrNull $summary.realized_pnl_lifetime
+        $pnl = Get-EffectiveTesterSummaryPnl -Summary $summary
         if ($null -eq $pnl) {
             continue
         }
@@ -194,6 +213,9 @@ function Get-BestTesterBySymbol {
             result_label = Get-EffectiveTesterSummaryResultLabel -Summary $summary
             trust_state  = [string]$summary.trust_state
             source_path  = $file.FullName
+            optimization_inputs = @(
+                Get-EffectiveTesterSummaryOptimizationInputs -Summary $summary
+            )
         }
 
         if (-not $best.ContainsKey($row.symbol_alias) -or $row.pnl -gt $best[$row.symbol_alias].pnl) {
@@ -259,17 +281,25 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
     $bestTesterPnl = $null
     $bestTesterTrust = ""
     $bestTesterPath = ""
+    $bestTesterOptimizationInputs = @()
 
     if ($tester) {
         $bestTesterPnl = $tester.pnl
         $bestTesterTrust = [string]$tester.trust_state
         $bestTesterPath = [string]$tester.source_path
+        $bestTesterOptimizationInputs = @($tester.optimization_inputs)
     }
 
     if ($null -ne $priorityTesterPnl -and ($null -eq $bestTesterPnl -or $priorityTesterPnl -gt $bestTesterPnl)) {
         $bestTesterPnl = $priorityTesterPnl
         $bestTesterTrust = [string]$item.latest_tester_trust
         $bestTesterPath = [string]$item.latest_tester_path
+        $bestTesterOptimizationInputs = if ($item.PSObject.Properties.Name -contains 'latest_tester_optimization_inputs') {
+            @($item.latest_tester_optimization_inputs)
+        }
+        else {
+            @()
+        }
     }
 
     $hasMeaningfulPriorityBaseline = Test-MeaningfulPriorityTesterBaseline -Item $item
@@ -309,6 +339,7 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
         best_tester_pnl   = if ($hasTesterBaseline) { $bestTesterPnl } else { $null }
         best_tester_trust = if ($hasTesterBaseline) { $bestTesterTrust } else { "" }
         best_tester_path  = if ($hasTesterBaseline) { $bestTesterPath } else { "" }
+        best_tester_optimization_inputs = if ($hasTesterBaseline) { @($bestTesterOptimizationInputs) } else { @() }
         recommended_action = [string]$item.recommended_action
         priority_rank     = [int]$item.rank
     }
@@ -367,7 +398,13 @@ if ($testerPositive.Count -eq 0) {
 }
 else {
     foreach ($item in $testerPositive) {
-        $lines.Add(("- {0}: best_tester_pnl={1} trust={2}" -f $item.symbol_alias, $item.best_tester_pnl, $item.best_tester_trust))
+        $inputsSuffix = if (@($item.best_tester_optimization_inputs).Count -gt 0) {
+            " inputs={0}" -f ((@($item.best_tester_optimization_inputs) -join "; "))
+        }
+        else {
+            ""
+        }
+        $lines.Add(("- {0}: best_tester_pnl={1} trust={2}{3}" -f $item.symbol_alias, $item.best_tester_pnl, $item.best_tester_trust, $inputsSuffix))
     }
 }
 $lines.Add("")

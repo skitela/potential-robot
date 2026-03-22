@@ -101,6 +101,25 @@ function Get-EffectiveTesterSummaryResultLabel {
     return $rawResultLabel
 }
 
+function Get-EffectiveTesterSummaryOptimizationInputs {
+    param([object]$Summary)
+
+    if ($null -eq $Summary) {
+        return @()
+    }
+
+    $telemetry = Get-FirstValue -Object $Summary -Names @("tester_telemetry")
+    $passCount = [int](Get-FirstValue -Object $Summary -Names @("tester_optimization_pass_count"))
+    $experimentStatus = [string](Get-FirstValue -Object $telemetry -Names @("experiment_status"))
+    $optimizationInputs = @(Get-FirstValue -Object $telemetry -Names @("optimization_inputs"))
+
+    if (($passCount -gt 0 -or $experimentStatus -eq "OPTIMIZATION_PASS") -and $optimizationInputs.Count -gt 0) {
+        return @($optimizationInputs | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
+    return @()
+}
+
 function Test-MeaningfulTesterSummary {
     param([object]$Summary)
 
@@ -369,6 +388,9 @@ function Get-LatestTesterSummaries {
                     bias         = $biasValue
                     pnl          = $pnlValue
                     result_label = $resultLabel
+                    optimization_inputs = @(
+                        Get-EffectiveTesterSummaryOptimizationInputs -Summary $summary
+                    )
                 }
             }
             catch {
@@ -467,6 +489,7 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
         latest_tester_sample = if ($null -ne $tester) { $tester.sample } else { 0 }
         latest_tester_bias  = if ($null -ne $tester) { [math]::Round([double]$tester.bias, 4) } else { 0.0 }
         latest_tester_pnl   = if ($null -ne $tester) { [math]::Round([double]$tester.pnl, 2) } else { 0.0 }
+        latest_tester_optimization_inputs = if ($null -ne $tester) { @($tester.optimization_inputs) } else { @() }
         source_summary_path = $summaryPath
         source_written_utc  = $_.LastWriteTimeUtc
     }
@@ -531,6 +554,12 @@ $lines.Add("")
 $lines.Add("## Top Queue")
 $lines.Add("")
 foreach ($item in $ranked | Select-Object -First 10) {
+    $inputsSuffix = if (@($item.latest_tester_optimization_inputs).Count -gt 0) {
+        ", tester_inputs={0}" -f ((@($item.latest_tester_optimization_inputs) -join "; "))
+    }
+    else {
+        ""
+    }
     $lines.Add(("- #{0} {1}: score={2}, band={3}, trust={4}, cost={5}, sample={6}, live_opens_24h={7}, live_net_24h={8}, action={9}" -f
         $item.rank,
         $item.symbol_alias,
@@ -541,12 +570,18 @@ foreach ($item in $ranked | Select-Object -First 10) {
         $item.learning_sample_count,
         $item.live_opens_24h,
         $item.live_net_24h,
-        $item.recommended_action))
+        $item.recommended_action) + $inputsSuffix)
 }
 $lines.Add("")
 $lines.Add("## Full Queue")
 $lines.Add("")
 foreach ($item in $ranked) {
+    $inputsSuffix = if (@($item.latest_tester_optimization_inputs).Count -gt 0) {
+        ", tester_inputs={0}" -f ((@($item.latest_tester_optimization_inputs) -join "; "))
+    }
+    else {
+        ""
+    }
     $lines.Add(("- #{0} {1}: score={2}, trust={3}, reason={4}, cost={5}, sample={6}, bias={7}, live_opens_24h={8}, live_net_24h={9}, tester={10}, action={11}" -f
         $item.rank,
         $item.symbol_alias,
@@ -559,7 +594,7 @@ foreach ($item in $ranked) {
         $item.live_opens_24h,
         $item.live_net_24h,
         $item.latest_tester_result,
-        $item.recommended_action))
+        $item.recommended_action) + $inputsSuffix)
 }
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdLatest -Encoding UTF8
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdStamped -Encoding UTF8
