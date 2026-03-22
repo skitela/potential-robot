@@ -438,6 +438,33 @@ function Get-OptimizationReportRowCount {
     return 0
 }
 
+function Initialize-StrategyTesterSandboxContract {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SandboxRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$StorageAlias
+    )
+
+    $paths = @(
+        $SandboxRoot,
+        (Join-Path $SandboxRoot "state"),
+        (Join-Path $SandboxRoot "state\\_global"),
+        (Join-Path $SandboxRoot "state\\_domains"),
+        (Join-Path $SandboxRoot "logs"),
+        (Join-Path $SandboxRoot "run"),
+        (Join-Path $SandboxRoot "key"),
+        (Join-Path $SandboxRoot ("state\\{0}" -f $StorageAlias)),
+        (Join-Path $SandboxRoot ("logs\\{0}" -f $StorageAlias)),
+        (Join-Path $SandboxRoot ("run\\{0}" -f $StorageAlias)),
+        (Join-Path $SandboxRoot ("key\\{0}" -f $StorageAlias))
+    )
+
+    foreach ($path in $paths) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+    }
+}
+
 $canonicalAlias = Get-RegistryCanonicalSymbol -RegistryItem $entry
 $entryCodeSymbol = if ($entry.PSObject.Properties.Name -contains 'code_symbol') { [string]$entry.code_symbol } else { "" }
 $resolvedAlias = Convert-ToSandboxToken $(if (-not [string]::IsNullOrWhiteSpace($entryCodeSymbol)) { $entryCodeSymbol } else { Get-RegistryCanonicalSymbol -RegistryItem $entry })
@@ -509,6 +536,7 @@ New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
 New-Item -ItemType Directory -Force -Path $mt5ReportsDir | Out-Null
 
 & (Join-Path $ProjectRoot "TOOLS\RESET_MICROBOT_STRATEGY_TESTER_SANDBOX.ps1") -ProjectRoot $ProjectRoot -SymbolAlias $storageAlias -SandboxTag $sanitizedTag | Out-Null
+Initialize-StrategyTesterSandboxContract -SandboxRoot $sandboxRoot -StorageAlias $storageAlias
 & (Join-Path $ProjectRoot "TOOLS\COMPILE_MICROBOT.ps1") -ExpertName $ExpertName | Out-Null
 
 $config = @"
