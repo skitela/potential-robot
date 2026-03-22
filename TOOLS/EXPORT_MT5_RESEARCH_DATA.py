@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 from typing import Iterable
 
 import duckdb
 import pandas as pd
+from pandas.errors import ParserError
 
 
 QDM_EXPORT_ALIAS_MAP = {
@@ -63,6 +65,37 @@ def discover_related_common_roots(common_root: Path) -> list[Path]:
 def read_tsv(path: Path) -> pd.DataFrame:
     try:
         return pd.read_csv(path, sep="\t", low_memory=False)
+    except ParserError:
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.reader(handle, delimiter="\t"))
+        except Exception:
+            return pd.DataFrame()
+
+        if not rows:
+            return pd.DataFrame()
+
+        header = list(rows[0])
+        body = [list(row) for row in rows[1:] if row]
+        if not body:
+            return pd.DataFrame(columns=header)
+
+        max_len = max(len(header), *(len(row) for row in body))
+        if len(header) < max_len:
+            header = header + [f"_extra_col_{idx}" for idx in range(1, max_len - len(header) + 1)]
+
+        normalized_rows = []
+        for row in body:
+            if len(row) < max_len:
+                row = row + [None] * (max_len - len(row))
+            elif len(row) > max_len:
+                row = row[:max_len]
+            normalized_rows.append(row)
+
+        try:
+            return pd.DataFrame(normalized_rows, columns=header)
+        except Exception:
+            return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -81,6 +114,33 @@ def flatten_records(records: Iterable[dict]) -> pd.DataFrame:
     return pd.json_normalize(records, sep=".")
 
 
+def normalize_frame_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    normalized = df.copy()
+    for column in normalized.columns:
+        series = normalized[column]
+        if not pd.api.types.is_object_dtype(series.dtype):
+            continue
+
+        non_null = series.dropna()
+        if non_null.empty:
+            continue
+
+        numeric_candidate = pd.to_numeric(series, errors="coerce")
+        if int(numeric_candidate.notna().sum()) == int(non_null.shape[0]):
+            if (numeric_candidate.dropna() % 1 == 0).all():
+                normalized[column] = numeric_candidate.astype("Int64")
+            else:
+                normalized[column] = numeric_candidate.astype("Float64")
+            continue
+
+        normalized[column] = series.astype("string")
+
+    return normalized
+
+
 def export_frame(df: pd.DataFrame, stem: str, output_dir: Path) -> dict:
     csv_path = output_dir / f"{stem}.csv"
     parquet_path = output_dir / f"{stem}.parquet"
@@ -89,7 +149,7 @@ def export_frame(df: pd.DataFrame, stem: str, output_dir: Path) -> dict:
         pd.DataFrame().to_parquet(parquet_path, index=False)
     else:
         df.to_csv(csv_path, index=False)
-        df.to_parquet(parquet_path, index=False)
+        normalize_frame_for_parquet(df).to_parquet(parquet_path, index=False)
     return {
         "rows": int(len(df.index)),
         "csv_path": str(csv_path),
@@ -105,7 +165,7 @@ def export_parquet_only(df: pd.DataFrame, stem: str, output_dir: Path) -> dict:
     if df.empty:
         pd.DataFrame().to_parquet(parquet_path, index=False)
     else:
-        df.to_parquet(parquet_path, index=False)
+        normalize_frame_for_parquet(df).to_parquet(parquet_path, index=False)
     return {
         "rows": int(len(df.index)),
         "csv_path": None,

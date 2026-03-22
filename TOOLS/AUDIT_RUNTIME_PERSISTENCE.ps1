@@ -21,11 +21,14 @@ $snapshotNames = @(
     "runtime_control.csv",
     "tuning_policy.csv",
     "tuning_policy_effective.csv",
+    "tuning_policy_stable.csv",
     "session_capital_state.csv",
     "session_capital_coordinator.csv",
     "core_capital_contract.csv",
     "tuning_family_policy.csv",
-    "tuning_coordinator_state.csv"
+    "tuning_coordinator_state.csv",
+    "tester_telemetry_latest.json",
+    "tester_pass_summary.csv"
 )
 
 $rotatableThresholds = [ordered]@{
@@ -112,6 +115,11 @@ foreach ($file in $allFiles) {
     $name = $file.Name
     if ($file.FullName -match "\\key\\") {
         Add-FileToBucket -Buckets $buckets -BucketName "key_material" -File $file
+        continue
+    }
+
+    if ($file.FullName -match "\\qdm_import\\") {
+        Add-FileToBucket -Buckets $buckets -BucketName "qdm_import_staging" -File $file
         continue
     }
 
