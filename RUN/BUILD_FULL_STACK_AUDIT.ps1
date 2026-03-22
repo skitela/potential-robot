@@ -95,6 +95,21 @@ function Read-JsonFile {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
+function Get-LatestFileByPattern {
+    param(
+        [string]$DirectoryPath,
+        [string]$Filter
+    )
+
+    if (-not (Test-Path -LiteralPath $DirectoryPath)) {
+        return $null
+    }
+
+    return Get-ChildItem -LiteralPath $DirectoryPath -File -Filter $Filter -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+}
+
 function Get-SafeObjectValue {
     param(
         [object]$Object,
@@ -176,6 +191,15 @@ $profitTracking = Read-JsonFile -Path (Join-Path $opsRoot "profit_tracking_lates
 $nearProfitQueue = Read-JsonFile -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json")
 $researchManifest = Read-JsonFile -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json")
 $qdmCustomPilot = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json")
+$qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
+$qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
+$qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
+$qdmCustomSmokeRun = $null
+if ($null -ne $qdmCustomSmokeSummaryFile) {
+    $runJsonName = [System.IO.Path]::GetFileNameWithoutExtension($qdmCustomSmokeSummaryFile.Name) -replace "_summary$",""
+    $runJsonPath = Join-Path $qdmCustomSmokeDir ($runJsonName + ".json")
+    $qdmCustomSmokeRun = Read-JsonFile -Path $runJsonPath
+}
 
 $runtimeUnexpectedTotal = 0
 if ($null -ne $runtimeArtifactAudit) {
@@ -381,6 +405,21 @@ $report = [ordered]@{
                 mql_log_copy_path = $(if ($qdmCustomPilot.PSObject.Properties.Name -contains "mql_log_copy_path") { $qdmCustomPilot.mql_log_copy_path } else { $null })
             }
         } else { $null }
+        qdm_custom_symbol_smoke = if ($null -ne $qdmCustomSmokeSummaryFile -and $null -ne $qdmCustomSmokeSummary) {
+            [ordered]@{
+                summary_path = $qdmCustomSmokeSummaryFile.FullName
+                last_write_local = $qdmCustomSmokeSummaryFile.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                run_id = $qdmCustomSmokeSummary.run_id
+                symbol = $qdmCustomSmokeSummary.symbol
+                result_label = $qdmCustomSmokeSummary.result_label
+                final_balance = $qdmCustomSmokeSummary.final_balance
+                test_duration = $qdmCustomSmokeSummary.test_duration
+                learning_sample_count = $qdmCustomSmokeSummary.learning_sample_count
+                requested_model = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'requested_model' -Default $null } else { $null })
+                model = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'model' -Default $null } else { $null })
+                model_normalized_for_qdm_custom_symbol = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'model_normalized_for_qdm_custom_symbol' -Default $false } else { $false })
+            }
+        } else { $null }
     }
     freshness = @($freshness)
     cleanliness = [ordered]@{
@@ -505,6 +544,30 @@ if ($null -ne $report.lab_health.near_profit_optimization) {
 }
 else {
     $lines.Add("- near-profit lane status not available")
+}
+$lines.Add("")
+$lines.Add("## QDM Custom Pilot")
+$lines.Add("")
+if ($null -ne $report.lab_health.qdm_custom_symbol_pilot) {
+    $lines.Add(("- import_status: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.run_status))
+    $lines.Add(("- import_succeeded: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.import_succeeded))
+    $lines.Add(("- custom_symbol: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.custom_symbol))
+    $lines.Add(("- import_message: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.import_message))
+}
+else {
+    $lines.Add("- qdm custom-symbol import status not available")
+}
+if ($null -ne $report.lab_health.qdm_custom_symbol_smoke) {
+    $lines.Add(("- smoke_run_id: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.run_id))
+    $lines.Add(("- smoke_result_label: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.result_label))
+    $lines.Add(("- smoke_requested_model: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.requested_model))
+    $lines.Add(("- smoke_model: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.model))
+    $lines.Add(("- smoke_model_normalized_for_qdm_custom_symbol: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.model_normalized_for_qdm_custom_symbol))
+    $lines.Add(("- smoke_final_balance: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.final_balance))
+    $lines.Add(("- smoke_duration: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.test_duration))
+}
+else {
+    $lines.Add("- qdm custom-symbol smoke status not available")
 }
 $lines.Add("")
 $lines.Add("## Consistency")
