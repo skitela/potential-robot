@@ -6,7 +6,7 @@ param(
     [string]$PaperLiveFeedbackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$SessionMatrixPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\session_window_matrix_v1.json",
     [string]$QdmProfileBuilderPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_QDM_WEAKEST_PROFILE.ps1",
-    [string]$QdmPackPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_weakest_pack.csv",
+    [string]$QdmPackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_weakest_pack_latest.csv",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [int]$SlotMinutes = 20
 )

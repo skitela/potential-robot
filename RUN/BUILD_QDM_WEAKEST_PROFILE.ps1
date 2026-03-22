@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$PriorityReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
-    [string]$OutputPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_weakest_pack.csv",
+    [string]$OutputPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_weakest_pack_latest.csv",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [int]$DesiredCount = 17
 )

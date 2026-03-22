@@ -30,6 +30,7 @@ $qdmWeakestScript = Join-Path $ProjectRoot "RUN\START_QDM_WEAKEST_SYNC_BACKGROUN
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
 $statusDir = Join-Path $ProjectRoot "EVIDENCE\OPS"
+$mt5StatusPath = Join-Path $statusDir "mt5_tester_status_latest.json"
 $dailySystemReportPath = Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json"
 $secondaryMt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe"
 
@@ -101,6 +102,21 @@ function Get-FileAgeSecondsOrMax {
     return [int][math]::Round(((Get-Date) - (Get-Item -LiteralPath $Path).LastWriteTime).TotalSeconds)
 }
 
+function Read-JsonOrNull {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
 function Invoke-SupervisorAction {
     param(
         [System.Collections.IDictionary]$Actions,
@@ -131,37 +147,31 @@ function Invoke-SupervisorAction {
     }
 }
 
-function Get-Mt5LabActivityCount {
+function Get-WeakestMt5ActivityCount {
     param(
-        [string]$TerminalExePath
+        [string]$Mt5StatusPath
     )
 
     $wrapperCount = Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*"
-    $wrapperCount += Get-WrapperCount -Pattern "*usdchf_fix_retest_*"
-    $wrapperCount += Get-WrapperCount -Pattern "*silver_baseline_*"
-    $wrapperCount += Get-WrapperCount -Pattern "*microbot_retest_after_idle_wrapper_*"
-    $wrapperCount += Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*"
+    if ($wrapperCount -gt 0) {
+        return $wrapperCount
+    }
 
-    $secondaryTerminalCount = @(
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.Name -eq "terminal64.exe" -and
-                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
-                ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq [System.IO.Path]::GetFullPath($TerminalExePath).ToLowerInvariant())
-            }
-    ).Count
+    $mt5Status = Read-JsonOrNull -Path $Mt5StatusPath
+    if ($null -eq $mt5Status) {
+        return 0
+    }
 
-    $metaTesterExePath = Join-Path (Split-Path -Parent $TerminalExePath) "metatester64.exe"
-    $metaTesterCount = @(
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.Name -eq "metatester64.exe" -and
-                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
-                ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq [System.IO.Path]::GetFullPath($metaTesterExePath).ToLowerInvariant())
-            }
-    ).Count
+    $state = [string]$mt5Status.state
+    $watchedTerminalRunning = [bool]$mt5Status.watched_terminal_running
+    $watchedMetaTesterRunning = [bool]$mt5Status.watched_metatester_running
+    $watchedExecutorRunning = [bool]$mt5Status.watched_executor_running
 
-    return ($wrapperCount + $secondaryTerminalCount + $metaTesterCount)
+    if ($state -eq "running" -and ($watchedTerminalRunning -or $watchedMetaTesterRunning -or $watchedExecutorRunning)) {
+        return 1
+    }
+
+    return 0
 }
 
 function Write-SupervisorStatus {
@@ -450,7 +460,7 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "weakest_mt5" -Operation {
         Ensure-BackgroundTask `
             -Label "weakest_mt5" `
-            -IsRunning { (Get-Mt5LabActivityCount -TerminalExePath $secondaryMt5Exe) -gt 0 } `
+            -IsRunning { (Get-WeakestMt5ActivityCount -Mt5StatusPath $mt5StatusPath) -gt 0 } `
             -StarterPath $weakestBatchScript
     } | Out-Null
 
