@@ -147,10 +147,6 @@ function Get-BlockedReason {
             continue
         }
 
-        $entryAlias = Normalize-QdmKey (Get-OptionalStringProperty -InputObject $entry -PropertyName "symbol_alias")
-        if (-not [string]::IsNullOrWhiteSpace($entryAlias) -and $entryAlias -eq $AliasKey) {
-            return $reason
-        }
     }
 
     return $null
