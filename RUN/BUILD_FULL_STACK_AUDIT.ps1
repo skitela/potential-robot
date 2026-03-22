@@ -175,6 +175,7 @@ $freshness = @(
     Get-FileFreshness -Label "ml_tuning_hints" -Path (Join-Path $opsRoot "ml_tuning_hints_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_weakest_profile" -Path (Join-Path $opsRoot "qdm_weakest_profile_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_custom_symbol_pilot" -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "qdm_custom_symbol_smoke" -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "daily_system_report" -Path (Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json") -ThresholdSeconds 5400
@@ -191,6 +192,7 @@ $profitTracking = Read-JsonFile -Path (Join-Path $opsRoot "profit_tracking_lates
 $nearProfitQueue = Read-JsonFile -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json")
 $researchManifest = Read-JsonFile -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json")
 $qdmCustomPilot = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json")
+$qdmCustomSmokeLatest = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -405,7 +407,21 @@ $report = [ordered]@{
                 mql_log_copy_path = $(if ($qdmCustomPilot.PSObject.Properties.Name -contains "mql_log_copy_path") { $qdmCustomPilot.mql_log_copy_path } else { $null })
             }
         } else { $null }
-        qdm_custom_symbol_smoke = if ($null -ne $qdmCustomSmokeSummaryFile -and $null -ne $qdmCustomSmokeSummary) {
+        qdm_custom_symbol_smoke = if ($null -ne $qdmCustomSmokeLatest) {
+            [ordered]@{
+                summary_path = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'summary_path' -Default $null)
+                last_write_local = $(if (Test-Path -LiteralPath (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json")) { (Get-Item -LiteralPath (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json")).LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null })
+                run_id = $qdmCustomSmokeLatest.tester_run_id
+                symbol = $qdmCustomSmokeLatest.custom_symbol
+                result_label = $qdmCustomSmokeLatest.result_label
+                final_balance = $qdmCustomSmokeLatest.final_balance
+                test_duration = $qdmCustomSmokeLatest.test_duration
+                learning_sample_count = $null
+                requested_model = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'requested_model' -Default $null)
+                model = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'model' -Default $null)
+                model_normalized_for_qdm_custom_symbol = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'model_normalized_for_qdm_custom_symbol' -Default $false)
+            }
+        } elseif ($null -ne $qdmCustomSmokeSummaryFile -and $null -ne $qdmCustomSmokeSummary) {
             [ordered]@{
                 summary_path = $qdmCustomSmokeSummaryFile.FullName
                 last_write_local = $qdmCustomSmokeSummaryFile.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
