@@ -354,6 +354,63 @@ function Read-LastNonEmptyLine {
     return ""
 }
 
+function Get-TesterPassSummary {
+    param([string]$Path)
+
+    $summary = [ordered]@{
+        latest_pass = $null
+        best_pass = $null
+        positive_count = 0
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]$summary
+    }
+
+    $stream = $null
+    $reader = $null
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $reader = New-Object System.IO.StreamReader($stream)
+        while (-not $reader.EndOfStream) {
+            $line = $reader.ReadLine()
+            if ([string]::IsNullOrWhiteSpace($line)) {
+                continue
+            }
+
+            try {
+                $pass = $line | ConvertFrom-Json
+            }
+            catch {
+                continue
+            }
+
+            $summary.latest_pass = $pass
+            $pnl = [double](0 + $pass.realized_pnl_lifetime)
+            if ($pnl -gt 0) {
+                $summary.positive_count++
+            }
+
+            if ($null -eq $summary.best_pass -or $pnl -gt [double](0 + $summary.best_pass.realized_pnl_lifetime)) {
+                $summary.best_pass = $pass
+            }
+        }
+    }
+    catch {
+        return [pscustomobject]$summary
+    }
+    finally {
+        if ($null -ne $reader) {
+            $reader.Dispose()
+        }
+        elseif ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+
+    return [pscustomobject]$summary
+}
+
 function Resolve-ActiveSandboxState {
     param(
         [string]$Root,
@@ -426,18 +483,9 @@ function Resolve-ActiveSandboxState {
     $decisionEventStats = Get-TextFileStats -Path $decisionEventsPath
     $tuningExperimentStats = Get-TextFileStats -Path $tuningExperimentsPath
     $testerPassStats = Get-TextFileStats -Path $testerPassPath
-    $latestTesterPass = $null
-    if ($testerPassStats.line_count -gt 0 -and -not $testerPassStats.locked) {
-        $lastPassLine = Read-LastNonEmptyLine -Path $testerPassPath
-        if (-not [string]::IsNullOrWhiteSpace($lastPassLine)) {
-            try {
-                $latestTesterPass = $lastPassLine | ConvertFrom-Json
-            }
-            catch {
-                $latestTesterPass = $null
-            }
-        }
-    }
+    $testerPassSummary = Get-TesterPassSummary -Path $testerPassPath
+    $latestTesterPass = $testerPassSummary.latest_pass
+    $bestTesterPass = $testerPassSummary.best_pass
 
     return [ordered]@{
         root_path = $sandboxRoot.FullName
@@ -479,10 +527,14 @@ function Resolve-ActiveSandboxState {
         tester_pass_rows_locked = $testerPassStats.locked
         tester_pass_bytes = if ($null -ne $testerPassItem) { [long]$testerPassItem.Length } else { 0L }
         tester_session_present = (Test-Path -LiteralPath $testerSessionPath)
+        tester_positive_pass_count = [int](0 + $testerPassSummary.positive_count)
         latest_tester_pass_frame = if ($null -ne $latestTesterPass) { [int](0 + $latestTesterPass.frame_pass) } else { 0 }
         latest_tester_pass_custom_score = if ($null -ne $latestTesterPass) { [double](0 + $latestTesterPass.custom_score) } else { 0.0 }
         latest_tester_pass_realized_pnl = if ($null -ne $latestTesterPass) { [double](0 + $latestTesterPass.realized_pnl_lifetime) } else { 0.0 }
         latest_tester_pass_inputs = if ($null -ne $latestTesterPass -and $latestTesterPass.PSObject.Properties.Name -contains "optimization_inputs") { @($latestTesterPass.optimization_inputs) } else { @() }
+        best_tester_pass_custom_score = if ($null -ne $bestTesterPass) { [double](0 + $bestTesterPass.custom_score) } else { 0.0 }
+        best_tester_pass_realized_pnl = if ($null -ne $bestTesterPass) { [double](0 + $bestTesterPass.realized_pnl_lifetime) } else { 0.0 }
+        best_tester_pass_inputs = if ($null -ne $bestTesterPass -and $bestTesterPass.PSObject.Properties.Name -contains "optimization_inputs") { @($bestTesterPass.optimization_inputs) } else { @() }
     }
 }
 
@@ -659,11 +711,17 @@ function Write-StatusArtifacts {
         $lines.Add(("- tester_pass_rows_locked: {0}" -f $Status.active_sandbox.tester_pass_rows_locked))
         $lines.Add(("- tester_pass_bytes: {0}" -f $Status.active_sandbox.tester_pass_bytes))
         $lines.Add(("- tester_session_present: {0}" -f $Status.active_sandbox.tester_session_present))
+        $lines.Add(("- tester_positive_pass_count: {0}" -f $Status.active_sandbox.tester_positive_pass_count))
         if ($Status.active_sandbox.latest_tester_pass_frame -gt 0) {
             $lines.Add(("- latest_tester_pass_frame: {0}" -f $Status.active_sandbox.latest_tester_pass_frame))
             $lines.Add(("- latest_tester_pass_custom_score: {0}" -f $Status.active_sandbox.latest_tester_pass_custom_score))
             $lines.Add(("- latest_tester_pass_realized_pnl: {0}" -f $Status.active_sandbox.latest_tester_pass_realized_pnl))
             $lines.Add(("- latest_tester_pass_inputs: {0}" -f ((@($Status.active_sandbox.latest_tester_pass_inputs) -join "; "))))
+        }
+        if (@($Status.active_sandbox.best_tester_pass_inputs).Count -gt 0 -or $Status.active_sandbox.best_tester_pass_realized_pnl -ne 0) {
+            $lines.Add(("- best_tester_pass_custom_score: {0}" -f $Status.active_sandbox.best_tester_pass_custom_score))
+            $lines.Add(("- best_tester_pass_realized_pnl: {0}" -f $Status.active_sandbox.best_tester_pass_realized_pnl))
+            $lines.Add(("- best_tester_pass_inputs: {0}" -f ((@($Status.active_sandbox.best_tester_pass_inputs) -join "; "))))
         }
     }
     $lines.Add("")

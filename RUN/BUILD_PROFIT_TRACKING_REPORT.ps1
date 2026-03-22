@@ -3,6 +3,7 @@ param(
     [string]$RuntimeReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$PriorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
     [string]$TesterEvidenceRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER",
+    [string]$NearProfitQueuePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\near_profit_optimization_queue_latest.json",
     [string]$QdmPilotRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_registry_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
@@ -239,6 +240,10 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $runtime = Get-Content -LiteralPath $RuntimeReviewPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $priority = Get-Content -LiteralPath $PriorityPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $bestTester = Get-BestTesterBySymbol -Root $TesterEvidenceRoot
+$nearProfitQueue = $null
+if (Test-Path -LiteralPath $NearProfitQueuePath) {
+    $nearProfitQueue = Get-Content -LiteralPath $NearProfitQueuePath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
 $qdmPilotRegistry = $null
 if (Test-Path -LiteralPath $QdmPilotRegistryPath) {
     $qdmPilotRegistry = Get-Content -LiteralPath $QdmPilotRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -263,6 +268,32 @@ foreach ($item in @($runtime.top_active)) {
     }
 }
 
+$activeOptimizationByAlias = @{}
+if (
+    $null -ne $nearProfitQueue -and
+    [string]$nearProfitQueue.state -eq "running" -and
+    $nearProfitQueue.PSObject.Properties.Name -contains 'active_sandbox' -and
+    $null -ne $nearProfitQueue.active_sandbox
+) {
+    $activeSymbolAlias = Normalize-Alias ([string]$nearProfitQueue.current_symbol)
+    $activeCandidatePnl = Convert-ToDoubleOrNull $nearProfitQueue.active_sandbox.best_tester_pass_realized_pnl
+    $activeCandidateInputs = @()
+    if ($nearProfitQueue.active_sandbox.PSObject.Properties.Name -contains 'best_tester_pass_inputs') {
+        $activeCandidateInputs = @($nearProfitQueue.active_sandbox.best_tester_pass_inputs | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
+    if (
+        -not [string]::IsNullOrWhiteSpace($activeSymbolAlias) -and
+        $null -ne $activeCandidatePnl -and
+        ([math]::Abs($activeCandidatePnl) -ge 0.0000001 -or $activeCandidateInputs.Count -gt 0)
+    ) {
+        $activeOptimizationByAlias[$activeSymbolAlias] = [pscustomobject]@{
+            pnl = $activeCandidatePnl
+            optimization_inputs = @($activeCandidateInputs)
+        }
+    }
+}
+
 $rows = foreach ($item in @($priority.ranked_instruments)) {
     $symbol = [string]$item.symbol_alias
     $symbolNorm = Normalize-Alias $symbol
@@ -274,6 +305,10 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
     $runtimeItem = $null
     if ($runtimeBySymbol.ContainsKey($symbol)) {
         $runtimeItem = $runtimeBySymbol[$symbol]
+    }
+    $activeOptimizationCandidate = $null
+    if ($activeOptimizationByAlias.ContainsKey($symbolNorm)) {
+        $activeOptimizationCandidate = $activeOptimizationByAlias[$symbolNorm]
     }
     $qdmPilot = $null
     if ($qdmPilotByAlias.ContainsKey($symbolNorm)) {
@@ -358,6 +393,8 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
         best_tester_trust = if ($hasTesterBaseline) { $bestTesterTrust } else { "" }
         best_tester_path  = if ($hasTesterBaseline) { $bestTesterPath } else { "" }
         best_tester_optimization_inputs = if ($hasTesterBaseline) { @($bestTesterOptimizationInputs) } else { @() }
+        active_optimization_candidate_pnl = if ($null -ne $activeOptimizationCandidate) { $activeOptimizationCandidate.pnl } else { $null }
+        active_optimization_candidate_inputs = if ($null -ne $activeOptimizationCandidate) { @($activeOptimizationCandidate.optimization_inputs) } else { @() }
         qdm_custom_pilot_ready = ($null -ne $qdmPilot)
         qdm_custom_symbol = if ($null -ne $qdmPilot) { [string]$qdmPilot.custom_symbol } else { "" }
         qdm_pilot_row_count = if ($null -ne $qdmPilot) { [int]$qdmPilot.pilot_row_count } else { 0 }
@@ -426,13 +463,19 @@ else {
         else {
             ""
         }
+        $candidateSuffix = if ($null -ne $item.active_optimization_candidate_pnl) {
+            " active_candidate_pnl={0}" -f $item.active_optimization_candidate_pnl
+        }
+        else {
+            ""
+        }
         $qdmSuffix = if ($item.qdm_custom_pilot_ready) {
             " qdm={0} rows={1}" -f $item.qdm_custom_symbol, $item.qdm_pilot_row_count
         }
         else {
             ""
         }
-        $lines.Add(("- {0}: best_tester_pnl={1} trust={2}{3}{4}" -f $item.symbol_alias, $item.best_tester_pnl, $item.best_tester_trust, $inputsSuffix, $qdmSuffix))
+        $lines.Add(("- {0}: best_tester_pnl={1} trust={2}{3}{4}{5}" -f $item.symbol_alias, $item.best_tester_pnl, $item.best_tester_trust, $inputsSuffix, $candidateSuffix, $qdmSuffix))
     }
 }
 $lines.Add("")
@@ -443,13 +486,25 @@ if ($nearProfit.Count -eq 0) {
 }
 else {
     foreach ($item in $nearProfit | Select-Object -First 8) {
+        $candidateSuffix = if ($null -ne $item.active_optimization_candidate_pnl) {
+            $candidateInputs = if (@($item.active_optimization_candidate_inputs).Count -gt 0) {
+                " active_candidate_inputs={0}" -f ((@($item.active_optimization_candidate_inputs) -join "; "))
+            }
+            else {
+                ""
+            }
+            " active_candidate_pnl={0}{1}" -f $item.active_optimization_candidate_pnl, $candidateInputs
+        }
+        else {
+            ""
+        }
         $qdmSuffix = if ($item.qdm_custom_pilot_ready) {
             " qdm={0} rows={1}" -f $item.qdm_custom_symbol, $item.qdm_pilot_row_count
         }
         else {
             ""
         }
-        $lines.Add(("- {0}: best_tester_pnl={1} live_opens={2} live_closes={3} live_wins={4} live_losses={5} live_net_24h={6} action={7}{8}" -f $item.symbol_alias, $item.best_tester_pnl, $item.live_opens_24h, $item.live_closes_24h, $item.live_wins_24h, $item.live_losses_24h, $item.live_net_24h, $item.recommended_action, $qdmSuffix))
+        $lines.Add(("- {0}: best_tester_pnl={1} live_opens={2} live_closes={3} live_wins={4} live_losses={5} live_net_24h={6} action={7}{8}{9}" -f $item.symbol_alias, $item.best_tester_pnl, $item.live_opens_24h, $item.live_closes_24h, $item.live_wins_24h, $item.live_losses_24h, $item.live_net_24h, $item.recommended_action, $candidateSuffix, $qdmSuffix))
     }
 }
 $lines.Add("")

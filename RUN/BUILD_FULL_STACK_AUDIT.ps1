@@ -380,6 +380,11 @@ $report = [ordered]@{
                 risk_guard_count = $nearProfitQueue.near_profit_risk_guard_count
                 risk_guard_rejected_events = $nearProfitQueue.near_profit_risk_guard_rejected_events
                 active_sandbox = if ($nearProfitQueue.PSObject.Properties.Name -contains "active_sandbox") { $nearProfitQueue.active_sandbox } else { $null }
+                positive_pass_visible = (
+                    $nearProfitQueue.PSObject.Properties.Name -contains "active_sandbox" -and
+                    $null -ne $nearProfitQueue.active_sandbox -and
+                    [double](Get-SafeObjectValue -Object $nearProfitQueue.active_sandbox -PropertyName 'best_tester_pass_realized_pnl' -Default 0.0) -gt 0
+                )
                 sandbox_progress_visible = (
                     $nearProfitQueue.PSObject.Properties.Name -contains "active_sandbox" -and
                     $null -ne $nearProfitQueue.active_sandbox -and
@@ -564,6 +569,7 @@ if ($null -ne $report.lab_health.near_profit_optimization) {
     $lines.Add(("- risk_guard_running: {0}" -f $report.lab_health.near_profit_optimization.risk_guard_running))
     $lines.Add(("- risk_guard_rejected_events: {0}" -f $report.lab_health.near_profit_optimization.risk_guard_rejected_events))
     $lines.Add(("- sandbox_progress_visible: {0}" -f $report.lab_health.near_profit_optimization.sandbox_progress_visible))
+    $lines.Add(("- positive_pass_visible: {0}" -f $report.lab_health.near_profit_optimization.positive_pass_visible))
     if ($null -ne $report.lab_health.near_profit_optimization.active_sandbox) {
         $lines.Add(("- storage_contract_complete: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.storage_contract_complete))
         $lines.Add(("- run_dir_present: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.run_dir_present))
@@ -577,6 +583,11 @@ if ($null -ne $report.lab_health.near_profit_optimization) {
         $lines.Add(("- decision_event_rows: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.decision_event_rows))
         $lines.Add(("- tuning_experiment_rows: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.tuning_experiment_rows))
         $lines.Add(("- tester_pass_rows: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.tester_pass_rows))
+        $lines.Add(("- tester_positive_pass_count: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.tester_positive_pass_count))
+        $lines.Add(("- best_tester_pass_realized_pnl: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.best_tester_pass_realized_pnl))
+        if (@($report.lab_health.near_profit_optimization.active_sandbox.best_tester_pass_inputs).Count -gt 0) {
+            $lines.Add(("- best_tester_pass_inputs: {0}" -f ((@($report.lab_health.near_profit_optimization.active_sandbox.best_tester_pass_inputs) -join "; "))))
+        }
     }
 }
 else {
