@@ -604,34 +604,44 @@ void OnTick()
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
+      bool breakout_setup = (signal.setup_type == "SETUP_BREAKOUT");
+      bool range_setup = (signal.setup_type == "SETUP_RANGE");
+      bool trend_setup = (signal.setup_type == "SETUP_TREND");
+      bool chaos_regime = (signal.market_regime == "CHAOS");
+      bool range_regime = (signal.market_regime == "RANGE");
+      bool breakout_regime = (signal.market_regime == "BREAKOUT");
+      bool trend_regime = (signal.market_regime == "TREND");
+      bool low_confidence = (signal.confidence_bucket == "LOW");
+      bool bad_spread = (signal.spread_regime == "BAD");
+      bool non_good_renko = (signal.renko_quality_grade != "GOOD");
       bool blocked_by_tuning_gate = false;
       bool blocked_by_usdjpy_breakout_chaos_gate = false;
       bool blocked_by_usdjpy_range_chaos_gate = false;
-      if(signal.setup_type == "SETUP_TREND" && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
+      if(trend_setup && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
          blocked_by_tuning_gate = true;
-      if(signal.setup_type == "SETUP_BREAKOUT" && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
+      if(breakout_setup && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_breakout && poor_candle)
          blocked_by_tuning_gate = true;
-      if(signal.setup_type == "SETUP_BREAKOUT" && g_usdjpy_effective_tuning_policy.require_non_poor_renko_for_breakout && poor_renko)
+      if(breakout_setup && g_usdjpy_effective_tuning_policy.require_non_poor_renko_for_breakout && poor_renko)
          blocked_by_tuning_gate = true;
-      if(signal.setup_type == "SETUP_RANGE" && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_range && poor_candle)
+      if(range_setup && g_usdjpy_effective_tuning_policy.require_non_poor_candle_for_range && poor_candle)
          blocked_by_tuning_gate = true;
-      if(signal.setup_type == "SETUP_RANGE" && g_usdjpy_effective_tuning_policy.require_non_poor_renko_for_range && poor_renko)
+      if(range_setup && g_usdjpy_effective_tuning_policy.require_non_poor_renko_for_range && poor_renko)
          blocked_by_tuning_gate = true;
-      if(signal.setup_type == "SETUP_BREAKOUT")
+      if(breakout_setup)
         {
          paper_gate_abs = 0.64;
-         if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE" || signal.confidence_bucket == "LOW")
+         if(chaos_regime || range_regime || low_confidence)
             paper_gate_abs = 0.74;
          if(
-            signal.market_regime == "CHAOS" &&
-            signal.confidence_bucket == "LOW" &&
+            chaos_regime &&
+            low_confidence &&
             poor_candle &&
-            (signal.renko_quality_grade != "GOOD" || signal.spread_regime == "BAD")
+            (non_good_renko || bad_spread)
          )
             blocked_by_usdjpy_breakout_chaos_gate = true;
          if(
-            signal.market_regime == "CHAOS" &&
-            signal.confidence_bucket == "LOW" &&
+            chaos_regime &&
+            low_confidence &&
             signal.renko_quality_grade == "GOOD" &&
             g_market.spread_points <= 24.0
          )
@@ -641,27 +651,29 @@ void OnTick()
          else if(poor_candle)
             paper_gate_abs = MathMax(paper_gate_abs,0.78);
         }
-      else if(signal.setup_type == "SETUP_RANGE")
+      else if(range_setup)
         {
          paper_gate_abs = 0.19;
          if(
-            signal.market_regime == "CHAOS" &&
+            chaos_regime &&
             (
-               (signal.confidence_bucket == "LOW" && (poor_candle || poor_renko)) ||
-               (signal.spread_regime == "BAD" && (poor_candle || poor_renko)) ||
+               (low_confidence && (poor_candle || poor_renko)) ||
+               (bad_spread && (poor_candle || poor_renko)) ||
                (poor_candle && signal.renko_quality_grade == "GOOD")
             )
          )
             blocked_by_usdjpy_range_chaos_gate = true;
-         if(signal.market_regime == "CHAOS")
+         if(chaos_regime && poor_candle && non_good_renko)
+            blocked_by_usdjpy_range_chaos_gate = true;
+         if(chaos_regime)
             paper_gate_abs = MathMax(paper_gate_abs,0.26);
-         if(signal.market_regime == "TREND" || signal.market_regime == "BREAKOUT")
+         if(trend_regime || breakout_regime)
             paper_gate_abs = 0.30;
-         if(signal.confidence_bucket == "LOW" && poor_candle && poor_renko)
+         if(low_confidence && poor_candle && poor_renko)
             paper_gate_abs = MathMax(paper_gate_abs,0.38);
-         else if(signal.confidence_bucket == "LOW" && (poor_candle || poor_renko))
+         else if(low_confidence && (poor_candle || poor_renko))
             paper_gate_abs = MathMax(paper_gate_abs,0.30);
-         if(signal.market_regime == "CHAOS" && signal.spread_regime == "BAD")
+         if(chaos_regime && bad_spread)
             paper_gate_abs = MathMax(paper_gate_abs,0.32);
         }
 

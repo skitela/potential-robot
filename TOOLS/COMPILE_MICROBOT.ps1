@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$ServerName = "OANDATMS-MT5",
+    [Alias("BotName")]
     [string]$ExpertName = "MicroBot_EURUSD",
     [string]$Symbol = "",
     [string]$PortableLabRoot = "C:\TRADING_TOOLS\MT5_NEAR_PROFIT_LAB",
