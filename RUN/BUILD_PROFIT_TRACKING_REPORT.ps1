@@ -35,6 +35,58 @@ function Normalize-Alias {
     return (($Value.ToUpperInvariant()) -replace '[^A-Z0-9]+', '')
 }
 
+function Get-FirstValue {
+    param(
+        [object]$Object,
+        [string[]]$Names
+    )
+
+    foreach ($name in $Names) {
+        if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $name) {
+            return $Object.$name
+        }
+    }
+
+    return $null
+}
+
+function Get-EffectiveTesterSummaryPnl {
+    param([object]$Summary)
+
+    if ($null -eq $Summary) {
+        return $null
+    }
+
+    $topLevelPnl = Convert-ToDoubleOrNull $Summary.realized_pnl_lifetime
+    $telemetry = Get-FirstValue -Object $Summary -Names @("tester_telemetry")
+    $passCount = [int](Get-FirstValue -Object $Summary -Names @("tester_optimization_pass_count"))
+    $experimentStatus = [string](Get-FirstValue -Object $telemetry -Names @("experiment_status"))
+    $telemetryPnl = Convert-ToDoubleOrNull (Get-FirstValue -Object $telemetry -Names @("realized_pnl_lifetime", "custom_score"))
+
+    if (($passCount -gt 0 -or $experimentStatus -eq "OPTIMIZATION_PASS") -and $null -ne $telemetryPnl) {
+        return $telemetryPnl
+    }
+
+    return $topLevelPnl
+}
+
+function Get-EffectiveTesterSummaryResultLabel {
+    param([object]$Summary)
+
+    $resultLabel = [string](Get-FirstValue -Object $Summary -Names @("result_label"))
+    $passCount = [int](Get-FirstValue -Object $Summary -Names @("tester_optimization_pass_count"))
+
+    if ($resultLabel -eq "timed_out" -and $passCount -gt 0) {
+        return "timed_out_with_materialized_passes"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($resultLabel)) {
+        return $resultLabel
+    }
+
+    return [string](Get-FirstValue -Object $Summary -Names @("raw_result_label"))
+}
+
 function Test-MeaningfulTesterSummary {
     param([object]$Summary)
 
@@ -52,7 +104,7 @@ function Test-MeaningfulTesterSummary {
         $trustState = [string]$Summary.trust_state
     }
 
-    $pnl = Convert-ToDoubleOrNull $Summary.realized_pnl_lifetime
+    $pnl = Get-EffectiveTesterSummaryPnl -Summary $Summary
     $hasMaterialPnl = ($null -ne $pnl -and [math]::Abs($pnl) -ge 0.0000001)
 
     if ($sampleCount -gt 0) {
@@ -139,7 +191,7 @@ function Get-BestTesterBySymbol {
         $row = [pscustomobject]@{
             symbol_alias = $symbolAlias
             pnl          = $pnl
-            result_label = [string]$summary.result_label
+            result_label = Get-EffectiveTesterSummaryResultLabel -Summary $summary
             trust_state  = [string]$summary.trust_state
             source_path  = $file.FullName
         }
@@ -203,10 +255,26 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
         $null
     }
 
-    $bestTesterPnl = if ($tester) { $tester.pnl } else { Convert-ToDoubleOrNull $item.latest_tester_pnl }
+    $priorityTesterPnl = Convert-ToDoubleOrNull $item.latest_tester_pnl
+    $bestTesterPnl = $null
+    $bestTesterTrust = ""
+    $bestTesterPath = ""
+
+    if ($tester) {
+        $bestTesterPnl = $tester.pnl
+        $bestTesterTrust = [string]$tester.trust_state
+        $bestTesterPath = [string]$tester.source_path
+    }
+
+    if ($null -ne $priorityTesterPnl -and ($null -eq $bestTesterPnl -or $priorityTesterPnl -gt $bestTesterPnl)) {
+        $bestTesterPnl = $priorityTesterPnl
+        $bestTesterTrust = [string]$item.latest_tester_trust
+        $bestTesterPath = [string]$item.latest_tester_path
+    }
+
     $hasMeaningfulPriorityBaseline = Test-MeaningfulPriorityTesterBaseline -Item $item
     $hasTesterBaseline = $false
-    if ($tester) {
+    if ($null -ne $bestTesterPnl) {
         $hasTesterBaseline = $true
     }
     elseif (
@@ -239,8 +307,8 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
         live_neutral_24h  = $liveNeutral
         live_net_24h      = $liveNet
         best_tester_pnl   = if ($hasTesterBaseline) { $bestTesterPnl } else { $null }
-        best_tester_trust = if ($tester) { $tester.trust_state } elseif ($hasTesterBaseline) { [string]$item.latest_tester_trust } else { "" }
-        best_tester_path  = if ($tester) { $tester.source_path } elseif ($hasTesterBaseline) { [string]$item.latest_tester_path } else { "" }
+        best_tester_trust = if ($hasTesterBaseline) { $bestTesterTrust } else { "" }
+        best_tester_path  = if ($hasTesterBaseline) { $bestTesterPath } else { "" }
         recommended_action = [string]$item.recommended_action
         priority_rank     = [int]$item.rank
     }

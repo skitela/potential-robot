@@ -39,6 +39,68 @@ function Get-FirstValue {
     return $null
 }
 
+function Convert-ToDoubleOrNull {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    $raw = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($raw) -or $raw -eq "null") {
+        return $null
+    }
+
+    try {
+        return [double]($raw -replace ',', '.')
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-EffectiveTesterSummaryPnl {
+    param([object]$Summary)
+
+    if ($null -eq $Summary) {
+        return $null
+    }
+
+    $topLevelPnl = Convert-ToDoubleOrNull (Get-FirstValue -Object $Summary -Names @("realized_pnl_lifetime"))
+    $telemetry = Get-FirstValue -Object $Summary -Names @("tester_telemetry")
+    $passCount = [int](Get-FirstValue -Object $Summary -Names @("tester_optimization_pass_count"))
+    $experimentStatus = [string](Get-FirstValue -Object $telemetry -Names @("experiment_status"))
+    $telemetryPnl = Convert-ToDoubleOrNull (Get-FirstValue -Object $telemetry -Names @("realized_pnl_lifetime", "custom_score"))
+
+    if (($passCount -gt 0 -or $experimentStatus -eq "OPTIMIZATION_PASS") -and $null -ne $telemetryPnl) {
+        return $telemetryPnl
+    }
+
+    return $topLevelPnl
+}
+
+function Get-EffectiveTesterSummaryResultLabel {
+    param([object]$Summary)
+
+    $resultLabel = [string](Get-FirstValue -Object $Summary -Names @("result_label"))
+    $rawResultLabel = [string](Get-FirstValue -Object $Summary -Names @("raw_result_label"))
+    $passCount = [int](Get-FirstValue -Object $Summary -Names @("tester_optimization_pass_count"))
+
+    if ($resultLabel -eq "timed_out" -and $passCount -gt 0) {
+        return "timed_out_with_materialized_passes"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($resultLabel)) {
+        return $resultLabel
+    }
+
+    if ($passCount -gt 0 -and -not [string]::IsNullOrWhiteSpace($rawResultLabel)) {
+        return $rawResultLabel
+    }
+
+    return $rawResultLabel
+}
+
 function Test-MeaningfulTesterSummary {
     param([object]$Summary)
 
@@ -48,14 +110,14 @@ function Test-MeaningfulTesterSummary {
 
     $sampleCount = [int](Get-FirstValue -Object $Summary -Names @("learning_sample_count"))
     $trustState = [string](Get-FirstValue -Object $Summary -Names @("trust_state"))
-    $resultLabel = [string](Get-FirstValue -Object $Summary -Names @("result_label"))
-    $pnlValue = [double](Get-FirstValue -Object $Summary -Names @("realized_pnl_lifetime"))
+    $resultLabel = Get-EffectiveTesterSummaryResultLabel -Summary $Summary
+    $pnlValue = Get-EffectiveTesterSummaryPnl -Summary $Summary
 
     if ($sampleCount -gt 0) {
         return $true
     }
 
-    if ([math]::Abs($pnlValue) -ge 0.0000001) {
+    if ($null -ne $pnlValue -and [math]::Abs($pnlValue) -ge 0.0000001) {
         return $true
     }
 
@@ -286,11 +348,14 @@ function Get-LatestTesterSummaries {
                 if (-not (Test-MeaningfulTesterSummary -Summary $summary)) {
                     return
                 }
-                $resultLabel = [string](Get-FirstValue -Object $summary -Names @("result_label"))
+                $resultLabel = Get-EffectiveTesterSummaryResultLabel -Summary $summary
                 $trustState = [string](Get-FirstValue -Object $summary -Names @("trust_state"))
                 $sampleCount = [int](Get-FirstValue -Object $summary -Names @("learning_sample_count"))
                 $biasValue = [double](Get-FirstValue -Object $summary -Names @("learning_bias"))
-                $pnlValue = [double](Get-FirstValue -Object $summary -Names @("realized_pnl_lifetime"))
+                $pnlValue = Get-EffectiveTesterSummaryPnl -Summary $summary
+                if ($null -eq $pnlValue) {
+                    $pnlValue = 0.0
+                }
                 if ($map.ContainsKey($alias)) {
                     return
                 }

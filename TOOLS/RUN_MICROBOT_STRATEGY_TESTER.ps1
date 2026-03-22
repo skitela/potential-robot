@@ -438,6 +438,26 @@ function Get-OptimizationReportRowCount {
     return 0
 }
 
+function Convert-ToDoubleOrNull {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    $raw = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $null
+    }
+
+    try {
+        return [double]($raw -replace ',', '.')
+    }
+    catch {
+        return $null
+    }
+}
+
 function Initialize-StrategyTesterSandboxContract {
     param(
         [Parameter(Mandatory = $true)]
@@ -717,6 +737,26 @@ if (Test-Path -LiteralPath $testerOptimizationPassesPath) {
 }
 
 $runtimeMap = Get-KeyValueCsvMap -Path $runtimeStatePath
+$runtimeRealizedPnlLifetime = if ($runtimeMap.Contains('realized_pnl_lifetime')) { $runtimeMap['realized_pnl_lifetime'] } else { $null }
+$testerTelemetryRealizedPnl = Convert-ToDoubleOrNull (Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'realized_pnl_lifetime' -Default $null)
+$testerTelemetryExperimentStatus = [string](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'experiment_status' -Default '')
+$optimizationMaterialized = (($Optimization -ne 0) -and ($testerOptimizationPassCount -gt 0))
+$optimizationResultSource = if ($optimizationResultRows -gt 0) { "mt5_report" } else { "none" }
+
+if ($optimizationMaterialized -and $optimizationResultRows -lt $testerOptimizationPassCount) {
+    $optimizationResultRows = $testerOptimizationPassCount
+    $optimizationResultSource = "agent_passes"
+}
+
+$effectiveResultLabel = $resultLabel
+if ($timedOut -and $testerOptimizationPassCount -gt 0) {
+    $effectiveResultLabel = "timed_out_with_materialized_passes"
+}
+
+$effectiveRealizedPnlLifetime = $runtimeRealizedPnlLifetime
+if (($optimizationMaterialized -or $testerTelemetryExperimentStatus -eq 'OPTIMIZATION_PASS') -and $null -ne $testerTelemetryRealizedPnl) {
+    $effectiveRealizedPnlLifetime = [string]([math]::Round($testerTelemetryRealizedPnl, 2))
+}
 
 $paperOpenRows = 0
 $paperScoreGateRows = 0
@@ -840,6 +880,7 @@ $result = [ordered]@{
     optimization_criterion = $OptimizationCriterion
     timeout_sec           = $TimeoutSec
     optimization_result_rows = $optimizationResultRows
+    optimization_result_source = $optimizationResultSource
     expert_parameters_source_path = $(if ($expertParametersSourcePath -ne "") { $expertParametersSourcePath } else { $null })
     expert_parameters_profile_name = $(if ($expertParametersTargetName -ne "") { $expertParametersTargetName } else { $null })
     model                 = $Model
@@ -850,7 +891,8 @@ $result = [ordered]@{
     agent_logs_copied     = $copiedAgentLogs
     final_balance         = $finalBalance
     test_duration         = $testDuration
-    result_label          = $resultLabel
+    result_label          = $effectiveResultLabel
+    raw_result_label      = $resultLabel
     restore_profile       = [bool]$RestoreMicrobotsProfile
     tester_telemetry_path = $(if (Test-Path -LiteralPath $testerTelemetryPath) { $testerTelemetryPath } else { $null })
     tester_telemetry_session_path = $(if (Test-Path -LiteralPath $testerTelemetrySessionPath) { $testerTelemetrySessionPath } else { $null })
@@ -871,10 +913,12 @@ $summary = [ordered]@{
     optimization_criterion    = $OptimizationCriterion
     timeout_sec               = $TimeoutSec
     optimization_result_rows  = $optimizationResultRows
+    optimization_result_source = $optimizationResultSource
     expert_parameters_profile_name = $expertParametersTargetName
     final_balance             = $finalBalance
     test_duration             = $testDuration
-    result_label              = $resultLabel
+    result_label              = $effectiveResultLabel
+    raw_result_label          = $resultLabel
     worker_name               = $workerToken
     evidence_dir              = $evidenceDir
     trust_state               = $summaryTrustState
@@ -899,7 +943,8 @@ $summary = [ordered]@{
     accepted_evaluated_rows   = $acceptedEvaluatedRows
     score_below_trigger_rows  = $scoreBelowTriggerRows
     paper_conversion_ratio    = $conversionRatio
-    realized_pnl_lifetime     = ($runtimeMap['realized_pnl_lifetime'])
+    realized_pnl_lifetime     = $effectiveRealizedPnlLifetime
+    runtime_realized_pnl_lifetime = $runtimeRealizedPnlLifetime
     execution_summary_trust_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_state' -Default '')
     execution_summary_trust_reason = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_reason' -Default '')
     execution_summary_cost_pressure_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'cost_pressure_state' -Default '')
