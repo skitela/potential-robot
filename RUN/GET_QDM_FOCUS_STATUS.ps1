@@ -8,7 +8,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $dataDbPath = Join-Path $QdmRoot "user\data\data.db"
-$qdmLogPath = Join-Path $QdmRoot "user\log\QuantDataManager\log_2026_03_19.log"
+$qdmLogDir = Join-Path $QdmRoot "user\log\QuantDataManager"
+$qdmLogPath = $null
+if (Test-Path -LiteralPath $qdmLogDir) {
+    $qdmLogPath = Get-ChildItem -LiteralPath $qdmLogDir -File -Filter "log_*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1 |
+        ForEach-Object { $_.FullName }
+}
 
 Write-Host "=== QDM STATUS ==="
 Get-Process -ErrorAction SilentlyContinue |
@@ -39,7 +46,11 @@ conn.close()
     $symbolLines
 }
 
-$latestSyncLog = Get-ChildItem -Path $LogRoot -Filter "qdm_focus_sync_*.log" -ErrorAction SilentlyContinue |
+$latestSyncLog = Get-ChildItem -Path $LogRoot -File -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.Name -like "qdm_focus_sync_*.log" -or
+        $_.Name -like "qdm_missing_supported_sync_*.log"
+    } |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
@@ -50,8 +61,9 @@ if ($latestSyncLog) {
     Get-Content -Path $latestSyncLog.FullName -Tail 40
 }
 
-if (Test-Path -LiteralPath $qdmLogPath) {
+if (-not [string]::IsNullOrWhiteSpace($qdmLogPath) -and (Test-Path -LiteralPath $qdmLogPath)) {
     Write-Host ""
     Write-Host "=== LAST QDM ENGINE LOG ==="
+    Write-Host $qdmLogPath
     Get-Content -Path $qdmLogPath -Tail 40
 }

@@ -176,20 +176,38 @@ function Get-QdmSpec {
         }
         "DE30" {
             return [pscustomobject]@{
-                supported = $false
-                reason = "current QDM dataset does not materialize usable DEU.IDX history on disk; keep DE30 on MT5/runtime fallback"
+                supported = $true
+                symbol = "DEUIDXEUR"
+                datasource = "dukascopy"
+                datatype = "TICK"
+                date_from = "2018.01.01"
+                date_to = ""
+                mt5_export_name = "MB_DE30_DUKA"
+                notes = "weakest_dynamic_indices"
             }
         }
         "COPPER-US" {
             return [pscustomobject]@{
-                supported = $false
-                reason = "current QDM dataset does not materialize usable COPPER.CMD history on disk; keep COPPER-US on MT5/runtime fallback"
+                supported = $true
+                symbol = "COPPERCMDUSD"
+                datasource = "dukascopy"
+                datatype = "TICK"
+                date_from = "2018.01.01"
+                date_to = ""
+                mt5_export_name = "MB_COPPER_DUKA"
+                notes = "weakest_dynamic_metals_problem"
             }
         }
         "COPPERUS" {
             return [pscustomobject]@{
-                supported = $false
-                reason = "current QDM dataset does not materialize usable COPPER.CMD history on disk; keep COPPER-US on MT5/runtime fallback"
+                supported = $true
+                symbol = "COPPERCMDUSD"
+                datasource = "dukascopy"
+                datatype = "TICK"
+                date_from = "2018.01.01"
+                date_to = ""
+                mt5_export_name = "MB_COPPER_DUKA"
+                notes = "weakest_dynamic_metals_problem"
             }
         }
         "PLATIN" {
@@ -200,8 +218,14 @@ function Get-QdmSpec {
         }
         "US500" {
             return [pscustomobject]@{
-                supported = $false
-                reason = "current QDM dataset does not contain usable US500 index history in this flow; keep US500 on MT5/runtime fallback"
+                supported = $true
+                symbol = "USA500IDXUSD"
+                datasource = "dukascopy"
+                datatype = "TICK"
+                date_from = "2018.01.01"
+                date_to = ""
+                mt5_export_name = "MB_US500_DUKA"
+                notes = "weakest_dynamic_indices"
             }
         }
         default {

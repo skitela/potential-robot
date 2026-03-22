@@ -30,11 +30,11 @@ function Get-QdmSpec {
         "GBPAUD" { return [pscustomobject]@{ supported = $true; symbol = "GBPAUD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2016.01.01"; date_to = ""; mt5_export_name = "MB_GBPAUD_DUKA"; notes = "registry_fx" } }
         "GOLD" { return [pscustomobject]@{ supported = $true; symbol = "XAUUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_GOLD_DUKA"; notes = "registry_metals" } }
         "SILVER" { return [pscustomobject]@{ supported = $true; symbol = "XAGUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_SILVER_DUKA"; notes = "registry_metals" } }
-        "DE30" { return [pscustomobject]@{ supported = $false; reason = "current QDM dataset does not materialize usable DEU.IDX history on disk; use MT5/runtime fallback on laptop" } }
-        "COPPER-US" { return [pscustomobject]@{ supported = $false; reason = "current QDM dataset does not materialize usable COPPER.CMD history on disk; use MT5/runtime fallback on laptop" } }
-        "COPPERUS" { return [pscustomobject]@{ supported = $false; reason = "current QDM dataset does not materialize usable COPPER.CMD history on disk; use MT5/runtime fallback on laptop" } }
+        "DE30" { return [pscustomobject]@{ supported = $true; symbol = "DEUIDXEUR"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_DE30_DUKA"; notes = "registry_indices" } }
+        "COPPER-US" { return [pscustomobject]@{ supported = $true; symbol = "COPPERCMDUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_COPPER_DUKA"; notes = "registry_metals_problem" } }
+        "COPPERUS" { return [pscustomobject]@{ supported = $true; symbol = "COPPERCMDUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_COPPER_DUKA"; notes = "registry_metals_problem" } }
         "PLATIN" { return [pscustomobject]@{ supported = $false; reason = "no stable QDM datasource mapped for PLATIN in current flow; use MT5/runtime fallback on laptop" } }
-        "US500" { return [pscustomobject]@{ supported = $false; reason = "current QDM dataset does not contain usable US500 index history in this flow; use MT5/runtime fallback on laptop" } }
+        "US500" { return [pscustomobject]@{ supported = $true; symbol = "USA500IDXUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_US500_DUKA"; notes = "registry_indices" } }
         default { return [pscustomobject]@{ supported = $false; reason = "no QDM mapping defined for alias" } }
     }
 }
@@ -117,19 +117,43 @@ if (Test-Path -LiteralPath $BlockedSymbolsPath) {
     }
 }
 
-$blockedMap = @{}
-foreach ($entry in $blockedDefinitions) {
-    if ($null -eq $entry) { continue }
-    $reason = Get-OptionalStringProperty -InputObject $entry -PropertyName "reason"
-    $keys = @(
-        $(Normalize-QdmKey (Get-OptionalStringProperty -InputObject $entry -PropertyName "symbol_alias"))
-        $(Normalize-QdmKey (Get-OptionalStringProperty -InputObject $entry -PropertyName "qdm_symbol"))
-        $(Normalize-QdmKey (Get-OptionalStringProperty -InputObject $entry -PropertyName "broker_symbol"))
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+function Get-BlockedReason {
+    param(
+        [object[]]$Definitions,
+        [string]$AliasKey,
+        [string]$BrokerKey,
+        [string]$QdmSymbolKey
+    )
 
-    foreach ($key in $keys) {
-        $blockedMap[$key] = $reason
+    foreach ($entry in $Definitions) {
+        if ($null -eq $entry) { continue }
+
+        $reason = Get-OptionalStringProperty -InputObject $entry -PropertyName "reason"
+        if ([string]::IsNullOrWhiteSpace($reason)) { continue }
+
+        $entryQdmSymbol = Normalize-QdmKey (Get-OptionalStringProperty -InputObject $entry -PropertyName "qdm_symbol")
+        if (-not [string]::IsNullOrWhiteSpace($entryQdmSymbol)) {
+            if ($entryQdmSymbol -eq $QdmSymbolKey) {
+                return $reason
+            }
+            continue
+        }
+
+        $entryBrokerSymbol = Normalize-QdmKey (Get-OptionalStringProperty -InputObject $entry -PropertyName "broker_symbol")
+        if (-not [string]::IsNullOrWhiteSpace($entryBrokerSymbol)) {
+            if ($entryBrokerSymbol -eq $BrokerKey) {
+                return $reason
+            }
+            continue
+        }
+
+        $entryAlias = Normalize-QdmKey (Get-OptionalStringProperty -InputObject $entry -PropertyName "symbol_alias")
+        if (-not [string]::IsNullOrWhiteSpace($entryAlias) -and $entryAlias -eq $AliasKey) {
+            return $reason
+        }
     }
+
+    return $null
 }
 
 $rows = New-Object System.Collections.Generic.List[object]
@@ -158,14 +182,7 @@ foreach ($item in @($registry.symbols)) {
         continue
     }
 
-    $blockedReason = $null
-    foreach ($candidateKey in @($aliasKey, $brokerKey, $specSymbolKey)) {
-        if ([string]::IsNullOrWhiteSpace($candidateKey)) { continue }
-        if ($blockedMap.ContainsKey($candidateKey)) {
-            $blockedReason = [string]$blockedMap[$candidateKey]
-            break
-        }
-    }
+    $blockedReason = Get-BlockedReason -Definitions $blockedDefinitions -AliasKey $aliasKey -BrokerKey $brokerKey -QdmSymbolKey $specSymbolKey
 
     if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
         $blocked.Add([pscustomobject]@{
