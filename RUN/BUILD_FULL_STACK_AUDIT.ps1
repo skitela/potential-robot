@@ -173,6 +173,8 @@ $freshness = @(
     Get-FileFreshness -Label "mt5_retest_queue" -Path (Join-Path $opsRoot "mt5_retest_queue_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "near_profit_optimization_queue" -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "ml_tuning_hints" -Path (Join-Path $opsRoot "ml_tuning_hints_latest.json") -ThresholdSeconds 1200
+    Get-FileFreshness -Label "qdm_missing_only_profile" -Path (Join-Path $opsRoot "qdm_missing_only_profile_latest.json") -ThresholdSeconds 1200
+    Get-FileFreshness -Label "qdm_missing_supported_sync" -Path (Join-Path $opsRoot "qdm_missing_supported_sync_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_weakest_profile" -Path (Join-Path $opsRoot "qdm_weakest_profile_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_custom_symbol_pilot" -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_smoke" -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json") -ThresholdSeconds 1800
@@ -192,6 +194,8 @@ $autonomousStatus = Read-JsonFile -Path (Join-Path $opsRoot "autonomous_90p_late
 $trustButVerify = Read-JsonFile -Path (Join-Path $opsRoot "trust_but_verify_latest.json")
 $profitTracking = Read-JsonFile -Path (Join-Path $opsRoot "profit_tracking_latest.json")
 $nearProfitQueue = Read-JsonFile -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json")
+$qdmMissingOnlyProfile = Read-JsonFile -Path (Join-Path $opsRoot "qdm_missing_only_profile_latest.json")
+$qdmMissingSupportedSync = Read-JsonFile -Path (Join-Path $opsRoot "qdm_missing_supported_sync_latest.json")
 $researchManifest = Read-JsonFile -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json")
 $qdmCustomPilot = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json")
 $qdmCustomSmokeLatest = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json")
@@ -403,6 +407,19 @@ $report = [ordered]@{
                 )
             }
         } else { $null }
+        qdm_missing_supported_sync = if ($null -ne $qdmMissingSupportedSync -or $null -ne $qdmMissingOnlyProfile) {
+            [ordered]@{
+                state = $(if ($null -ne $qdmMissingSupportedSync) { Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'state' -Default $null } else { $null })
+                sync_started = $(if ($null -ne $qdmMissingSupportedSync) { [bool](Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'sync_started' -Default $false) } else { $false })
+                missing_count = $(if ($null -ne $qdmMissingOnlyProfile) { [int](Get-SafeObjectValue -Object $qdmMissingOnlyProfile -PropertyName 'qdm_missing_count' -Default 0) } else { 0 })
+                blocked_count = $(if ($null -ne $qdmMissingOnlyProfile) { [int](Get-SafeObjectValue -Object $qdmMissingOnlyProfile -PropertyName 'qdm_blocked_count' -Default 0) } else { 0 })
+                unsupported_count = $(if ($null -ne $qdmMissingOnlyProfile) { [int](Get-SafeObjectValue -Object $qdmMissingOnlyProfile -PropertyName 'qdm_unsupported_count' -Default 0) } else { 0 })
+                missing_symbols = $(if ($null -ne $qdmMissingSupportedSync) { @((Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'missing_symbols' -Default @())) } elseif ($null -ne $qdmMissingOnlyProfile) { @($qdmMissingOnlyProfile.missing | ForEach-Object { [string]$_.symbol_alias }) } else { @() })
+                unsupported_symbols = $(if ($null -ne $qdmMissingSupportedSync) { @((Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'unsupported_symbols' -Default @())) } elseif ($null -ne $qdmMissingOnlyProfile) { @($qdmMissingOnlyProfile.unsupported | ForEach-Object { [string]$_.symbol_alias }) } else { @() })
+                current_focus = $(if ($null -ne $qdmMissingSupportedSync) { Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'current_focus' -Default $null } else { $null })
+                note = $(if ($null -ne $qdmMissingSupportedSync) { Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'note' -Default $null } else { $null })
+            }
+        } else { $null }
         qdm_custom_symbol_pilot = if ($null -ne $qdmCustomPilot) {
             [ordered]@{
                 run_status = $qdmCustomPilot.run_status
@@ -596,6 +613,18 @@ else {
 $lines.Add("")
 $lines.Add("## QDM Custom Pilot")
 $lines.Add("")
+if ($null -ne $report.lab_health.qdm_missing_supported_sync) {
+    $lines.Add(("- missing_sync_state: {0}" -f $report.lab_health.qdm_missing_supported_sync.state))
+    $lines.Add(("- missing_sync_started: {0}" -f $report.lab_health.qdm_missing_supported_sync.sync_started))
+    $lines.Add(("- missing_sync_missing_count: {0}" -f $report.lab_health.qdm_missing_supported_sync.missing_count))
+    $lines.Add(("- missing_sync_blocked_count: {0}" -f $report.lab_health.qdm_missing_supported_sync.blocked_count))
+    $lines.Add(("- missing_sync_unsupported_count: {0}" -f $report.lab_health.qdm_missing_supported_sync.unsupported_count))
+    $lines.Add(("- missing_sync_symbols: {0}" -f ($report.lab_health.qdm_missing_supported_sync.missing_symbols -join ", ")))
+    $lines.Add(("- missing_sync_current_focus: {0}" -f $report.lab_health.qdm_missing_supported_sync.current_focus))
+}
+else {
+    $lines.Add("- qdm missing-supported sync status not available")
+}
 if ($null -ne $report.lab_health.qdm_custom_symbol_pilot) {
     $lines.Add(("- import_status: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.run_status))
     $lines.Add(("- import_succeeded: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.import_succeeded))
