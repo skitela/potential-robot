@@ -457,6 +457,50 @@ function Resolve-LatestOptimizationRunSummaryItem {
     return $candidate
 }
 
+function Get-CompletedOptimizationSymbolsSinceStart {
+    param(
+        [string]$BatchReportPath,
+        [datetime]$StartedAt = [datetime]::MinValue,
+        [string[]]$SelectedSymbols = @()
+    )
+
+    $dir = Split-Path -Parent $BatchReportPath
+    if ([string]::IsNullOrWhiteSpace($dir) -or -not (Test-Path -LiteralPath $dir)) {
+        return @()
+    }
+
+    $selectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($symbol in @($SelectedSymbols)) {
+        $alias = Convert-ToCanonicalSymbol -Symbol ([string]$symbol)
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            [void]$selectedSet.Add($alias)
+        }
+    }
+
+    $completed = New-Object System.Collections.Generic.List[string]
+    foreach ($summaryItem in @(Get-ChildItem -Path $dir -Filter "*_summary.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)) {
+        if ($StartedAt -ne [datetime]::MinValue -and $summaryItem.LastWriteTime -lt $StartedAt.AddSeconds(-15)) {
+            continue
+        }
+
+        $summary = Read-JsonFile -Path $summaryItem.FullName
+        if ($null -eq $summary) {
+            continue
+        }
+
+        $alias = Convert-ToCanonicalSymbol -Symbol ([string]$summary.symbol_alias)
+        if ([string]::IsNullOrWhiteSpace($alias) -or -not $selectedSet.Contains($alias)) {
+            continue
+        }
+
+        if (-not $completed.Contains($alias)) {
+            [void]$completed.Add($alias)
+        }
+    }
+
+    return @($completed.ToArray())
+}
+
 function Write-StatusArtifacts {
     param(
         [hashtable]$Status,
@@ -616,6 +660,7 @@ if (-not [string]::IsNullOrWhiteSpace($resolvedStartedAt)) {
 $latestOptimizationSummaryItem = Resolve-LatestOptimizationRunSummaryItem -BatchReportPath $BatchReportPath -StartedAt $(if ($null -ne $startedAtDate) { $startedAtDate } else { [datetime]::MinValue })
 $latestOptimizationSummary = if ($null -ne $latestOptimizationSummaryItem) { Read-JsonFile -Path $latestOptimizationSummaryItem.FullName } else { $null }
 $latestOptimizationSummarySymbol = if ($null -ne $latestOptimizationSummary) { Convert-ToCanonicalSymbol -Symbol ([string]$latestOptimizationSummary.symbol_alias) } else { "" }
+$completedSinceStart = Get-CompletedOptimizationSymbolsSinceStart -BatchReportPath $BatchReportPath -StartedAt $(if ($null -ne $startedAtDate) { $startedAtDate } else { [datetime]::MinValue }) -SelectedSymbols $selectedSymbols
 
 $runElapsedSec = 0
 if ($null -ne $startedAtDate) {
@@ -737,6 +782,30 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
 
 if (@($resolvedPending).Count -eq 0 -and @($selectedSymbols).Count -gt 0 -and $resolvedState -notin @("completed", "failed")) {
     $resolvedPending = @($selectedSymbols | Where-Object { @($resolvedCompleted) -notcontains $_ })
+}
+
+if ($resolvedState -eq "running" -and @($completedSinceStart).Count -gt 0) {
+    $resolvedCompleted = @(
+        @($resolvedCompleted + $completedSinceStart) |
+            ForEach-Object { Convert-ToCanonicalSymbol -Symbol ([string]$_) } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique
+    )
+
+    $activeCanonical = Convert-ToCanonicalSymbol -Symbol $resolvedCurrentSymbol
+    $resolvedPending = @(
+        $selectedSymbols |
+            ForEach-Object { Convert-ToCanonicalSymbol -Symbol ([string]$_) } |
+            Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and
+                ($_ -eq $activeCanonical -or @($resolvedCompleted) -notcontains $_)
+            } |
+            Select-Object -Unique
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($activeCanonical)) {
+        $resolvedCompleted = @($resolvedCompleted | Where-Object { $_ -ne $activeCanonical })
+    }
 }
 
 $preferredSandboxTagTokens = @()
