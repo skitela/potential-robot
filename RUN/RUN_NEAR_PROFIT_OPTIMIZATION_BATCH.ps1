@@ -24,6 +24,22 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Convert-ToCanonicalSymbol {
+    param([string]$Symbol)
+
+    if ([string]::IsNullOrWhiteSpace($Symbol)) {
+        return ""
+    }
+
+    $canonical = $Symbol.Trim().ToUpperInvariant()
+    $dotIndex = $canonical.IndexOf(".")
+    if ($dotIndex -gt 0) {
+        $canonical = $canonical.Substring(0, $dotIndex)
+    }
+
+    return $canonical
+}
+
 function Resolve-NearProfitDateWindow {
     param(
         [string]$FromDate,
@@ -80,10 +96,31 @@ if ($nearProfit.Count -le 0) {
     throw "No near-profit symbols available in $ProfitTrackingPath"
 }
 
+$testerPositiveAliasSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($entry in @($profitTracking.tester_positive)) {
+    $alias = Convert-ToCanonicalSymbol -Symbol ([string]$entry.symbol_alias)
+    if (-not [string]::IsNullOrWhiteSpace($alias)) {
+        [void]$testerPositiveAliasSet.Add($alias)
+    }
+}
+
+$eligibleNearProfit = @(
+    $nearProfit |
+        Where-Object {
+            $alias = Convert-ToCanonicalSymbol -Symbol ([string]$_.symbol_alias)
+            -not [string]::IsNullOrWhiteSpace($alias) -and
+            -not $testerPositiveAliasSet.Contains($alias)
+        }
+)
+
+if ($eligibleNearProfit.Count -gt 0) {
+    $nearProfit = $eligibleNearProfit
+}
+
 $excludedAliasSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($alias in @($ExcludedSymbolAliases)) {
     if (-not [string]::IsNullOrWhiteSpace($alias)) {
-        [void]$excludedAliasSet.Add([string]$alias)
+        [void]$excludedAliasSet.Add((Convert-ToCanonicalSymbol -Symbol ([string]$alias)))
     }
 }
 
@@ -91,7 +128,7 @@ $filteredNearProfit = if ($excludedAliasSet.Count -gt 0) {
     @(
         $nearProfit |
             Where-Object {
-                -not $excludedAliasSet.Contains([string]$_.symbol_alias)
+                -not $excludedAliasSet.Contains((Convert-ToCanonicalSymbol -Symbol ([string]$_.symbol_alias)))
             }
     )
 } else {
@@ -103,7 +140,7 @@ if ($filteredNearProfit.Count -le 0) {
 }
 
 $selected = @($filteredNearProfit | Select-Object -First ([Math]::Max(1, $NearProfitCount)))
-$symbolAliases = @($selected | ForEach-Object { [string]$_.symbol_alias } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$symbolAliases = @($selected | ForEach-Object { Convert-ToCanonicalSymbol -Symbol ([string]$_.symbol_alias) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if ($symbolAliases.Count -le 0) {
     throw "Near-profit list did not yield usable symbol aliases."
 }

@@ -48,10 +48,31 @@ function Get-NearProfitSymbols {
         return @()
     }
 
+    $testerPositiveAliasSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($profitTracking.tester_positive)) {
+        $alias = Convert-ToCanonicalSymbol -Symbol ([string]$entry.symbol_alias)
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            [void]$testerPositiveAliasSet.Add($alias)
+        }
+    }
+
+    $eligibleNearProfit = @(
+        $nearProfit |
+            Where-Object {
+                $alias = Convert-ToCanonicalSymbol -Symbol ([string]$_.symbol_alias)
+                -not [string]::IsNullOrWhiteSpace($alias) -and
+                -not $testerPositiveAliasSet.Contains($alias)
+            }
+    )
+
+    if ($eligibleNearProfit.Count -gt 0) {
+        $nearProfit = $eligibleNearProfit
+    }
+
     return @(
         $nearProfit |
             Select-Object -First ([Math]::Max(1, $TopCount)) |
-            ForEach-Object { [string]$_.symbol_alias } |
+            ForEach-Object { Convert-ToCanonicalSymbol -Symbol ([string]$_.symbol_alias) } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
 }

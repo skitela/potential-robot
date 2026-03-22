@@ -49,6 +49,62 @@ function Get-NearProfitRiskGuardProcesses {
     )
 }
 
+function Convert-ToCanonicalSymbol {
+    param([string]$Symbol)
+
+    if ([string]::IsNullOrWhiteSpace($Symbol)) {
+        return ""
+    }
+
+    $canonical = $Symbol.Trim().ToUpperInvariant()
+    $dotIndex = $canonical.IndexOf(".")
+    if ($dotIndex -gt 0) {
+        $canonical = $canonical.Substring(0, $dotIndex)
+    }
+
+    return $canonical
+}
+
+function Get-DedicatedLabProcesses {
+    param([string]$TerminalRoot)
+
+    if ([string]::IsNullOrWhiteSpace($TerminalRoot) -or -not (Test-Path -LiteralPath $TerminalRoot)) {
+        return @()
+    }
+
+    $terminalRootFull = [System.IO.Path]::GetFullPath($TerminalRoot).TrimEnd('\')
+    $terminalRootPrefix = ($terminalRootFull + "\").ToLowerInvariant()
+
+    return @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                ($_.Name -eq "terminal64.exe" -or $_.Name -eq "metatester64.exe") -and
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant().StartsWith($terminalRootPrefix))
+            }
+    )
+}
+
+function Stop-DedicatedLabProcesses {
+    param([string]$TerminalRoot)
+
+    $processes = @(Get-DedicatedLabProcesses -TerminalRoot $TerminalRoot)
+    if ($processes.Count -le 0) {
+        return 0
+    }
+
+    foreach ($proc in $processes) {
+        try {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+        }
+        catch {
+        }
+    }
+
+    Start-Sleep -Seconds 3
+    return $processes.Count
+}
+
 function Ensure-NearProfitRiskPopupGuard {
     param(
         [string]$ProjectRootPath,
@@ -180,6 +236,27 @@ if ($nearProfit.Count -le 0) {
     throw "No near-profit symbols available in $ProfitTrackingPath"
 }
 
+$testerPositiveAliasSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($entry in @($profitTracking.tester_positive)) {
+    $alias = Convert-ToCanonicalSymbol -Symbol ([string]$entry.symbol_alias)
+    if (-not [string]::IsNullOrWhiteSpace($alias)) {
+        [void]$testerPositiveAliasSet.Add($alias)
+    }
+}
+
+$eligibleNearProfit = @(
+    $nearProfit |
+        Where-Object {
+            $alias = Convert-ToCanonicalSymbol -Symbol ([string]$_.symbol_alias)
+            -not [string]::IsNullOrWhiteSpace($alias) -and
+            -not $testerPositiveAliasSet.Contains($alias)
+        }
+)
+
+if ($eligibleNearProfit.Count -gt 0) {
+    $nearProfit = $eligibleNearProfit
+}
+
 $selectedSymbols = @(
     $nearProfit |
         Select-Object -First ([Math]::Max(1, $NearProfitCount)) |
@@ -188,6 +265,48 @@ $selectedSymbols = @(
 )
 if ($selectedSymbols.Count -le 0) {
     throw "Near-profit list did not yield usable symbol aliases."
+}
+
+$queueStatusPath = Join-Path $OpsEvidenceDir "near_profit_optimization_queue_latest.json"
+if ($UseDedicatedPortableLabLane -and ($existingWrappers.Count -eq 0)) {
+    $queueStatus = $null
+    if (Test-Path -LiteralPath $queueStatusPath) {
+        try {
+            $queueStatus = Get-Content -LiteralPath $queueStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        }
+        catch {
+            $queueStatus = $null
+        }
+    }
+
+    $activeDedicatedProcesses = @(Get-DedicatedLabProcesses -TerminalRoot $DedicatedLabTerminalRoot)
+    if ($activeDedicatedProcesses.Count -gt 0 -and $null -ne $queueStatus) {
+        $activeDedicatedSymbol = Convert-ToCanonicalSymbol -Symbol ([string]$queueStatus.current_symbol)
+        $runExpired = (($queueStatus.PSObject.Properties.Name -contains "run_timeout_sec") -and (0 + $queueStatus.run_timeout_sec) -gt 0 -and (0 + $queueStatus.run_remaining_sec) -le 0)
+        $retiredSymbol = (-not [string]::IsNullOrWhiteSpace($activeDedicatedSymbol) -and ($selectedSymbols -notcontains $activeDedicatedSymbol))
+        $testerPositiveActive = (-not [string]::IsNullOrWhiteSpace($activeDedicatedSymbol) -and $testerPositiveAliasSet.Contains($activeDedicatedSymbol))
+
+        if ($runExpired -and ($retiredSymbol -or $testerPositiveActive)) {
+            $stoppedCount = Stop-DedicatedLabProcesses -TerminalRoot $DedicatedLabTerminalRoot
+            if ($stoppedCount -gt 0) {
+                & $statusScript `
+                    -ProjectRoot $ProjectRoot `
+                    -OpsEvidenceDir $OpsEvidenceDir `
+                    -LogRoot $LogRoot `
+                    -ProfitTrackingPath $ProfitTrackingPath `
+                    -Mt5TesterStatusPath (Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json") `
+                    -BatchReportPath (Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json") `
+                    -UseDedicatedPortableLabLane $UseDedicatedPortableLabLane `
+                    -DedicatedLabTerminalRoot $DedicatedLabTerminalRoot `
+                    -NearProfitCount $NearProfitCount `
+                    -State "idle" `
+                    -CurrentSymbol "" `
+                    -Completed @() `
+                    -Pending $selectedSymbols `
+                    -CurrentNote "stale_portable_lab_retired_symbol_cleaned" | Out-Null
+            }
+        }
+    }
 }
 
 $mt5TesterStatusPath = Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json"
