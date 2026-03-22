@@ -519,6 +519,17 @@ $runDir = Join-Path $ProjectRoot "RUN\strategy_tester"
 if ([string]::IsNullOrWhiteSpace($EvidenceSubdir) -and -not [string]::IsNullOrWhiteSpace($workerToken)) {
     $EvidenceSubdir = $workerToken.ToLowerInvariant()
 }
+
+$requestedModel = $Model
+$modelNormalizedForQdmCustomSymbol = $false
+if (($Symbol -like "*_QDM_*") -and $Model -eq 4) {
+    # QDM custom-symbol pilot currently runs reliably on OHLC minute modeling.
+    # Leaving the default model 4 here causes false "no history data" failures
+    # before the expert even gets a chance to initialize.
+    $Model = 1
+    $modelNormalizedForQdmCustomSymbol = $true
+}
+
 $evidenceDir = Resolve-EvidenceDir -ProjectRootPath $ProjectRoot -Subdir $EvidenceSubdir
 $mt5Root = Split-Path -Parent $Mt5Exe
 $mt5ReportsDir = if ($PortableTerminal) { Join-Path $TerminalDataDir "reports" } else { Join-Path $mt5Root "reports" }
@@ -883,7 +894,9 @@ $result = [ordered]@{
     optimization_result_source = $optimizationResultSource
     expert_parameters_source_path = $(if ($expertParametersSourcePath -ne "") { $expertParametersSourcePath } else { $null })
     expert_parameters_profile_name = $(if ($expertParametersTargetName -ne "") { $expertParametersTargetName } else { $null })
+    requested_model       = $requestedModel
     model                 = $Model
+    model_normalized_for_qdm_custom_symbol = $modelNormalizedForQdmCustomSymbol
     timed_out             = $timedOut
     reports_copied        = $copiedReports
     tester_logs_copied    = $copiedTesterLogs
@@ -909,6 +922,9 @@ $summary = [ordered]@{
     expert_name               = $ExpertName
     from_date                 = $FromDate
     to_date                   = $ToDate
+    requested_model           = $requestedModel
+    model                     = $Model
+    model_normalized_for_qdm_custom_symbol = $modelNormalizedForQdmCustomSymbol
     optimization              = $Optimization
     optimization_criterion    = $OptimizationCriterion
     timeout_sec               = $TimeoutSec

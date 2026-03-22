@@ -159,6 +159,7 @@ $freshness = @(
     Get-FileFreshness -Label "near_profit_optimization_queue" -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json") -ThresholdSeconds 900
     Get-FileFreshness -Label "ml_tuning_hints" -Path (Join-Path $opsRoot "ml_tuning_hints_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_weakest_profile" -Path (Join-Path $opsRoot "qdm_weakest_profile_latest.json") -ThresholdSeconds 1200
+    Get-FileFreshness -Label "qdm_custom_symbol_pilot" -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "daily_system_report" -Path (Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json") -ThresholdSeconds 5400
@@ -174,6 +175,7 @@ $trustButVerify = Read-JsonFile -Path (Join-Path $opsRoot "trust_but_verify_late
 $profitTracking = Read-JsonFile -Path (Join-Path $opsRoot "profit_tracking_latest.json")
 $nearProfitQueue = Read-JsonFile -Path (Join-Path $opsRoot "near_profit_optimization_queue_latest.json")
 $researchManifest = Read-JsonFile -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json")
+$qdmCustomPilot = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json")
 
 $runtimeUnexpectedTotal = 0
 if ($null -ne $runtimeArtifactAudit) {
@@ -364,6 +366,19 @@ $report = [ordered]@{
                         )
                     )
                 )
+            }
+        } else { $null }
+        qdm_custom_symbol_pilot = if ($null -ne $qdmCustomPilot) {
+            [ordered]@{
+                run_status = $qdmCustomPilot.run_status
+                import_succeeded = $qdmCustomPilot.import_succeeded
+                custom_symbol = $qdmCustomPilot.custom_symbol
+                broker_template_symbol = $qdmCustomPilot.broker_template_symbol
+                portable_terminal = $qdmCustomPilot.portable_terminal
+                terminal_origin = $qdmCustomPilot.terminal_origin
+                import_message = $qdmCustomPilot.import_message
+                terminal_log_copy_path = $qdmCustomPilot.terminal_log_copy_path
+                mql_log_copy_path = $(if ($qdmCustomPilot.PSObject.Properties.Name -contains "mql_log_copy_path") { $qdmCustomPilot.mql_log_copy_path } else { $null })
             }
         } else { $null }
     }

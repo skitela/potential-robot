@@ -22,11 +22,12 @@ bool EnsureCustomSymbol(const string custom_symbol,const string group_name,const
    return(false);
   }
 
-bool ReadRatesFromCommonCsv(const string relative_csv_path,MqlRates &rates[])
+bool ReadRatesFromCommonCsv(const string relative_csv_path,MqlRates &rates[],int &skipped_non_increasing)
   {
    ArrayResize(rates,0);
+   skipped_non_increasing=0;
 
-   const int handle = FileOpen(relative_csv_path,FILE_READ|FILE_TXT|FILE_CSV|FILE_COMMON|FILE_ANSI);
+   const int handle = FileOpen(relative_csv_path,FILE_READ|FILE_TXT|FILE_CSV|FILE_COMMON|FILE_ANSI,',');
    if(handle == INVALID_HANDLE)
      {
       PrintFormat("Failed to open common CSV: %s, error=%d",relative_csv_path,GetLastError());
@@ -34,6 +35,7 @@ bool ReadRatesFromCommonCsv(const string relative_csv_path,MqlRates &rates[])
      }
 
    int row_count = 0;
+   datetime last_time = 0;
    while(!FileIsEnding(handle))
      {
       const string date_part = FileReadString(handle);
@@ -66,9 +68,16 @@ bool ReadRatesFromCommonCsv(const string relative_csv_path,MqlRates &rates[])
       if(rate.time <= 0)
          continue;
 
+      if(last_time > 0 && rate.time <= last_time)
+        {
+         skipped_non_increasing++;
+         continue;
+        }
+
       ArrayResize(rates,row_count + 1);
       rates[row_count] = rate;
       row_count++;
+      last_time = rate.time;
      }
 
    FileClose(handle);
@@ -78,7 +87,8 @@ bool ReadRatesFromCommonCsv(const string relative_csv_path,MqlRates &rates[])
 void OnStart()
   {
    MqlRates rates[];
-   if(!ReadRatesFromCommonCsv(InpCommonCsvPath,rates))
+   int skipped_non_increasing = 0;
+   if(!ReadRatesFromCommonCsv(InpCommonCsvPath,rates,skipped_non_increasing))
      {
       Print("No rates parsed from CSV.");
       return;
@@ -108,6 +118,9 @@ void OnStart()
 
    if(InpSelectSymbolAfterImport)
       SymbolSelect(InpCustomSymbol,true);
+
+   if(skipped_non_increasing > 0)
+      PrintFormat("Skipped %d non-increasing CSV rows for %s before import",skipped_non_increasing,InpCustomSymbol);
 
    PrintFormat("Imported %d M1 bars into custom symbol %s from %s to %s",
                replaced,

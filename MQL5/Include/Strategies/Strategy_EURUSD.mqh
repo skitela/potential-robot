@@ -34,6 +34,14 @@ bool StrategyEURUSDInit(const MbSymbolProfile &profile)
    bool ok = MbStrategyInitIndicators(profile,12,34,14,14,g_eurusd_ema_fast_handle,g_eurusd_ema_slow_handle,g_eurusd_atr_handle,g_eurusd_rsi_handle);
    g_eurusd_last_bar_time = 0;
    MbTuningLocalPolicyReset(g_eurusd_tuning_policy);
+   if(!ok)
+      PrintFormat("MB_EURUSD_INIT_FAIL stage=INDICATORS symbol=%s tf=%s ema_fast=%d ema_slow=%d atr=%d rsi=%d",
+                  profile.symbol,
+                  EnumToString(profile.trade_tf),
+                  g_eurusd_ema_fast_handle,
+                  g_eurusd_ema_slow_handle,
+                  g_eurusd_atr_handle,
+                  g_eurusd_rsi_handle);
    return ok;
   }
 
@@ -414,4 +422,3 @@ void EvaluateEURUSDStrategy(
   }
 
 #endif
-

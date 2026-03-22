@@ -42,7 +42,19 @@ void MbRuntimeOnTick(MbRuntimeState &state)
 
 bool MbVerifyChartSymbol(const string expected_symbol)
   {
-   return (MbCanonicalSymbol(Symbol()) == MbCanonicalSymbol(expected_symbol));
+   string chart_symbol = Symbol();
+   string expected_canonical = MbCanonicalSymbol(expected_symbol);
+   string chart_canonical = MbCanonicalSymbol(chart_symbol);
+   if(chart_canonical == expected_canonical)
+      return true;
+
+   string chart_upper = chart_symbol;
+   StringToUpper(chart_upper);
+   string qdm_prefix = expected_canonical + "_QDM_";
+   if(StringFind(chart_upper,qdm_prefix) == 0)
+      return true;
+
+   return false;
   }
 
 #endif

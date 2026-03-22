@@ -97,6 +97,17 @@ bool IsLocalPaperModeActive()
    return MbIsEffectivePaperRuntimeActive(InpEnableLiveEntries,InpPaperCollectMode,g_runtime_control);
   }
 
+void NormalizeEURUSDResearchCustomTimeframe()
+  {
+   if(!MbIsStrategyTesterRuntime())
+      return;
+
+   string chart_symbol = Symbol();
+   StringToUpper(chart_symbol);
+   if(StringFind(chart_symbol,"_QDM_") > 0)
+      g_profile.trade_tf = (ENUM_TIMEFRAMES)Period();
+  }
+
 void ConfigureEURUSDStrategyTesterSandbox()
   {
    if(!InpEnableStrategyTesterSandbox || !MbIsStrategyTesterRuntime())
@@ -290,9 +301,19 @@ int OnInit()
    MbRuntimeReset(g_state);
    LoadProfileEURUSD(g_profile);
    if(!MbVerifyChartSymbol(g_profile.symbol))
+     {
+      PrintFormat("MB_EURUSD_INIT_FAIL stage=VERIFY_CHART expected=%s chart=%s",g_profile.symbol,Symbol());
       return(INIT_FAILED);
+     }
    g_profile.symbol = Symbol();
+   NormalizeEURUSDResearchCustomTimeframe();
    ConfigureEURUSDStrategyTesterSandbox();
+   PrintFormat("MB_EURUSD_INIT_INFO chart=%s profile_symbol=%s tf=%s sandbox=%s tester=%s",
+               Symbol(),
+               g_profile.symbol,
+               EnumToString(g_profile.trade_tf),
+               InpStrategyTesterSandboxTag,
+               (MbIsStrategyTesterRuntime() ? "true" : "false"));
    g_state.magic = InpMagic;
    g_state.symbol = g_profile.symbol;
    g_state.mode = MB_MODE_READY;
@@ -300,9 +321,15 @@ int OnInit()
    g_trade.SetDeviationInPoints(g_profile.deviation_points);
    g_trade.SetTypeFillingBySymbol(g_profile.symbol);
    if(!MbStorageInit(g_profile.symbol))
+     {
+      PrintFormat("MB_EURUSD_INIT_FAIL stage=STORAGE symbol=%s common_root=%s",g_profile.symbol,MbRootPath());
       return(INIT_FAILED);
+     }
    if(!StrategyEURUSDInit(g_profile))
+     {
+      PrintFormat("MB_EURUSD_INIT_FAIL stage=STRATEGY_INIT symbol=%s tf=%s",g_profile.symbol,EnumToString(g_profile.trade_tf));
       return(INIT_FAILED);
+     }
 
    MbLoadRuntimeState(g_state);
    MbNormalizePaperRuntimeState(g_state,IsLocalPaperModeActive());

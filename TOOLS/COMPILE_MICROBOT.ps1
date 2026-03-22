@@ -4,6 +4,7 @@ param(
     [string]$ExpertName = "MicroBot_EURUSD",
     [string]$Symbol = "",
     [string]$PortableLabRoot = "C:\TRADING_TOOLS\MT5_NEAR_PROFIT_LAB",
+    [string]$PortableQdmLabRoot = "C:\TRADING_TOOLS\MT5_QDM_CUSTOM_LAB",
     [switch]$CopySourcesToTerminal
 )
 
@@ -208,6 +209,7 @@ $result = [ordered]@{
 
 if ($compileOk) {
     $result.portable_lab_sync = Sync-CompiledExpertToPortableLab -SourceTerminalDataDir $terminalDataDir -PortableLabRootPath $PortableLabRoot -CompiledExpertName $ExpertName
+    $result.portable_qdm_lab_sync = Sync-CompiledExpertToPortableLab -SourceTerminalDataDir $terminalDataDir -PortableLabRootPath $PortableQdmLabRoot -CompiledExpertName $ExpertName
 }
 
 $result | ConvertTo-Json -Depth 5

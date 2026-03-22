@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$TerminalOrigin = "C:\Program Files\MetaTrader 5",
+    [string]$TerminalDataDir = "",
     [string]$PilotCsvPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\QDM_PILOT\MB_EURUSD_DUKA_M1_PILOT.csv",
     [string]$CommonRelativeCsvPath = "MAKRO_I_MIKRO_BOT\\qdm_import\\MB_EURUSD_DUKA_M1_PILOT.csv",
     [string]$ScriptName = "QdmImportCustomSymbolBars",
@@ -9,7 +10,11 @@ param(
     [string]$BrokerTemplateSymbol = "EURUSD.pro",
     [bool]$SelectSymbolAfterImport = $true,
     [bool]$RunImport = $true,
-    [int]$TimeoutSec = 300
+    [int]$TimeoutSec = 300,
+    [bool]$UseDedicatedPortableLabLane = $true,
+    [string]$DedicatedLabTerminalRoot = "C:\TRADING_TOOLS\MT5_QDM_CUSTOM_LAB",
+    [string]$DedicatedLabSourceTerminalOrigin = "C:\Program Files\MetaTrader 5",
+    [string]$LatestStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json"
 )
 
 Set-StrictMode -Version Latest
@@ -47,10 +52,9 @@ function Resolve-TerminalDataDirByOrigin {
 }
 
 function Get-RunningTerminalProcessesForOrigin {
-    param([string]$OriginPath)
+    param([string]$TerminalExePath)
 
-    $terminalExe = Join-Path $OriginPath "terminal64.exe"
-    $normalizedTerminalExe = [System.IO.Path]::GetFullPath($terminalExe).ToLowerInvariant()
+    $normalizedTerminalExe = [System.IO.Path]::GetFullPath($TerminalExePath).ToLowerInvariant()
 
     return @(
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
@@ -79,6 +83,24 @@ function Read-TextBestEffort {
     return ""
 }
 
+function Get-LatestRegexMatchValue {
+    param(
+        [string]$Text,
+        [string]$Pattern
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text) -or [string]::IsNullOrWhiteSpace($Pattern)) {
+        return $null
+    }
+
+    $matches = [regex]::Matches($Text, $Pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline)
+    if ($null -eq $matches -or $matches.Count -le 0) {
+        return $null
+    }
+
+    return [string]$matches[$matches.Count - 1].Value
+}
+
 function Write-PresetFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -98,7 +120,32 @@ if (-not (Test-Path -LiteralPath $PilotCsvPath)) {
 }
 
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
-$terminalDataDir = Resolve-TerminalDataDirByOrigin -OriginPath $TerminalOrigin
+$portableTerminal = $false
+if ($UseDedicatedPortableLabLane) {
+    $preparePortableLabScript = Join-Path $projectPath "RUN\PREPARE_QDM_CUSTOM_PORTABLE_LAB.ps1"
+    if (-not (Test-Path -LiteralPath $preparePortableLabScript)) {
+        throw "Required script not found: $preparePortableLabScript"
+    }
+
+    $portableLab = & $preparePortableLabScript `
+        -ProjectRoot $projectPath `
+        -SourceTerminalOrigin $DedicatedLabSourceTerminalOrigin `
+        -LabTerminalRoot $DedicatedLabTerminalRoot
+
+    if ($null -eq $portableLab) {
+        throw "QDM custom portable lab preparation returned no result."
+    }
+
+    $TerminalOrigin = [string]$portableLab.terminal_origin
+    $TerminalDataDir = [string]$portableLab.terminal_data_dir
+    $portableTerminal = [bool]$portableLab.portable_terminal
+}
+
+if ([string]::IsNullOrWhiteSpace($TerminalDataDir)) {
+    $TerminalDataDir = Resolve-TerminalDataDirByOrigin -OriginPath $TerminalOrigin
+}
+
+$terminalDataDir = $TerminalDataDir
 $terminalExe = Join-Path $TerminalOrigin "terminal64.exe"
 $metaEditorExe = Join-Path $TerminalOrigin "MetaEditor64.exe"
 if (-not (Test-Path -LiteralPath $terminalExe)) {
@@ -148,6 +195,7 @@ $scriptPresetName = "{0}.set" -f $runId
 $scriptPresetPath = Join-Path $presetsTargetDir $scriptPresetName
 $configPath = Join-Path $runDir ("{0}.ini" -f $runId)
 $terminalLogCopyPath = Join-Path $evidenceDir ("{0}__terminal.log" -f $runId)
+$mqlLogCopyPath = Join-Path $evidenceDir ("{0}__mql.log" -f $runId)
 
 $runStatus = if ($compileOk) { "ready" } else { "compile_failed" }
 $runTimedOut = $false
@@ -176,14 +224,18 @@ ShutdownTerminal=1
     Set-Content -LiteralPath $configPath -Value $config -Encoding ASCII
 
     if ($RunImport) {
-        $busyProcesses = @(Get-RunningTerminalProcessesForOrigin -OriginPath $TerminalOrigin)
+        $busyProcesses = @(Get-RunningTerminalProcessesForOrigin -TerminalExePath $terminalExe)
         if ($busyProcesses.Count -gt 0) {
             $runStatus = "blocked_origin_busy"
             $importMessage = "Terminal origin is busy; import launch skipped to avoid colliding with an active MT5 instance."
         }
         else {
             $launchAt = Get-Date
-            $process = Start-Process -FilePath $terminalExe -ArgumentList @("/config:$configPath") -PassThru
+            $terminalArgs = @("/config:$configPath")
+            if ($portableTerminal) {
+                $terminalArgs += "/portable"
+            }
+            $process = Start-Process -FilePath $terminalExe -ArgumentList $terminalArgs -PassThru
             try {
                 Wait-Process -Id $process.Id -Timeout $TimeoutSec -ErrorAction Stop
                 $runStatus = "completed"
@@ -196,6 +248,7 @@ ShutdownTerminal=1
 
             Start-Sleep -Seconds 2
 
+            $mqlLogDir = Join-Path $terminalDataDir "MQL5\Logs"
             $terminalLogItem = $null
             if (Test-Path -LiteralPath $terminalLogDir) {
                 $terminalLogItem = Get-ChildItem -LiteralPath $terminalLogDir -File -ErrorAction SilentlyContinue |
@@ -208,25 +261,63 @@ ShutdownTerminal=1
                 Copy-Item -LiteralPath $terminalLogItem.FullName -Destination $terminalLogCopyPath -Force
                 $terminalLogText = Read-TextBestEffort -Path $terminalLogItem.FullName
                 $successRegex = [regex]::Escape("Imported ") + ".*" + [regex]::Escape($CustomSymbol)
-                if ($terminalLogText -match $successRegex) {
+                $latestSuccess = Get-LatestRegexMatchValue -Text $terminalLogText -Pattern $successRegex
+                if (-not [string]::IsNullOrWhiteSpace($latestSuccess)) {
                     $importSucceeded = $true
-                    $importMessage = ($Matches[0])
+                    $importMessage = $latestSuccess
                     if (-not $runTimedOut) {
                         $runStatus = "imported"
                     }
                 }
-                elseif ($terminalLogText -match "CustomRatesReplace failed.*|Failed to open common CSV.*|No rates parsed from CSV.*|Custom symbol not ready.*") {
-                    $importMessage = $Matches[0]
-                    if (-not $runTimedOut) {
-                        $runStatus = "failed"
+                else {
+                    $latestFailure = Get-LatestRegexMatchValue -Text $terminalLogText -Pattern "CustomRatesReplace failed.*|Failed to open common CSV.*|No rates parsed from CSV.*|Custom symbol not ready.*"
+                    if (-not [string]::IsNullOrWhiteSpace($latestFailure)) {
+                        $importMessage = $latestFailure
+                        if (-not $runTimedOut) {
+                            $runStatus = "failed"
+                        }
                     }
                 }
-                elseif ([string]::IsNullOrWhiteSpace($importMessage)) {
+                if ([string]::IsNullOrWhiteSpace($importMessage) -and -not $importSucceeded) {
                     $importMessage = "Terminal run completed, but no explicit import success marker was found in the terminal log."
                 }
             }
             elseif ([string]::IsNullOrWhiteSpace($importMessage)) {
                 $importMessage = "Terminal run completed, but no fresh terminal log was captured."
+            }
+
+            $mqlLogItem = $null
+            if (Test-Path -LiteralPath $mqlLogDir) {
+                $mqlLogItem = Get-ChildItem -LiteralPath $mqlLogDir -File -ErrorAction SilentlyContinue |
+                    Where-Object { $null -eq $launchAt -or $_.LastWriteTime -ge $launchAt.AddSeconds(-5) } |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+            }
+
+            if ($null -ne $mqlLogItem) {
+                Copy-Item -LiteralPath $mqlLogItem.FullName -Destination $mqlLogCopyPath -Force
+            }
+
+            if (-not $importSucceeded -and $null -ne $mqlLogItem) {
+                $mqlLogText = Read-TextBestEffort -Path $mqlLogItem.FullName
+                $successRegex = [regex]::Escape("Imported ") + ".*" + [regex]::Escape($CustomSymbol)
+                $latestSuccess = Get-LatestRegexMatchValue -Text $mqlLogText -Pattern $successRegex
+                if (-not [string]::IsNullOrWhiteSpace($latestSuccess)) {
+                    $importSucceeded = $true
+                    $importMessage = $latestSuccess
+                    if (-not $runTimedOut) {
+                        $runStatus = "imported"
+                    }
+                }
+                else {
+                    $latestFailure = Get-LatestRegexMatchValue -Text $mqlLogText -Pattern "CustomRatesReplace failed.*|Failed to open common CSV.*|No rates parsed from CSV.*|Custom symbol not ready.*"
+                    if (-not [string]::IsNullOrWhiteSpace($latestFailure)) {
+                        $importMessage = $latestFailure
+                        if (-not $runTimedOut) {
+                            $runStatus = "failed"
+                        }
+                    }
+                }
             }
         }
     }
@@ -236,12 +327,13 @@ ShutdownTerminal=1
     }
 }
 
-[pscustomobject]@{
+$result = [pscustomobject]@{
     schema_version = "1.1"
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     terminal_origin = $TerminalOrigin
     terminal_exe = $terminalExe
     terminal_data_dir = $terminalDataDir
+    portable_terminal = $portableTerminal
     common_csv_path = $targetCommonCsvPath
     script_name = $ScriptName
     script_target = $scriptTarget
@@ -259,9 +351,17 @@ ShutdownTerminal=1
     custom_group = $CustomGroup
     broker_template_symbol = $BrokerTemplateSymbol
     terminal_log_copy_path = $(if (Test-Path -LiteralPath $terminalLogCopyPath) { $terminalLogCopyPath } else { $null })
+    mql_log_copy_path = $(if (Test-Path -LiteralPath $mqlLogCopyPath) { $mqlLogCopyPath } else { $null })
     busy_origin_process_count = $busyProcesses.Count
     busy_origin_process_ids = @($busyProcesses | ForEach-Object { [int]$_.ProcessId })
-} | ConvertTo-Json -Depth 5
+}
+
+if (-not [string]::IsNullOrWhiteSpace($LatestStatusPath)) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LatestStatusPath) | Out-Null
+    $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $LatestStatusPath -Encoding UTF8
+}
+
+$result | ConvertTo-Json -Depth 5
 
 if (-not $compileOk) {
     exit 1
