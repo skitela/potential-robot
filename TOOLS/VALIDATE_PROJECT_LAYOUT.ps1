@@ -176,6 +176,7 @@ $requiredPaths = @(
     "MQL5\\Include\\Core\\MbTuningFamilyAgent.mqh",
     "MQL5\\Include\\Core\\MbTuningCoordinator.mqh",
     "MQL5\\Scripts\\TuningArchitectureCheck.mq5",
+    "MQL5\\Scripts\\QdmImportCustomSymbolBars.mq5",
     "EVIDENCE\\build_verification_report.json",
     "EVIDENCE\\build_verification_report.txt",
     "EVIDENCE\\preset_safety_report.json",
