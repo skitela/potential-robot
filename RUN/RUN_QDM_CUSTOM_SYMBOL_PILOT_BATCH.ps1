@@ -1,12 +1,13 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string[]]$SymbolAliases = @("AUDUSD", "NZDUSD", "USDCAD", "USDJPY", "EURUSD", "GBPUSD"),
+    [string[]]$SymbolAliases = @(),
     [string]$TerminalRoot = "C:\TRADING_TOOLS\MT5_QDM_CUSTOM_LAB",
     [string]$Period = "M1",
     [string]$FromDate = "2026.03.12",
     [string]$ToDate = "2026.03.16",
     [int]$TimeoutSec = 300,
-    [string]$LatestStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_batch_latest.json"
+    [string]$LatestStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_batch_latest.json",
+    [string]$PilotRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_registry_latest.json"
 )
 
 Set-StrictMode -Version Latest
@@ -47,6 +48,38 @@ function Convert-ToolResultToObject {
     return $Value
 }
 
+function Get-DefaultSymbolAliases {
+    param(
+        [string]$RegistryPath
+    )
+
+    $fallback = @("AUDUSD", "EURAUD", "EURUSD", "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY")
+    if (-not (Test-Path -LiteralPath $RegistryPath)) {
+        return [pscustomobject]@{
+            symbols = $fallback
+            source = "fallback"
+        }
+    }
+
+    try {
+        $registry = Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $symbols = @($registry.symbols | ForEach-Object { ([string]$_).ToUpperInvariant() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($symbols.Count -gt 0) {
+            return [pscustomobject]@{
+                symbols = $symbols
+                source = "registry"
+            }
+        }
+    }
+    catch {
+    }
+
+    return [pscustomobject]@{
+        symbols = $fallback
+        source = "fallback"
+    }
+}
+
 $pilotScript = Join-Path $ProjectRoot "RUN\RUN_QDM_CUSTOM_SYMBOL_PILOT.ps1"
 if (-not (Test-Path -LiteralPath $pilotScript)) {
     throw "Required pilot script not found: $pilotScript"
@@ -54,8 +87,12 @@ if (-not (Test-Path -LiteralPath $pilotScript)) {
 
 $pwsh = (Get-Command powershell.exe -ErrorAction Stop).Source
 $results = New-Object System.Collections.Generic.List[object]
+$defaultSymbols = Get-DefaultSymbolAliases -RegistryPath $PilotRegistryPath
+$selectedSymbolInput = @($SymbolAliases | ForEach-Object { ([string]$_).ToUpperInvariant() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$selectedSymbols = if ($selectedSymbolInput.Count -gt 0) { @($selectedSymbolInput) } else { @($defaultSymbols.symbols) }
+$selectedSymbolSource = if ($selectedSymbolInput.Count -gt 0) { "manual" } else { [string]$defaultSymbols.source }
 
-foreach ($symbolAlias in $SymbolAliases) {
+foreach ($symbolAlias in $selectedSymbols) {
     $normalizedAlias = [string]$symbolAlias
     if ([string]::IsNullOrWhiteSpace($normalizedAlias)) {
         continue
@@ -101,13 +138,13 @@ foreach ($symbolAlias in $SymbolAliases) {
 $successful = @($results | Where-Object { $_.state -eq "completed" }).Count
 $failed = @($results | Where-Object { $_.state -ne "completed" }).Count
 $batchState = if ($failed -gt 0) { "completed_with_failures" } else { "completed" }
-$selectedSymbols = @($SymbolAliases | ForEach-Object { ([string]$_).ToUpperInvariant() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $resultsArray = @($results.ToArray())
 
 $report = [pscustomobject]@{
     schema_version = "1.0"
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
-    selected_symbols = $selectedSymbols
+    selected_symbols = @($selectedSymbols)
+    selected_symbol_source = $selectedSymbolSource
     successful_count = $successful
     failed_count = $failed
     state = $batchState

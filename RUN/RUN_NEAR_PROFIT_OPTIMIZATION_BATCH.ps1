@@ -40,6 +40,37 @@ function Convert-ToCanonicalSymbol {
     return $canonical
 }
 
+function Get-NearProfitOrderKey {
+    param([object]$Entry)
+
+    $qdmReady = if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "qdm_custom_pilot_ready") { [bool]$Entry.qdm_custom_pilot_ready } else { $false }
+    $bestTesterPnl = 0.0
+    if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "best_tester_pnl") {
+        try {
+            $bestTesterPnl = [double]$Entry.best_tester_pnl
+        }
+        catch {
+            $bestTesterPnl = 0.0
+        }
+    }
+    $priorityRank = 999999
+    if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "priority_rank") {
+        try {
+            $priorityRank = [int]$Entry.priority_rank
+        }
+        catch {
+            $priorityRank = 999999
+        }
+    }
+
+    return [pscustomobject]@{
+        qdm_rank = if ($qdmReady) { 0 } else { 1 }
+        pnl_rank = -1.0 * $bestTesterPnl
+        priority_rank = $priorityRank
+        symbol_alias = [string]$Entry.symbol_alias
+    }
+}
+
 function Resolve-NearProfitDateWindow {
     param(
         [string]$FromDate,
@@ -91,7 +122,14 @@ if (-not (Test-Path -LiteralPath $ProfitTrackingPath)) {
 }
 
 $profitTracking = Get-Content -LiteralPath $ProfitTrackingPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$nearProfit = @($profitTracking.near_profit | Sort-Object priority_rank, symbol_alias)
+$nearProfit = @(
+    $profitTracking.near_profit |
+        Sort-Object `
+            @{ Expression = { (Get-NearProfitOrderKey -Entry $_).qdm_rank } }, `
+            @{ Expression = { (Get-NearProfitOrderKey -Entry $_).pnl_rank } }, `
+            @{ Expression = { (Get-NearProfitOrderKey -Entry $_).priority_rank } }, `
+            @{ Expression = { (Get-NearProfitOrderKey -Entry $_).symbol_alias } }
+)
 if ($nearProfit.Count -le 0) {
     throw "No near-profit symbols available in $ProfitTrackingPath"
 }

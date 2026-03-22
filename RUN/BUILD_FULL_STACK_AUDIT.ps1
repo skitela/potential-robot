@@ -453,6 +453,7 @@ $report = [ordered]@{
                 state = $qdmCustomPilotBatch.state
                 successful_count = $qdmCustomPilotBatch.successful_count
                 failed_count = $qdmCustomPilotBatch.failed_count
+                selected_symbol_source = $(Get-SafeObjectValue -Object $qdmCustomPilotBatch -PropertyName 'selected_symbol_source' -Default $null)
                 selected_symbols = @($qdmCustomPilotBatch.selected_symbols)
             }
         } else { $null }
@@ -618,6 +619,7 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_pilot_batch) {
     $lines.Add(("- batch_state: {0}" -f $report.lab_health.qdm_custom_symbol_pilot_batch.state))
     $lines.Add(("- batch_successful_count: {0}" -f $report.lab_health.qdm_custom_symbol_pilot_batch.successful_count))
     $lines.Add(("- batch_failed_count: {0}" -f $report.lab_health.qdm_custom_symbol_pilot_batch.failed_count))
+    $lines.Add(("- batch_selected_symbol_source: {0}" -f $report.lab_health.qdm_custom_symbol_pilot_batch.selected_symbol_source))
     $lines.Add(("- batch_symbols: {0}" -f ($report.lab_health.qdm_custom_symbol_pilot_batch.selected_symbols -join ", ")))
 }
 else {
