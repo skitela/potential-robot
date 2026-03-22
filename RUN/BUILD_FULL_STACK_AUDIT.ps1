@@ -198,7 +198,14 @@ $wrapperState = [ordered]@{
     qdm_weakest = ((Get-WrapperCount -Pattern "*qdm_weakest_sync_wrapper_*") -gt 0)
     ml = ((Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0)
     weakest_mt5 = ((Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*") -gt 0 -or (Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*") -gt 0)
-    near_profit_optimization = ((Get-WrapperCount -Pattern "*near_profit_optimization_after_idle_wrapper_*") -gt 0)
+    near_profit_optimization = (
+        (Get-WrapperCount -Pattern "*near_profit_optimization_after_idle_wrapper_*") -gt 0 -or
+        ($null -ne $nearProfitQueue -and (
+            [string]$nearProfitQueue.state -eq "running" -or
+            [int](Get-SafeObjectValue -Object $nearProfitQueue -PropertyName 'dedicated_lab_terminal_count' -Default 0) -gt 0 -or
+            [int](Get-SafeObjectValue -Object $nearProfitQueue -PropertyName 'dedicated_lab_metatester_count' -Default 0) -gt 0
+        ))
+    )
     mt5_status_watcher = ((Get-WrapperCount -Pattern "*mt5_tester_status_watcher_wrapper_*") -gt 0)
 }
 
