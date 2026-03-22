@@ -467,6 +467,9 @@ if ($null -ne $report.lab_health.near_profit_optimization) {
     $lines.Add(("- risk_guard_rejected_events: {0}" -f $report.lab_health.near_profit_optimization.risk_guard_rejected_events))
     $lines.Add(("- sandbox_progress_visible: {0}" -f $report.lab_health.near_profit_optimization.sandbox_progress_visible))
     if ($null -ne $report.lab_health.near_profit_optimization.active_sandbox) {
+        $lines.Add(("- storage_contract_complete: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.storage_contract_complete))
+        $lines.Add(("- run_dir_present: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.run_dir_present))
+        $lines.Add(("- key_dir_present: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.key_dir_present))
         $lines.Add(("- heartbeat_fresh: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.heartbeat_fresh))
         $lines.Add(("- heartbeat_age_sec: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.heartbeat_age_sec))
         $lines.Add(("- ticks_seen: {0}" -f $report.lab_health.near_profit_optimization.active_sandbox.ticks_seen))

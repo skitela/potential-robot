@@ -318,6 +318,7 @@ function Resolve-ActiveSandboxState {
     $stateDir = Join-Path $sandboxRoot.FullName ("state\{0}" -f $canonical)
     $logDir = Join-Path $sandboxRoot.FullName ("logs\{0}" -f $canonical)
     $runDir = Join-Path $sandboxRoot.FullName ("run\{0}" -f $canonical)
+    $keyDir = Join-Path $sandboxRoot.FullName ("key\{0}" -f $canonical)
     $runtimeStatePath = Join-Path $stateDir "runtime_state.csv"
     $runtimeStatusPath = Join-Path $stateDir "runtime_status.json"
     $heartbeatPath = Join-Path $stateDir "heartbeat.txt"
@@ -348,6 +349,16 @@ function Resolve-ActiveSandboxState {
     return [ordered]@{
         root_path = $sandboxRoot.FullName
         root_name = $sandboxRoot.Name
+        state_dir_present = (Test-Path -LiteralPath $stateDir)
+        log_dir_present = (Test-Path -LiteralPath $logDir)
+        run_dir_present = (Test-Path -LiteralPath $runDir)
+        key_dir_present = (Test-Path -LiteralPath $keyDir)
+        storage_contract_complete = (
+            (Test-Path -LiteralPath $stateDir) -and
+            (Test-Path -LiteralPath $logDir) -and
+            (Test-Path -LiteralPath $runDir) -and
+            (Test-Path -LiteralPath $keyDir)
+        )
         runtime_state_path = $runtimeStatePath
         runtime_status_path = $runtimeStatusPath
         heartbeat_path = $heartbeatPath
@@ -452,6 +463,11 @@ function Write-StatusArtifacts {
         $lines.Add("## Active Sandbox")
         $lines.Add("")
         $lines.Add(("- root_name: {0}" -f $Status.active_sandbox.root_name))
+        $lines.Add(("- storage_contract_complete: {0}" -f $Status.active_sandbox.storage_contract_complete))
+        $lines.Add(("- state_dir_present: {0}" -f $Status.active_sandbox.state_dir_present))
+        $lines.Add(("- log_dir_present: {0}" -f $Status.active_sandbox.log_dir_present))
+        $lines.Add(("- run_dir_present: {0}" -f $Status.active_sandbox.run_dir_present))
+        $lines.Add(("- key_dir_present: {0}" -f $Status.active_sandbox.key_dir_present))
         $lines.Add(("- heartbeat_at_local: {0}" -f $Status.active_sandbox.heartbeat_at_local))
         $lines.Add(("- heartbeat_age_sec: {0}" -f $Status.active_sandbox.heartbeat_age_sec))
         $lines.Add(("- heartbeat_fresh: {0}" -f $Status.active_sandbox.heartbeat_fresh))
@@ -531,6 +547,7 @@ $mt5TesterStatus = Read-JsonFile -Path $Mt5TesterStatusPath
 $batchReport = Read-JsonFile -Path $BatchReportPath
 $latestOptimizationSummaryItem = Resolve-LatestOptimizationRunSummaryItem -BatchReportPath $BatchReportPath
 $latestOptimizationSummary = if ($null -ne $latestOptimizationSummaryItem) { Read-JsonFile -Path $latestOptimizationSummaryItem.FullName } else { $null }
+$latestOptimizationSummarySymbol = if ($null -ne $latestOptimizationSummary) { Convert-ToCanonicalSymbol -Symbol ([string]$latestOptimizationSummary.symbol_alias) } else { "" }
 
 $resolvedState = $State
 $resolvedCurrentSymbol = $CurrentSymbol
@@ -595,10 +612,21 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
                 $resolvedNote = "optimization_lane_active_from_summary"
             }
         }
-        elseif ($UseDedicatedPortableLabLane) {
+        if ($UseDedicatedPortableLabLane) {
             if ($dedicatedLabHasActivity) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$dedicatedLabProcessState.current_symbol)) {
+                    $resolvedCurrentSymbol = [string]$dedicatedLabProcessState.current_symbol
+                }
+
                 if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
                     $resolvedNote = "portable_lab_lane_active"
+                }
+                elseif (
+                    $resolvedNote -eq "optimization_lane_active_from_summary" -and
+                    -not [string]::IsNullOrWhiteSpace([string]$dedicatedLabProcessState.current_symbol) -and
+                    (Convert-ToCanonicalSymbol -Symbol $resolvedCurrentSymbol) -ne (Convert-ToCanonicalSymbol -Symbol ([string]$dedicatedLabProcessState.current_symbol))
+                ) {
+                    $resolvedNote = "portable_lab_config_active"
                 }
             }
             elseif ([string]::IsNullOrWhiteSpace($resolvedNote)) {
@@ -629,6 +657,15 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
         }
         elseif ([string]::IsNullOrWhiteSpace($resolvedNote)) {
             $resolvedNote = "wrapper_running_without_active_mt5"
+        }
+    }
+    elseif ($UseDedicatedPortableLabLane -and $dedicatedLabHasActivity) {
+        $resolvedState = "running"
+        if (-not [string]::IsNullOrWhiteSpace([string]$dedicatedLabProcessState.current_symbol)) {
+            $resolvedCurrentSymbol = [string]$dedicatedLabProcessState.current_symbol
+        }
+        if ([string]::IsNullOrWhiteSpace($resolvedNote)) {
+            $resolvedNote = "portable_lab_process_active"
         }
     }
     elseif ($null -ne $batchReport) {
@@ -673,7 +710,15 @@ if ($UseDedicatedPortableLabLane) {
     $preferredSandboxTagTokens += "OPT_WORKER_"
 }
 
-$activeSandbox = Resolve-ActiveSandboxState -Root $CommonFilesRoot -CurrentSymbol $resolvedCurrentSymbol -PreferredTagTokens $preferredSandboxTagTokens
+$activeSandboxSymbol = $resolvedCurrentSymbol
+if (
+    $UseDedicatedPortableLabLane -and
+    -not [string]::IsNullOrWhiteSpace([string]$dedicatedLabProcessState.current_symbol)
+) {
+    $activeSandboxSymbol = [string]$dedicatedLabProcessState.current_symbol
+}
+
+$activeSandbox = Resolve-ActiveSandboxState -Root $CommonFilesRoot -CurrentSymbol $activeSandboxSymbol -PreferredTagTokens $preferredSandboxTagTokens
 
 $status = [ordered]@{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -691,6 +736,7 @@ $status = [ordered]@{
     dedicated_lab_metatester_count = $dedicatedLabProcessState.metatester_count
     dedicated_lab_current_symbol = [string]$dedicatedLabProcessState.current_symbol
     dedicated_lab_config_path = [string]$dedicatedLabProcessState.config_path
+    latest_optimization_summary_symbol = $latestOptimizationSummarySymbol
     near_profit_risk_guard_running = ($nearProfitRiskGuardProcesses.Count -gt 0)
     near_profit_risk_guard_count = $nearProfitRiskGuardProcesses.Count
     near_profit_risk_guard_status_path = $nearProfitRiskGuardStatusPath
