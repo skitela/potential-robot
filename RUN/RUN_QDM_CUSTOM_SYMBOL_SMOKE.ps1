@@ -2,6 +2,8 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$TerminalRoot = "C:\TRADING_TOOLS\MT5_QDM_CUSTOM_LAB",
     [string]$SymbolAlias = "EURUSD",
+    [string]$PilotCsvPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\QDM_PILOT\MB_EURUSD_DUKA_M1_PILOT.csv",
+    [string]$CommonRelativeCsvPath = "MAKRO_I_MIKRO_BOT\\qdm_import\\MB_EURUSD_DUKA_M1_PILOT.csv",
     [string]$CustomSymbol = "EURUSD_QDM_M1",
     [string]$BrokerTemplateSymbol = "EURUSD.pro",
     [string]$Period = "M1",
@@ -85,6 +87,8 @@ $importResult = Convert-ToolResultToObject (& $importScript `
     -ProjectRoot $ProjectRoot `
     -UseDedicatedPortableLabLane $true `
     -DedicatedLabTerminalRoot $TerminalRoot `
+    -PilotCsvPath $PilotCsvPath `
+    -CommonRelativeCsvPath $CommonRelativeCsvPath `
     -CustomSymbol $CustomSymbol `
     -BrokerTemplateSymbol $BrokerTemplateSymbol)
 
@@ -135,6 +139,8 @@ $result = [ordered]@{
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     state = "completed"
     symbol_alias = $SymbolAlias
+    pilot_csv_path = $PilotCsvPath
+    common_relative_csv_path = $CommonRelativeCsvPath
     custom_symbol = $CustomSymbol
     broker_template_symbol = $BrokerTemplateSymbol
     import_status = $importResult.run_status
