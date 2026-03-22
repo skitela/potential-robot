@@ -428,7 +428,8 @@ function Resolve-LogItem {
 function Resolve-LatestOptimizationRunSummaryItem {
     param(
         [string]$BatchReportPath,
-        [datetime]$StartedAt = [datetime]::MinValue
+        [datetime]$StartedAt = [datetime]::MinValue,
+        [string[]]$SelectedSymbols = @()
     )
 
     if ([string]::IsNullOrWhiteSpace($BatchReportPath)) {
@@ -440,21 +441,35 @@ function Resolve-LatestOptimizationRunSummaryItem {
         return $null
     }
 
+    $selectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($symbol in @($SelectedSymbols)) {
+        $alias = Convert-ToCanonicalSymbol -Symbol ([string]$symbol)
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            [void]$selectedSet.Add($alias)
+        }
+    }
+
     $batchReportName = [System.IO.Path]::GetFileName($BatchReportPath)
-    $candidate = Get-ChildItem -Path $dir -Filter "*_summary.json" -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne $batchReportName } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
+    foreach ($candidate in @(Get-ChildItem -Path $dir -Filter "*_summary.json" -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $batchReportName } | Sort-Object LastWriteTime -Descending)) {
+        if ($StartedAt -ne [datetime]::MinValue -and $candidate.LastWriteTime -lt $StartedAt.AddSeconds(-15)) {
+            continue
+        }
 
-    if ($null -eq $candidate) {
-        return $null
+        if ($selectedSet.Count -gt 0) {
+            $summary = Read-JsonFile -Path $candidate.FullName
+            if ($null -eq $summary) {
+                continue
+            }
+            $alias = Convert-ToCanonicalSymbol -Symbol ([string]$summary.symbol_alias)
+            if ([string]::IsNullOrWhiteSpace($alias) -or -not $selectedSet.Contains($alias)) {
+                continue
+            }
+        }
+
+        return $candidate
     }
 
-    if ($StartedAt -ne [datetime]::MinValue -and $candidate.LastWriteTime -lt $StartedAt.AddSeconds(-15)) {
-        return $null
-    }
-
-    return $candidate
+    return $null
 }
 
 function Get-CompletedOptimizationSymbolsSinceStart {
@@ -657,7 +672,7 @@ if (-not [string]::IsNullOrWhiteSpace($resolvedStartedAt)) {
     }
 }
 
-$latestOptimizationSummaryItem = Resolve-LatestOptimizationRunSummaryItem -BatchReportPath $BatchReportPath -StartedAt $(if ($null -ne $startedAtDate) { $startedAtDate } else { [datetime]::MinValue })
+$latestOptimizationSummaryItem = Resolve-LatestOptimizationRunSummaryItem -BatchReportPath $BatchReportPath -StartedAt $(if ($null -ne $startedAtDate) { $startedAtDate } else { [datetime]::MinValue }) -SelectedSymbols $selectedSymbols
 $latestOptimizationSummary = if ($null -ne $latestOptimizationSummaryItem) { Read-JsonFile -Path $latestOptimizationSummaryItem.FullName } else { $null }
 $latestOptimizationSummarySymbol = if ($null -ne $latestOptimizationSummary) { Convert-ToCanonicalSymbol -Symbol ([string]$latestOptimizationSummary.symbol_alias) } else { "" }
 $completedSinceStart = Get-CompletedOptimizationSymbolsSinceStart -BatchReportPath $BatchReportPath -StartedAt $(if ($null -ne $startedAtDate) { $startedAtDate } else { [datetime]::MinValue }) -SelectedSymbols $selectedSymbols
