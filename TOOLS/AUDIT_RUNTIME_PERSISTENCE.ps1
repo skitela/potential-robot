@@ -46,6 +46,11 @@ $preservedLearningNames = @(
     "learning_bucket_summary_v1.csv"
 )
 
+$preservedTuningNames = @(
+    "tuning_reasoning.csv",
+    "tuning_experiments.csv"
+)
+
 $legacyCandidates = @(
     "learning_observations.csv"
 )
@@ -125,6 +130,11 @@ foreach ($file in $allFiles) {
         continue
     }
 
+    if ($preservedTuningNames -contains $name) {
+        Add-FileToBucket -Buckets $buckets -BucketName "preserved_tuning_memory" -File $file
+        continue
+    }
+
     if ($legacyCandidates -contains $name) {
         Add-FileToBucket -Buckets $buckets -BucketName "legacy_cleanup_candidate" -File $file
         continue
@@ -144,6 +154,7 @@ $recommendations = @(
     "Snapshots should stay overwrite-only; they are current state, not history.",
     "Rotatable journals may be archived aggressively because they are operational telemetry, not the system's durable learning memory.",
     "learning_observations_v2.csv and learning_bucket_summary_v1.csv stay preserved because tuning agents read them as local memory.",
+    "tuning_reasoning.csv and tuning_experiments.csv are preserved tuning memory; treat them as durable learning context, not runtime trash.",
     "learning_observations.csv is treated as a legacy cleanup candidate and should not keep growing in the new architecture."
 )
 

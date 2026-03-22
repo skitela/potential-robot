@@ -19,6 +19,26 @@ function Read-JsonFile {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
+function Get-ProfileSnapshot {
+    param(
+        [string]$ProjectRoot,
+        [string]$ProfileStatusPath
+    )
+
+    & $ProfileBuilderPath | Out-Null
+
+    $profileStatus = Read-JsonFile -Path $ProfileStatusPath
+    if ($null -eq $profileStatus) {
+        throw "Missing profile status not found: $ProfileStatusPath"
+    }
+
+    return [pscustomobject]@{
+        missing_count = [int]$profileStatus.qdm_missing_count
+        missing_symbols = @($profileStatus.missing | ForEach-Object { [string]$_.symbol_alias })
+        unsupported_symbols = @($profileStatus.unsupported | ForEach-Object { [string]$_.symbol_alias })
+    }
+}
+
 function Write-LatestStatus {
     param(
         [string]$State,
@@ -57,17 +77,11 @@ foreach ($path in @($ProfileBuilderPath, $SyncScriptPath)) {
     }
 }
 
-& $ProfileBuilderPath | Out-Null
-
 $profileStatusPath = Join-Path $ProjectRoot "EVIDENCE\OPS\qdm_missing_only_profile_latest.json"
-$profileStatus = Read-JsonFile -Path $profileStatusPath
-if ($null -eq $profileStatus) {
-    throw "Missing profile status not found: $profileStatusPath"
-}
-
-$missingCount = [int]$profileStatus.qdm_missing_count
-$missingSymbols = @($profileStatus.missing | ForEach-Object { [string]$_.symbol_alias })
-$unsupportedSymbols = @($profileStatus.unsupported | ForEach-Object { [string]$_.symbol_alias })
+$profileSnapshot = Get-ProfileSnapshot -ProjectRoot $ProjectRoot -ProfileStatusPath $profileStatusPath
+$missingCount = $profileSnapshot.missing_count
+$missingSymbols = @($profileSnapshot.missing_symbols)
+$unsupportedSymbols = @($profileSnapshot.unsupported_symbols)
 
 $state = "noop"
 $syncStarted = $false
@@ -80,7 +94,17 @@ try {
 
         & $SyncScriptPath -ProfilePath $ProfilePath
 
-        $state = "completed"
+        $profileSnapshot = Get-ProfileSnapshot -ProjectRoot $ProjectRoot -ProfileStatusPath $profileStatusPath
+        $missingCount = $profileSnapshot.missing_count
+        $missingSymbols = @($profileSnapshot.missing_symbols)
+        $unsupportedSymbols = @($profileSnapshot.unsupported_symbols)
+
+        if ($missingCount -gt 0) {
+            $state = "completed_with_remaining_missing"
+        }
+        else {
+            $state = "completed"
+        }
     }
 
     Write-LatestStatus -State $state -SyncStarted $syncStarted -MissingCount $missingCount -MissingSymbols $missingSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $ProfilePath -LatestStatusPath $LatestStatusPath

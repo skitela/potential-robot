@@ -408,14 +408,34 @@ $report = [ordered]@{
             }
         } else { $null }
         qdm_missing_supported_sync = if ($null -ne $qdmMissingSupportedSync -or $null -ne $qdmMissingOnlyProfile) {
+            $profileMissingSymbols = if ($null -ne $qdmMissingOnlyProfile) { @($qdmMissingOnlyProfile.missing | ForEach-Object { [string]$_.symbol_alias }) } else { @() }
+            $profileUnsupportedSymbols = if ($null -ne $qdmMissingOnlyProfile) { @($qdmMissingOnlyProfile.unsupported | ForEach-Object { [string]$_.symbol_alias }) } else { @() }
+            $resolvedMissingSymbols = if ($null -ne $qdmMissingOnlyProfile) {
+                @($profileMissingSymbols)
+            }
+            elseif ($null -ne $qdmMissingSupportedSync) {
+                @((Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'missing_symbols' -Default @()))
+            }
+            else {
+                @()
+            }
+            $resolvedUnsupportedSymbols = if ($null -ne $qdmMissingOnlyProfile) {
+                @($profileUnsupportedSymbols)
+            }
+            elseif ($null -ne $qdmMissingSupportedSync) {
+                @((Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'unsupported_symbols' -Default @()))
+            }
+            else {
+                @()
+            }
             [ordered]@{
                 state = $(if ($null -ne $qdmMissingSupportedSync) { Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'state' -Default $null } else { $null })
                 sync_started = $(if ($null -ne $qdmMissingSupportedSync) { [bool](Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'sync_started' -Default $false) } else { $false })
                 missing_count = $(if ($null -ne $qdmMissingOnlyProfile) { [int](Get-SafeObjectValue -Object $qdmMissingOnlyProfile -PropertyName 'qdm_missing_count' -Default 0) } else { 0 })
                 blocked_count = $(if ($null -ne $qdmMissingOnlyProfile) { [int](Get-SafeObjectValue -Object $qdmMissingOnlyProfile -PropertyName 'qdm_blocked_count' -Default 0) } else { 0 })
                 unsupported_count = $(if ($null -ne $qdmMissingOnlyProfile) { [int](Get-SafeObjectValue -Object $qdmMissingOnlyProfile -PropertyName 'qdm_unsupported_count' -Default 0) } else { 0 })
-                missing_symbols = $(if ($null -ne $qdmMissingSupportedSync) { @((Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'missing_symbols' -Default @())) } elseif ($null -ne $qdmMissingOnlyProfile) { @($qdmMissingOnlyProfile.missing | ForEach-Object { [string]$_.symbol_alias }) } else { @() })
-                unsupported_symbols = $(if ($null -ne $qdmMissingSupportedSync) { @((Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'unsupported_symbols' -Default @())) } elseif ($null -ne $qdmMissingOnlyProfile) { @($qdmMissingOnlyProfile.unsupported | ForEach-Object { [string]$_.symbol_alias }) } else { @() })
+                missing_symbols = @($resolvedMissingSymbols)
+                unsupported_symbols = @($resolvedUnsupportedSymbols)
                 current_focus = $(if ($null -ne $qdmMissingSupportedSync) { Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'current_focus' -Default $null } else { $null })
                 note = $(if ($null -ne $qdmMissingSupportedSync) { Get-SafeObjectValue -Object $qdmMissingSupportedSync -PropertyName 'note' -Default $null } else { $null })
             }
