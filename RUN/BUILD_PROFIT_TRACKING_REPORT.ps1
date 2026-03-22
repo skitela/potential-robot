@@ -37,6 +37,22 @@ function Normalize-Alias {
     return (($Value.ToUpperInvariant()) -replace '[^A-Z0-9]+', '')
 }
 
+function Convert-ToIntOrNull {
+    param([object]$Value)
+
+    if ($null -eq $Value) { return $null }
+    $raw = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    if ($raw -eq "null") { return $null }
+
+    try {
+        return [int]$raw
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-FirstValue {
     param(
         [object]$Object,
@@ -399,6 +415,13 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
         qdm_custom_symbol = if ($null -ne $qdmPilot) { [string]$qdmPilot.custom_symbol } else { "" }
         qdm_pilot_row_count = if ($null -ne $qdmPilot) { [int]$qdmPilot.pilot_row_count } else { 0 }
         qdm_pilot_result = if ($null -ne $qdmPilot) { [string]$qdmPilot.result_label } else { "" }
+        current_priority_score = Convert-ToIntOrNull $item.priority_score
+        current_priority_band = [string]$item.priority_band
+        current_priority_trust = [string]$item.trust_state
+        current_priority_trust_reason = [string]$item.trust_reason
+        current_priority_cost = [string]$item.cost_state
+        current_priority_learning_sample_count = Convert-ToIntOrNull $item.learning_sample_count
+        current_priority_spread_points = Convert-ToDoubleOrNull $item.spread_points
         recommended_action = [string]$item.recommended_action
         priority_rank     = [int]$item.rank
     }
@@ -504,7 +527,17 @@ else {
         else {
             ""
         }
-        $lines.Add(("- {0}: best_tester_pnl={1} live_opens={2} live_closes={3} live_wins={4} live_losses={5} live_net_24h={6} action={7}{8}{9}" -f $item.symbol_alias, $item.best_tester_pnl, $item.live_opens_24h, $item.live_closes_24h, $item.live_wins_24h, $item.live_losses_24h, $item.live_net_24h, $item.recommended_action, $candidateSuffix, $qdmSuffix))
+        $currentStateSuffix = if (
+            -not [string]::IsNullOrWhiteSpace([string]$item.current_priority_trust) -or
+            $null -ne $item.current_priority_spread_points -or
+            $null -ne $item.current_priority_learning_sample_count
+        ) {
+            " current_trust={0} spread={1} sample={2}" -f $item.current_priority_trust, $item.current_priority_spread_points, $item.current_priority_learning_sample_count
+        }
+        else {
+            ""
+        }
+        $lines.Add(("- {0}: best_tester_pnl={1} live_opens={2} live_closes={3} live_wins={4} live_losses={5} live_net_24h={6} action={7}{8}{9}{10}" -f $item.symbol_alias, $item.best_tester_pnl, $item.live_opens_24h, $item.live_closes_24h, $item.live_wins_24h, $item.live_losses_24h, $item.live_net_24h, $item.recommended_action, $candidateSuffix, $qdmSuffix, $currentStateSuffix))
     }
 }
 $lines.Add("")

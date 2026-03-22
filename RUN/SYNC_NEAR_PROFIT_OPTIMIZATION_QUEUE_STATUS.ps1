@@ -36,14 +36,40 @@ function Get-NearProfitOrderKey {
     param([object]$Entry)
 
     $qdmReady = if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "qdm_custom_pilot_ready") { [bool]$Entry.qdm_custom_pilot_ready } else { $false }
-    $trustRank = 0
+    $historicalTrustRank = 0
     if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "best_tester_trust") {
         $bestTesterTrust = [string]$Entry.best_tester_trust
         switch ($bestTesterTrust) {
-            "LOW_SAMPLE" { $trustRank = 2 }
-            "FOREFIELD_DIRTY" { $trustRank = 1 }
-            "PAPER_CONVERSION_BLOCKED" { $trustRank = 1 }
-            default { $trustRank = 0 }
+            "LOW_SAMPLE" { $historicalTrustRank = 2 }
+            "FOREFIELD_DIRTY" { $historicalTrustRank = 1 }
+            "PAPER_CONVERSION_BLOCKED" { $historicalTrustRank = 1 }
+            default { $historicalTrustRank = 0 }
+        }
+    }
+    $currentTrustRank = 0
+    if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "current_priority_trust") {
+        $currentPriorityTrust = [string]$Entry.current_priority_trust
+        $currentPriorityTrustReason = if ($Entry.PSObject.Properties.Name -contains "current_priority_trust_reason") { [string]$Entry.current_priority_trust_reason } else { "" }
+        if ($currentPriorityTrust -eq "LOW_SAMPLE" -or $currentPriorityTrustReason -like "*LOW_SAMPLE*") {
+            $currentTrustRank = 2
+        }
+        elseif (
+            $currentPriorityTrust -eq "FOREFIELD_DIRTY" -or
+            $currentPriorityTrust -eq "PAPER_CONVERSION_BLOCKED" -or
+            $currentPriorityTrustReason -like "*FOREFIELD_DIRTY*" -or
+            $currentPriorityTrustReason -like "*PAPER_CONVERSION_BLOCKED*"
+        ) {
+            $currentTrustRank = 1
+        }
+    }
+    $trustRank = [Math]::Max($historicalTrustRank, $currentTrustRank)
+    $spreadRank = 999999.0
+    if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "current_priority_spread_points") {
+        try {
+            $spreadRank = [double]$Entry.current_priority_spread_points
+        }
+        catch {
+            $spreadRank = 999999.0
         }
     }
     $bestTesterPnl = 0.0
@@ -68,6 +94,7 @@ function Get-NearProfitOrderKey {
     return [pscustomobject]@{
         qdm_rank = if ($qdmReady) { 0 } else { 1 }
         trust_rank = $trustRank
+        spread_rank = $spreadRank
         pnl_rank = -1.0 * $bestTesterPnl
         priority_rank = $priorityRank
         symbol_alias = [string]$Entry.symbol_alias
@@ -90,6 +117,7 @@ function Get-NearProfitSymbols {
             Sort-Object `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).qdm_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).trust_rank } }, `
+                @{ Expression = { (Get-NearProfitOrderKey -Entry $_).spread_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).pnl_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).priority_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).symbol_alias } }
@@ -972,6 +1000,16 @@ if ($resolvedState -eq "running" -and @($completedSinceStart).Count -gt 0) {
 
     if (-not [string]::IsNullOrWhiteSpace($activeCanonical)) {
         $resolvedCompleted = @($resolvedCompleted | Where-Object { $_ -ne $activeCanonical })
+    }
+}
+
+if ($resolvedState -eq "running") {
+    $activeCanonical = Convert-ToCanonicalSymbol -Symbol $resolvedCurrentSymbol
+    if (-not [string]::IsNullOrWhiteSpace($activeCanonical) -and @($resolvedPending) -contains $activeCanonical) {
+        $resolvedPending = @(
+            @($activeCanonical) +
+            @($resolvedPending | Where-Object { (Convert-ToCanonicalSymbol -Symbol ([string]$_)) -ne $activeCanonical })
+        )
     }
 }
 
