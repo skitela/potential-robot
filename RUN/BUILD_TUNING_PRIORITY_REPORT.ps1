@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$StateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state",
     [string]$RuntimeReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
+    [string]$QdmPilotRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_registry_latest.json",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
 
@@ -458,6 +459,19 @@ $runtimeReview = $null
 if (Test-Path -LiteralPath $RuntimeReviewPath) {
     $runtimeReview = Get-Content -LiteralPath $RuntimeReviewPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
+$qdmPilotRegistry = $null
+if (Test-Path -LiteralPath $QdmPilotRegistryPath) {
+    $qdmPilotRegistry = Get-Content -LiteralPath $QdmPilotRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+$qdmPilotByAlias = @{}
+if ($null -ne $qdmPilotRegistry -and $qdmPilotRegistry.PSObject.Properties.Name -contains 'entries') {
+    foreach ($entry in @($qdmPilotRegistry.entries)) {
+        $entryAlias = Normalize-SymbolAlias ([string]$entry.symbol_alias)
+        if (-not [string]::IsNullOrWhiteSpace($entryAlias)) {
+            $qdmPilotByAlias[$entryAlias] = $entry
+        }
+    }
+}
 
 $liveMap = @{}
 if ($null -ne $runtimeReview -and $runtimeReview.PSObject.Properties.Name -contains "key_instruments") {
@@ -505,6 +519,7 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
     $costState = Resolve-OperationalCostState -CostState $costState -CostReason $costReason -ExpectedPaperClosure $expectedPaperClosure
 
     $live = if ($liveMap.ContainsKey($alias)) { $liveMap[$alias] } else { $null }
+    $qdmPilot = if ($qdmPilotByAlias.ContainsKey($alias)) { $qdmPilotByAlias[$alias] } else { $null }
     $liveNet = if ($null -ne $live) { [double]$live.net } else { 0.0 }
     $liveOpens = if ($null -ne $live) { [int]$live.opens } else { 0 }
     $liveCost = if ($null -ne $live) { [string]$live.cost } else { $costState }
@@ -552,6 +567,10 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
         best_tester_bias    = if ($null -ne $bestTester) { [math]::Round([double]$bestTester.bias, 4) } else { 0.0 }
         best_tester_pnl     = if ($null -ne $bestTester) { [math]::Round([double]$bestTester.pnl, 2) } else { 0.0 }
         best_tester_optimization_inputs = if ($null -ne $bestTester) { @($bestTester.optimization_inputs) } else { @() }
+        qdm_custom_pilot_ready = ($null -ne $qdmPilot)
+        qdm_custom_symbol = if ($null -ne $qdmPilot) { [string]$qdmPilot.custom_symbol } else { "" }
+        qdm_pilot_row_count = if ($null -ne $qdmPilot) { [int]$qdmPilot.pilot_row_count } else { 0 }
+        qdm_pilot_result = if ($null -ne $qdmPilot) { [string]$qdmPilot.result_label } else { "" }
         source_summary_path = $summaryPath
         source_written_utc  = $_.LastWriteTimeUtc
     }
@@ -616,6 +635,12 @@ $lines.Add("")
 $lines.Add("## Top Queue")
 $lines.Add("")
 foreach ($item in $ranked | Select-Object -First 10) {
+    $qdmSuffix = if ($item.qdm_custom_pilot_ready) {
+        ", qdm={0}, qdm_rows={1}" -f $item.qdm_custom_symbol, $item.qdm_pilot_row_count
+    }
+    else {
+        ""
+    }
     $inputsSuffix = if (@($item.latest_tester_optimization_inputs).Count -gt 0) {
         ", tester_inputs={0}" -f ((@($item.latest_tester_optimization_inputs) -join "; "))
     }
@@ -638,12 +663,18 @@ foreach ($item in $ranked | Select-Object -First 10) {
         $item.learning_sample_count,
         $item.live_opens_24h,
         $item.live_net_24h,
-        $item.recommended_action) + $inputsSuffix + $bestSuffix)
+        $item.recommended_action) + $inputsSuffix + $bestSuffix + $qdmSuffix)
 }
 $lines.Add("")
 $lines.Add("## Full Queue")
 $lines.Add("")
 foreach ($item in $ranked) {
+    $qdmSuffix = if ($item.qdm_custom_pilot_ready) {
+        ", qdm={0}, qdm_rows={1}, qdm_result={2}" -f $item.qdm_custom_symbol, $item.qdm_pilot_row_count, $item.qdm_pilot_result
+    }
+    else {
+        ""
+    }
     $inputsSuffix = if (@($item.latest_tester_optimization_inputs).Count -gt 0) {
         ", tester_inputs={0}" -f ((@($item.latest_tester_optimization_inputs) -join "; "))
     }
@@ -668,7 +699,7 @@ foreach ($item in $ranked) {
         $item.live_opens_24h,
         $item.live_net_24h,
         $item.latest_tester_result,
-        $item.recommended_action) + $inputsSuffix + $bestSuffix)
+        $item.recommended_action) + $inputsSuffix + $bestSuffix + $qdmSuffix)
 }
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdLatest -Encoding UTF8
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdStamped -Encoding UTF8

@@ -3,6 +3,7 @@ param(
     [string]$RuntimeReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$PriorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
     [string]$TesterEvidenceRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\STRATEGY_TESTER",
+    [string]$QdmPilotRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_registry_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
 
@@ -238,6 +239,19 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $runtime = Get-Content -LiteralPath $RuntimeReviewPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $priority = Get-Content -LiteralPath $PriorityPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $bestTester = Get-BestTesterBySymbol -Root $TesterEvidenceRoot
+$qdmPilotRegistry = $null
+if (Test-Path -LiteralPath $QdmPilotRegistryPath) {
+    $qdmPilotRegistry = Get-Content -LiteralPath $QdmPilotRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+$qdmPilotByAlias = @{}
+if ($null -ne $qdmPilotRegistry -and $qdmPilotRegistry.PSObject.Properties.Name -contains 'entries') {
+    foreach ($entry in @($qdmPilotRegistry.entries)) {
+        $entryAlias = Normalize-Alias ([string]$entry.symbol_alias)
+        if (-not [string]::IsNullOrWhiteSpace($entryAlias)) {
+            $qdmPilotByAlias[$entryAlias] = $entry
+        }
+    }
+}
 
 $runtimeBySymbol = @{}
 foreach ($item in @($runtime.key_instruments)) {
@@ -260,6 +274,10 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
     $runtimeItem = $null
     if ($runtimeBySymbol.ContainsKey($symbol)) {
         $runtimeItem = $runtimeBySymbol[$symbol]
+    }
+    $qdmPilot = $null
+    if ($qdmPilotByAlias.ContainsKey($symbolNorm)) {
+        $qdmPilot = $qdmPilotByAlias[$symbolNorm]
     }
 
     $liveOpens = Convert-ToDoubleOrNull $item.live_opens_24h
@@ -340,6 +358,10 @@ $rows = foreach ($item in @($priority.ranked_instruments)) {
         best_tester_trust = if ($hasTesterBaseline) { $bestTesterTrust } else { "" }
         best_tester_path  = if ($hasTesterBaseline) { $bestTesterPath } else { "" }
         best_tester_optimization_inputs = if ($hasTesterBaseline) { @($bestTesterOptimizationInputs) } else { @() }
+        qdm_custom_pilot_ready = ($null -ne $qdmPilot)
+        qdm_custom_symbol = if ($null -ne $qdmPilot) { [string]$qdmPilot.custom_symbol } else { "" }
+        qdm_pilot_row_count = if ($null -ne $qdmPilot) { [int]$qdmPilot.pilot_row_count } else { 0 }
+        qdm_pilot_result = if ($null -ne $qdmPilot) { [string]$qdmPilot.result_label } else { "" }
         recommended_action = [string]$item.recommended_action
         priority_rank     = [int]$item.rank
     }
@@ -404,7 +426,13 @@ else {
         else {
             ""
         }
-        $lines.Add(("- {0}: best_tester_pnl={1} trust={2}{3}" -f $item.symbol_alias, $item.best_tester_pnl, $item.best_tester_trust, $inputsSuffix))
+        $qdmSuffix = if ($item.qdm_custom_pilot_ready) {
+            " qdm={0} rows={1}" -f $item.qdm_custom_symbol, $item.qdm_pilot_row_count
+        }
+        else {
+            ""
+        }
+        $lines.Add(("- {0}: best_tester_pnl={1} trust={2}{3}{4}" -f $item.symbol_alias, $item.best_tester_pnl, $item.best_tester_trust, $inputsSuffix, $qdmSuffix))
     }
 }
 $lines.Add("")
@@ -415,7 +443,13 @@ if ($nearProfit.Count -eq 0) {
 }
 else {
     foreach ($item in $nearProfit | Select-Object -First 8) {
-        $lines.Add(("- {0}: best_tester_pnl={1} live_opens={2} live_closes={3} live_wins={4} live_losses={5} live_net_24h={6} action={7}" -f $item.symbol_alias, $item.best_tester_pnl, $item.live_opens_24h, $item.live_closes_24h, $item.live_wins_24h, $item.live_losses_24h, $item.live_net_24h, $item.recommended_action))
+        $qdmSuffix = if ($item.qdm_custom_pilot_ready) {
+            " qdm={0} rows={1}" -f $item.qdm_custom_symbol, $item.qdm_pilot_row_count
+        }
+        else {
+            ""
+        }
+        $lines.Add(("- {0}: best_tester_pnl={1} live_opens={2} live_closes={3} live_wins={4} live_losses={5} live_net_24h={6} action={7}{8}" -f $item.symbol_alias, $item.best_tester_pnl, $item.live_opens_24h, $item.live_closes_24h, $item.live_wins_24h, $item.live_losses_24h, $item.live_net_24h, $item.recommended_action, $qdmSuffix))
     }
 }
 $lines.Add("")
