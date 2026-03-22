@@ -1039,15 +1039,25 @@ $result['research_export_manifest_path'] = $(if (Test-Path -LiteralPath $researc
 $result['research_export_status'] = $researchRefreshStatus
 $result['research_export_refreshed'] = $researchRefreshRan
 $result['research_export_error'] = $researchRefreshError
+$result['research_export_tester_telemetry_rows_total'] = $researchTesterTelemetryRows
+$result['research_export_tester_pass_rows_total'] = $researchTesterPassRows
 $result['research_export_tester_telemetry_rows'] = $researchTesterTelemetryRows
 $result['research_export_tester_pass_rows'] = $researchTesterPassRows
+$result['research_export_tester_telemetry_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetryPath)
+$result['research_export_tester_telemetry_session_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetrySessionPath)
+$result['research_export_tester_pass_rows_for_run'] = $testerOptimizationPassCount
 
 $summary['research_export_manifest_path'] = $(if (Test-Path -LiteralPath $researchManifestPath) { $researchManifestPath } else { $null })
 $summary['research_export_status'] = $researchRefreshStatus
 $summary['research_export_refreshed'] = $researchRefreshRan
 $summary['research_export_error'] = $researchRefreshError
+$summary['research_export_tester_telemetry_rows_total'] = $researchTesterTelemetryRows
+$summary['research_export_tester_pass_rows_total'] = $researchTesterPassRows
 $summary['research_export_tester_telemetry_rows'] = $researchTesterTelemetryRows
 $summary['research_export_tester_pass_rows'] = $researchTesterPassRows
+$summary['research_export_tester_telemetry_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetryPath)
+$summary['research_export_tester_telemetry_session_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetrySessionPath)
+$summary['research_export_tester_pass_rows_for_run'] = $testerOptimizationPassCount
 
 $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
 $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
