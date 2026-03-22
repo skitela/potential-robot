@@ -7,6 +7,7 @@ param(
     [int]$NearProfitCount = 3,
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
+    [int]$CalibrationWindowDays = 5,
     [int]$TimeoutSec = 14400,
     [ValidateSet(0,1,2,3)]
     [int]$Optimization = 2,
@@ -21,6 +22,52 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Resolve-NearProfitDateWindow {
+    param(
+        [string]$FromDate,
+        [string]$ToDate,
+        [int]$CalibrationWindowDays
+    )
+
+    $effectiveFromDate = $FromDate
+    $effectiveToDate = $ToDate
+    $windowApplied = $false
+
+    if ($CalibrationWindowDays -le 0) {
+        return [pscustomobject]@{
+            from_date = $effectiveFromDate
+            to_date = $effectiveToDate
+            window_applied = $windowApplied
+            calibration_window_days = 0
+        }
+    }
+
+    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+    $dateFormat = "yyyy.MM.dd"
+    $styles = [System.Globalization.DateTimeStyles]::None
+    $parsedFromDate = [datetime]::MinValue
+    $parsedToDate = [datetime]::MinValue
+
+    if (
+        [datetime]::TryParseExact($FromDate, $dateFormat, $culture, $styles, [ref]$parsedFromDate) -and
+        [datetime]::TryParseExact($ToDate, $dateFormat, $culture, $styles, [ref]$parsedToDate)
+    ) {
+        $targetWindowDays = [Math]::Max(1, $CalibrationWindowDays)
+        $candidateFromDate = $parsedToDate.AddDays(-1 * ($targetWindowDays - 1))
+        if ($candidateFromDate -gt $parsedFromDate) {
+            $effectiveFromDate = $candidateFromDate.ToString($dateFormat, $culture)
+            $windowApplied = $true
+        }
+    }
+
+    return [pscustomobject]@{
+        from_date = $effectiveFromDate
+        to_date = $effectiveToDate
+        window_applied = $windowApplied
+        calibration_window_days = [Math]::Max(1, $CalibrationWindowDays)
+    }
+}
 
 if (-not (Test-Path -LiteralPath $ProfitTrackingPath)) {
     throw "Profit tracking file not found: $ProfitTrackingPath"
@@ -38,12 +85,14 @@ if ($symbolAliases.Count -le 0) {
     throw "Near-profit list did not yield usable symbol aliases."
 }
 
+$dateWindow = Resolve-NearProfitDateWindow -FromDate $FromDate -ToDate $ToDate -CalibrationWindowDays $CalibrationWindowDays
+
 $workerNames = @()
 for ($i = 0; $i -lt $symbolAliases.Count; $i++) {
     $workerNames += ("opt_worker_{0}" -f ($i + 1))
 }
 
-& (Join-Path $ProjectRoot "TOOLS\RUN_STRATEGY_TESTER_BATCH.ps1") `
+$report = & (Join-Path $ProjectRoot "TOOLS\RUN_STRATEGY_TESTER_BATCH.ps1") `
     -ProjectRoot $ProjectRoot `
     -Mt5Exe $Mt5Exe `
     -TerminalDataDir $TerminalDataDir `
@@ -51,11 +100,44 @@ for ($i = 0; $i -lt $symbolAliases.Count; $i++) {
     -SymbolAliases $symbolAliases `
     -WorkerNames $workerNames `
     -TimeoutSec $TimeoutSec `
-    -FromDate $FromDate `
-    -ToDate $ToDate `
+    -FromDate $dateWindow.from_date `
+    -ToDate $dateWindow.to_date `
     -BatchReportName $BatchReportName `
     -EvidenceSubdir $EvidenceSubdir `
     -Optimization $Optimization `
     -OptimizationCriterion $OptimizationCriterion `
     -SkipResearchRefresh:$SkipResearchRefresh `
     -ResearchPerfProfile $ResearchPerfProfile
+
+$report | Add-Member -NotePropertyName "requested_from_date" -NotePropertyValue $FromDate -Force
+$report | Add-Member -NotePropertyName "requested_to_date" -NotePropertyValue $ToDate -Force
+$report | Add-Member -NotePropertyName "effective_from_date" -NotePropertyValue ([string]$dateWindow.from_date) -Force
+$report | Add-Member -NotePropertyName "effective_to_date" -NotePropertyValue ([string]$dateWindow.to_date) -Force
+$report | Add-Member -NotePropertyName "calibration_window_days" -NotePropertyValue ([int]$dateWindow.calibration_window_days) -Force
+$report | Add-Member -NotePropertyName "calibration_window_applied" -NotePropertyValue ([bool]$dateWindow.window_applied) -Force
+
+$evidenceDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER"
+if (-not [string]::IsNullOrWhiteSpace($EvidenceSubdir)) {
+    $evidenceDir = Join-Path $evidenceDir $EvidenceSubdir
+}
+New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
+$jsonPath = Join-Path $evidenceDir ($BatchReportName + ".json")
+$mdPath = Join-Path $evidenceDir ($BatchReportName + ".md")
+$report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+
+$mdLines = @(
+    "# Near Profit Optimization Latest",
+    "",
+    ("- requested_from_date: {0}" -f $report.requested_from_date),
+    ("- requested_to_date: {0}" -f $report.requested_to_date),
+    ("- effective_from_date: {0}" -f $report.effective_from_date),
+    ("- effective_to_date: {0}" -f $report.effective_to_date),
+    ("- calibration_window_days: {0}" -f $report.calibration_window_days),
+    ("- calibration_window_applied: {0}" -f $report.calibration_window_applied)
+)
+foreach ($run in @($report.runs)) {
+    $mdLines += ("- {0} / {1}: {2}, duration={3}, timeout_sec={4}, optimization_rows={5}" -f $run.symbol_alias, $run.sandbox_name, $run.result_label, $run.test_duration, $run.timeout_sec, $run.optimization_result_rows)
+}
+($mdLines -join "`r`n") | Set-Content -LiteralPath $mdPath -Encoding UTF8
+
+$report
