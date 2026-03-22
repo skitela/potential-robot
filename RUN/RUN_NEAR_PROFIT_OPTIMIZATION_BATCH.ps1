@@ -5,6 +5,7 @@ param(
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075",
     [switch]$PortableTerminal,
     [int]$NearProfitCount = 3,
+    [string[]]$ExcludedSymbolAliases = @(),
     [string]$FromDate = "2026.03.01",
     [string]$ToDate = "2026.03.16",
     [int]$CalibrationWindowDays = 5,
@@ -79,7 +80,29 @@ if ($nearProfit.Count -le 0) {
     throw "No near-profit symbols available in $ProfitTrackingPath"
 }
 
-$selected = @($nearProfit | Select-Object -First ([Math]::Max(1, $NearProfitCount)))
+$excludedAliasSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($alias in @($ExcludedSymbolAliases)) {
+    if (-not [string]::IsNullOrWhiteSpace($alias)) {
+        [void]$excludedAliasSet.Add([string]$alias)
+    }
+}
+
+$filteredNearProfit = if ($excludedAliasSet.Count -gt 0) {
+    @(
+        $nearProfit |
+            Where-Object {
+                -not $excludedAliasSet.Contains([string]$_.symbol_alias)
+            }
+    )
+} else {
+    @($nearProfit)
+}
+
+if ($filteredNearProfit.Count -le 0) {
+    $filteredNearProfit = @($nearProfit)
+}
+
+$selected = @($filteredNearProfit | Select-Object -First ([Math]::Max(1, $NearProfitCount)))
 $symbolAliases = @($selected | ForEach-Object { [string]$_.symbol_alias } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if ($symbolAliases.Count -le 0) {
     throw "Near-profit list did not yield usable symbol aliases."

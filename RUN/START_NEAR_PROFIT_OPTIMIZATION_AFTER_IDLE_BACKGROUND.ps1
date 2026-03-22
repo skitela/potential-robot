@@ -190,12 +190,36 @@ if ($selectedSymbols.Count -le 0) {
     throw "Near-profit list did not yield usable symbol aliases."
 }
 
+$mt5TesterStatusPath = Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json"
+$excludedActiveSymbols = @()
+if (Test-Path -LiteralPath $mt5TesterStatusPath) {
+    try {
+        $mt5TesterStatus = Get-Content -LiteralPath $mt5TesterStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -ne $mt5TesterStatus -and [string]$mt5TesterStatus.state -eq "running") {
+            $activeMainTesterSymbol = [string]$mt5TesterStatus.current_symbol
+            if (-not [string]::IsNullOrWhiteSpace($activeMainTesterSymbol)) {
+                $excludedActiveSymbols = @($activeMainTesterSymbol)
+                $filteredSelectedSymbols = @(
+                    $selectedSymbols |
+                        Where-Object {
+                            $_ -ne $activeMainTesterSymbol
+                        }
+                )
+                if ($filteredSelectedSymbols.Count -gt 0) {
+                    $selectedSymbols = $filteredSelectedSymbols
+                }
+            }
+        }
+    }
+    catch {
+    }
+}
+
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logPath = Join-Path $LogRoot ("near_profit_optimization_after_idle_{0}.log" -f $timestamp)
 $wrapperPath = Join-Path $env:TEMP ("near_profit_optimization_after_idle_wrapper_{0}.ps1" -f $timestamp)
 $metaTesterExe = Join-Path (Split-Path -Parent $Mt5Exe) "metatester64.exe"
 $batchReportPath = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json"
-$mt5TesterStatusPath = Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json"
 $quotedSymbols = ($selectedSymbols | ForEach-Object { "'{0}'" -f $_ }) -join ", "
 $awaitingIdleNote = if ($UseDedicatedPortableLabLane) { "awaiting_near_profit_lab_idle" } else { "awaiting_secondary_mt5_idle" }
 $busyIdleNote = if ($UseDedicatedPortableLabLane) { "near_profit_lab_busy" } else { "secondary_mt5_busy" }
@@ -305,6 +329,7 @@ try {
         PortableTerminal = $portableTerminalLiteral
         ProfitTrackingPath = '$ProfitTrackingPath'
         NearProfitCount = $NearProfitCount
+        ExcludedSymbolAliases = @($($excludedActiveSymbols | ForEach-Object { "'{0}'" -f $_ } -join ', '))
         FromDate = '$FromDate'
         ToDate = '$ToDate'
         CalibrationWindowDays = $CalibrationWindowDays
