@@ -121,8 +121,8 @@ Copy-Item -LiteralPath $PilotCsvPath -Destination $targetCommonCsvPath -Force
 $scriptsTargetDir = Join-Path $terminalDataDir "MQL5\Scripts"
 $presetsTargetDir = Join-Path $terminalDataDir "MQL5\Presets"
 $logsDir = Join-Path $projectPath "LOGS"
-$runDir = Join-Path $projectPath "RUN\qdm_import"
 $evidenceDir = Join-Path $projectPath "EVIDENCE\QDM_PILOT"
+$runDir = Join-Path $evidenceDir "run"
 $terminalLogDir = Join-Path $terminalDataDir "logs"
 
 New-Item -ItemType Directory -Force -Path $scriptsTargetDir | Out-Null
