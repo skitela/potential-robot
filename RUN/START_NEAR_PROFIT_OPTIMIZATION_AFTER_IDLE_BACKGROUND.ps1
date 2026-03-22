@@ -101,7 +101,23 @@ function Stop-DedicatedLabProcesses {
         }
     }
 
-    Start-Sleep -Seconds 3
+    $deadline = (Get-Date).AddSeconds(45)
+    do {
+        Start-Sleep -Seconds 3
+        $remaining = @(Get-DedicatedLabProcesses -TerminalRoot $TerminalRoot)
+        if ($remaining.Count -le 0) {
+            break
+        }
+
+        foreach ($proc in $remaining) {
+            try {
+                Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+            }
+            catch {
+            }
+        }
+    } while ((Get-Date) -lt $deadline)
+
     return $processes.Count
 }
 
@@ -339,6 +355,7 @@ $logPath = Join-Path $LogRoot ("near_profit_optimization_after_idle_{0}.log" -f 
 $wrapperPath = Join-Path $env:TEMP ("near_profit_optimization_after_idle_wrapper_{0}.ps1" -f $timestamp)
 $metaTesterExe = Join-Path (Split-Path -Parent $Mt5Exe) "metatester64.exe"
 $batchReportPath = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json"
+$batchReportMarkdownPath = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.md"
 $quotedSymbols = ($selectedSymbols | ForEach-Object { "'{0}'" -f $_ }) -join ", "
 $awaitingIdleNote = if ($UseDedicatedPortableLabLane) { "awaiting_near_profit_lab_idle" } else { "awaiting_secondary_mt5_idle" }
 $busyIdleNote = if ($UseDedicatedPortableLabLane) { "near_profit_lab_busy" } else { "secondary_mt5_busy" }
@@ -438,6 +455,16 @@ try {
     }
     else {
         Save-NearProfitQueueStatus -State 'running' -Completed @() -Pending `$selectedSymbols -CurrentNote 'portable_lab_lane_ready'
+    }
+
+    foreach (`$staleBatchArtifact in @('$batchReportPath', '$batchReportMarkdownPath')) {
+        if (-not [string]::IsNullOrWhiteSpace(`$staleBatchArtifact) -and (Test-Path -LiteralPath `$staleBatchArtifact)) {
+            try {
+                Remove-Item -LiteralPath `$staleBatchArtifact -Force -ErrorAction Stop
+            }
+            catch {
+            }
+        }
     }
 
     Save-NearProfitQueueStatus -State 'running' -Completed @() -Pending @() -CurrentNote 'near_profit_batch_started'

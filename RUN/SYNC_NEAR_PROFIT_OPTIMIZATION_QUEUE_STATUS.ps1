@@ -426,7 +426,10 @@ function Resolve-LogItem {
 }
 
 function Resolve-LatestOptimizationRunSummaryItem {
-    param([string]$BatchReportPath)
+    param(
+        [string]$BatchReportPath,
+        [datetime]$StartedAt = [datetime]::MinValue
+    )
 
     if ([string]::IsNullOrWhiteSpace($BatchReportPath)) {
         return $null
@@ -438,10 +441,20 @@ function Resolve-LatestOptimizationRunSummaryItem {
     }
 
     $batchReportName = [System.IO.Path]::GetFileName($BatchReportPath)
-    return Get-ChildItem -Path $dir -Filter "*_summary.json" -ErrorAction SilentlyContinue |
+    $candidate = Get-ChildItem -Path $dir -Filter "*_summary.json" -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -ne $batchReportName } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
+
+    if ($null -eq $candidate) {
+        return $null
+    }
+
+    if ($StartedAt -ne [datetime]::MinValue -and $candidate.LastWriteTime -lt $StartedAt.AddSeconds(-15)) {
+        return $null
+    }
+
+    return $candidate
 }
 
 function Write-StatusArtifacts {
@@ -566,10 +579,6 @@ $dedicatedLabHasActivity = ($dedicatedLabProcessState.total_count -gt 0)
 $logItem = Resolve-LogItem -Root $LogRoot -ExplicitPath $LogPath
 $mt5TesterStatus = Read-JsonFile -Path $Mt5TesterStatusPath
 $batchReport = Read-JsonFile -Path $BatchReportPath
-$latestOptimizationSummaryItem = Resolve-LatestOptimizationRunSummaryItem -BatchReportPath $BatchReportPath
-$latestOptimizationSummary = if ($null -ne $latestOptimizationSummaryItem) { Read-JsonFile -Path $latestOptimizationSummaryItem.FullName } else { $null }
-$latestOptimizationSummarySymbol = if ($null -ne $latestOptimizationSummary) { Convert-ToCanonicalSymbol -Symbol ([string]$latestOptimizationSummary.symbol_alias) } else { "" }
-
 $resolvedState = $State
 $resolvedCurrentSymbol = $CurrentSymbol
 $resolvedCompleted = @($Completed)
@@ -603,6 +612,10 @@ if (-not [string]::IsNullOrWhiteSpace($resolvedStartedAt)) {
         $startedAtDate = $null
     }
 }
+
+$latestOptimizationSummaryItem = Resolve-LatestOptimizationRunSummaryItem -BatchReportPath $BatchReportPath -StartedAt $(if ($null -ne $startedAtDate) { $startedAtDate } else { [datetime]::MinValue })
+$latestOptimizationSummary = if ($null -ne $latestOptimizationSummaryItem) { Read-JsonFile -Path $latestOptimizationSummaryItem.FullName } else { $null }
+$latestOptimizationSummarySymbol = if ($null -ne $latestOptimizationSummary) { Convert-ToCanonicalSymbol -Symbol ([string]$latestOptimizationSummary.symbol_alias) } else { "" }
 
 $runElapsedSec = 0
 if ($null -ne $startedAtDate) {

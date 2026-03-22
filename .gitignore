@@ -27,6 +27,7 @@ Thumbs.db
 *.log
 *.zip
 *.tmp
+*.tmp.*
 
 # Artefakty kompilacji MT5
 *.ex5

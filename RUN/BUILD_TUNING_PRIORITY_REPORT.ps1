@@ -400,6 +400,58 @@ function Get-LatestTesterSummaries {
     return $map
 }
 
+function Get-BestTesterSummaries {
+    param([string]$StrategyTesterRoot)
+
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $StrategyTesterRoot)) {
+        return $map
+    }
+
+    Get-ChildItem -Path $StrategyTesterRoot -Recurse -Filter "*_summary.json" -File |
+        Sort-Object LastWriteTime -Descending |
+        ForEach-Object {
+            try {
+                $summary = Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+                $alias = Normalize-SymbolAlias (Get-FirstValue -Object $summary -Names @("symbol_alias", "storage_alias", "symbol"))
+                if ([string]::IsNullOrWhiteSpace($alias)) {
+                    return
+                }
+                if (-not (Test-MeaningfulTesterSummary -Summary $summary)) {
+                    return
+                }
+
+                $pnlValue = Get-EffectiveTesterSummaryPnl -Summary $summary
+                if ($null -eq $pnlValue) {
+                    return
+                }
+
+                $row = [ordered]@{
+                    path         = $_.FullName
+                    written_local = $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    trust_state  = [string](Get-FirstValue -Object $summary -Names @("trust_state"))
+                    trust_reason = [string](Get-FirstValue -Object $summary -Names @("trust_reason"))
+                    cost_state   = [string](Get-FirstValue -Object $summary -Names @("cost_pressure_state"))
+                    sample       = [int](Get-FirstValue -Object $summary -Names @("learning_sample_count"))
+                    bias         = [double](Get-FirstValue -Object $summary -Names @("learning_bias"))
+                    pnl          = $pnlValue
+                    result_label = Get-EffectiveTesterSummaryResultLabel -Summary $summary
+                    optimization_inputs = @(
+                        Get-EffectiveTesterSummaryOptimizationInputs -Summary $summary
+                    )
+                }
+
+                if (-not $map.ContainsKey($alias) -or $pnlValue -gt [double]$map[$alias].pnl) {
+                    $map[$alias] = $row
+                }
+            }
+            catch {
+            }
+        }
+
+    return $map
+}
+
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 
 $runtimeReview = $null
@@ -418,6 +470,7 @@ if ($null -ne $runtimeReview -and $runtimeReview.PSObject.Properties.Name -conta
 }
 
 $testerMap = Get-LatestTesterSummaries -StrategyTesterRoot (Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER")
+$bestTesterMap = Get-BestTesterSummaries -StrategyTesterRoot (Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER")
 
 $itemsByAlias = @{}
 Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
@@ -467,6 +520,7 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
     $score += Get-LiveWeight -Net $liveNet -Opens $liveOpens -TrustState $trustState
 
     $tester = if ($testerMap.ContainsKey($alias)) { $testerMap[$alias] } else { $null }
+    $bestTester = if ($bestTesterMap.ContainsKey($alias)) { $bestTesterMap[$alias] } else { $null }
 
     $candidate = [pscustomobject]@{
         rank                = 0
@@ -490,6 +544,14 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
         latest_tester_bias  = if ($null -ne $tester) { [math]::Round([double]$tester.bias, 4) } else { 0.0 }
         latest_tester_pnl   = if ($null -ne $tester) { [math]::Round([double]$tester.pnl, 2) } else { 0.0 }
         latest_tester_optimization_inputs = if ($null -ne $tester) { @($tester.optimization_inputs) } else { @() }
+        best_tester_path    = if ($null -ne $bestTester) { $bestTester.path } else { "" }
+        best_tester_result  = if ($null -ne $bestTester) { $bestTester.result_label } else { "" }
+        best_tester_trust   = if ($null -ne $bestTester) { $bestTester.trust_state } else { "" }
+        best_tester_cost    = if ($null -ne $bestTester) { $bestTester.cost_state } else { "" }
+        best_tester_sample  = if ($null -ne $bestTester) { $bestTester.sample } else { 0 }
+        best_tester_bias    = if ($null -ne $bestTester) { [math]::Round([double]$bestTester.bias, 4) } else { 0.0 }
+        best_tester_pnl     = if ($null -ne $bestTester) { [math]::Round([double]$bestTester.pnl, 2) } else { 0.0 }
+        best_tester_optimization_inputs = if ($null -ne $bestTester) { @($bestTester.optimization_inputs) } else { @() }
         source_summary_path = $summaryPath
         source_written_utc  = $_.LastWriteTimeUtc
     }
@@ -560,6 +622,12 @@ foreach ($item in $ranked | Select-Object -First 10) {
     else {
         ""
     }
+    $bestSuffix = if ($item.best_tester_pnl -ne 0 -or @($item.best_tester_optimization_inputs).Count -gt 0) {
+        ", best_tester_pnl={0}" -f $item.best_tester_pnl
+    }
+    else {
+        ""
+    }
     $lines.Add(("- #{0} {1}: score={2}, band={3}, trust={4}, cost={5}, sample={6}, live_opens_24h={7}, live_net_24h={8}, action={9}" -f
         $item.rank,
         $item.symbol_alias,
@@ -570,7 +638,7 @@ foreach ($item in $ranked | Select-Object -First 10) {
         $item.learning_sample_count,
         $item.live_opens_24h,
         $item.live_net_24h,
-        $item.recommended_action) + $inputsSuffix)
+        $item.recommended_action) + $inputsSuffix + $bestSuffix)
 }
 $lines.Add("")
 $lines.Add("## Full Queue")
@@ -578,6 +646,12 @@ $lines.Add("")
 foreach ($item in $ranked) {
     $inputsSuffix = if (@($item.latest_tester_optimization_inputs).Count -gt 0) {
         ", tester_inputs={0}" -f ((@($item.latest_tester_optimization_inputs) -join "; "))
+    }
+    else {
+        ""
+    }
+    $bestSuffix = if ($item.best_tester_pnl -ne 0 -or @($item.best_tester_optimization_inputs).Count -gt 0) {
+        ", best_tester_pnl={0}, best_tester_inputs={1}" -f $item.best_tester_pnl, ((@($item.best_tester_optimization_inputs) -join "; "))
     }
     else {
         ""
@@ -594,7 +668,7 @@ foreach ($item in $ranked) {
         $item.live_opens_24h,
         $item.live_net_24h,
         $item.latest_tester_result,
-        $item.recommended_action) + $inputsSuffix)
+        $item.recommended_action) + $inputsSuffix + $bestSuffix)
 }
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdLatest -Encoding UTF8
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdStamped -Encoding UTF8
