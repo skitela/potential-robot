@@ -5,6 +5,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registry = Get-Content (Join-Path $ProjectRoot "CONFIG\microbots_registry.json") -Raw | ConvertFrom-Json
 $familyMap = @{}
 foreach ($item in $registry.symbols) {
@@ -12,16 +15,19 @@ foreach ($item in $registry.symbols) {
     if (-not $familyMap.ContainsKey($family)) {
         $familyMap[$family] = @()
     }
-    $familyMap[$family] += [string]$item.symbol
+    $familyMap[$family] += $item
 }
 
 $families = @()
 foreach ($family in $familyMap.Keys | Sort-Object) {
     $symbols = @($familyMap[$family])
     $rows = @()
-    foreach ($symbol in $symbols) {
-        $summaryPath = Join-Path $CommonFilesRoot ("state\{0}\execution_summary.json" -f $symbol)
-        $policyPath = Join-Path $CommonFilesRoot ("state\{0}\informational_policy.json" -f $symbol)
+    foreach ($item in $symbols) {
+        $symbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+        $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $item
+        $stateAlias = Resolve-RegistryStateAlias -RegistryItem $item -CommonFilesRoot $CommonFilesRoot -RequiredFiles @("execution_summary.json","informational_policy.json")
+        $summaryPath = Join-Path $CommonFilesRoot ("state\{0}\execution_summary.json" -f $stateAlias)
+        $policyPath = Join-Path $CommonFilesRoot ("state\{0}\informational_policy.json" -f $stateAlias)
         if ((Test-Path $summaryPath) -and (Test-Path $policyPath)) {
             $summary = Get-Content $summaryPath -Raw | ConvertFrom-Json
             $policy = Get-Content $policyPath -Raw | ConvertFrom-Json
@@ -35,6 +41,8 @@ foreach ($family in $familyMap.Keys | Sort-Object) {
             }
             $rows += [pscustomobject]@{
                 symbol = $symbol
+                broker_symbol = $brokerSymbol
+                state_alias = $stateAlias
                 runtime_mode = [string]$summary.runtime_mode
                 latency_ms_avg = [math]::Round(([double]$summary.local_latency_us_avg / 1000.0),4)
                 latency_ms_max = [math]::Round(([double]$summary.local_latency_us_max / 1000.0),4)

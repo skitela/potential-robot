@@ -8,10 +8,15 @@ Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = "Stop"
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $runtimeSummaryPath = Join-Path $ProjectRoot "EVIDENCE\runtime_control_summary.json"
 $dailyJsonPath = Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json"
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $watchdogPath = Join-Path $ProjectRoot "EVIDENCE\runtime_watchdog_status.json"
+$mt5ProfilePath = Join-Path $ProjectRoot "EVIDENCE\mt5_microbots_profile_setup_report.json"
+$mt5InstallPath = Join-Path $ProjectRoot "EVIDENCE\validate_mt5_server_install_report.json"
 
 function Invoke-ToolScript {
     param([string]$RelativePath, [string[]]$Arguments = @())
@@ -26,10 +31,15 @@ function Read-JsonOrNull {
     try { return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json } catch { return $null }
 }
 
+function Refresh-Reports {
+    Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+    Invoke-ToolScript -RelativePath "TOOLS\GENERATE_EVENING_OWNER_REPORT.ps1"
+}
+
 $registry = Read-JsonOrNull $registryPath
 $symbols = @()
 if ($registry) {
-    $symbols = @($registry.symbols | ForEach-Object { [string]$_.symbol })
+    $symbols = @($registry.symbols | ForEach-Object { Get-RegistryDisplaySymbol -RegistryItem $_ -PreferBroker } | Select-Object -Unique)
 }
 $families = @("FX_MAIN","FX_ASIA","FX_CROSS","METALS_SPOT_PM","METALS_FUTURES","INDEX_EU","INDEX_US")
 
@@ -142,13 +152,13 @@ $btnFamilyHalt.Location = New-Object System.Drawing.Point(24,186)
 $familyBox.Controls.Add($btnFamilyHalt)
 
 $pairBox = New-Object System.Windows.Forms.GroupBox
-$pairBox.Text = "Sterowanie pojedyncza para"
+$pairBox.Text = "Sterowanie pojedynczym instrumentem"
 $pairBox.Size = New-Object System.Drawing.Size(300,220)
 $pairBox.Location = New-Object System.Drawing.Point(656,120)
 $form.Controls.Add($pairBox)
 
 $pairLabel = New-Object System.Windows.Forms.Label
-$pairLabel.Text = "Para walutowa:"
+$pairLabel.Text = "Instrument:"
 $pairLabel.AutoSize = $true
 $pairLabel.Location = New-Object System.Drawing.Point(24,34)
 $pairBox.Controls.Add($pairLabel)
@@ -219,33 +229,56 @@ $btnRefresh.Size = New-Object System.Drawing.Size(160,32)
 $btnRefresh.Location = New-Object System.Drawing.Point(492,586)
 $form.Controls.Add($btnRefresh)
 
+$btnOpenMt5 = New-Object System.Windows.Forms.Button
+$btnOpenMt5.Text = "Uruchom OANDA MT5"
+$btnOpenMt5.Size = New-Object System.Drawing.Size(220,32)
+$btnOpenMt5.Location = New-Object System.Drawing.Point(666,586)
+$form.Controls.Add($btnOpenMt5)
+
 function Refresh-Panel {
     $summary = Read-JsonOrNull $runtimeSummaryPath
     $daily = Read-JsonOrNull $dailyJsonPath
     $watchdog = Read-JsonOrNull $watchdogPath
+    $mt5Profile = Read-JsonOrNull $mt5ProfilePath
+    $mt5Install = Read-JsonOrNull $mt5InstallPath
+    $mt5Process = Get-Process terminal64 -ErrorAction SilentlyContinue | Select-Object -First 1
 
     $rows = @()
     if ($summary) { $rows = @($summary.kontrola) }
 
-    $allReady = ($rows.Count -gt 0 -and (@($rows | Where-Object { $_.requested_mode -ne "READY" }).Count -eq 0))
-    $anyHalt = (@($rows | Where-Object { $_.requested_mode -eq "HALT" }).Count -gt 0)
-    $anyCloseOnly = (@($rows | Where-Object { $_.requested_mode -eq "CLOSE_ONLY" }).Count -gt 0)
+    $dailyRows = @()
+    $dailySummary = $null
+    if ($daily) {
+        if ($daily.PSObject.Properties.Name -contains "instrumenty") { $dailyRows = @($daily.instrumenty) }
+        if ($daily.PSObject.Properties.Name -contains "raport_dzienny") { $dailySummary = $daily.raport_dzienny }
+    }
 
-    if ($anyHalt) {
-        $statusBadge.Text = "NIE DZIALA"
-        $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(183,32,32)
-        $statusBadge.ForeColor = [System.Drawing.Color]::White
-    } elseif ($anyCloseOnly) {
-        $statusBadge.Text = "CLOSE-ONLY"
-        $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(201,128,18)
-        $statusBadge.ForeColor = [System.Drawing.Color]::White
-    } elseif ($allReady) {
-        $statusBadge.Text = "DZIALA"
-        $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(35,140,74)
-        $statusBadge.ForeColor = [System.Drawing.Color]::White
+    if ($dailySummary) {
+        switch ([string]$dailySummary.stan_systemu) {
+            "DZIALA" {
+                $statusBadge.Text = "DZIALA"
+                $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(35,140,74)
+                $statusBadge.ForeColor = [System.Drawing.Color]::White
+            }
+            "UWAGA" {
+                $statusBadge.Text = "UWAGA"
+                $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(201,128,18)
+                $statusBadge.ForeColor = [System.Drawing.Color]::White
+            }
+            "RYNEK_ZAMKNIETY" {
+                $statusBadge.Text = "RYNEK ZAMKNIETY"
+                $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(39,89,136)
+                $statusBadge.ForeColor = [System.Drawing.Color]::White
+            }
+            default {
+                $statusBadge.Text = "PADL"
+                $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(183,32,32)
+                $statusBadge.ForeColor = [System.Drawing.Color]::White
+            }
+        }
     } else {
-        $statusBadge.Text = "STAN MIESZANY"
-        $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(39,89,136)
+        $statusBadge.Text = "BRAK RAPORTU"
+        $statusBadge.BackColor = [System.Drawing.Color]::FromArgb(97,97,97)
         $statusBadge.ForeColor = [System.Drawing.Color]::White
     }
 
@@ -279,20 +312,38 @@ function Refresh-Panel {
         $repairBadge.ForeColor = [System.Drawing.Color]::White
     }
 
-    if ($daily) {
+    if ($dailySummary) {
         $watchdogText = ""
-        if ($watchdog) { $watchdogText = " | Naprawa: $($watchdog.status)" }
-        $summaryLabel.Text = "Wynik 24h: $($daily.raport_dzienny.wynik_sumaryczny_kwota) | Srednia latencja: $($daily.raport_dzienny.srednia_latencja_dobowa_ms) ms | Pary z zyskiem: $($daily.raport_dzienny.liczba_par_zysk) | Pary ze strata: $($daily.raport_dzienny.liczba_par_strata)$watchdogText"
+        if ($watchdog) { $watchdogText = " | Samonaprawa: $($watchdog.status)" }
+        $summaryLabel.Text = "Status: $($dailySummary.stan_systemu) | Netto dzis: $($dailySummary.netto_dzis) | Zmiana do wczoraj: $($dailySummary.zmiana_netto_do_wczoraj) | Wygrane / przegrane: $($dailySummary.wygrane_dzis) / $($dailySummary.przegrane_dzis) | Ping sr: $($dailySummary.sredni_ping_ms) ms | Latencja bota sr: $($dailySummary.srednia_latencja_bota_us) us$watchdogText"
     } else {
         $summaryLabel.Text = "Brak aktualnego raportu dziennego."
     }
 
     $lines = @()
-    foreach ($row in ($rows | Select-Object -First 11)) {
-        $lines += ("{0} | {1} | {2} | {3}" -f $row.para_walutowa, $row.rodzina, $row.requested_mode, $row.reason_code)
+    foreach ($row in ($dailyRows | Sort-Object swiezosc_s -Descending | Select-Object -First 8)) {
+        $lines += ("{0} | {1} | praca={2} | swiezosc={3} | netto={4} | zmiana={5} | W/P={6}/{7} | ping={8} ms | lat={9}/{10} us" -f
+            $row.instrument,
+            $row.status_pracy,
+            $row.czas_pracy_dzis_label,
+            $row.swiezosc_label,
+            $row.netto_dzis,
+            $row.zmiana_do_wczoraj,
+            $row.wygrane_dzis,
+            $row.przegrane_dzis,
+            $row.ping_ms,
+            $row.latencja_sr_us,
+            $row.latencja_max_us)
     }
     if ($lines.Count -eq 0) {
-        $lines += "Brak danych sterowania."
+        $lines += "Brak swiezych danych dziennych."
+    }
+    if ($rows.Count -gt 0) {
+        $lines += ""
+        $lines += "TRYBY OPERATORSKIE"
+        foreach ($row in ($rows | Select-Object -First 6)) {
+            $lines += ("{0} | {1} | {2} | {3}" -f $row.para_walutowa, $row.rodzina, $row.requested_mode, $row.reason_code)
+        }
     }
     if ($watchdog) {
         $lines += ""
@@ -308,31 +359,47 @@ function Refresh-Panel {
             $lines += ("Blad naprawy: " + [string]$watchdog.repair_error)
         }
     }
+    $lines += ""
+    $mt5Status = if ($mt5Process) { "URUCHOMIONY" } else { "NIEAKTYWNY" }
+    $lines += ("MT5 | status={0}" -f $mt5Status)
+    if ($mt5Install) {
+        $lines += ("MT5 | instalacja_ok={0}" -f [bool]$mt5Install.ok)
+    }
+    if ($mt5Profile) {
+        $charts = 0
+        if ($mt5Profile.PSObject.Properties.Name -contains "charts") {
+            $charts = @($mt5Profile.charts).Count
+        }
+        $lines += ("MT5 | profil={0} | wykresy={1} | launched={2}" -f $mt5Profile.profile_name, $charts, $mt5Profile.launched)
+    }
+    if ($mt5Process) {
+        $lines += ("MT5 | start lokalny={0}" -f (Get-Date $mt5Process.StartTime -Format "yyyy-MM-dd HH:mm:ss"))
+    }
     $detailsBox.Text = ($lines -join [Environment]::NewLine)
 }
 
 $btnNormal.Add_Click({
     Invoke-ToolScript -RelativePath "RUN\WLACZ_TRYB_NORMALNY_SYSTEMU.ps1"
     Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-    Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+    Refresh-Reports
     Refresh-Panel
 })
 $btnCloseOnly.Add_Click({
     Invoke-ToolScript -RelativePath "RUN\WLACZ_CLOSE_ONLY_SYSTEMU.ps1"
     Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-    Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+    Refresh-Reports
     Refresh-Panel
 })
 $btnHalt.Add_Click({
     Invoke-ToolScript -RelativePath "RUN\ZATRZYMAJ_SYSTEM.ps1"
     Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-    Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+    Refresh-Reports
     Refresh-Panel
 })
 $btnRepairNow.Add_Click({
     Invoke-ToolScript -RelativePath "RUN\SPRAWDZ_I_NAPRAW_SYSTEM.ps1"
     Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-    Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+    Refresh-Reports
     Refresh-Panel
 })
 
@@ -340,7 +407,7 @@ $btnFamilyNormal.Add_Click({
     if ($familyCombo.SelectedItem) {
         Invoke-ToolScript -RelativePath "TOOLS\SET_RUNTIME_CONTROL_PL.ps1" -Arguments @("-Zakres","rodzina","-WartoscZakresu",$familyCombo.SelectedItem.ToString(),"-Tryb","NORMALNY","-Powod","WLACZONO_RODZINE")
         Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-        Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+        Refresh-Reports
         Refresh-Panel
     }
 })
@@ -348,7 +415,7 @@ $btnFamilyClose.Add_Click({
     if ($familyCombo.SelectedItem) {
         Invoke-ToolScript -RelativePath "TOOLS\SET_RUNTIME_CONTROL_PL.ps1" -Arguments @("-Zakres","rodzina","-WartoscZakresu",$familyCombo.SelectedItem.ToString(),"-Tryb","CLOSE_ONLY","-Powod","RODZINA_CLOSE_ONLY")
         Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-        Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+        Refresh-Reports
         Refresh-Panel
     }
 })
@@ -356,7 +423,7 @@ $btnFamilyHalt.Add_Click({
     if ($familyCombo.SelectedItem) {
         Invoke-ToolScript -RelativePath "TOOLS\SET_RUNTIME_CONTROL_PL.ps1" -Arguments @("-Zakres","rodzina","-WartoscZakresu",$familyCombo.SelectedItem.ToString(),"-Tryb","HALT","-Powod","RODZINA_ZATRZYMANA")
         Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-        Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+        Refresh-Reports
         Refresh-Panel
     }
 })
@@ -365,7 +432,7 @@ $btnPairNormal.Add_Click({
     if ($pairCombo.SelectedItem) {
         Invoke-ToolScript -RelativePath "TOOLS\SET_RUNTIME_CONTROL_PL.ps1" -Arguments @("-Zakres","para","-WartoscZakresu",$pairCombo.SelectedItem.ToString(),"-Tryb","NORMALNY","-Powod","WLACZONO_PARE")
         Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-        Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+        Refresh-Reports
         Refresh-Panel
     }
 })
@@ -373,7 +440,7 @@ $btnPairClose.Add_Click({
     if ($pairCombo.SelectedItem) {
         Invoke-ToolScript -RelativePath "TOOLS\SET_RUNTIME_CONTROL_PL.ps1" -Arguments @("-Zakres","para","-WartoscZakresu",$pairCombo.SelectedItem.ToString(),"-Tryb","CLOSE_ONLY","-Powod","PARA_CLOSE_ONLY")
         Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-        Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+        Refresh-Reports
         Refresh-Panel
     }
 })
@@ -381,18 +448,28 @@ $btnPairHalt.Add_Click({
     if ($pairCombo.SelectedItem) {
         Invoke-ToolScript -RelativePath "TOOLS\SET_RUNTIME_CONTROL_PL.ps1" -Arguments @("-Zakres","para","-WartoscZakresu",$pairCombo.SelectedItem.ToString(),"-Tryb","HALT","-Powod","PARA_ZATRZYMANA")
         Invoke-ToolScript -RelativePath "TOOLS\GENERATE_RUNTIME_CONTROL_SUMMARY.ps1"
-        Invoke-ToolScript -RelativePath "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
+        Refresh-Reports
         Refresh-Panel
     }
 })
 
 $btnOpenDashboard.Add_Click({
+    Refresh-Reports
     Start-Process (Join-Path $ProjectRoot "EVIDENCE\DAILY\dashboard_dzienny_latest.html")
 })
 $btnOpenEvening.Add_Click({
+    Refresh-Reports
     Start-Process (Join-Path $ProjectRoot "EVIDENCE\DAILY\dashboard_wieczorny_latest.html")
 })
-$btnRefresh.Add_Click({ Refresh-Panel })
+$btnOpenMt5.Add_Click({
+    Invoke-ToolScript -RelativePath "RUN\OPEN_OANDA_MT5_WITH_MICROBOTS.ps1"
+    Start-Sleep -Seconds 2
+    Refresh-Panel
+})
+$btnRefresh.Add_Click({
+    Refresh-Reports
+    Refresh-Panel
+})
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 10000

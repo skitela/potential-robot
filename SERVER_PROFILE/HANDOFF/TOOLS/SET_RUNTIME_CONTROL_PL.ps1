@@ -12,6 +12,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
+. $helperPath
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $registry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json
 
@@ -29,7 +32,7 @@ switch ($Zakres) {
         if ([string]::IsNullOrWhiteSpace($WartoscZakresu)) {
             throw "Dla zakresu 'para' podaj WartoscZakresu."
         }
-        $targets = @($registry.symbols | Where-Object { $_.symbol -eq $WartoscZakresu })
+        $targets = @($registry.symbols | Where-Object { Test-RegistryAliasMatch -RegistryItem $_ -Alias $WartoscZakresu })
     }
 }
 
@@ -45,20 +48,38 @@ $requestedMode = switch ($Tryb) {
 
 $changed = @()
 foreach ($item in $targets) {
-    $symbol = [string]$item.symbol
-    $stateDir = Join-Path $CommonFilesRoot ("state\{0}" -f $symbol)
-    New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
-    $controlPath = Join-Path $stateDir "runtime_control.csv"
-    @(
-        "requested_mode`t$requestedMode"
-        "reason_code`t$Powod"
-    ) | Set-Content -LiteralPath $controlPath -Encoding ASCII
+    $canonicalSymbol = Get-RegistryCanonicalSymbol -RegistryItem $item
+    $aliases = @(Get-RegistrySymbolCandidates -RegistryItem $item)
+    $existingAliases = @($aliases | Where-Object {
+        Test-Path -LiteralPath (Join-Path $CommonFilesRoot ("state\{0}" -f $_))
+    } | Select-Object -Unique)
+
+    $targetAliases = if ($existingAliases.Count -gt 0) {
+        $existingAliases
+    } else {
+        @($aliases | Select-Object -First 2)
+    }
+
+    $controlPaths = @()
+    foreach ($alias in $targetAliases) {
+        if ([string]::IsNullOrWhiteSpace($alias)) { continue }
+        $stateDir = Join-Path $CommonFilesRoot ("state\{0}" -f $alias)
+        New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+        $controlPath = Join-Path $stateDir "runtime_control.csv"
+        @(
+            "requested_mode`t$requestedMode"
+            "reason_code`t$Powod"
+        ) | Set-Content -LiteralPath $controlPath -Encoding ASCII
+        $controlPaths += $controlPath
+    }
 
     $changed += [pscustomobject]@{
-        symbol = $symbol
+        symbol = $canonicalSymbol
+        broker_symbol = (Get-RegistryBrokerSymbol -RegistryItem $item)
+        aliases = @($targetAliases)
         requested_mode = $requestedMode
         reason_code = $Powod
-        control_path = $controlPath
+        control_paths = @($controlPaths)
     }
 }
 

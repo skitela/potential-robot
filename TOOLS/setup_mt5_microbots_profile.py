@@ -197,9 +197,14 @@ def _close_mt5_processes() -> None:
             "-NoProfile",
             "-Command",
             (
-                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue; "
+                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
+                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
                 "if($p){$p|%{$_.CloseMainWindow()|Out-Null}; Start-Sleep -Seconds 2; "
-                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue; if($p){$p|Stop-Process -Force}}"
+                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
+                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
+                "if($p){$p|Stop-Process -Force}}"
             ),
         ],
         check=False,
@@ -208,11 +213,66 @@ def _close_mt5_processes() -> None:
     )
 
 
-def _launch_mt5(mt5_exe: Path, profile_name: str) -> bool:
+def _list_oanda_terminal_processes(include_vps: bool = True) -> List[Dict[str, Any]]:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' }; "
+            "$p | Select-Object Id,MainWindowTitle,StartTime | ConvertTo-Json -Depth 3"
+        ),
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8")
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    rows = data if isinstance(data, list) else [data]
+    if include_vps:
+        return rows
+    return [row for row in rows if "[VPS]" not in str(row.get("MainWindowTitle", ""))]
+
+
+def _launch_mt5(mt5_exe: Path, profile_name: str) -> Dict[str, Any]:
     if not mt5_exe.exists():
-        return False
+        return {
+            "requested": False,
+            "launched": False,
+            "launch_note": "mt5_exe_missing",
+            "before": _list_oanda_terminal_processes(include_vps=True),
+            "after": _list_oanda_terminal_processes(include_vps=True),
+        }
+    before_all = _list_oanda_terminal_processes(include_vps=True)
+    before_local = _list_oanda_terminal_processes(include_vps=False)
     subprocess.Popen([str(mt5_exe), f"/profile:{profile_name}"])
-    return True
+    time.sleep(6)
+    after_all = _list_oanda_terminal_processes(include_vps=True)
+    after_local = _list_oanda_terminal_processes(include_vps=False)
+    before_ids = {int(row.get("Id", 0)) for row in before_local if row.get("Id")}
+    after_ids = {int(row.get("Id", 0)) for row in after_local if row.get("Id")}
+    new_local_ids = sorted(after_ids - before_ids)
+    launched = bool(new_local_ids) or bool(after_local)
+    launch_note = "local_terminal_visible"
+    if before_local and after_local and before_ids == after_ids:
+        launch_note = "reused_existing_local_terminal"
+    elif not after_local:
+        if any("[VPS]" in str(row.get("MainWindowTitle", "")) for row in after_all):
+            launch_note = "blocked_by_existing_vps_instance"
+        else:
+            launch_note = "local_terminal_not_visible_after_launch"
+    return {
+        "requested": True,
+        "launched": launched,
+        "launch_note": launch_note,
+        "before": before_all,
+        "after": after_all,
+        "new_local_ids": new_local_ids,
+    }
 
 
 def main() -> int:
@@ -266,16 +326,23 @@ def main() -> int:
             }
         )
 
-    launched = False
+    launch_report: Dict[str, Any] = {
+        "requested": False,
+        "launched": False,
+        "launch_note": "launch_not_requested",
+        "before": _list_oanda_terminal_processes(include_vps=True),
+        "after": _list_oanda_terminal_processes(include_vps=True),
+    }
     if args.launch:
-        launched = _launch_mt5(mt5_exe, args.profile_name)
+        launch_report = _launch_mt5(mt5_exe, args.profile_name)
 
     report = {
         "ok": True,
         "profile_name": args.profile_name,
         "charts_dir": str(charts_dir),
         "template": str(template),
-        "launched": launched,
+        "launched": bool(launch_report.get("launched", False)),
+        "launch_report": launch_report,
         "charts": written,
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }

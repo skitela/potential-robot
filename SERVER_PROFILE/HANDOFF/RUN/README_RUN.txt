@@ -27,6 +27,7 @@ Dodatkowe launchery operatorskie:
 - `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\OTWORZ_DASHBOARD_DZIENNY.ps1`
 - `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\OTWORZ_RAPORT_WIECZORNY.ps1`
 - `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\URUCHOM_MT5_PANEL_I_DASHBOARD.ps1`
+- `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\UTWORZ_SKROTY_NA_PULPICIE.ps1`
 
 Wersje do zwyklego dwukliku:
 
@@ -44,7 +45,9 @@ Przeznaczenie:
 - `OTWORZ_DASHBOARD_DZIENNY.ps1` otwiera tylko dashboard dzienny
 - `OTWORZ_RAPORT_WIECZORNY.ps1` otwiera tylko raport wieczorny
 - `URUCHOM_MT5_PANEL_I_DASHBOARD.ps1` uruchamia `OANDA MT5`, a potem panel i dashboardy
+- `UTWORZ_SKROTY_NA_PULPICIE.ps1` tworzy na pulpicie Windows skroty do panelu, dashboardow i startu `OANDA MT5`
 - odpowiadajace im pliki `.bat` robia to samo, ale sa wygodne do dwukliku w Windows
+- po uruchomieniu skryptu tworzenia skrotow te same wejscia sa dostepne tez bezposrednio z pulpitu Windows
 
 Pozostale najwazniejsze skróty:
 
@@ -53,6 +56,7 @@ Pozostale najwazniejsze skróty:
 - `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\WLACZ_CLOSE_ONLY_SYSTEMU.ps1`
 - `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\ZATRZYMAJ_SYSTEM.ps1`
 - `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\SPRAWDZ_I_NAPRAW_SYSTEM.ps1`
+- `powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\OPEN_OANDA_MT5_WITH_MICROBOTS.ps1`
 
 Rekomendowany preflight rollout:
 

@@ -12,7 +12,13 @@ $guardScript = Join-Path $projectRoot "TOOLS\mt5_risk_popup_guard.ps1"
 $guardStatus = Join-Path $projectRoot "EVIDENCE\OPS\mt5_risk_guard_status.json"
 $pythonScript = Join-Path $projectRoot "TOOLS\setup_mt5_microbots_profile.py"
 
-Get-Process terminal64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+$targetTitlePattern = 'OANDA TMS Brokers S.A.'
+Get-Process terminal64 -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.MainWindowTitle -like "*$targetTitlePattern*" -and
+        $_.MainWindowTitle -notmatch '\[VPS\]'
+    } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
 
 Start-Process powershell -ArgumentList @(
     "-NoProfile",
