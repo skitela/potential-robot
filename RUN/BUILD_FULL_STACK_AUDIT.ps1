@@ -176,6 +176,7 @@ $freshness = @(
     Get-FileFreshness -Label "qdm_weakest_profile" -Path (Join-Path $opsRoot "qdm_weakest_profile_latest.json") -ThresholdSeconds 1200
     Get-FileFreshness -Label "qdm_custom_symbol_pilot" -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_smoke" -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "qdm_custom_symbol_pilot_registry" -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_registry_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "daily_system_report" -Path (Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json") -ThresholdSeconds 5400
@@ -193,6 +194,7 @@ $nearProfitQueue = Read-JsonFile -Path (Join-Path $opsRoot "near_profit_optimiza
 $researchManifest = Read-JsonFile -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json")
 $qdmCustomPilot = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILOT\qdm_import_custom_symbol_latest.json")
 $qdmCustomSmokeLatest = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json")
+$qdmCustomPilotRegistry = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_registry_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -436,6 +438,14 @@ $report = [ordered]@{
                 model_normalized_for_qdm_custom_symbol = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'model_normalized_for_qdm_custom_symbol' -Default $false } else { $false })
             }
         } else { $null }
+        qdm_custom_symbol_pilot_registry = if ($null -ne $qdmCustomPilotRegistry) {
+            [ordered]@{
+                total_symbols = $qdmCustomPilotRegistry.total_symbols
+                successful_smokes = $qdmCustomPilotRegistry.successful_smokes
+                normalized_models = $qdmCustomPilotRegistry.normalized_models
+                symbols = @($qdmCustomPilotRegistry.symbols)
+            }
+        } else { $null }
     }
     freshness = @($freshness)
     cleanliness = [ordered]@{
@@ -584,6 +594,15 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_smoke) {
 }
 else {
     $lines.Add("- qdm custom-symbol smoke status not available")
+}
+if ($null -ne $report.lab_health.qdm_custom_symbol_pilot_registry) {
+    $lines.Add(("- registry_total_symbols: {0}" -f $report.lab_health.qdm_custom_symbol_pilot_registry.total_symbols))
+    $lines.Add(("- registry_successful_smokes: {0}" -f $report.lab_health.qdm_custom_symbol_pilot_registry.successful_smokes))
+    $lines.Add(("- registry_normalized_models: {0}" -f $report.lab_health.qdm_custom_symbol_pilot_registry.normalized_models))
+    $lines.Add(("- registry_symbols: {0}" -f ($report.lab_health.qdm_custom_symbol_pilot_registry.symbols -join ", ")))
+}
+else {
+    $lines.Add("- qdm custom-symbol pilot registry not available")
 }
 $lines.Add("")
 $lines.Add("## Consistency")
