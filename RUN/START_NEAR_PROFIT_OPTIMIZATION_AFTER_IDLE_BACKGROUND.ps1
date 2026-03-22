@@ -226,6 +226,7 @@ $busyIdleNote = if ($UseDedicatedPortableLabLane) { "near_profit_lab_busy" } els
 $skipIdleWaitLiteral = if ($UseDedicatedPortableLabLane) { '$true' } else { '$false' }
 $portableTerminalLiteral = if ($portableTerminal) { '$true' } else { '$false' }
 $skipResearchRefreshLiteral = if ($SkipResearchRefresh) { '$true' } else { '$false' }
+$excludedSymbolsLiteral = @($excludedActiveSymbols | ForEach-Object { "'{0}'" -f $_ }) -join ", "
 
 $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'
@@ -329,7 +330,7 @@ try {
         PortableTerminal = $portableTerminalLiteral
         ProfitTrackingPath = '$ProfitTrackingPath'
         NearProfitCount = $NearProfitCount
-        ExcludedSymbolAliases = @($($excludedActiveSymbols | ForEach-Object { "'{0}'" -f $_ } -join ', '))
+        ExcludedSymbolAliases = @($excludedSymbolsLiteral)
         FromDate = '$FromDate'
         ToDate = '$ToDate'
         CalibrationWindowDays = $CalibrationWindowDays

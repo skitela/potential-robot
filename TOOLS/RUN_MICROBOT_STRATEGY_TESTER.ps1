@@ -181,6 +181,39 @@ function Set-OptimizationRangesInPreset {
     Set-Content -LiteralPath $PresetPath -Value $lines -Encoding Default
 }
 
+function Set-PresetKeyValue {
+    param(
+        [string]$PresetPath,
+        [string]$Key,
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PresetPath) -or [string]::IsNullOrWhiteSpace($Key)) {
+        return
+    }
+
+    $lines = @()
+    if (Test-Path -LiteralPath $PresetPath) {
+        $lines = @(Get-Content -LiteralPath $PresetPath -Encoding Default -ErrorAction SilentlyContinue)
+    }
+
+    $replacement = "{0}={1}" -f $Key, $Value
+    $matched = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -like "$Key=*") {
+            $lines[$i] = $replacement
+            $matched = $true
+            break
+        }
+    }
+
+    if (-not $matched) {
+        $lines += $replacement
+    }
+
+    Set-Content -LiteralPath $PresetPath -Value $lines -Encoding Default
+}
+
 function Resolve-TesterSymbol {
     param(
         [object]$RegistryItem,
@@ -412,8 +445,14 @@ $storageAlias = Convert-ToSandboxToken (Get-RegistryCanonicalSymbol -RegistryIte
 if ([string]::IsNullOrWhiteSpace($storageAlias)) {
     $storageAlias = $resolvedAlias
 }
+$workerToken = Convert-ToSandboxToken $WorkerName
 if ([string]::IsNullOrWhiteSpace($SandboxTag)) {
-    $SandboxTag = "${resolvedAlias}_AGENT"
+    if (-not [string]::IsNullOrWhiteSpace($workerToken)) {
+        $SandboxTag = "${workerToken}_AGENT"
+    }
+    else {
+        $SandboxTag = "${resolvedAlias}_AGENT"
+    }
 }
 $sanitizedTag = Convert-ToSandboxToken $SandboxTag
 
@@ -430,7 +469,6 @@ if ($ExpertPath -match '^(?i)Experts\\') {
 
 $runId = ("{0}_strategy_tester_{1}" -f $resolvedAlias.ToLowerInvariant(), (Get-Date -Format "yyyyMMdd_HHmmss"))
 $runDir = Join-Path $ProjectRoot "RUN\strategy_tester"
-$workerToken = Convert-ToSandboxToken $WorkerName
 if ([string]::IsNullOrWhiteSpace($EvidenceSubdir) -and -not [string]::IsNullOrWhiteSpace($workerToken)) {
     $EvidenceSubdir = $workerToken.ToLowerInvariant()
 }
@@ -459,6 +497,8 @@ if (-not [string]::IsNullOrWhiteSpace($expertParametersSourcePath)) {
     $expertParametersTargetName = "{0}_{1}.set" -f $runId, [System.IO.Path]::GetFileNameWithoutExtension($expertParametersSourcePath)
     $expertParametersTargetPath = Join-Path $testerProfilesDir $expertParametersTargetName
     Copy-Item -LiteralPath $expertParametersSourcePath -Destination $expertParametersTargetPath -Force
+    Set-PresetKeyValue -PresetPath $expertParametersTargetPath -Key "InpEnableStrategyTesterSandbox" -Value "true"
+    Set-PresetKeyValue -PresetPath $expertParametersTargetPath -Key "InpStrategyTesterSandboxTag" -Value $sanitizedTag
     if ($Optimization -ne 0) {
         Set-OptimizationRangesInPreset -PresetPath $expertParametersTargetPath
     }

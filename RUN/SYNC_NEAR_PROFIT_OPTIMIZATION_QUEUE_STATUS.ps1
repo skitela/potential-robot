@@ -86,6 +86,8 @@ function Get-DedicatedLabProcessState {
             terminal_count = 0
             metatester_count = 0
             total_count = 0
+            current_symbol = ""
+            config_path = ""
         }
     }
 
@@ -100,10 +102,36 @@ function Get-DedicatedLabProcessState {
             }
     )
 
+    $terminalProcess = $matchingProcesses | Where-Object { $_.Name -eq "terminal64.exe" } | Select-Object -First 1
+    $configPath = ""
+    $currentSymbol = ""
+
+    if ($null -ne $terminalProcess -and -not [string]::IsNullOrWhiteSpace($terminalProcess.CommandLine)) {
+        $commandLine = [string]$terminalProcess.CommandLine
+        $configMatch = [regex]::Match($commandLine, '/config:(?:"(?<path>[^"]+)"|(?<path>\S+))', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($configMatch.Success) {
+            $configPath = [string]$configMatch.Groups["path"].Value
+            if (Test-Path -LiteralPath $configPath) {
+                try {
+                    foreach ($line in Get-Content -LiteralPath $configPath -ErrorAction Stop) {
+                        if ($line -like "Symbol=*") {
+                            $currentSymbol = Convert-ToCanonicalSymbol -Symbol ($line.Substring(7))
+                            break
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+        }
+    }
+
     return [pscustomobject]@{
         terminal_count = @($matchingProcesses | Where-Object { $_.Name -eq "terminal64.exe" }).Count
         metatester_count = @($matchingProcesses | Where-Object { $_.Name -eq "metatester64.exe" }).Count
         total_count = $matchingProcesses.Count
+        current_symbol = $currentSymbol
+        config_path = $configPath
     }
 }
 
@@ -248,7 +276,8 @@ function Get-TextFileStats {
 function Resolve-ActiveSandboxState {
     param(
         [string]$Root,
-        [string]$CurrentSymbol
+        [string]$CurrentSymbol,
+        [string[]]$PreferredTagTokens = @()
     )
 
     $canonical = Convert-ToCanonicalSymbol -Symbol $CurrentSymbol
@@ -256,10 +285,31 @@ function Resolve-ActiveSandboxState {
         return $null
     }
 
-    $sandboxRoot = Get-ChildItem -Path $Root -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like ("MAKRO_I_MIKRO_BOT_TESTER_{0}_*" -f $canonical) } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
+    $candidateRoots = @(
+        Get-ChildItem -Path $Root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like ("MAKRO_I_MIKRO_BOT_TESTER_{0}_*" -f $canonical) } |
+            Sort-Object LastWriteTime -Descending
+    )
+
+    $sandboxRoot = $null
+    if ($candidateRoots.Count -gt 0 -and $PreferredTagTokens.Count -gt 0) {
+        $sandboxRoot = @(
+            $candidateRoots |
+                Where-Object {
+                    $rootNameUpper = $_.Name.ToUpperInvariant()
+                    foreach ($token in $PreferredTagTokens) {
+                        if (-not [string]::IsNullOrWhiteSpace($token) -and $rootNameUpper.Contains($token.ToUpperInvariant())) {
+                            return $true
+                        }
+                    }
+                    return $false
+                }
+        ) | Select-Object -First 1
+    }
+
+    if ($null -eq $sandboxRoot) {
+        $sandboxRoot = $candidateRoots | Select-Object -First 1
+    }
 
     if ($null -eq $sandboxRoot) {
         return $null
@@ -555,6 +605,10 @@ if ([string]::IsNullOrWhiteSpace($resolvedState)) {
                 $resolvedNote = "portable_lab_wrapper_running"
             }
 
+            if ([string]::IsNullOrWhiteSpace($resolvedCurrentSymbol) -and -not [string]::IsNullOrWhiteSpace([string]$dedicatedLabProcessState.current_symbol)) {
+                $resolvedCurrentSymbol = [string]$dedicatedLabProcessState.current_symbol
+            }
+
             if ([string]::IsNullOrWhiteSpace($resolvedCurrentSymbol) -and @($resolvedPending).Count -gt 0) {
                 $resolvedCurrentSymbol = [string]$resolvedPending[0]
             }
@@ -614,7 +668,12 @@ if (@($resolvedPending).Count -eq 0 -and @($selectedSymbols).Count -gt 0 -and $r
     $resolvedPending = @($selectedSymbols | Where-Object { @($resolvedCompleted) -notcontains $_ })
 }
 
-$activeSandbox = Resolve-ActiveSandboxState -Root $CommonFilesRoot -CurrentSymbol $resolvedCurrentSymbol
+$preferredSandboxTagTokens = @()
+if ($UseDedicatedPortableLabLane) {
+    $preferredSandboxTagTokens += "OPT_WORKER_"
+}
+
+$activeSandbox = Resolve-ActiveSandboxState -Root $CommonFilesRoot -CurrentSymbol $resolvedCurrentSymbol -PreferredTagTokens $preferredSandboxTagTokens
 
 $status = [ordered]@{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -630,6 +689,8 @@ $status = [ordered]@{
     dedicated_portable_lab_lane = $UseDedicatedPortableLabLane
     dedicated_lab_terminal_count = $dedicatedLabProcessState.terminal_count
     dedicated_lab_metatester_count = $dedicatedLabProcessState.metatester_count
+    dedicated_lab_current_symbol = [string]$dedicatedLabProcessState.current_symbol
+    dedicated_lab_config_path = [string]$dedicatedLabProcessState.config_path
     near_profit_risk_guard_running = ($nearProfitRiskGuardProcesses.Count -gt 0)
     near_profit_risk_guard_count = $nearProfitRiskGuardProcesses.Count
     near_profit_risk_guard_status_path = $nearProfitRiskGuardStatusPath
