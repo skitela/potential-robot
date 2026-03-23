@@ -3,6 +3,7 @@
 
 #include "MbRuntimeTypes.mqh"
 #include "MbStorage.mqh"
+#include "MbExecutionPingContract.mqh"
 
 string MbResolveDomainFromSessionProfile(const string session_profile)
   {
@@ -245,6 +246,7 @@ void MbNormalizePaperRuntimeState(
   {
    MbNormalizePaperRuntimeState(state,paper_mode_active);
    snapshot.paper_runtime_override_active = paper_mode_active;
+   MbRefreshOperationalExecutionPing(paper_mode_active,snapshot);
    if(!paper_mode_active)
       return;
    snapshot.trade_permissions_ok = true;

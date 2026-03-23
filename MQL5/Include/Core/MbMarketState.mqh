@@ -2,6 +2,7 @@
 #define MB_MARKET_STATE_INCLUDED
 
 #include "MbRuntimeTypes.mqh"
+#include "MbExecutionPingContract.mqh"
 
 bool MbSymbolTradeModeAllowsEntries(const long symbol_trade_mode)
   {
@@ -19,6 +20,7 @@ void MbRefreshMarketSnapshot(const MbSymbolProfile &profile,MbMarketSnapshot &sn
    snapshot.terminal_connected = (TerminalInfoInteger(TERMINAL_CONNECTED) != 0);
    snapshot.terminal_ping_last_us = MathMax(0,(long)TerminalInfoInteger(TERMINAL_PING_LAST));
    snapshot.terminal_ping_last_ms = (long)MathRound((double)snapshot.terminal_ping_last_us / 1000.0);
+   MbRefreshOperationalExecutionPing(false,snapshot);
    snapshot.term_trade_allowed = (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) != 0);
    snapshot.mql_trade_allowed = (MQLInfoInteger(MQL_TRADE_ALLOWED) != 0);
    snapshot.account_trade_allowed = (AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) != 0);
@@ -51,7 +53,7 @@ void MbRefreshMarketSnapshot(const MbSymbolProfile &profile,MbMarketSnapshot &sn
    snapshot.diag = StringFormat(
       "conn=%d ping_ms=%I64d term=%d mql=%d acc=%d raw=%d acc_mode=%I64d sym_mode=%I64d stops=%d freeze=%d tick_age_ms=%I64d vol_min=%.2f step=%.2f",
       (int)snapshot.terminal_connected,
-      snapshot.terminal_ping_last_ms,
+      (long)MathRound((snapshot.operational_ping_ms > 0.0 ? snapshot.operational_ping_ms : (double)snapshot.terminal_ping_last_ms)),
       (int)snapshot.term_trade_allowed,
       (int)snapshot.mql_trade_allowed,
       (int)snapshot.account_trade_allowed,

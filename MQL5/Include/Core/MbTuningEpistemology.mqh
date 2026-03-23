@@ -273,9 +273,10 @@ void MbEvaluateExecutionQualityState(
    MbExecutionQualityState &out
 )
   {
+   double effective_ping_ms = (market.operational_ping_ms > 0.0 ? market.operational_ping_ms : (double)market.terminal_ping_last_ms);
    out.state = "GOOD";
    out.reason_code = "EXECUTION_HEALTHY";
-   out.ping_ms = market.terminal_ping_last_ms;
+   out.ping_ms = (long)MathRound(effective_ping_ms);
    out.tick_age_ms = market.tick_age_ms;
    out.slippage_proxy = state.execution_pressure;
    out.retry_proxy = (double)state.exec_error_streak;
@@ -316,7 +317,7 @@ void MbEvaluateExecutionQualityState(
       return;
      }
 
-   if(market.terminal_ping_last_ms >= 90)
+   if(effective_ping_ms >= 90.0)
      {
       out.state = "BAD";
       out.reason_code = "PING_TOO_HIGH";
@@ -327,7 +328,7 @@ void MbEvaluateExecutionQualityState(
       market.tick_age_ms >= 5000 ||
       state.exec_error_streak >= 1 ||
       state.execution_pressure >= 0.60 ||
-      market.terminal_ping_last_ms >= 45 ||
+      effective_ping_ms >= 45.0 ||
       state.spread_anomaly_streak >= 4
    )
      {
@@ -336,7 +337,7 @@ void MbEvaluateExecutionQualityState(
          out.reason_code = "RETRY_SPIKE";
       else if(market.tick_age_ms >= 5000)
          out.reason_code = "TICK_STALE";
-      else if(market.terminal_ping_last_ms >= 45)
+      else if(effective_ping_ms >= 45.0)
          out.reason_code = "PING_ELEVATED";
       else if(state.spread_anomaly_streak >= 4)
          out.reason_code = "RATE_LIMIT_PRESSURE";

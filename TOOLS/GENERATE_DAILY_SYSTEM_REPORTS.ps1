@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$CommonFilesRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT",
+    [string]$HostingReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_hosting_daily_report_latest.json",
     [datetime]$NowLocal = (Get-Date)
 )
 
@@ -30,6 +31,24 @@ function Read-JsonOrNull {
     } catch {
         return $null
     }
+}
+
+function Get-FirstPresentValue {
+    param(
+        [object]$Object,
+        [string[]]$Names
+    )
+
+    foreach ($name in $Names) {
+        if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $name) {
+            $value = $Object.$name
+            if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+                return $value
+            }
+        }
+    }
+
+    return $null
 }
 
 function Read-SharedText {
@@ -255,6 +274,11 @@ function Get-FamilyLabel {
 
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $registry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json
+$hostingReport = Read-JsonOrNull -Path $HostingReportPath
+$hostingOperationalPingMs = 0.0
+if ($null -ne $hostingReport -and $hostingReport.PSObject.Properties.Name -contains 'ping_avg_ms') {
+    $hostingOperationalPingMs = To-DoubleOrZero $hostingReport.ping_avg_ms
+}
 $dailyDir = Join-Path $ProjectRoot "EVIDENCE\DAILY"
 New-Item -ItemType Directory -Force -Path $dailyDir | Out-Null
 
@@ -285,7 +309,15 @@ foreach ($item in $registry.symbols) {
     $fresh = ($freshnessSec -le 300)
     $status = if ($fresh) { "Pracuje" } elseif ($freshnessSec -le 900) { "Uwaga" } else { "Stare dane" }
 
-    $pingMs = if ($summary) { To-DoubleOrZero $summary.terminal_ping_ms } elseif ($policy) { To-DoubleOrZero $policy.terminal_ping_ms } else { 0.0 }
+    $terminalPingMs = if ($summary) { To-DoubleOrZero $summary.terminal_ping_ms } elseif ($policy) { To-DoubleOrZero $policy.terminal_ping_ms } else { 0.0 }
+    $runtimeOperationalPingMs = 0.0
+    if ($summary) {
+        $runtimeOperationalPingMs = To-DoubleOrZero (Get-FirstPresentValue -Object $summary -Names @("operational_ping_ms"))
+    }
+    if ($runtimeOperationalPingMs -le 0 -and $policy) {
+        $runtimeOperationalPingMs = To-DoubleOrZero (Get-FirstPresentValue -Object $policy -Names @("operational_ping_ms"))
+    }
+    $operationalPingMs = if ($hostingOperationalPingMs -gt 0) { $hostingOperationalPingMs } elseif ($runtimeOperationalPingMs -gt 0) { $runtimeOperationalPingMs } else { $terminalPingMs }
     $latencyAvgUs = if ($summary) { To-DoubleOrZero $summary.local_latency_us_avg } elseif ($policy) { To-DoubleOrZero $policy.local_latency_us_avg } else { 0.0 }
     $latencyMaxUs = if ($summary) { To-DoubleOrZero $summary.local_latency_us_max } elseif ($policy) { To-DoubleOrZero $policy.local_latency_us_max } else { 0.0 }
     $trustState = if ($summary) { [string]$summary.trust_state } elseif ($policy) { [string]$policy.trust_state } else { "" }
@@ -316,7 +348,9 @@ foreach ($item in $registry.symbols) {
         przegrane_wczoraj = $learning.losses_yesterday
         otwarcia_dzis = $decision.opens_today
         skutecznosc_dzis_proc = if ($learning.closes_today -gt 0) { [math]::Round(($learning.wins_today / $learning.closes_today) * 100.0, 1) } else { 0.0 }
-        ping_ms = [math]::Round($pingMs, 2)
+        ping_ms = [math]::Round($operationalPingMs, 2)
+        ping_operacyjny_ms = [math]::Round($operationalPingMs, 2)
+        ping_terminalny_ms = [math]::Round($terminalPingMs, 2)
         latencja_sr_us = [math]::Round($latencyAvgUs, 2)
         latencja_max_us = [math]::Round($latencyMaxUs, 2)
         trust_state = $trustState
@@ -344,9 +378,11 @@ $winsYesterday = [int](Measure-SumOrZero -InputObject $rows -Property wygrane_wc
 $lossesYesterday = [int](Measure-SumOrZero -InputObject $rows -Property przegrane_wczoraj)
 $closesYesterday = [int](Measure-SumOrZero -InputObject $rows -Property zamkniecia_wczoraj)
 $opensToday = [int](Measure-SumOrZero -InputObject $rows -Property otwarcia_dzis)
-$avgPingRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.ping_ms -gt 0 }) -Property ping_ms
+$avgOperationalPingRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.ping_operacyjny_ms -gt 0 }) -Property ping_operacyjny_ms
+$avgTerminalPingRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.ping_terminalny_ms -gt 0 }) -Property ping_terminalny_ms
 $avgLatencyRaw = Measure-AverageOrZero -InputObject @($rows | Where-Object { $_.latencja_sr_us -gt 0 }) -Property latencja_sr_us
-$avgPing = if ($null -ne $avgPingRaw) { [math]::Round($avgPingRaw, 2) } else { 0.0 }
+$avgOperationalPing = if ($null -ne $avgOperationalPingRaw) { [math]::Round($avgOperationalPingRaw, 2) } else { 0.0 }
+$avgTerminalPing = if ($null -ne $avgTerminalPingRaw) { [math]::Round($avgTerminalPingRaw, 2) } else { 0.0 }
 $avgLatencyUs = if ($null -ne $avgLatencyRaw) { [math]::Round($avgLatencyRaw, 2) } else { 0.0 }
 $maxLatencyUs = [math]::Round((Measure-MaximumOrZero -InputObject $rows -Property latencja_max_us), 2)
 $avgFreshness = [math]::Round((Measure-AverageOrZero -InputObject $rows -Property swiezosc_s), 0)
@@ -378,7 +414,8 @@ $familyRows = @(
             wygrane_dzis = [int](Measure-SumOrZero -InputObject $groupRows -Property wygrane_dzis)
             przegrane_dzis = [int](Measure-SumOrZero -InputObject $groupRows -Property przegrane_dzis)
             otwarcia_dzis = [int](Measure-SumOrZero -InputObject $groupRows -Property otwarcia_dzis)
-            ping_sr_ms = [math]::Round((Measure-AverageOrZero -InputObject $groupRows -Property ping_ms), 2)
+            ping_operacyjny_sr_ms = [math]::Round((Measure-AverageOrZero -InputObject $groupRows -Property ping_operacyjny_ms), 2)
+            ping_terminalny_sr_ms = [math]::Round((Measure-AverageOrZero -InputObject $groupRows -Property ping_terminalny_ms), 2)
             latencja_sr_us = if ($null -ne $familyLatencyRaw) { [math]::Round($familyLatencyRaw, 2) } else { 0.0 }
         }
     }
@@ -411,7 +448,9 @@ $summary = [ordered]@{
     wygrane_wczoraj = $winsYesterday
     przegrane_wczoraj = $lossesYesterday
     skutecznosc_wczoraj_proc = if ($closesYesterday -gt 0) { [math]::Round(($winsYesterday / $closesYesterday) * 100.0, 1) } else { 0.0 }
-    sredni_ping_ms = $avgPing
+    sredni_ping_ms = $avgOperationalPing
+    sredni_ping_operacyjny_ms = $avgOperationalPing
+    sredni_ping_terminalny_ms = $avgTerminalPing
     srednia_latencja_bota_us = $avgLatencyUs
     maksymalna_latencja_bota_us = $maxLatencyUs
     srednia_swiezosc_s = $avgFreshness
@@ -454,7 +493,8 @@ $txt += ("Wygrane / przegrane dzis: {0} / {1}" -f $summary.wygrane_dzis, $summar
 $txt += ("Otwarcia dzis: {0} | Zamkniecia dzis: {1} | Skutecznosc: {2}%" -f $summary.otwarcia_dzis, $summary.zamkniecia_dzis, (Format-PL -Value $summary.skutecznosc_dzis_proc -Decimals 1))
 $txt += ""
 $txt += "TECHNIKA"
-$txt += ("Sredni ping: {0} ms" -f (Format-PL -Value $summary.sredni_ping_ms -Decimals 2))
+$txt += ("Sredni ping operacyjny VPS-broker: {0} ms" -f (Format-PL -Value $summary.sredni_ping_operacyjny_ms -Decimals 2))
+$txt += ("Sredni ping terminalny diagnostyczny: {0} ms" -f (Format-PL -Value $summary.sredni_ping_terminalny_ms -Decimals 2))
 $txt += ("Srednia latencja bota: {0} us" -f (Format-PL -Value $summary.srednia_latencja_bota_us -Decimals 2))
 $txt += ("Maksymalna latencja bota: {0} us" -f (Format-PL -Value $summary.maksymalna_latencja_bota_us -Decimals 2))
 $txt += ("Swieze instrumenty: {0}/{1}" -f $summary.liczba_swiezych, $summary.liczba_instrumentow)
@@ -474,7 +514,7 @@ foreach ($family in $familyRows) {
 $txt += ""
 $txt += "INSTRUMENTY"
 foreach ($row in ($rows | Sort-Object instrument)) {
-    $txt += ("- {0} | {1} | praca {2} | swiezosc {3} | netto {4} | zmiana {5} | W/P {6}/{7} | otwarcia {8} | ping {9} ms | latencja {10}/{11} us | trust {12} | exec {13} | cost {14}" -f
+    $txt += ("- {0} | {1} | praca {2} | swiezosc {3} | netto {4} | zmiana {5} | W/P {6}/{7} | otwarcia {8} | ping operacyjny {9} ms | ping terminalny {10} ms | latencja {11}/{12} us | trust {13} | exec {14} | cost {15}" -f
         $row.instrument,
         $row.status_pracy,
         $row.czas_pracy_dzis_label,
@@ -484,7 +524,8 @@ foreach ($row in ($rows | Sort-Object instrument)) {
         $row.wygrane_dzis,
         $row.przegrane_dzis,
         $row.otwarcia_dzis,
-        (Format-PL -Value $row.ping_ms -Decimals 2),
+        (Format-PL -Value $row.ping_operacyjny_ms -Decimals 2),
+        (Format-PL -Value $row.ping_terminalny_ms -Decimals 2),
         (Format-PL -Value $row.latencja_sr_us -Decimals 2),
         (Format-PL -Value $row.latencja_max_us -Decimals 2),
         $row.trust_state,
@@ -495,11 +536,11 @@ $txt | Set-Content -LiteralPath $txtPath -Encoding UTF8
 $txt | Set-Content -LiteralPath $latestTxt -Encoding UTF8
 
 $familyHtml = ($familyRows | ForEach-Object {
-    "<tr><td>$($_.rodzina_label)</td><td>$($_.swieze)/$($_.instrumenty)</td><td>$(Format-PL -Value $_.netto_dzis)</td><td>$(Format-PL -Value $_.zmiana_do_wczoraj)</td><td>$($_.wygrane_dzis)/$($_.przegrane_dzis)</td><td>$($_.otwarcia_dzis)</td><td>$(Format-PL -Value $_.ping_sr_ms -Decimals 2)</td><td>$(Format-PL -Value $_.latencja_sr_us -Decimals 2)</td></tr>"
+    "<tr><td>$($_.rodzina_label)</td><td>$($_.swieze)/$($_.instrumenty)</td><td>$(Format-PL -Value $_.netto_dzis)</td><td>$(Format-PL -Value $_.zmiana_do_wczoraj)</td><td>$($_.wygrane_dzis)/$($_.przegrane_dzis)</td><td>$($_.otwarcia_dzis)</td><td>$(Format-PL -Value $_.ping_operacyjny_sr_ms -Decimals 2)</td><td>$(Format-PL -Value $_.latencja_sr_us -Decimals 2)</td></tr>"
 }) -join "`n"
 
 $workingRowsHtml = ((@($rows | Where-Object { $_.swiezy -and $_.status_pracy -eq "Pracuje" } | Sort-Object netto_dzis -Descending | Select-Object -First 5)) | ForEach-Object {
-    "<li><b>$($_.instrument)</b> - praca $($_.czas_pracy_dzis_label), netto $(Format-PL -Value $_.netto_dzis), ping $(Format-PL -Value $_.ping_ms -Decimals 2) ms</li>"
+    "<li><b>$($_.instrument)</b> - praca $($_.czas_pracy_dzis_label), netto $(Format-PL -Value $_.netto_dzis), ping operacyjny $(Format-PL -Value $_.ping_operacyjny_ms -Decimals 2) ms</li>"
 }) -join "`n"
 if ([string]::IsNullOrWhiteSpace($workingRowsHtml)) { $workingRowsHtml = "<li>Brak swiezych, aktywnych instrumentow.</li>" }
 
@@ -515,7 +556,7 @@ if ([string]::IsNullOrWhiteSpace($staleRowsHtml)) { $staleRowsHtml = "<li>Wszyst
 
 $instrumentHtml = (($rows | Sort-Object instrument) | ForEach-Object {
     $rowClass = if ($_.netto_dzis -gt 0) { "plus" } elseif ($_.netto_dzis -lt 0) { "minus" } else { "zero" }
-    "<tr class='$rowClass'><td>$($_.instrument)</td><td>$($_.rodzina_label)</td><td>$($_.status_pracy)</td><td>$($_.czas_pracy_dzis_label)</td><td>$($_.swiezosc_label)</td><td>$(Format-PL -Value $_.netto_dzis)</td><td>$(Format-PL -Value $_.zmiana_do_wczoraj)</td><td>$($_.wygrane_dzis)/$($_.przegrane_dzis)</td><td>$($_.otwarcia_dzis)</td><td>$(Format-PL -Value $_.ping_ms -Decimals 2)</td><td>$(Format-PL -Value $_.latencja_sr_us -Decimals 2)</td><td>$(Format-PL -Value $_.latencja_max_us -Decimals 2)</td><td>$($_.trust_state)</td><td>$($_.execution_quality)</td><td>$($_.cost_pressure)</td><td>$($_.ostatni_powod)</td></tr>"
+    "<tr class='$rowClass'><td>$($_.instrument)</td><td>$($_.rodzina_label)</td><td>$($_.status_pracy)</td><td>$($_.czas_pracy_dzis_label)</td><td>$($_.swiezosc_label)</td><td>$(Format-PL -Value $_.netto_dzis)</td><td>$(Format-PL -Value $_.zmiana_do_wczoraj)</td><td>$($_.wygrane_dzis)/$($_.przegrane_dzis)</td><td>$($_.otwarcia_dzis)</td><td>$(Format-PL -Value $_.ping_operacyjny_ms -Decimals 2)</td><td>$(Format-PL -Value $_.ping_terminalny_ms -Decimals 2)</td><td>$(Format-PL -Value $_.latencja_sr_us -Decimals 2)</td><td>$(Format-PL -Value $_.latencja_max_us -Decimals 2)</td><td>$($_.trust_state)</td><td>$($_.execution_quality)</td><td>$($_.cost_pressure)</td><td>$($_.ostatni_powod)</td></tr>"
 }) -join "`n"
 
 $html = @"
@@ -552,7 +593,7 @@ $html = @"
       <div class="panel">
         <h1>Dashboard dzienny systemu</h1>
         <div class="muted">Data: $($summary.data_raportu) | Godzina: $($summary.godzina_raportu)</div>
-        <p>Ten widok jest ustawiony pod to, co dla Ciebie najważniejsze: czy system zyje, jak swieze sa dane, ile naprawde pracowal, jaki jest wynik netto, ile bylo wygranych i przegranych oraz czy dzisiejszy obraz jest lepszy czy gorszy od wczorajszego.</p>
+        <p>Ten widok jest ustawiony pod to, co dla Ciebie najważniejsze: czy system zyje, jak swieze sa dane, ile naprawde pracowal, jaki jest wynik netto, ile bylo wygranych i przegranych oraz jaki jest realny ping wykonania VPS-broker. Ping terminalny zostaje tylko jako diagnostyka.</p>
       </div>
       <div class="panel">
         <h2>Stan systemu</h2>
@@ -566,7 +607,8 @@ $html = @"
         <div class="card"><span>Zmiana do wczoraj</span><b>$(Format-PL -Value $summary.zmiana_netto_do_wczoraj)</b></div>
         <div class="card"><span>Wygrane / przegrane</span><b>$($summary.wygrane_dzis) / $($summary.przegrane_dzis)</b></div>
         <div class="card"><span>Otwarcia dzis</span><b>$($summary.otwarcia_dzis)</b></div>
-        <div class="card"><span>Sredni ping</span><b>$(Format-PL -Value $summary.sredni_ping_ms -Decimals 2) ms</b></div>
+        <div class="card"><span>Sredni ping operacyjny</span><b>$(Format-PL -Value $summary.sredni_ping_operacyjny_ms -Decimals 2) ms</b></div>
+        <div class="card"><span>Ping terminalny</span><b>$(Format-PL -Value $summary.sredni_ping_terminalny_ms -Decimals 2) ms</b></div>
         <div class="card"><span>Srednia latencja bota</span><b>$(Format-PL -Value $summary.srednia_latencja_bota_us -Decimals 2) us</b></div>
         <div class="card"><span>Czas pracy dzis</span><b>$($summary.laczny_czas_pracy_dzis_label)</b></div>
         <div class="card"><span>Swieze instrumenty</span><b>$($summary.liczba_swiezych) / $($summary.liczba_instrumentow)</b></div>
@@ -592,14 +634,14 @@ $html = @"
     <div class="panel">
       <h2>Rodziny</h2>
       <table>
-        <thead><tr><th>Rodzina</th><th>Swieze</th><th>Netto dzis</th><th>Zmiana do wczoraj</th><th>Wygrane / przegrane</th><th>Otwarcia</th><th>Ping sr ms</th><th>Latencja sr us</th></tr></thead>
+        <thead><tr><th>Rodzina</th><th>Swieze</th><th>Netto dzis</th><th>Zmiana do wczoraj</th><th>Wygrane / przegrane</th><th>Otwarcia</th><th>Ping operacyjny sr ms</th><th>Latencja sr us</th></tr></thead>
         <tbody>$familyHtml</tbody>
       </table>
     </div>
     <div class="panel">
       <h2>Instrumenty</h2>
       <table>
-        <thead><tr><th>Instrument</th><th>Rodzina</th><th>Status</th><th>Czas pracy</th><th>Swiezosc</th><th>Netto dzis</th><th>Zmiana do wczoraj</th><th>W / P</th><th>Otwarcia</th><th>Ping</th><th>Latencja sr</th><th>Latencja max</th><th>Trust</th><th>Execution</th><th>Cost</th><th>Ostatni powod</th></tr></thead>
+        <thead><tr><th>Instrument</th><th>Rodzina</th><th>Status</th><th>Czas pracy</th><th>Swiezosc</th><th>Netto dzis</th><th>Zmiana do wczoraj</th><th>W / P</th><th>Otwarcia</th><th>Ping operacyjny</th><th>Ping terminalny</th><th>Latencja sr</th><th>Latencja max</th><th>Trust</th><th>Execution</th><th>Cost</th><th>Ostatni powod</th></tr></thead>
         <tbody>$instrumentHtml</tbody>
       </table>
     </div>

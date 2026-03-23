@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$DateStamp = (Get-Date).ToString('yyyyMMdd')
+    [string]$DateStamp = (Get-Date).ToString('yyyyMMdd'),
+    [string]$CommonFilesRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -199,6 +200,33 @@ function Load-JsonOrNull {
     return $null
 }
 
+function Write-OperationalPingContract {
+    param(
+        [string]$CommonRoot,
+        [double]$PingMs,
+        [string]$SourceLabel
+    )
+
+    if ($PingMs -le 0) {
+        return $null
+    }
+
+    $globalDir = Join-Path $CommonRoot 'state\_global'
+    New-Item -ItemType Directory -Force -Path $globalDir | Out-Null
+    $path = Join-Path $globalDir 'execution_ping_contract.csv'
+    $revision = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $lines = @(
+        "enabled`t1"
+        "revision`t$revision"
+        "refresh_interval_sec`t300"
+        ("paper_operational_ping_ms`t{0}" -f ([Math]::Round($PingMs, 2).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)))
+        ("live_operational_ping_ms`t{0}" -f ([Math]::Round($PingMs, 2).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)))
+        ("source`t{0}" -f $SourceLabel)
+    )
+    ($lines -join [Environment]::NewLine) | Set-Content -Path $path -Encoding UTF8
+    return $path
+}
+
 $logSelection = Resolve-HostingLogSelection -PreferredDateStamp $DateStamp
 $terminalLogs = @($logSelection.Files)
 if (-not $terminalLogs) {
@@ -325,6 +353,11 @@ $summary = [pscustomobject]@{
     instrument_rows = @($instrumentRows)
 }
 
+$executionPingContractPath = Write-OperationalPingContract -CommonRoot $CommonFilesRoot -PingMs ([double]$summary.ping_avg_ms) -SourceLabel 'hosting_vps_broker'
+if ($executionPingContractPath) {
+    Add-Member -InputObject $summary -NotePropertyName execution_ping_contract_path -NotePropertyValue $executionPingContractPath
+}
+
 $outDir = Join-Path $ProjectRoot 'EVIDENCE\OPS'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $jsonPath = Join-Path $outDir 'mt5_hosting_daily_report_latest.json'
@@ -356,6 +389,7 @@ $md.Add("- Heartbeat count: $($summary.heartbeat_count)")
 $md.Add("- Pierwszy heartbeat: $($summary.first_heartbeat)")
 $md.Add("- Ostatni heartbeat: $($summary.last_heartbeat)")
 $md.Add("- Ping min/max/avg: $($summary.ping_min_ms) / $($summary.ping_max_ms) / $($summary.ping_avg_ms) ms")
+$md.Add("- Ten ping traktujemy jako glowny ping operacyjny VPS <-> broker.")
 $md.Add("- RAM committed min/max: $($summary.committed_ram_min_mb) / $($summary.committed_ram_max_mb) MB")
 $md.Add("- CPU max: EA $($summary.cpu_ea_max_pct)% ; symbols $($summary.cpu_symbols_max_pct)% ; workers $($summary.cpu_workers_max_pct)%")
 $md.Add('')

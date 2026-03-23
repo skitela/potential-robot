@@ -104,8 +104,9 @@ double MbResolveModeledSlippagePoints(const MbSymbolProfile &profile,const MbMar
   {
    double deviation_component = MathMax(0.5,(double)profile.deviation_points * 0.15);
    double ping_component = 0.5;
-   if(snapshot.terminal_ping_last_ms > 0)
-      ping_component = MathMin(5.0,(double)snapshot.terminal_ping_last_ms / 25.0);
+   double effective_ping_ms = (snapshot.operational_ping_ms > 0.0 ? snapshot.operational_ping_ms : (double)snapshot.terminal_ping_last_ms);
+   if(effective_ping_ms > 0.0)
+      ping_component = MathMin(5.0,effective_ping_ms / 25.0);
    return MathMax(deviation_component,ping_component);
   }
 

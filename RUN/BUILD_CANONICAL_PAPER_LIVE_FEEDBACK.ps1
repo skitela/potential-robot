@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$DailyReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\DAILY\raport_dzienny_latest.json",
+    [string]$HostingReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_hosting_daily_report_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
 
@@ -27,6 +28,21 @@ function To-Double {
     return [double]$Value
 }
 
+function Read-JsonOrNull {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
 if (-not (Test-Path -LiteralPath $DailyReportPath)) {
     throw "Daily system report not found: $DailyReportPath"
 }
@@ -36,6 +52,8 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $daily = Get-Content -LiteralPath $DailyReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $dailySummary = $daily.raport_dzienny
 $instrumentRows = @($daily.instrumenty)
+$hosting = Read-JsonOrNull -Path $HostingReportPath
+$hostingOperationalPingMs = if ($null -ne $hosting) { [math]::Round((To-Double $hosting.ping_avg_ms), 2) } else { 0.0 }
 
 $generatedRuntimeLocal = ""
 if ($null -ne $dailySummary) {
@@ -68,7 +86,9 @@ $keyInstruments = foreach ($row in $instrumentRows) {
         fresh = [bool]$row.swiezy
         freshness_seconds = To-Int $row.swiezosc_s
         last_heartbeat = [string]$row.ostatni_heartbeat
-        ping_ms = [math]::Round((To-Double $row.ping_ms), 2)
+        ping_ms = [math]::Round((To-Double $(if ($row.PSObject.Properties.Name -contains 'ping_operacyjny_ms') { $row.ping_operacyjny_ms } else { $row.ping_ms })), 2)
+        operational_ping_ms = [math]::Round((To-Double $(if ($row.PSObject.Properties.Name -contains 'ping_operacyjny_ms') { $row.ping_operacyjny_ms } else { $row.ping_ms })), 2)
+        terminal_ping_ms = [math]::Round((To-Double $(if ($row.PSObject.Properties.Name -contains 'ping_terminalny_ms') { $row.ping_terminalny_ms } else { $row.ping_ms })), 2)
         local_latency_us_avg = [math]::Round((To-Double $row.latencja_sr_us), 2)
         local_latency_us_max = [math]::Round((To-Double $row.latencja_max_us), 2)
     }
@@ -107,7 +127,8 @@ $report = [ordered]@{
         wins = To-Int $dailySummary.wygrane_dzis
         losses = To-Int $dailySummary.przegrane_dzis
         success_rate_pct = [math]::Round((To-Double $dailySummary.skutecznosc_dzis_proc), 2)
-        terminal_ping_ms_avg = [math]::Round((To-Double $dailySummary.sredni_ping_ms), 2)
+        operational_ping_ms_avg = if ($hostingOperationalPingMs -gt 0) { $hostingOperationalPingMs } else { [math]::Round((To-Double $(if ($dailySummary.PSObject.Properties.Name -contains 'sredni_ping_operacyjny_ms') { $dailySummary.sredni_ping_operacyjny_ms } else { $dailySummary.sredni_ping_ms })), 2) }
+        terminal_ping_ms_avg = [math]::Round((To-Double $(if ($dailySummary.PSObject.Properties.Name -contains 'sredni_ping_terminalny_ms') { $dailySummary.sredni_ping_terminalny_ms } else { $dailySummary.sredni_ping_ms })), 2)
         local_latency_us_avg = [math]::Round((To-Double $dailySummary.srednia_latencja_bota_us), 2)
         local_latency_us_max = [math]::Round((To-Double $dailySummary.maksymalna_latencja_bota_us), 2)
     }
@@ -129,6 +150,7 @@ $lines.Add(("- generated_local: {0}" -f $report.generated_local))
 $lines.Add(("- window_start_local: {0}" -f $report.window_start_local))
 $lines.Add(("- net: {0}" -f $report.net))
 $lines.Add(("- active_instruments: {0}" -f $report.active_instruments))
+$lines.Add(("- operational_ping_ms_avg: {0}" -f $report.summary.operational_ping_ms_avg))
 $lines.Add(("- terminal_ping_ms_avg: {0}" -f $report.summary.terminal_ping_ms_avg))
 $lines.Add(("- local_latency_us_avg: {0}" -f $report.summary.local_latency_us_avg))
 $lines.Add(("- local_latency_us_max: {0}" -f $report.summary.local_latency_us_max))

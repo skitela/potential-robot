@@ -240,9 +240,10 @@ MbGuardVerdict MbEvaluateMarketEntryGuards(
       return MB_GUARD_BLOCK;
 
    bool paper_mode = (snapshot.paper_runtime_override_active || state.paper_mode_active);
-   if(snapshot.terminal_ping_last_us >= 100000)
+   double effective_ping_ms = (snapshot.operational_ping_ms > 0.0 ? snapshot.operational_ping_ms : (double)snapshot.terminal_ping_last_ms);
+   if(effective_ping_ms >= 100.0)
       state.caution_mode = true;
-   if(!paper_mode && snapshot.terminal_ping_last_us >= 180000)
+   if(!paper_mode && effective_ping_ms >= 180.0)
      {
       reason_code = "PING_TOO_HIGH";
       return MB_GUARD_BLOCK;

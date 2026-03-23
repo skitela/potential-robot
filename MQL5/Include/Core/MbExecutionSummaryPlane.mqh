@@ -72,7 +72,7 @@ void MbFlushExecutionSummary(
       (state.renko_reversal_flag ? "true" : "false")
    );
    payload += StringFormat(
-      ",\"latency_samples\":%I64d,\"local_latency_us_avg\":%I64d,\"local_latency_us_max\":%I64d,\"order_send_ms_avg\":%I64d,\"order_send_ms_max\":%I64d,\"last_local_latency_us\":%I64d,\"last_order_send_ms\":%I64d,\"execution_attempt_count\":%I64d,\"execution_ok_count\":%I64d,\"execution_retry_avg\":%.3f,\"execution_slippage_points_avg\":%.3f,\"execution_slippage_points_max\":%.3f,\"spread_points\":%.2f,\"tick_age_ms\":%I64d,\"terminal_connected\":%s,\"terminal_ping_ms\":%I64d,\"cache_valid\":%s,\"trade_permissions_ok\":%s,\"raw_trade_permissions_ok\":%s,\"paper_runtime_override_active\":%s,\"term_trade_allowed\":%s,\"mql_trade_allowed\":%s,\"account_trade_allowed\":%s",
+      ",\"latency_samples\":%I64d,\"local_latency_us_avg\":%I64d,\"local_latency_us_max\":%I64d,\"order_send_ms_avg\":%I64d,\"order_send_ms_max\":%I64d,\"last_local_latency_us\":%I64d,\"last_order_send_ms\":%I64d,\"execution_attempt_count\":%I64d,\"execution_ok_count\":%I64d,\"execution_retry_avg\":%.3f,\"execution_slippage_points_avg\":%.3f,\"execution_slippage_points_max\":%.3f,\"spread_points\":%.2f,\"tick_age_ms\":%I64d,\"terminal_connected\":%s,\"terminal_ping_ms\":%I64d,\"operational_ping_ms\":%.2f,\"execution_ping_contract_present\":%s,\"execution_ping_contract_enabled\":%s,\"cache_valid\":%s,\"trade_permissions_ok\":%s,\"raw_trade_permissions_ok\":%s,\"paper_runtime_override_active\":%s,\"term_trade_allowed\":%s,\"mql_trade_allowed\":%s,\"account_trade_allowed\":%s",
       summary.latency_samples,
       summary.local_latency_us_avg,
       summary.local_latency_us_max,
@@ -89,6 +89,9 @@ void MbFlushExecutionSummary(
       snapshot.tick_age_ms,
       MbJsonBool(snapshot.terminal_connected),
       snapshot.terminal_ping_last_ms,
+      snapshot.operational_ping_ms,
+      MbJsonBool(snapshot.execution_ping_contract_present),
+      MbJsonBool(snapshot.execution_ping_contract_enabled),
       MbJsonBool(snapshot.valid),
       MbJsonBool(snapshot.trade_permissions_ok),
       MbJsonBool(snapshot.raw_trade_permissions_ok),

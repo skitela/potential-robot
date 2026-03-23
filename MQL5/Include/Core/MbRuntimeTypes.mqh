@@ -195,8 +195,11 @@ struct MbMarketSnapshot
    double bid;
    double ask;
    double spread_points;
+   bool execution_ping_contract_present;
+   bool execution_ping_contract_enabled;
    long terminal_ping_last_us;
    long terminal_ping_last_ms;
+   double operational_ping_ms;
    long tick_time_msc;
    long tick_age_ms;
    double tick_value;
@@ -488,8 +491,11 @@ void MbMarketSnapshotReset(MbMarketSnapshot &snapshot)
    snapshot.bid = 0.0;
    snapshot.ask = 0.0;
    snapshot.spread_points = 0.0;
+   snapshot.execution_ping_contract_present = false;
+   snapshot.execution_ping_contract_enabled = false;
    snapshot.terminal_ping_last_us = 0;
    snapshot.terminal_ping_last_ms = 0;
+   snapshot.operational_ping_ms = 0.0;
    snapshot.tick_time_msc = 0;
    snapshot.tick_age_ms = 0;
    snapshot.tick_value = 0.0;
