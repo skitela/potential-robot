@@ -46,6 +46,8 @@ def empty_report(output_root: Path, db_path: Path, reason: str, horizon_sec: int
         "score_threshold": score_threshold,
         "summary": {
             "liczba_obserwacji_onnx": 0,
+            "liczba_obserwacji_live": 0,
+            "liczba_obserwacji_paper": 0,
             "liczba_obserwacji_z_kandydatem": 0,
             "liczba_obserwacji_z_wynikiem_rynku": 0,
             "liczba_symboli": 0,
@@ -72,6 +74,8 @@ def write_report(report: dict[str, Any], output_root: Path) -> None:
         "## Podsumowanie",
         "",
         f"- liczba_obserwacji_onnx: {report['summary']['liczba_obserwacji_onnx']}",
+        f"- liczba_obserwacji_live: {report['summary']['liczba_obserwacji_live']}",
+        f"- liczba_obserwacji_paper: {report['summary']['liczba_obserwacji_paper']}",
         f"- liczba_obserwacji_z_kandydatem: {report['summary']['liczba_obserwacji_z_kandydatem']}",
         f"- liczba_obserwacji_z_wynikiem_rynku: {report['summary']['liczba_obserwacji_z_wynikiem_rynku']}",
         f"- liczba_symboli: {report['summary']['liczba_symboli']}",
@@ -88,6 +92,8 @@ def write_report(report: dict[str, Any], output_root: Path) -> None:
                 [
                     f"### {item['symbol_alias']}",
                     f"- obserwacje_onnx: {item['obserwacje_onnx']}",
+                    f"- obserwacje_live: {item['obserwacje_live']}",
+                    f"- obserwacje_paper: {item['obserwacje_paper']}",
                     f"- obserwacje_z_kandydatem: {item['obserwacje_z_kandydatem']}",
                     f"- obserwacje_z_wynikiem_rynku: {item['obserwacje_z_wynikiem_rynku']}",
                     f"- sredni_wynik_malego_onnx: {item['sredni_wynik_malego_onnx']}",
@@ -138,6 +144,7 @@ def main() -> int:
                     CAST(ts AS BIGINT) AS ts,
                     CAST(symbol AS VARCHAR) AS symbol_alias,
                     CAST(stage AS VARCHAR) AS stage,
+                    CAST(COALESCE(runtime_channel, 'UNKNOWN') AS VARCHAR) AS runtime_channel,
                     CAST(available AS BIGINT) AS available,
                     CAST(teacher_available AS BIGINT) AS teacher_available,
                     CAST(teacher_used AS BIGINT) AS teacher_used,
@@ -248,6 +255,8 @@ def main() -> int:
             SELECT
                 symbol_alias,
                 COUNT(*) AS obserwacje_onnx,
+                SUM(CASE WHEN runtime_channel = 'LIVE' THEN 1 ELSE 0 END) AS obserwacje_live,
+                SUM(CASE WHEN runtime_channel = 'PAPER' THEN 1 ELSE 0 END) AS obserwacje_paper,
                 SUM(CASE WHEN accepted IS NOT NULL THEN 1 ELSE 0 END) AS obserwacje_z_kandydatem,
                 SUM(CASE WHEN outcome_pnl IS NOT NULL THEN 1 ELSE 0 END) AS obserwacje_z_wynikiem_rynku,
                 ROUND(AVG(symbol_score), 6) AS sredni_wynik_malego_onnx,
@@ -271,6 +280,7 @@ def main() -> int:
                     CAST(ts AS BIGINT) AS ts,
                     CAST(symbol AS VARCHAR) AS symbol_alias,
                     CAST(stage AS VARCHAR) AS stage,
+                    CAST(COALESCE(runtime_channel, 'UNKNOWN') AS VARCHAR) AS runtime_channel,
                     CAST(teacher_score AS DOUBLE) AS teacher_score,
                     CAST(symbol_score AS DOUBLE) AS symbol_score,
                     CAST(latency_us AS DOUBLE) AS latency_us,
@@ -343,6 +353,8 @@ def main() -> int:
             )
             SELECT
                 COUNT(*) AS liczba_obserwacji_onnx,
+                SUM(CASE WHEN runtime_channel = 'LIVE' THEN 1 ELSE 0 END) AS liczba_obserwacji_live,
+                SUM(CASE WHEN runtime_channel = 'PAPER' THEN 1 ELSE 0 END) AS liczba_obserwacji_paper,
                 SUM(CASE WHEN accepted IS NOT NULL THEN 1 ELSE 0 END) AS liczba_obserwacji_z_kandydatem,
                 SUM(CASE WHEN outcome_pnl IS NOT NULL THEN 1 ELSE 0 END) AS liczba_obserwacji_z_wynikiem_rynku,
                 COUNT(DISTINCT symbol_alias) AS liczba_symboli
@@ -352,9 +364,11 @@ def main() -> int:
 
     summary = {
         "liczba_obserwacji_onnx": int(summary_row[0] or 0),
-        "liczba_obserwacji_z_kandydatem": int(summary_row[1] or 0),
-        "liczba_obserwacji_z_wynikiem_rynku": int(summary_row[2] or 0),
-        "liczba_symboli": int(summary_row[3] or 0),
+        "liczba_obserwacji_live": int(summary_row[1] or 0),
+        "liczba_obserwacji_paper": int(summary_row[2] or 0),
+        "liczba_obserwacji_z_kandydatem": int(summary_row[3] or 0),
+        "liczba_obserwacji_z_wynikiem_rynku": int(summary_row[4] or 0),
+        "liczba_symboli": int(summary_row[5] or 0),
     }
 
     report = {

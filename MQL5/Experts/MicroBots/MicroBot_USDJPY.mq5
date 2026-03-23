@@ -37,6 +37,7 @@
 #include "..\\..\\Include\\Core\\MbPaperTrading.mqh"
 #include "..\\..\\Include\\Core\\MbTuningLocalAgent.mqh"
 #include "..\\..\\Include\\Core\\MbTuningHierarchyBridge.mqh"
+#include "..\\..\\Include\\Core\\MbOnnxPilotObservation.mqh"
 #include "..\\..\\Include\\Profiles\\Profile_USDJPY.mqh"
 #include "..\\..\\Include\\Strategies\\Strategy_USDJPY.mqh"
 
@@ -44,6 +45,7 @@ input ulong InpMagic = 910103;
 input uint InpTimerSec = 5;
 input bool InpEnableLiveEntries = false;
 input bool InpPaperCollectMode = true;
+input bool InpEnableOnnxObservation = true;
 input string InpTradeComment = "MB_USDJPY";
 input bool InpEnableStrategyTesterSandbox = true;
 input string InpStrategyTesterSandboxTag = "USDJPY_AGENT";
@@ -72,6 +74,8 @@ string g_last_aux_event_key = "";
 datetime g_last_aux_event_ts = 0;
 string g_tuning_action_log_path = "";
 string g_tuning_deckhand_log_path = "";
+string g_onnx_observation_log_path = "";
+string g_onnx_observation_state_path = "";
 
 bool ShouldRunUSDJPYTuningCycle(const datetime now)
   {
@@ -320,6 +324,8 @@ int OnInit()
    g_trade_transaction_log_path = MbLogFilePath(g_profile.symbol,"trade_transactions.jsonl");
    g_tuning_action_log_path = MbLogFilePath(g_profile.symbol,"tuning_actions.csv");
    g_tuning_deckhand_log_path = MbLogFilePath(g_profile.symbol,"tuning_deckhand.csv");
+   g_onnx_observation_log_path = MbLogFilePath(g_profile.symbol,"onnx_observations.csv");
+   g_onnx_observation_state_path = MbStateFilePath(g_profile.symbol,"onnx_observation_latest.json");
    MbDecisionJournalInit(g_decision_log_path);
    MbCandidateSignalJournalInit(g_candidate_log_path);
    MbExecutionTelemetryInit(g_execution_telemetry_path);
@@ -339,6 +345,18 @@ int OnInit()
    MbBuildEffectiveTuningPolicy(g_profile.session_profile,g_usdjpy_local_tuning_policy,g_usdjpy_effective_tuning_policy,g_usdjpy_family_tuning_policy,g_usdjpy_coordinator_state);
    StrategyUSDJPYSetTuningPolicy(g_usdjpy_effective_tuning_policy);
    MbSaveEffectiveTuningLocalPolicy(g_profile.symbol,g_usdjpy_effective_tuning_policy);
+   bool onnx_ready = MbOnnxObservationInit(
+      g_profile.symbol,
+      InpEnableOnnxObservation,
+      g_onnx_observation_log_path,
+      g_onnx_observation_state_path
+   );
+   PrintFormat(
+      "MB_USDJPY_ONNX_OBSERVATION enabled=%s ready=%s symbol=%s",
+      (InpEnableOnnxObservation ? "true" : "false"),
+      (onnx_ready ? "true" : "false"),
+      g_profile.symbol
+   );
    if(g_kill_switch.halt)
       g_state.halt = true;
 
@@ -357,6 +375,7 @@ void OnDeinit(const int reason)
    MbTesterTelemetryFinalizeSingleRun(g_profile,g_state,g_market,g_usdjpy_effective_tuning_policy,g_latency);
    MbLatencyProfileFlush(g_latency,g_latency_log_path);
    MbSavePaperPosition(g_profile.symbol,g_paper_position);
+   MbOnnxObservationShutdown();
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
    MbSaveTuningLocalPolicy(g_profile.symbol,g_usdjpy_local_tuning_policy);
    MbSaveEffectiveTuningLocalPolicy(g_profile.symbol,g_usdjpy_effective_tuning_policy);
@@ -687,6 +706,19 @@ void OnTick()
          signal.reason_code = "USDJPY_BREAKOUT_CHAOS_POOR_CANDLE_BLOCK";
       else if(blocked_by_usdjpy_range_chaos_gate)
          signal.reason_code = "USDJPY_RANGE_CHAOS_DIRTY_FOREGROUND_BLOCK";
+     }
+   if(signal.setup_type != "NONE")
+     {
+      MbOnnxObservationResult onnx_result;
+      MbOnnxObservationEvaluate(
+         now,
+         "EVALUATED",
+         g_profile.symbol,
+         (IsLocalPaperModeActive() ? "PAPER" : "LIVE"),
+         signal,
+         g_market.spread_points,
+         onnx_result
+      );
      }
    AppendUSDJPYCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)

@@ -93,6 +93,7 @@ void MbOnnxObservationEnsureCsvHeader(const string rel_path)
       "ts",
       "symbol",
       "stage",
+      "runtime_channel",
       "available",
       "teacher_available",
       "teacher_used",
@@ -114,6 +115,7 @@ void MbOnnxObservationEnsureCsvHeader(const string rel_path)
 
 void MbOnnxObservationWriteLatest(
    const string symbol,
+   const string runtime_channel,
    const MbSignalDecision &signal,
    const double spread_points,
    const MbOnnxObservationResult &result
@@ -127,8 +129,9 @@ void MbOnnxObservationWriteLatest(
       return;
 
    string payload = StringFormat(
-      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"available\":%s,\"teacher_available\":%s,\"teacher_used\":%s,\"run_ok\":%s,\"teacher_score\":%.6f,\"symbol_score\":%.6f,\"latency_us\":%I64d,\"reason_code\":\"%s\",\"signal_valid\":%s,\"setup_type\":\"%s\",\"market_regime\":\"%s\",\"spread_regime\":\"%s\",\"confidence_bucket\":\"%s\",\"score\":%.6f,\"confidence_score\":%.6f,\"spread_points\":%.2f,\"generated_at_utc\":%I64d}",
+      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"runtime_channel\":\"%s\",\"available\":%s,\"teacher_available\":%s,\"teacher_used\":%s,\"run_ok\":%s,\"teacher_score\":%.6f,\"symbol_score\":%.6f,\"latency_us\":%I64d,\"reason_code\":\"%s\",\"signal_valid\":%s,\"setup_type\":\"%s\",\"market_regime\":\"%s\",\"spread_regime\":\"%s\",\"confidence_bucket\":\"%s\",\"score\":%.6f,\"confidence_score\":%.6f,\"spread_points\":%.2f,\"generated_at_utc\":%I64d}",
       MbOnnxObservationEscapeJson(symbol),
+      MbOnnxObservationEscapeJson(runtime_channel),
       MbJsonBool(result.available),
       MbJsonBool(result.teacher_available),
       MbJsonBool(result.teacher_used),
@@ -156,6 +159,7 @@ void MbOnnxObservationAppendLog(
    const datetime ts,
    const string symbol,
    const string stage,
+   const string runtime_channel,
    const MbSignalDecision &signal,
    const double spread_points,
    const MbOnnxObservationResult &result
@@ -174,6 +178,7 @@ void MbOnnxObservationAppendLog(
       (long)ts,
       MbCanonicalSymbol(symbol),
       stage,
+      runtime_channel,
       (result.available ? 1 : 0),
       (result.teacher_available ? 1 : 0),
       (result.teacher_used ? 1 : 0),
@@ -477,10 +482,11 @@ void MbOnnxObservationShutdown()
    MbOnnxObservationResetRuntime();
   }
 
-bool MbOnnxObservationEvaluate(
+bool MbOnnxObservationEvaluateWithChannel(
    const datetime ts,
    const string stage,
    const string symbol,
+   const string runtime_channel,
    const MbSignalDecision &signal,
    const double spread_points,
    MbOnnxObservationResult &result
@@ -497,8 +503,8 @@ bool MbOnnxObservationEvaluate(
    if(!g_mb_onnx_obs_symbol_ready)
      {
       result.reason_code = "ONNX_SYMBOL_MODEL_NOT_READY";
-      MbOnnxObservationWriteLatest(symbol,signal,spread_points,result);
-      MbOnnxObservationAppendLog(ts,symbol,stage,signal,spread_points,result);
+      MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
+      MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
       return false;
      }
 
@@ -512,8 +518,8 @@ bool MbOnnxObservationEvaluate(
         {
          result.reason_code = "ONNX_GLOBAL_TEACHER_NOT_READY";
          result.latency_us = (long)(GetMicrosecondCount() - started_us);
-         MbOnnxObservationWriteLatest(symbol,signal,spread_points,result);
-         MbOnnxObservationAppendLog(ts,symbol,stage,signal,spread_points,result);
+         MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
+         MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
          return false;
         }
 
@@ -531,8 +537,8 @@ bool MbOnnxObservationEvaluate(
         {
          result.reason_code = "ONNX_GLOBAL_RUN_FAILED";
          result.latency_us = (long)(GetMicrosecondCount() - started_us);
-         MbOnnxObservationWriteLatest(symbol,signal,spread_points,result);
-         MbOnnxObservationAppendLog(ts,symbol,stage,signal,spread_points,result);
+         MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
+         MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
          return false;
         }
       result.teacher_used = true;
@@ -552,17 +558,58 @@ bool MbOnnxObservationEvaluate(
      {
       result.reason_code = "ONNX_SYMBOL_RUN_FAILED";
       result.latency_us = (long)(GetMicrosecondCount() - started_us);
-      MbOnnxObservationWriteLatest(symbol,signal,spread_points,result);
-      MbOnnxObservationAppendLog(ts,symbol,stage,signal,spread_points,result);
+      MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
+      MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
       return false;
      }
 
    result.run_ok = true;
    result.reason_code = "ONNX_OBSERVATION_OK";
    result.latency_us = (long)(GetMicrosecondCount() - started_us);
-   MbOnnxObservationWriteLatest(symbol,signal,spread_points,result);
-   MbOnnxObservationAppendLog(ts,symbol,stage,signal,spread_points,result);
+   MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
+   MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
    return true;
+  }
+
+bool MbOnnxObservationEvaluate(
+   const datetime ts,
+   const string stage,
+   const string symbol,
+   const string runtime_channel,
+   const MbSignalDecision &signal,
+   const double spread_points,
+   MbOnnxObservationResult &result
+)
+  {
+   return MbOnnxObservationEvaluateWithChannel(
+      ts,
+      stage,
+      symbol,
+      runtime_channel,
+      signal,
+      spread_points,
+      result
+   );
+  }
+
+bool MbOnnxObservationEvaluate(
+   const datetime ts,
+   const string stage,
+   const string symbol,
+   const MbSignalDecision &signal,
+   const double spread_points,
+   MbOnnxObservationResult &result
+)
+  {
+   return MbOnnxObservationEvaluateWithChannel(
+      ts,
+      stage,
+      symbol,
+      "UNKNOWN",
+      signal,
+      spread_points,
+      result
+   );
   }
 
 #endif

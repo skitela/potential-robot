@@ -37,6 +37,7 @@
 #include "..\\..\\Include\\Core\\MbPaperTrading.mqh"
 #include "..\\..\\Include\\Core\\MbTuningLocalAgent.mqh"
 #include "..\\..\\Include\\Core\\MbTuningHierarchyBridge.mqh"
+#include "..\\..\\Include\\Core\\MbOnnxPilotObservation.mqh"
 #include "..\\..\\Include\\Profiles\\Profile_SILVER.mqh"
 #include "..\\..\\Include\\Strategies\\Strategy_SILVER.mqh"
 
@@ -44,6 +45,7 @@ input ulong InpMagic = 920202;
 input uint InpTimerSec = 5;
 input bool InpEnableLiveEntries = false;
 input bool InpPaperCollectMode = true;
+input bool InpEnableOnnxObservation = true;
 input string InpTradeComment = "MB_SILVER";
 input bool InpEnableStrategyTesterSandbox = true;
 input string InpStrategyTesterSandboxTag = "SILVER_AGENT";
@@ -72,6 +74,8 @@ string g_last_aux_event_key = "";
 datetime g_last_aux_event_ts = 0;
 string g_tuning_action_log_path = "";
 string g_tuning_deckhand_log_path = "";
+string g_onnx_observation_log_path = "";
+string g_onnx_observation_state_path = "";
 
 bool ShouldRunSILVERTuningCycle(const datetime now)
   {
@@ -321,6 +325,8 @@ int OnInit()
    g_trade_transaction_log_path = MbLogFilePath(g_profile.symbol,"trade_transactions.jsonl");
    g_tuning_action_log_path = MbLogFilePath(g_profile.symbol,"tuning_actions.csv");
    g_tuning_deckhand_log_path = MbLogFilePath(g_profile.symbol,"tuning_deckhand.csv");
+   g_onnx_observation_log_path = MbLogFilePath(g_profile.symbol,"onnx_observations.csv");
+   g_onnx_observation_state_path = MbStateFilePath(g_profile.symbol,"onnx_observation_latest.json");
    MbDecisionJournalInit(g_decision_log_path);
    MbCandidateSignalJournalInit(g_candidate_log_path);
    MbExecutionTelemetryInit(g_execution_telemetry_path);
@@ -340,6 +346,18 @@ int OnInit()
    MbBuildEffectiveTuningPolicy(g_profile.session_profile,g_SILVER_local_tuning_policy,g_SILVER_effective_tuning_policy,g_SILVER_family_tuning_policy,g_tuning_coordinator_state);
    StrategySILVERSetTuningPolicy(g_SILVER_effective_tuning_policy);
    MbSaveEffectiveTuningLocalPolicy(g_profile.symbol,g_SILVER_effective_tuning_policy);
+   bool onnx_ready = MbOnnxObservationInit(
+      g_profile.symbol,
+      InpEnableOnnxObservation,
+      g_onnx_observation_log_path,
+      g_onnx_observation_state_path
+   );
+   PrintFormat(
+      "MB_SILVER_ONNX_OBSERVATION enabled=%s ready=%s symbol=%s",
+      (InpEnableOnnxObservation ? "true" : "false"),
+      (onnx_ready ? "true" : "false"),
+      g_profile.symbol
+   );
    if(g_kill_switch.halt)
       g_state.halt = true;
 
@@ -358,6 +376,7 @@ void OnDeinit(const int reason)
    MbTesterTelemetryFinalizeSingleRun(g_profile,g_state,g_market,g_SILVER_effective_tuning_policy,g_latency);
    MbLatencyProfileFlush(g_latency,g_latency_log_path);
    MbSavePaperPosition(g_profile.symbol,g_paper_position);
+   MbOnnxObservationShutdown();
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
    MbSaveTuningLocalPolicy(g_profile.symbol,g_SILVER_local_tuning_policy);
    MbSaveEffectiveTuningLocalPolicy(g_profile.symbol,g_SILVER_effective_tuning_policy);
@@ -657,6 +676,19 @@ void OnTick()
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
          signal.reason_code = "PAPER_SCORE_GATE";
         }
+     }
+   if(signal.setup_type != "NONE")
+     {
+      MbOnnxObservationResult onnx_result;
+      MbOnnxObservationEvaluate(
+         now,
+         "EVALUATED",
+         g_profile.symbol,
+         (IsLocalPaperModeActive() ? "PAPER" : "LIVE"),
+         signal,
+         g_market.spread_points,
+         onnx_result
+      );
      }
    AppendSILVERCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)

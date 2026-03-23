@@ -718,6 +718,7 @@ void OnTick()
          now,
          "EVALUATED",
          g_profile.symbol,
+         (IsLocalPaperModeActive() ? "PAPER" : "LIVE"),
          signal,
          g_market.spread_points,
          onnx_result
