@@ -201,8 +201,11 @@ $report = [pscustomobject]@{
 
 $jsonLatest = Join-Path $EvidenceDir "runtime_onnx_pilot_latest.json"
 $mdLatest = Join-Path $EvidenceDir "runtime_onnx_pilot_latest.md"
+$jsonSymbolLatest = Join-Path $EvidenceDir ("runtime_onnx_pilot_{0}_latest.json" -f $artifactToken)
+$mdSymbolLatest = Join-Path $EvidenceDir ("runtime_onnx_pilot_{0}_latest.md" -f $artifactToken)
 
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonLatest -Encoding UTF8
+$report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonSymbolLatest -Encoding UTF8
 
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("# Runtime ONNX Pilot")
@@ -221,5 +224,6 @@ $lines.Add(("- kontrakt: {0}" -f $report.runtime_contract_target))
 $lines.Add(("- nauczyciel globalny onnx: {0}" -f $report.global_runtime_onnx_target))
 $lines.Add(("- nauczyciel globalny kontrakt: {0}" -f $report.global_runtime_contract_target))
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdLatest -Encoding UTF8
+($lines -join "`r`n") | Set-Content -LiteralPath $mdSymbolLatest -Encoding UTF8
 
 $report

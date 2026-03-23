@@ -71,6 +71,16 @@ function Get-NearProfitOrderKey {
         }
     }
     $trustRank = [Math]::Max($historicalTrustRank, $currentTrustRank)
+    $currentCostRank = 2
+    if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "current_priority_cost") {
+        switch ([string]$Entry.current_priority_cost) {
+            "LOW" { $currentCostRank = 0 }
+            "MEDIUM" { $currentCostRank = 1 }
+            "HIGH" { $currentCostRank = 2 }
+            "NON_REPRESENTATIVE" { $currentCostRank = 3 }
+            default { $currentCostRank = 2 }
+        }
+    }
     $spreadRank = 999999.0
     if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "current_priority_spread_points") {
         try {
@@ -98,10 +108,21 @@ function Get-NearProfitOrderKey {
             $priorityRank = 999999
         }
     }
+    $liveNetRank = 0.0
+    if ($null -ne $Entry -and $Entry.PSObject.Properties.Name -contains "live_net_24h") {
+        try {
+            $liveNetRank = -1.0 * [double]$Entry.live_net_24h
+        }
+        catch {
+            $liveNetRank = 0.0
+        }
+    }
 
     return [pscustomobject]@{
         qdm_rank = if ($qdmReady) { 0 } else { 1 }
         trust_rank = $trustRank
+        live_net_rank = $liveNetRank
+        cost_rank = $currentCostRank
         spread_rank = $spreadRank
         pnl_rank = -1.0 * $bestTesterPnl
         priority_rank = $priorityRank
@@ -165,6 +186,8 @@ $nearProfit = @(
             Sort-Object `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).qdm_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).trust_rank } }, `
+                @{ Expression = { (Get-NearProfitOrderKey -Entry $_).live_net_rank } }, `
+                @{ Expression = { (Get-NearProfitOrderKey -Entry $_).cost_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).spread_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).pnl_rank } }, `
                 @{ Expression = { (Get-NearProfitOrderKey -Entry $_).priority_rank } }, `
