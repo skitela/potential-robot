@@ -6,13 +6,40 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $variantPath = Join-Path $ProjectRoot "CONFIG\\strategy_variant_registry.json"
+$registryPath = Join-Path $ProjectRoot "CONFIG\\microbots_registry.json"
 $configPath = Join-Path $ProjectRoot "CONFIG\\family_policy_registry.json"
 $evidencePath = Join-Path $ProjectRoot "EVIDENCE\\family_policy_registry_report.json"
 
 $variantRegistry = Get-Content -Raw -LiteralPath $variantPath | ConvertFrom-Json
+$microbotRegistry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json
+
+$activeSymbols = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($item in $microbotRegistry.symbols) {
+    if ($item.PSObject.Properties.Name -contains 'symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.symbol)) {
+        [void]$activeSymbols.Add([string]$item.symbol)
+    }
+    if ($item.PSObject.Properties.Name -contains 'broker_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.broker_symbol)) {
+        [void]$activeSymbols.Add([string]$item.broker_symbol)
+    }
+    if ($item.PSObject.Properties.Name -contains 'code_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.code_symbol)) {
+        [void]$activeSymbols.Add([string]$item.code_symbol)
+    }
+}
+
+$activeVariants = @(
+    $variantRegistry.variants | Where-Object {
+        $alias = if ($_.PSObject.Properties.Name -contains 'alias_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$_.alias_symbol)) {
+            [string]$_.alias_symbol
+        } else {
+            [string]$_.symbol
+        }
+
+        $activeSymbols.Contains([string]$_.symbol) -or $activeSymbols.Contains($alias)
+    }
+)
 
 $families = @()
-foreach ($group in ($variantRegistry.variants | Group-Object { $_.profile.session_profile } | Sort-Object Name)) {
+foreach ($group in ($activeVariants | Group-Object { $_.profile.session_profile } | Sort-Object Name)) {
     $starts = @($group.Group | ForEach-Object { [int]$_.profile.trade_window_start_hour } | Sort-Object -Unique)
     $ends = @($group.Group | ForEach-Object { [int]$_.profile.trade_window_end_hour } | Sort-Object -Unique)
     $spreads = @($group.Group | ForEach-Object { [int]$_.profile.max_spread_points } | Sort-Object -Unique)

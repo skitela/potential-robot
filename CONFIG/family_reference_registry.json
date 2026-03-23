@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "generated_at_utc": "2026-03-23T09:18:16.0618357Z",
-  "project_root": "C:\\MAKRO_I_MIKRO_BOT",
+  "generated_at_utc": "2026-03-23T10:13:56.0729939Z",
+  "project_root": "C:\\\\MAKRO_I_MIKRO_BOT",
   "references": [
     {
       "family": "FX_ASIA",
@@ -22,20 +22,20 @@
       },
       "family_allowed_ranges": {
         "trade_window_start_hour": {
-          "min": 0,
-          "max": 0
+          "min": 0.0,
+          "max": 0.0
         },
         "trade_window_end_hour": {
-          "min": 3,
-          "max": 5
+          "min": 3.0,
+          "max": 5.0
         },
         "max_spread_points": {
-          "min": 25,
-          "max": 25
+          "min": 25.0,
+          "max": 25.0
         },
         "caution_trigger_abs": {
           "min": 0.98,
-          "max": 1
+          "max": 1.0
         },
         "ready_trigger_abs": {
           "min": 0.8,
@@ -69,20 +69,20 @@
       },
       "family_allowed_ranges": {
         "trade_window_start_hour": {
-          "min": 7,
-          "max": 7
+          "min": 7.0,
+          "max": 7.0
         },
         "trade_window_end_hour": {
-          "min": 11,
-          "max": 12
+          "min": 11.0,
+          "max": 12.0
         },
         "max_spread_points": {
-          "min": 34,
-          "max": 52
+          "min": 34.0,
+          "max": 48.0
         },
         "caution_trigger_abs": {
           "min": 0.98,
-          "max": 1
+          "max": 1.0
         },
         "ready_trigger_abs": {
           "min": 0.82,
@@ -117,16 +117,16 @@
       },
       "family_allowed_ranges": {
         "trade_window_start_hour": {
-          "min": 8,
-          "max": 8
+          "min": 8.0,
+          "max": 8.0
         },
         "trade_window_end_hour": {
-          "min": 11,
-          "max": 12
+          "min": 11.0,
+          "max": 12.0
         },
         "max_spread_points": {
-          "min": 24,
-          "max": 25
+          "min": 24.0,
+          "max": 25.0
         },
         "caution_trigger_abs": {
           "min": 0.9,
@@ -162,16 +162,16 @@
       },
       "family_allowed_ranges": {
         "trade_window_start_hour": {
-          "min": 12,
-          "max": 12
+          "min": 12.0,
+          "max": 12.0
         },
         "trade_window_end_hour": {
-          "min": 14,
-          "max": 14
+          "min": 14.0,
+          "max": 14.0
         },
         "max_spread_points": {
-          "min": 110,
-          "max": 110
+          "min": 110.0,
+          "max": 110.0
         },
         "caution_trigger_abs": {
           "min": 0.98,
@@ -207,20 +207,20 @@
       },
       "family_allowed_ranges": {
         "trade_window_start_hour": {
-          "min": 17,
-          "max": 17
+          "min": 17.0,
+          "max": 17.0
         },
         "trade_window_end_hour": {
-          "min": 20,
-          "max": 20
+          "min": 20.0,
+          "max": 20.0
         },
         "max_spread_points": {
-          "min": 95,
-          "max": 95
+          "min": 95.0,
+          "max": 95.0
         },
         "caution_trigger_abs": {
-          "min": 1,
-          "max": 1
+          "min": 1.0,
+          "max": 1.0
         },
         "ready_trigger_abs": {
           "min": 0.84,
@@ -252,23 +252,23 @@
       },
       "family_allowed_ranges": {
         "trade_window_start_hour": {
-          "min": 14,
-          "max": 14
+          "min": 14.0,
+          "max": 14.0
         },
         "trade_window_end_hour": {
-          "min": 17,
-          "max": 17
+          "min": 17.0,
+          "max": 17.0
         },
         "max_spread_points": {
-          "min": 190,
-          "max": 200
+          "min": 200.0,
+          "max": 200.0
         },
         "caution_trigger_abs": {
-          "min": 1.04,
+          "min": 1.08,
           "max": 1.08
         },
         "ready_trigger_abs": {
-          "min": 0.86,
+          "min": 0.9,
           "max": 0.9
         }
       },
@@ -298,16 +298,16 @@
       },
       "family_allowed_ranges": {
         "trade_window_start_hour": {
-          "min": 14,
-          "max": 14
+          "min": 14.0,
+          "max": 14.0
         },
         "trade_window_end_hour": {
-          "min": 17,
-          "max": 17
+          "min": 17.0,
+          "max": 17.0
         },
         "max_spread_points": {
-          "min": 120,
-          "max": 170
+          "min": 120.0,
+          "max": 170.0
         },
         "caution_trigger_abs": {
           "min": 1.02,

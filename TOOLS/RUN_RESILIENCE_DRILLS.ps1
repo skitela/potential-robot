@@ -54,7 +54,7 @@ Add-Drill 'recovery_artifacts_present' ($packageOk -and $handoffOk -and $backupO
 $logPath = Join-Path $TerminalDataDir ("logs\" + (Get-Date -Format 'yyyyMMdd') + ".log")
 $expertLoads = @()
 if (Test-Path $logPath) {
-    $expertLoads = Select-String -Path $logPath -Pattern 'expert MicroBot_.* loaded successfully' | ForEach-Object { $_.Line }
+    $expertLoads = @(Select-String -Path $logPath -Pattern 'expert MicroBot_.* loaded successfully' | ForEach-Object { $_.Line })
 }
 $loadOk = $expertLoads.Count -ge $symbols.Count
 Add-Drill 'post_restart_expert_loads' $loadOk 'MT5 log should show successful expert loads after restart'
