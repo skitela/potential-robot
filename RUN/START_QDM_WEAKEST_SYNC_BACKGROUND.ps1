@@ -1,17 +1,17 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$LogRoot = "C:\TRADING_DATA\QDM\logs",
-    [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_missing_only_pack.csv",
+    [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_missing_only_pack_latest.csv",
     [int]$MinStartGapMinutes = 360
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$syncScript = Join-Path $ProjectRoot "RUN\SYNC_QDM_FOCUS_PACK.ps1"
+$syncRunnerScript = Join-Path $ProjectRoot "RUN\RUN_QDM_MISSING_SUPPORTED_SYNC.ps1"
 $buildProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1"
-if (-not (Test-Path -LiteralPath $syncScript)) {
-    throw "QDM sync script not found: $syncScript"
+if (-not (Test-Path -LiteralPath $syncRunnerScript)) {
+    throw "QDM sync runner not found: $syncRunnerScript"
 }
 if (-not (Test-Path -LiteralPath $buildProfileScript)) {
     throw "QDM missing-only profile builder not found: $buildProfileScript"
@@ -28,6 +28,7 @@ $profileRows = @(
 )
 
 if ($profileRows.Count -eq 0) {
+    & $syncRunnerScript -ProjectRoot $ProjectRoot -ProfilePath $ProfilePath | Out-Null
     Write-Host "Skipping QDM missing-only sync start: no missing symbols detected."
     return
 }
@@ -57,7 +58,7 @@ $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'
 Start-Transcript -Path '$logPath' -Force
 try {
-    & '$syncScript' -ProfilePath '$ProfilePath'
+    & '$syncRunnerScript' -ProjectRoot '$ProjectRoot' -ProfilePath '$ProfilePath'
 }
 finally {
     Stop-Transcript

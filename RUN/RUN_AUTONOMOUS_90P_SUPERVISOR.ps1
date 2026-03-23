@@ -26,6 +26,7 @@ $archiverScript = Join-Path $ProjectRoot "RUN\START_LOCAL_OPERATOR_ARCHIVER_BACK
 $mt5WatcherScript = Join-Path $ProjectRoot "RUN\START_MT5_TESTER_STATUS_WATCHER_BACKGROUND.ps1"
 $mt5RiskGuardScript = Join-Path $ProjectRoot "RUN\START_MT5_RISK_POPUP_GUARD_BACKGROUND.ps1"
 $weakestBatchScript = Join-Path $ProjectRoot "RUN\START_WEAKEST_MT5_BATCH_BACKGROUND.ps1"
+$nearProfitBatchScript = Join-Path $ProjectRoot "RUN\START_NEAR_PROFIT_OPTIMIZATION_AFTER_IDLE_BACKGROUND.ps1"
 $qdmWeakestScript = Join-Path $ProjectRoot "RUN\START_QDM_WEAKEST_SYNC_BACKGROUND.ps1"
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
@@ -54,6 +55,7 @@ foreach ($path in @(
     $mt5WatcherScript,
     $mt5RiskGuardScript,
     $weakestBatchScript,
+    $nearProfitBatchScript,
     $qdmWeakestScript,
     $mlScript,
     $perfScript
@@ -462,6 +464,13 @@ while ($true) {
             -Label "weakest_mt5" `
             -IsRunning { (Get-WeakestMt5ActivityCount -Mt5StatusPath $mt5StatusPath) -gt 0 } `
             -StarterPath $weakestBatchScript
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "near_profit_optimization" -Operation {
+        Ensure-BackgroundTask `
+            -Label "near_profit_optimization" `
+            -IsRunning { (Get-WrapperCount -Pattern "*near_profit_optimization_after_idle_wrapper_*") -gt 0 } `
+            -StarterPath $nearProfitBatchScript
     } | Out-Null
 
     Write-SupervisorStatus -Cycle $cycle -Actions $actions

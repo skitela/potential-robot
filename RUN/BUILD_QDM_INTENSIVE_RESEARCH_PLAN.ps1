@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
     [string]$PriorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
+    [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$MlHintsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\ml_tuning_hints_latest.json",
     [string]$PaperLiveFeedbackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$SessionMatrixPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\session_window_matrix_v1.json",
@@ -232,6 +233,132 @@ function Get-Mt5FollowupReason {
     return "maintain_verified_rotation"
 }
 
+function Test-QdmCustomPilotReady {
+    param(
+        [object]$PriorityEntry,
+        [object]$ProfitEntry
+    )
+
+    if ($null -ne $ProfitEntry -and $ProfitEntry.PSObject.Properties.Name -contains "qdm_custom_pilot_ready") {
+        return [bool]$ProfitEntry.qdm_custom_pilot_ready
+    }
+
+    if ($null -ne $PriorityEntry -and $PriorityEntry.PSObject.Properties.Name -contains "qdm_custom_pilot_ready") {
+        return [bool]$PriorityEntry.qdm_custom_pilot_ready
+    }
+
+    return $false
+}
+
+function Get-ProfitStatus {
+    param([object]$ProfitEntry)
+
+    if ($null -eq $ProfitEntry) {
+        return ""
+    }
+
+    if ($ProfitEntry.PSObject.Properties.Name -contains "status") {
+        return [string]$ProfitEntry.status
+    }
+
+    return ""
+}
+
+function Get-ResearchPriorityTier {
+    param(
+        [object]$PriorityEntry,
+        [object]$ProfitEntry,
+        [bool]$QdmSupported
+    )
+
+    $status = Get-ProfitStatus -ProfitEntry $ProfitEntry
+    $qdmCustomPilotReady = Test-QdmCustomPilotReady -PriorityEntry $PriorityEntry -ProfitEntry $ProfitEntry
+    $trustState = if ($null -ne $PriorityEntry) { [string]$PriorityEntry.trust_state } else { "" }
+
+    if ($status -eq "TESTER_POSITIVE" -and $qdmCustomPilotReady) { return 0 }
+    if ($status -eq "TESTER_POSITIVE") { return 1 }
+    if ($status -eq "NEAR_PROFIT" -and $qdmCustomPilotReady -and $trustState -eq "TRUSTED") { return 2 }
+    if ($status -eq "NEAR_PROFIT" -and $qdmCustomPilotReady) { return 3 }
+    if ($status -eq "LIVE_POSITIVE" -and $qdmCustomPilotReady) { return 4 }
+    if ($qdmCustomPilotReady -and $trustState -eq "TRUSTED") { return 5 }
+    if ($qdmCustomPilotReady) { return 6 }
+    if ($QdmSupported -and $trustState -eq "TRUSTED") { return 7 }
+    if ($QdmSupported) { return 8 }
+    return 9
+}
+
+function Get-ResearchPriorityScore {
+    param(
+        [object]$PriorityEntry,
+        [object]$ProfitEntry,
+        [bool]$QdmSupported
+    )
+
+    $score = 0.0
+    if ($null -ne $PriorityEntry) {
+        $score += [double]$PriorityEntry.priority_score
+    }
+
+    $status = Get-ProfitStatus -ProfitEntry $ProfitEntry
+    switch ($status) {
+        "TESTER_POSITIVE" { $score += 450.0 }
+        "NEAR_PROFIT" { $score += 220.0 }
+        "LIVE_POSITIVE" { $score += 140.0 }
+    }
+
+    $qdmCustomPilotReady = Test-QdmCustomPilotReady -PriorityEntry $PriorityEntry -ProfitEntry $ProfitEntry
+    if ($qdmCustomPilotReady) {
+        $score += 140.0
+    }
+    elseif ($QdmSupported) {
+        $score += 45.0
+    }
+
+    $trustState = if ($null -ne $PriorityEntry) { [string]$PriorityEntry.trust_state } else { "" }
+    switch ($trustState) {
+        "TRUSTED" { $score += 45.0 }
+        "LOW_SAMPLE" { $score += 12.0 }
+        "FOREFIELD_DIRTY" { $score -= 25.0 }
+        "PAPER_CONVERSION_BLOCKED" { $score -= 35.0 }
+    }
+
+    $costState = if ($null -ne $PriorityEntry) { [string]$PriorityEntry.cost_state } else { "" }
+    switch ($costState) {
+        "HIGH" { $score -= 10.0 }
+        "NON_REPRESENTATIVE" { $score -= 30.0 }
+    }
+
+    $bestTesterPnl = 0.0
+    if ($null -ne $ProfitEntry -and $ProfitEntry.PSObject.Properties.Name -contains "best_tester_pnl") {
+        $bestTesterPnl = [double]$ProfitEntry.best_tester_pnl
+    }
+    elseif ($null -ne $PriorityEntry) {
+        $bestTesterPnl = [double]$PriorityEntry.latest_tester_pnl
+    }
+
+    if ($bestTesterPnl -gt 0) {
+        $score += [Math]::Min(($bestTesterPnl / 4.0), 180.0)
+    }
+    elseif ($bestTesterPnl -lt 0) {
+        $score += [Math]::Max(($bestTesterPnl / 20.0), -35.0)
+    }
+
+    if ($null -ne $ProfitEntry -and $ProfitEntry.PSObject.Properties.Name -contains "active_optimization_candidate_pnl") {
+        $activeCandidatePnl = $ProfitEntry.active_optimization_candidate_pnl
+        if ($null -ne $activeCandidatePnl) {
+            $activeCandidatePnlValue = [double]$activeCandidatePnl
+            if ($activeCandidatePnlValue -gt 0) {
+                $score += [Math]::Min(($activeCandidatePnlValue / 6.0), 120.0)
+            }
+            elseif ($activeCandidatePnlValue -lt 0) {
+                $score += [Math]::Max(($activeCandidatePnlValue / 25.0), -20.0)
+            }
+        }
+    }
+
+    return [Math]::Round($score, 3)
+}
+
 & $QdmProfileBuilderPath `
     -ProjectRoot $ProjectRoot `
     -PriorityReportPath $PriorityPath `
@@ -251,6 +378,11 @@ if (Test-Path -LiteralPath $MlHintsPath) {
 $paperLiveFeedback = $null
 if (Test-Path -LiteralPath $PaperLiveFeedbackPath) {
     $paperLiveFeedback = Get-Content -LiteralPath $PaperLiveFeedbackPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
+$profitTracking = $null
+if (Test-Path -LiteralPath $ProfitTrackingPath) {
+    $profitTracking = Get-Content -LiteralPath $ProfitTrackingPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
 $qdmProfilePath = Join-Path $EvidenceDir "qdm_weakest_profile_latest.json"
@@ -278,6 +410,16 @@ if ($null -ne $paperLiveFeedback) {
     }
 }
 
+$profitMap = @{}
+if ($null -ne $profitTracking) {
+    foreach ($item in @($profitTracking.live_positive) + @($profitTracking.tester_positive) + @($profitTracking.near_profit)) {
+        $key = [string]$item.symbol_alias
+        if (-not [string]::IsNullOrWhiteSpace($key) -and -not $profitMap.ContainsKey($key)) {
+            $profitMap[$key] = $item
+        }
+    }
+}
+
 $qdmIncludedMap = @{}
 foreach ($item in @($qdmProfile.included)) {
     $qdmIncludedMap[[string]$item.symbol_alias] = $item
@@ -288,9 +430,34 @@ foreach ($item in @($qdmProfile.skipped)) {
     $qdmSkippedMap[[string]$item.symbol_alias] = [string]$item.reason
 }
 
+$researchPriorityMap = @{}
+foreach ($item in @($registry.symbols)) {
+    $alias = [string]$item.symbol
+    $priorityEntry = if ($priorityMap.ContainsKey($alias)) { $priorityMap[$alias] } else { $null }
+    $profitEntry = if ($profitMap.ContainsKey($alias)) { $profitMap[$alias] } else { $null }
+    $qdmSupported = $qdmIncludedMap.ContainsKey($alias)
+    $researchPriorityMap[$alias] = [pscustomobject]@{
+        tier = Get-ResearchPriorityTier -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported
+        score = Get-ResearchPriorityScore -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported
+        profit_status = Get-ProfitStatus -ProfitEntry $profitEntry
+        qdm_custom_pilot_ready = Test-QdmCustomPilotReady -PriorityEntry $priorityEntry -ProfitEntry $profitEntry
+    }
+}
+
 $orderedRegistry = @(
     $registry.symbols |
         Sort-Object @{
+            Expression = {
+                $key = [string]$_.symbol
+                return [int]$researchPriorityMap[$key].tier
+            }
+        }, @{
+            Expression = {
+                $key = [string]$_.symbol
+                return [double]$researchPriorityMap[$key].score
+            }
+            Descending = $true
+        }, @{
             Expression = {
                 $key = [string]$_.symbol
                 if ($priorityMap.ContainsKey($key)) {
@@ -323,9 +490,11 @@ foreach ($groupName in $groupOrder) {
         $item = $groupItems[$i]
         $alias = [string]$item.symbol
         $priorityEntry = if ($priorityMap.ContainsKey($alias)) { $priorityMap[$alias] } else { $null }
+        $profitEntry = if ($profitMap.ContainsKey($alias)) { $profitMap[$alias] } else { $null }
         $runtimeEntry = if ($runtimeMap.ContainsKey($alias)) { $runtimeMap[$alias] } else { $null }
         $mlEntry = if ($mlMap.ContainsKey($alias)) { $mlMap[$alias] } else { $null }
         $qdmEntry = if ($qdmIncludedMap.ContainsKey($alias)) { $qdmIncludedMap[$alias] } else { $null }
+        $researchPriority = $researchPriorityMap[$alias]
         $slot = $slots[$i]
 
         $globalSlotIndex++
@@ -343,6 +512,10 @@ foreach ($groupName in $groupOrder) {
             symbol_alias = $alias
             broker_symbol = [string]$item.broker_symbol
             code_symbol = [string]$item.code_symbol
+            research_priority_tier = [int]$researchPriority.tier
+            research_priority_score = [double]$researchPriority.score
+            profit_status = [string]$researchPriority.profit_status
+            qdm_custom_pilot_ready = [bool]$researchPriority.qdm_custom_pilot_ready
             priority_rank = if ($null -ne $priorityEntry) { [int]$priorityEntry.rank } else { 999 }
             priority_score = if ($null -ne $priorityEntry) { [double]$priorityEntry.priority_score } else { 0.0 }
             priority_band = if ($null -ne $priorityEntry) { [string]$priorityEntry.priority_band } else { "UNKNOWN" }
@@ -411,6 +584,9 @@ $report = [ordered]@{
         total_symbols = $slotPlanArray.Count
         qdm_supported_symbols = @($slotPlanArray | Where-Object { $_.qdm_supported }).Count
         qdm_unsupported_symbols = @($slotPlanArray | Where-Object { -not $_.qdm_supported }).Count
+        qdm_custom_pilot_ready_symbols = @($slotPlanArray | Where-Object { $_.qdm_custom_pilot_ready }).Count
+        tester_positive_symbols = @($slotPlanArray | Where-Object { $_.profit_status -eq "TESTER_POSITIVE" }).Count
+        near_profit_symbols = @($slotPlanArray | Where-Object { $_.profit_status -eq "NEAR_PROFIT" }).Count
         mt5_queue_count = $testerQueueArray.Count
     }
 }
@@ -432,6 +608,9 @@ $lines.Add(("- runtime_profile: {0}" -f $report.runtime_profile))
 $lines.Add(("- slot_minutes: {0}" -f $report.slot_minutes))
 $lines.Add(("- total_symbols: {0}" -f $report.summary.total_symbols))
 $lines.Add(("- qdm_supported_symbols: {0}" -f $report.summary.qdm_supported_symbols))
+$lines.Add(("- qdm_custom_pilot_ready_symbols: {0}" -f $report.summary.qdm_custom_pilot_ready_symbols))
+$lines.Add(("- tester_positive_symbols: {0}" -f $report.summary.tester_positive_symbols))
+$lines.Add(("- near_profit_symbols: {0}" -f $report.summary.near_profit_symbols))
 $lines.Add(("- mt5_queue_count: {0}" -f $report.summary.mt5_queue_count))
 $lines.Add("")
 $lines.Add("## Group Summary")
@@ -461,10 +640,13 @@ foreach ($groupName in $groupOrder) {
     $lines.Add("")
     foreach ($row in $rows) {
         $qdmState = if ($row.qdm_supported) { ("QDM {0} via {1}" -f $row.qdm_symbol, $row.qdm_datasource) } else { ("QDM brak: {0}" -f $row.qdm_note) }
-        $lines.Add(("- slot #{0} {1} {2}: rank={3}, trust={4}, cost={5}, live_net_24h={6}, ml_risk={7}, {8}" -f
+        $lines.Add(("- slot #{0} {1} {2}: lane_tier={3}, lane_score={4}, profit_status={5}, rank={6}, trust={7}, cost={8}, live_net_24h={9}, ml_risk={10}, {11}" -f
             $row.slot_index_in_group,
             $row.slot_pl,
             $row.symbol_alias,
+            $row.research_priority_tier,
+            $row.research_priority_score,
+            $(if ([string]::IsNullOrWhiteSpace([string]$row.profit_status)) { "NONE" } else { [string]$row.profit_status }),
             $row.priority_rank,
             $row.trust_state,
             $row.cost_state,

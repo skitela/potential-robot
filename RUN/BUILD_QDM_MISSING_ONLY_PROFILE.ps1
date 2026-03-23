@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
-    [string]$OutputPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_missing_only_pack.csv",
+    [string]$OutputPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_missing_only_pack_latest.csv",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [string]$QdmRoot = "C:\TRADING_TOOLS\QuantDataManager",
     [string]$BlockedSymbolsPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_missing_only_blocked.json",
