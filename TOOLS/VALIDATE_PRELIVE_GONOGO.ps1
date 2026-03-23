@@ -1,5 +1,6 @@
 param(
-    [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT"
+    [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
+    [switch]$AllowBlockedAuditGate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +21,13 @@ function Invoke-GateStep {
         finished_utc = (Get-Date).ToUniversalTime().ToString("o")
         status = "PASS"
     }
+}
+
+Invoke-GateStep -Name "assert_audit_live_gate" -Action {
+    & (Join-Path $ProjectRoot "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
+        -ProjectRoot $ProjectRoot `
+        -GateType LIVE `
+        -AllowBlocked:$AllowBlockedAuditGate | Out-Null
 }
 
 Invoke-GateStep -Name "contract_tests" -Action {

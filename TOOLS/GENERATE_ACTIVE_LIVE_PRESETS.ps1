@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\PACKAGE\MQL5\Presets\ActiveLive"
+    [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\PACKAGE\MQL5\Presets\ActiveLive",
+    [switch]$AllowBlockedAuditGate
 )
 
 Set-StrictMode -Version Latest
@@ -8,6 +9,11 @@ $ErrorActionPreference = "Stop"
 
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
+
+& (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
+    -ProjectRoot $projectPath `
+    -GateType LIVE `
+    -AllowBlocked:$AllowBlockedAuditGate | Out-Null
 
 if (-not (Test-Path -LiteralPath $registryPath)) {
     throw "Missing registry: $registryPath"

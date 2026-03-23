@@ -314,6 +314,29 @@ function Invoke-AuditCycle {
 
             $autoHealResults.Add((Invoke-WrapperStarter -ScriptPath $starter.path -Parameters $starter.params)) | Out-Null
         }
+
+        $postHealScripts = @(
+            @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1")
+                params = @{ ProjectRoot = $ProjectRoot }
+            },
+            @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1")
+                params = @{
+                    ProjectRoot = $ProjectRoot
+                    ApplyRuntimeCleanup = $true
+                    ApplyLogRotation = $true
+                }
+            },
+            @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_ONNX_FEEDBACK_LOOP_REPORT.ps1")
+                params = @{ ProjectRoot = $ProjectRoot }
+            }
+        )
+
+        foreach ($script in $postHealScripts) {
+            $refreshResults.Add((Invoke-PowerShellScript -ScriptPath $script.path -Parameters $script.params)) | Out-Null
+        }
     }
 
     $fullStackPath = Join-Path $opsRoot "full_stack_audit_latest.json"
