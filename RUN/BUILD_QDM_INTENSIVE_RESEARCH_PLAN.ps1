@@ -4,6 +4,7 @@ param(
     [string]$PriorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$ReadinessReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_technical_readiness_latest.json",
+    [string]$FleetVerdictsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\active_fleet_verdicts_latest.json",
     [string]$MlHintsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\ml_tuning_hints_latest.json",
     [string]$PaperLiveFeedbackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$SessionMatrixPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\session_window_matrix_v1.json",
@@ -265,6 +266,19 @@ function Get-ProfitStatus {
     return ""
 }
 
+function Get-FleetVerdictPriority {
+    param([string]$FleetVerdict)
+
+    switch ($FleetVerdict) {
+        "DOCISNAC" { return 0 }
+        "KANDYDAT_PAPER_LIVE" { return 1 }
+        "UTRZYMAC" { return 2 }
+        "OBSERWOWAC" { return 3 }
+        "OBNIZYC_PRIORYTET" { return 4 }
+        default { return 5 }
+    }
+}
+
 function Get-ResearchPriorityTier {
     param(
         [object]$PriorityEntry,
@@ -403,6 +417,11 @@ if (Test-Path -LiteralPath $ReadinessReportPath) {
     $readinessReport = Get-Content -LiteralPath $ReadinessReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
+$fleetVerdicts = $null
+if (Test-Path -LiteralPath $FleetVerdictsPath) {
+    $fleetVerdicts = Get-Content -LiteralPath $FleetVerdictsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
 $qdmProfilePath = Join-Path $EvidenceDir "qdm_weakest_profile_latest.json"
 $qdmProfile = Get-Content -LiteralPath $qdmProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
 
@@ -448,6 +467,16 @@ if ($null -ne $readinessReport) {
     }
 }
 
+$fleetVerdictMap = @{}
+if ($null -ne $fleetVerdicts -and $fleetVerdicts.PSObject.Properties.Name -contains "verdicts") {
+    foreach ($item in @($fleetVerdicts.verdicts)) {
+        $key = [string]$item.symbol_alias
+        if (-not [string]::IsNullOrWhiteSpace($key) -and -not $fleetVerdictMap.ContainsKey($key)) {
+            $fleetVerdictMap[$key] = [string]$item.werdykt_koncowy
+        }
+    }
+}
+
 $qdmIncludedMap = @{}
 foreach ($item in @($qdmProfile.included)) {
     $qdmIncludedMap[[string]$item.symbol_alias] = $item
@@ -470,12 +499,19 @@ foreach ($item in @($registry.symbols)) {
         score = Get-ResearchPriorityScore -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported -ReadinessEntry $readinessEntry
         profit_status = Get-ProfitStatus -ProfitEntry $profitEntry
         qdm_custom_pilot_ready = Test-QdmCustomPilotReady -PriorityEntry $priorityEntry -ProfitEntry $profitEntry
+        fleet_verdict = if ($fleetVerdictMap.ContainsKey($alias)) { [string]$fleetVerdictMap[$alias] } else { "" }
+        fleet_verdict_priority = Get-FleetVerdictPriority -FleetVerdict $(if ($fleetVerdictMap.ContainsKey($alias)) { [string]$fleetVerdictMap[$alias] } else { "" })
     }
 }
 
 $orderedRegistry = @(
     $registry.symbols |
         Sort-Object @{
+            Expression = {
+                $key = [string]$_.symbol
+                return [int]$researchPriorityMap[$key].fleet_verdict_priority
+            }
+        }, @{
             Expression = {
                 $key = [string]$_.symbol
                 return [int]$researchPriorityMap[$key].tier
@@ -564,6 +600,8 @@ foreach ($groupName in $groupOrder) {
             research_group = $groupName
             session_profile = [string]$item.session_profile
             symbol_alias = $alias
+            fleet_verdict = [string]$researchPriority.fleet_verdict
+            fleet_verdict_priority = [int]$researchPriority.fleet_verdict_priority
             broker_symbol = [string]$item.broker_symbol
             code_symbol = [string]$item.code_symbol
             research_priority_tier = [int]$researchPriority.tier
@@ -710,6 +748,7 @@ foreach ($groupName in $groupOrder) {
             $row.live_net_24h,
             $row.ml_risk_score,
             $qdmState))
+        $lines.Add(("  fleet_verdict: {0}" -f $row.fleet_verdict))
         $lines.Add(("  research_lane: {0}" -f $row.research_data_lane))
         if (-not [string]::IsNullOrWhiteSpace([string]$row.technical_blocker)) {
             $lines.Add(("  technical_blocker: {0}" -f $row.technical_blocker))

@@ -2,6 +2,7 @@ param(
     [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$OnnxRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_symbol_registry_latest.json",
+    [string]$OnnxReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_micro_review_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [double]$TesterCapitalUsd = 10000.0
 )
@@ -32,14 +33,31 @@ function Get-OnnxStatus {
     return "BRAK"
 }
 
+function Get-OnnxQuality {
+    param(
+        [hashtable]$OnnxReviewMap,
+        [string]$Alias
+    )
+
+    if ($OnnxReviewMap.ContainsKey($Alias)) {
+        return [string]$OnnxReviewMap[$Alias].jakosc_onnx
+    }
+
+    return "BRAK"
+}
+
 function Get-RolloutVerdict {
     param(
-        [string]$OnnxStatus,
+        [string]$OnnxQuality,
         [bool]$QdmReady
     )
 
-    if ($QdmReady -and $OnnxStatus -eq "MODEL_PER_SYMBOL_READY") {
+    if ($QdmReady -and $OnnxQuality -in @("MOCNY", "DOBRY")) {
         return "GOTOWY_DO_PILOTA_PAPER_LIVE"
+    }
+
+    if ($QdmReady -and $OnnxQuality -eq "OSTROZNIE") {
+        return "NAJPIERW_OBSERWACJA_ONNX"
     }
 
     if ($QdmReady) {
@@ -66,6 +84,12 @@ $onnxRegistry = if (Test-Path -LiteralPath $OnnxRegistryPath) {
 else {
     $null
 }
+$onnxReview = if (Test-Path -LiteralPath $OnnxReviewPath) {
+    Get-Content -LiteralPath $OnnxReviewPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+else {
+    $null
+}
 
 $activeMap = @{}
 foreach ($item in @($registry.symbols)) {
@@ -85,6 +109,16 @@ if ($null -ne $onnxRegistry -and $onnxRegistry.PSObject.Properties.Name -contain
     }
 }
 
+$onnxReviewMap = @{}
+if ($null -ne $onnxReview -and $onnxReview.PSObject.Properties.Name -contains "items") {
+    foreach ($item in @($onnxReview.items)) {
+        $alias = Normalize-SymbolAlias ([string]$item.symbol_alias)
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            $onnxReviewMap[$alias] = $item
+        }
+    }
+}
+
 $winners = @(
     @($profitTracking.tester_positive) |
         Where-Object {
@@ -95,6 +129,7 @@ $winners = @(
         ForEach-Object {
             $alias = Normalize-SymbolAlias ([string]$_.symbol_alias)
             $onnxStatus = Get-OnnxStatus -OnnxMap $onnxMap -Alias $alias
+            $onnxQuality = Get-OnnxQuality -OnnxReviewMap $onnxReviewMap -Alias $alias
             [pscustomobject]@{
                 symbol_alias = $alias
                 session_profile = [string]$activeMap[$alias].session_profile
@@ -105,9 +140,13 @@ $winners = @(
                 qdm_custom_gotowy = [bool]$_.qdm_custom_pilot_ready
                 qdm_custom_symbol = [string]$_.qdm_custom_symbol
                 status_onnx = $onnxStatus
-                werdykt_rolloutu = Get-RolloutVerdict -OnnxStatus $onnxStatus -QdmReady ([bool]$_.qdm_custom_pilot_ready)
-                zalecenie = if ($onnxStatus -eq "MODEL_PER_SYMBOL_READY") {
+                jakosc_onnx = $onnxQuality
+                werdykt_rolloutu = Get-RolloutVerdict -OnnxQuality $onnxQuality -QdmReady ([bool]$_.qdm_custom_pilot_ready)
+                zalecenie = if ($onnxQuality -in @("MOCNY", "DOBRY")) {
                     "utrzymac zwycieskie wejscia i przygotowac pilot paper-live"
+                }
+                elseif ($onnxQuality -eq "OSTROZNIE") {
+                    "utrzymac zwycieskie wejscia i najpierw zbierac obserwacje onnx"
                 }
                 else {
                     "utrzymac zwycieskie wejscia i doszkolic maly model onnx przed paper-live"
@@ -148,6 +187,7 @@ foreach ($item in @($winners)) {
     $lines.Add(("- zwycieskie_wejscia: {0}" -f $inputs))
     $lines.Add(("- qdm_custom_gotowy: {0}" -f $item.qdm_custom_gotowy))
     $lines.Add(("- status_onnx: {0}" -f $item.status_onnx))
+    $lines.Add(("- jakosc_onnx: {0}" -f $item.jakosc_onnx))
     $lines.Add(("- werdykt_rolloutu: {0}" -f $item.werdykt_rolloutu))
     $lines.Add(("- zalecenie: {0}" -f $item.zalecenie))
     $lines.Add("")
