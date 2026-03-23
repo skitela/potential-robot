@@ -200,6 +200,34 @@ function Load-JsonOrNull {
     return $null
 }
 
+function Get-ActiveRegistryInstrumentSet {
+    param([string]$ProjectRoot)
+
+    $registryPath = Join-Path $ProjectRoot 'CONFIG\microbots_registry.json'
+    $set = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+
+    if (-not (Test-Path -LiteralPath $registryPath)) {
+        return $set
+    }
+
+    $registry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json
+    foreach ($item in @($registry.symbols)) {
+        foreach ($candidate in @(
+            [string]$item.symbol,
+            ([string]$item.symbol -replace '\.pro$',''),
+            [string]$item.broker_symbol,
+            ([string]$item.broker_symbol -replace '\.pro$',''),
+            [string]$item.code_symbol
+        )) {
+            if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                [void]$set.Add(($candidate -replace '\.pro$',''))
+            }
+        }
+    }
+
+    return $set
+}
+
 function Write-OperationalPingContract {
     param(
         [string]$CommonRoot,
@@ -239,8 +267,20 @@ $parsed = Parse-HostingTerminalLog -Path $selected.CanonicalPath
 
 $expertsFile = Get-LatestExpertsLog
 $roster = @()
+$historicalRosterExcluded = @()
+$activeRegistryInstruments = Get-ActiveRegistryInstrumentSet -ProjectRoot $ProjectRoot
 if ($expertsFile) {
-    $roster = @(Parse-ExpertsRoster -Path $expertsFile.FullName)
+    $parsedRoster = @(Parse-ExpertsRoster -Path $expertsFile.FullName)
+    $historicalRosterExcluded = @(
+        $parsedRoster |
+            Where-Object { -not $activeRegistryInstruments.Contains($_.Instrument) } |
+            Sort-Object Instrument -Unique
+    )
+    $roster = @(
+        $parsedRoster |
+            Where-Object { $activeRegistryInstruments.Contains($_.Instrument) } |
+            Sort-Object Instrument -Unique
+    )
 }
 
 $runtimeCompactPath = Join-Path $ProjectRoot 'EVIDENCE\OPS\paper_live_feedback_latest.json'
@@ -343,6 +383,8 @@ $summary = [pscustomobject]@{
     latest_experts_log = if ($expertsFile) { $expertsFile.FullName } else { $null }
     latest_experts_log_last_write = if ($expertsFile) { $expertsFile.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } else { $null }
     roster_count = @($roster).Count
+    historical_roster_excluded_count = @($historicalRosterExcluded).Count
+    historical_roster_excluded_symbols = @($historicalRosterExcluded | ForEach-Object { $_.Instrument })
     migration_last_line = if ($syncInfo) { Normalize-AsciiText $syncInfo.last_migration_line } else { $null }
     migration_scope = if ($syncInfo) { Normalize-AsciiText $syncInfo.migration_scope_label } else { $null }
     runtime_snapshot_generated_local = if ($runtimeCompact) { $runtimeCompact.generated_local } else { $null }
@@ -380,7 +422,8 @@ $md.Add('- Hosting MT5 jest zywy i raportuje regularne heartbeat-y dzisiaj.')
 $md.Add("- Ostatni heartbeat terminala w logu: $($summary.last_heartbeat)")
 $md.Add("- Srodowisko hostingu utrzymuje stale: $((($summary.chart_counts) -join ', ')) charts / $((($summary.ea_counts) -join ', ')) EAs.")
 $md.Add('- Dzisiejsze logi terminala sa zdublowane w dwoch katalogach, ale maja ta sama tresc.')
-$md.Add('- Dzienny log ekspertow nie powstal dzisiaj; ostatni log ekspertow pochodzi z czasu migracji i potwierdza zaladowanie 17 EA.')
+$md.Add('- Dzienny log ekspertow nie powstal dzisiaj; ostatni log ekspertow pochodzi z czasu migracji i jest czytany tylko jako historyczny slad.')
+$md.Add('- Lista EA w tym raporcie jest filtrowana do aktywnej floty z rejestru, wiec wycofane symbole nie wracaja juz do prawdy operacyjnej.')
 $md.Add('- Per-instrument runtime ponizej pochodzi z ostatniego dostepnego snapshotu paper/live, a nie z dzisiejszego logu terminala.')
 $md.Add('')
 $md.Add('## Heartbeat Dnia')
@@ -399,6 +442,9 @@ $md.Add("- Ostatnia potwierdzona migracja: $($summary.migration_last_line)")
 $md.Add("- Zakres migracji: $($summary.migration_scope)")
 $md.Add("- Ostatni log ekspertow: $($summary.latest_experts_log_last_write)")
 $md.Add("- Zaladowane EA z logu ekspertow: $($summary.roster_count)")
+if (@($summary.historical_roster_excluded_symbols).Count -gt 0) {
+    $md.Add("- Historycznie wykluczone symbole odfiltrowane z rosteru: $((@($summary.historical_roster_excluded_symbols) -join ', '))")
+}
 $md.Add('')
 $md.Add('### Lista EA / Instrumentow')
 $md.Add('')
@@ -437,7 +483,7 @@ else {
     $md.Add('- W dzisiejszym logu terminala nie znaleziono oczywistych bledow typu disconnect/shutdown/failed w ogonie dnia.')
 }
 $md.Add('- Dzisiejszy log terminala nie zawiera wpisow per symbol; pokazuje zdrowie hostingu jako calego kontenera VPS.')
-$md.Add('- Lista instrumentow i zaladowanych EA pochodzi z ostatniego logu ekspertow po migracji.')
+$md.Add('- Lista instrumentow i zaladowanych EA jest ograniczona do aktywnej floty z rejestru; historyczny log ekspertow nie moze juz reaktywowac wycofanych symboli w raporcie.')
 $md.Add('- Wartosci paper/live per instrument pochodza z ostatniego dostepnego runtime compact, wiec trzeba je czytac jako ostatnia znana prawde, a nie dzisiejszy swiezy pull z VPS.')
 
 $md -join [Environment]::NewLine | Set-Content -Path $mdPath -Encoding UTF8
