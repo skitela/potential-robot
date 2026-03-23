@@ -27,13 +27,11 @@ function Get-QdmSpec {
         "EURJPY" { return [pscustomobject]@{ supported = $true; symbol = "EURJPY"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2016.01.01"; date_to = ""; mt5_export_name = "MB_EURJPY_DUKA"; notes = "registry_fx" } }
         "GBPJPY" { return [pscustomobject]@{ supported = $true; symbol = "GBPJPY"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2016.01.01"; date_to = ""; mt5_export_name = "MB_GBPJPY_DUKA"; notes = "registry_fx" } }
         "EURAUD" { return [pscustomobject]@{ supported = $true; symbol = "EURAUD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2016.01.01"; date_to = ""; mt5_export_name = "MB_EURAUD_DUKA"; notes = "registry_fx" } }
-        "GBPAUD" { return [pscustomobject]@{ supported = $true; symbol = "GBPAUD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2016.01.01"; date_to = ""; mt5_export_name = "MB_GBPAUD_DUKA"; notes = "registry_fx" } }
         "GOLD" { return [pscustomobject]@{ supported = $true; symbol = "XAUUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_GOLD_DUKA"; notes = "registry_metals" } }
         "SILVER" { return [pscustomobject]@{ supported = $true; symbol = "XAGUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_SILVER_DUKA"; notes = "registry_metals" } }
         "DE30" { return [pscustomobject]@{ supported = $true; symbol = "DEUIDXEUR"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_DE30_DUKA"; notes = "registry_indices" } }
         "COPPER-US" { return [pscustomobject]@{ supported = $true; symbol = "COPPERCMDUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_COPPER_DUKA"; notes = "registry_metals_problem" } }
         "COPPERUS" { return [pscustomobject]@{ supported = $true; symbol = "COPPERCMDUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_COPPER_DUKA"; notes = "registry_metals_problem" } }
-        "PLATIN" { return [pscustomobject]@{ supported = $false; reason = "QDM CLI rejects XPT.CMD, XPT.CMD_dukascopy and XPTUSD in this installation; keep PLATIN on MT5/runtime fallback." } }
         "US500" { return [pscustomobject]@{ supported = $true; symbol = "USA500IDXUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_US500_DUKA"; notes = "registry_indices" } }
         default { return [pscustomobject]@{ supported = $false; reason = "no QDM mapping defined for alias" } }
     }

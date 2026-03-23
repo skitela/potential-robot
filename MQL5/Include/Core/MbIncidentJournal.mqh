@@ -2,6 +2,7 @@
 #define MB_INCIDENT_JOURNAL_INCLUDED
 
 #include "MbExecutionCommon.mqh"
+#include "MbRuntimeLogRotation.mqh"
 
 string g_mb_incident_queue[];
 string g_mb_incident_queue_path = "";
@@ -31,6 +32,7 @@ void MbIncidentJournalFlush()
    if(queued <= 0 || StringLen(g_mb_incident_queue_path) <= 0)
       return;
 
+   MbRotateRuntimeLogIfOversized(g_mb_incident_queue_path);
    int h = FileOpen(g_mb_incident_queue_path, FILE_COMMON | FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;
@@ -56,6 +58,7 @@ void MbIncidentJournalAppend(const string rel_path,const string payload)
       return;
      }
 
+   MbRotateRuntimeLogIfOversized(rel_path);
    int h = FileOpen(rel_path, FILE_COMMON | FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;

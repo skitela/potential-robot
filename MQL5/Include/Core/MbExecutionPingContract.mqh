@@ -98,8 +98,6 @@ void MbRefreshOperationalExecutionPing(const bool paper_mode,MbMarketSnapshot &s
    double resolved_ping_ms = MbResolveManualExecutionPingMs(paper_mode,cached_contract);
    if(resolved_ping_ms > 0.0)
       snapshot.operational_ping_ms = resolved_ping_ms;
-   else if(snapshot.terminal_ping_last_ms > 0)
-      snapshot.operational_ping_ms = (double)snapshot.terminal_ping_last_ms;
    else
       snapshot.operational_ping_ms = 0.0;
   }

@@ -240,7 +240,7 @@ MbGuardVerdict MbEvaluateMarketEntryGuards(
       return MB_GUARD_BLOCK;
 
    bool paper_mode = (snapshot.paper_runtime_override_active || state.paper_mode_active);
-   double effective_ping_ms = (snapshot.operational_ping_ms > 0.0 ? snapshot.operational_ping_ms : (double)snapshot.terminal_ping_last_ms);
+   double effective_ping_ms = MathMax(0.0,snapshot.operational_ping_ms);
    if(effective_ping_ms >= 100.0)
       state.caution_mode = true;
    if(!paper_mode && effective_ping_ms >= 180.0)

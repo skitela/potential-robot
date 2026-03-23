@@ -488,7 +488,7 @@ while ($true) {
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "full_stack_audit" -Operation {
-        & $fullStackAuditScript | Out-Null
+        & $fullStackAuditScript -ApplyLogRotation | Out-Null
         "rebuilt"
     } | Out-Null
 

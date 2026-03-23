@@ -11,7 +11,9 @@ param(
     [string]$QdmProfileBuilderPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_QDM_WEAKEST_PROFILE.ps1",
     [string]$QdmPackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_weakest_pack_latest.csv",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
-    [int]$SlotMinutes = 20
+    [int]$SlotMinutes = 20,
+    [ValidateSet("WeakUplift", "Balanced")]
+    [string]$LaptopFocusMode = "WeakUplift"
 )
 
 Set-StrictMode -Version Latest
@@ -279,6 +281,157 @@ function Get-FleetVerdictPriority {
     }
 }
 
+function Get-LaptopFocusTier {
+    param(
+        [string]$Mode,
+        [object]$VerdictEntry,
+        [object]$PriorityEntry,
+        [object]$ProfitEntry,
+        [object]$ReadinessEntry
+    )
+
+    if ($Mode -ne "WeakUplift") {
+        return 0
+    }
+
+    $fleetVerdict = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.werdykt_koncowy } else { "" }
+    $businessStatus = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.business_status } else { Get-ProfitStatus -ProfitEntry $ProfitEntry }
+    $onnxStatus = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_status } else { "" }
+    $onnxQuality = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_jakosc } else { "" }
+    $onnxAudit = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_krzyzowy_audyt } else { "" }
+    $technicalReadiness = if ($null -ne $ReadinessEntry) { [string]$ReadinessEntry.technical_readiness } else { "" }
+
+    if ($technicalReadiness -eq "QDM_EXPORT_BLOCKED") { return 7 }
+    if ($technicalReadiness -eq "MT5_FALLBACK_ONLY") { return 8 }
+    if ($onnxStatus -eq "GLOBAL_FALLBACK") { return 0 }
+    if ($onnxQuality -eq "SLABY" -or $onnxAudit -eq "DOSZKOLIC_MALY_MODEL") { return 1 }
+    if ($businessStatus -eq "NEGATIVE" -and $fleetVerdict -in @("OBSERWOWAC", "DOCISNAC")) { return 2 }
+    if ($businessStatus -eq "NEAR_PROFIT") { return 3 }
+    if ($fleetVerdict -eq "OBSERWOWAC") { return 4 }
+    if ($fleetVerdict -eq "OBNIZYC_PRIORYTET") { return 5 }
+    if ($businessStatus -eq "TESTER_POSITIVE") { return 6 }
+    if ($businessStatus -eq "LIVE_POSITIVE" -or $fleetVerdict -in @("UTRZYMAC", "KANDYDAT_PAPER_LIVE")) { return 7 }
+
+    return 8
+}
+
+function Get-LaptopFocusScore {
+    param(
+        [string]$Mode,
+        [object]$VerdictEntry,
+        [object]$PriorityEntry,
+        [object]$ProfitEntry
+    )
+
+    $score = 0.0
+    if ($null -ne $PriorityEntry) {
+        $score += [double]$PriorityEntry.priority_score
+    }
+
+    if ($Mode -ne "WeakUplift") {
+        return [Math]::Round($score, 3)
+    }
+
+    $fleetVerdict = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.werdykt_koncowy } else { "" }
+    $businessStatus = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.business_status } else { Get-ProfitStatus -ProfitEntry $ProfitEntry }
+    $onnxStatus = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_status } else { "" }
+    $onnxQuality = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_jakosc } else { "" }
+    $onnxAudit = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_krzyzowy_audyt } else { "" }
+
+    switch ($businessStatus) {
+        "NEGATIVE" { $score += 220.0 }
+        "NEAR_PROFIT" { $score += 165.0 }
+        "TESTER_POSITIVE" { $score += 55.0 }
+        "LIVE_POSITIVE" { $score -= 180.0 }
+    }
+
+    switch ($fleetVerdict) {
+        "DOCISNAC" { $score += 95.0 }
+        "OBSERWOWAC" { $score += 135.0 }
+        "OBNIZYC_PRIORYTET" { $score += 60.0 }
+        "KANDYDAT_PAPER_LIVE" { $score -= 120.0 }
+        "UTRZYMAC" { $score -= 160.0 }
+    }
+
+    if ($onnxStatus -eq "GLOBAL_FALLBACK") {
+        $score += 260.0
+    }
+
+    switch ($onnxQuality) {
+        "SLABY" { $score += 190.0 }
+        "OSTROZNIE" { $score += 90.0 }
+        "DOBRY" { $score += 15.0 }
+        "MOCNY" { $score -= 35.0 }
+    }
+
+    switch ($onnxAudit) {
+        "DOSZKOLIC_MALY_MODEL" { $score += 110.0 }
+        "FALLBACK_GLOBALNY" { $score += 95.0 }
+        "GOTOWY_DO_ZBIERANIA_OBSERWACJI" { $score -= 10.0 }
+    }
+
+    $bestTesterPnl = 0.0
+    if ($null -ne $VerdictEntry -and $VerdictEntry.PSObject.Properties.Name -contains "tester_pnl_usd") {
+        $bestTesterPnl = [double]$VerdictEntry.tester_pnl_usd
+    }
+    elseif ($null -ne $ProfitEntry -and $ProfitEntry.PSObject.Properties.Name -contains "best_tester_pnl") {
+        $bestTesterPnl = [double]$ProfitEntry.best_tester_pnl
+    }
+
+    if ($bestTesterPnl -lt 0) {
+        $score += [Math]::Min(([Math]::Abs($bestTesterPnl) / 2.5), 90.0)
+    }
+
+    return [Math]::Round($score, 3)
+}
+
+function Get-LaptopFocusReason {
+    param(
+        [string]$Mode,
+        [object]$VerdictEntry,
+        [object]$ProfitEntry
+    )
+
+    if ($Mode -ne "WeakUplift") {
+        return "tryb zrownowazony"
+    }
+
+    $businessStatus = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.business_status } else { Get-ProfitStatus -ProfitEntry $ProfitEntry }
+    $onnxStatus = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_status } else { "" }
+    $onnxQuality = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_jakosc } else { "" }
+    $onnxAudit = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.onnx_krzyzowy_audyt } else { "" }
+    $fleetVerdict = if ($null -ne $VerdictEntry) { [string]$VerdictEntry.werdykt_koncowy } else { "" }
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if ($onnxStatus -eq "GLOBAL_FALLBACK") {
+        [void]$reasons.Add("brak malego ONNX dla symbolu")
+    }
+    if ($onnxQuality -eq "SLABY" -or $onnxAudit -eq "DOSZKOLIC_MALY_MODEL") {
+        [void]$reasons.Add("maly ONNX wymaga doszkolenia")
+    }
+    if ($businessStatus -eq "NEGATIVE") {
+        [void]$reasons.Add("wynik biznesowy jest ujemny")
+    }
+    elseif ($businessStatus -eq "NEAR_PROFIT") {
+        [void]$reasons.Add("symbol jest blisko dodatniego testera")
+    }
+    elseif ($businessStatus -eq "TESTER_POSITIVE") {
+        [void]$reasons.Add("wynik dodatni, ale nadal wart dopracowania na laptopie")
+    }
+    if ($fleetVerdict -eq "OBSERWOWAC") {
+        [void]$reasons.Add("werdykt floty wymaga dalszej obserwacji")
+    }
+    elseif ($fleetVerdict -eq "OBNIZYC_PRIORYTET") {
+        [void]$reasons.Add("slabszy kandydat, ale nadal wart uporzadkowania")
+    }
+
+    if ($reasons.Count -eq 0) {
+        return "utrzymac spokojne monitorowanie"
+    }
+
+    return (($reasons.ToArray()) -join "; ")
+}
+
 function Get-ResearchPriorityTier {
     param(
         [object]$PriorityEntry,
@@ -468,11 +621,15 @@ if ($null -ne $readinessReport) {
 }
 
 $fleetVerdictMap = @{}
+$fleetVerdictEntryMap = @{}
 if ($null -ne $fleetVerdicts -and $fleetVerdicts.PSObject.Properties.Name -contains "verdicts") {
     foreach ($item in @($fleetVerdicts.verdicts)) {
         $key = [string]$item.symbol_alias
         if (-not [string]::IsNullOrWhiteSpace($key) -and -not $fleetVerdictMap.ContainsKey($key)) {
             $fleetVerdictMap[$key] = [string]$item.werdykt_koncowy
+        }
+        if (-not [string]::IsNullOrWhiteSpace($key) -and -not $fleetVerdictEntryMap.ContainsKey($key)) {
+            $fleetVerdictEntryMap[$key] = $item
         }
     }
 }
@@ -493,6 +650,7 @@ foreach ($item in @($registry.symbols)) {
     $priorityEntry = if ($priorityMap.ContainsKey($alias)) { $priorityMap[$alias] } else { $null }
     $profitEntry = if ($profitMap.ContainsKey($alias)) { $profitMap[$alias] } else { $null }
     $readinessEntry = if ($readinessMap.ContainsKey($alias)) { $readinessMap[$alias] } else { $null }
+    $verdictEntry = if ($fleetVerdictEntryMap.ContainsKey($alias)) { $fleetVerdictEntryMap[$alias] } else { $null }
     $qdmSupported = $qdmIncludedMap.ContainsKey($alias)
     $researchPriorityMap[$alias] = [pscustomobject]@{
         tier = Get-ResearchPriorityTier -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported -ReadinessEntry $readinessEntry
@@ -501,12 +659,25 @@ foreach ($item in @($registry.symbols)) {
         qdm_custom_pilot_ready = Test-QdmCustomPilotReady -PriorityEntry $priorityEntry -ProfitEntry $profitEntry
         fleet_verdict = if ($fleetVerdictMap.ContainsKey($alias)) { [string]$fleetVerdictMap[$alias] } else { "" }
         fleet_verdict_priority = Get-FleetVerdictPriority -FleetVerdict $(if ($fleetVerdictMap.ContainsKey($alias)) { [string]$fleetVerdictMap[$alias] } else { "" })
+        laptop_focus_tier = Get-LaptopFocusTier -Mode $LaptopFocusMode -VerdictEntry $verdictEntry -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -ReadinessEntry $readinessEntry
+        laptop_focus_score = Get-LaptopFocusScore -Mode $LaptopFocusMode -VerdictEntry $verdictEntry -PriorityEntry $priorityEntry -ProfitEntry $profitEntry
+        laptop_focus_reason = Get-LaptopFocusReason -Mode $LaptopFocusMode -VerdictEntry $verdictEntry -ProfitEntry $profitEntry
     }
 }
 
 $orderedRegistry = @(
     $registry.symbols |
         Sort-Object @{
+            Expression = {
+                $key = [string]$_.symbol
+                return [int]$researchPriorityMap[$key].laptop_focus_tier
+            }
+        }, @{
+            Expression = {
+                $key = [string]$_.symbol
+                return [double](-1.0 * [double]$researchPriorityMap[$key].laptop_focus_score)
+            }
+        }, @{
             Expression = {
                 $key = [string]$_.symbol
                 return [int]$researchPriorityMap[$key].fleet_verdict_priority
@@ -522,14 +693,6 @@ $orderedRegistry = @(
                 return [double]$researchPriorityMap[$key].score
             }
             Descending = $true
-        }, @{
-            Expression = {
-                $key = [string]$_.symbol
-                if ($priorityMap.ContainsKey($key)) {
-                    return [int]$priorityMap[$key].rank
-                }
-                return 999
-            }
         }, symbol
 )
 
@@ -602,6 +765,10 @@ foreach ($groupName in $groupOrder) {
             symbol_alias = $alias
             fleet_verdict = [string]$researchPriority.fleet_verdict
             fleet_verdict_priority = [int]$researchPriority.fleet_verdict_priority
+            laptop_focus_mode = $LaptopFocusMode
+            laptop_focus_tier = [int]$researchPriority.laptop_focus_tier
+            laptop_focus_score = [double]$researchPriority.laptop_focus_score
+            laptop_focus_reason = [string]$researchPriority.laptop_focus_reason
             broker_symbol = [string]$item.broker_symbol
             code_symbol = [string]$item.code_symbol
             research_priority_tier = [int]$researchPriority.tier
@@ -668,6 +835,7 @@ $report = [ordered]@{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     runtime_profile = "LAPTOP_RESEARCH"
+    laptop_focus_mode = $LaptopFocusMode
     slot_minutes = $SlotMinutes
     qdm_pack_path = $QdmPackPath
     tester_queue = $testerQueueArray
@@ -699,6 +867,7 @@ $lines.Add("# QDM Intensive Research Plan Latest")
 $lines.Add("")
 $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- runtime_profile: {0}" -f $report.runtime_profile))
+$lines.Add(("- laptop_focus_mode: {0}" -f $report.laptop_focus_mode))
 $lines.Add(("- slot_minutes: {0}" -f $report.slot_minutes))
 $lines.Add(("- total_symbols: {0}" -f $report.summary.total_symbols))
 $lines.Add(("- qdm_supported_symbols: {0}" -f $report.summary.qdm_supported_symbols))
@@ -734,10 +903,12 @@ foreach ($groupName in $groupOrder) {
     $lines.Add("")
     foreach ($row in $rows) {
         $qdmState = if ($row.qdm_supported) { ("QDM {0} via {1}" -f $row.qdm_symbol, $row.qdm_datasource) } else { ("QDM brak: {0}" -f $row.qdm_note) }
-        $lines.Add(("- slot #{0} {1} {2}: lane_tier={3}, lane_score={4}, profit_status={5}, readiness={6}, rank={7}, trust={8}, cost={9}, live_net_24h={10}, ml_risk={11}, {12}" -f
+        $lines.Add(("- slot #{0} {1} {2}: laptop_focus_tier={3}, laptop_focus_score={4}, lane_tier={5}, lane_score={6}, profit_status={7}, readiness={8}, rank={9}, trust={10}, cost={11}, live_net_24h={12}, ml_risk={13}, {14}" -f
             $row.slot_index_in_group,
             $row.slot_pl,
             $row.symbol_alias,
+            $row.laptop_focus_tier,
+            $row.laptop_focus_score,
             $row.research_priority_tier,
             $row.research_priority_score,
             $(if ([string]::IsNullOrWhiteSpace([string]$row.profit_status)) { "NONE" } else { [string]$row.profit_status }),
@@ -749,6 +920,7 @@ foreach ($groupName in $groupOrder) {
             $row.ml_risk_score,
             $qdmState))
         $lines.Add(("  fleet_verdict: {0}" -f $row.fleet_verdict))
+        $lines.Add(("  laptop_focus_reason: {0}" -f $row.laptop_focus_reason))
         $lines.Add(("  research_lane: {0}" -f $row.research_data_lane))
         if (-not [string]::IsNullOrWhiteSpace([string]$row.technical_blocker)) {
             $lines.Add(("  technical_blocker: {0}" -f $row.technical_blocker))

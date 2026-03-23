@@ -133,7 +133,9 @@ $summary = [ordered]@{
     polaczony_gotowy = @($items | Where-Object { $_.pietro_integracja -eq 'POLACZONY_GOTOWY' }).Count
     fallback_globalny = @($items | Where-Object { $_.status_modelu -eq 'GLOBAL_FALLBACK' }).Count
     mocny_lub_dobry = @($items | Where-Object { $_.pietro_jakosc_modelu -in @('MOCNY', 'DOBRY') }).Count
-    brak_obserwacji_runtime = @($items | Where-Object { $_.pietro_sprzezenie_zwrotne -eq 'BRAK_OBSERWACJI' }).Count
+    brak_obserwacji_runtime = @($items | Where-Object {
+        $_.pietro_integracja -eq 'POLACZONY_GOTOWY' -and $_.pietro_sprzezenie_zwrotne -eq 'BRAK_OBSERWACJI'
+    }).Count
     obserwacje_onnx_lacznie = $feedbackTotal
     gotowy_do_zbierania_obserwacji = @($items | Where-Object { $_.werdykt_koncowy -eq 'GOTOWY_DO_ZBIERANIA_OBSERWACJI' }).Count
     doszkolic_maly_model = @($items | Where-Object { $_.werdykt_koncowy -eq 'DOSZKOLIC_MALY_MODEL' }).Count

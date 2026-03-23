@@ -273,7 +273,7 @@ void MbEvaluateExecutionQualityState(
    MbExecutionQualityState &out
 )
   {
-   double effective_ping_ms = (market.operational_ping_ms > 0.0 ? market.operational_ping_ms : (double)market.terminal_ping_last_ms);
+   double effective_ping_ms = MathMax(0.0,market.operational_ping_ms);
    out.state = "GOOD";
    out.reason_code = "EXECUTION_HEALTHY";
    out.ping_ms = (long)MathRound(effective_ping_ms);

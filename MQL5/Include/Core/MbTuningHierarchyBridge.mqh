@@ -55,11 +55,10 @@ int MbGetTuningFamilySymbols(const string family,string &out[])
      }
    else if(family == "FX_CROSS")
      {
-      ArrayResize(out,4);
+      ArrayResize(out,3);
       out[0] = "EURJPY";
       out[1] = "GBPJPY";
       out[2] = "EURAUD";
-      out[3] = "GBPAUD";
      }
    else if(family == "METALS_SPOT_PM")
      {
@@ -69,9 +68,8 @@ int MbGetTuningFamilySymbols(const string family,string &out[])
      }
    else if(family == "METALS_FUTURES")
      {
-      ArrayResize(out,2);
-      out[0] = "PLATIN.pro";
-      out[1] = "COPPER-US.pro";
+      ArrayResize(out,1);
+      out[0] = "COPPER-US.pro";
      }
    else if(family == "INDEX_EU")
      {

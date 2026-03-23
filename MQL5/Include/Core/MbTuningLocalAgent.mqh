@@ -692,26 +692,6 @@ bool MbBuildAlternativeExperiment(
      }
 
    if(
-      canonical == "GBPAUD" &&
-      policy.last_failed_action_code == "FLOOR_RANGE_CONFIDENCE" &&
-      policy.last_failed_focus_setup_type == "SETUP_BREAKOUT" &&
-      policy.last_failed_focus_market_regime == "BREAKOUT"
-   )
-     {
-      out_alternative = policy;
-      out_alternative.require_non_poor_renko_for_breakout = true;
-      out_alternative.breakout_chaos_tax = MathMax(policy.breakout_chaos_tax,0.08);
-      out_alternative.confidence_cap = MathMin(policy.confidence_cap,0.72);
-      out_alternative.last_focus_setup_type = "SETUP_BREAKOUT";
-      out_alternative.last_focus_market_regime = "BREAKOUT";
-      out_alternative.last_hypothesis_code = "ODSIEJ_BREAKOUT_RENKO";
-      out_alternative.last_hypothesis_detail = "po jalowym eksperymencie sprawdz breakout tylko z czystym renko i ciasniejsza pewnoscia";
-      out_alternative.last_counterfactual_code = "GDYBY_TRWAC_W_JALOWYM_BREAKOUT";
-      out_alternative.last_counterfactual_detail = "agent dalej wisialby na breakoutach bez nowych lekcji";
-      return MbTuningPolicyChanged(policy,out_alternative);
-     }
-
-   if(
       canonical == "USDCHF" &&
       policy.last_failed_action_code == "FILTER_TREND_CANDLE" &&
       policy.last_failed_focus_setup_type == "SETUP_BREAKOUT" &&
@@ -753,26 +733,6 @@ bool MbBuildAlternativeExperiment(
       out_alternative.last_hypothesis_detail = "po fiasku breakout-trendu sprawdz tylko bardziej selektywny pullback trendowy z dobra swieca i breakout renko";
       out_alternative.last_counterfactual_code = "GDYBY_GONIC_BREAKOUT_USDCAD";
       out_alternative.last_counterfactual_detail = "agent dalej uczylby sie na breakoutach, ktore wchodza za pozno i gasna po wejsciu";
-      return MbTuningPolicyChanged(policy,out_alternative);
-     }
-
-   if(
-      canonical == "PLATIN" &&
-      policy.last_failed_action_code == "REBALANCE" &&
-      policy.last_failed_focus_setup_type == "SETUP_BREAKOUT" &&
-      policy.last_failed_focus_market_regime == "BREAKOUT"
-   )
-     {
-      out_alternative = policy;
-      out_alternative.require_non_poor_candle_for_breakout = true;
-      out_alternative.breakout_global_tax = MathMax(policy.breakout_global_tax,0.10);
-      out_alternative.risk_cap = MathMin(policy.risk_cap,0.60);
-      out_alternative.last_focus_setup_type = "SETUP_BREAKOUT";
-      out_alternative.last_focus_market_regime = "BREAKOUT";
-      out_alternative.last_hypothesis_code = "OCIAC_PLATIN_BREAKOUT";
-      out_alternative.last_hypothesis_detail = "po jalowym rebalansie sprawdz breakout tylko z dobra swieca i ciasniejszym ryzykiem";
-      out_alternative.last_counterfactual_code = "GDYBY_REBALANSOWAC_W_PUSTKE";
-      out_alternative.last_counterfactual_detail = "agent dalej wisialby na zmianie bez nowych lekcji i bez realnej selekcji";
       return MbTuningPolicyChanged(policy,out_alternative);
      }
 

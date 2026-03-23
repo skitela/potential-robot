@@ -91,21 +91,19 @@ int MbGetCandidateArbitrationSymbols(const string arbitration_group,string &out[
      }
    if(arbitration_group == "FX_CROSS")
      {
-      ArrayResize(out,4);
+      ArrayResize(out,3);
       out[0] = "EURJPY";
       out[1] = "GBPJPY";
       out[2] = "EURAUD";
-      out[3] = "GBPAUD";
-      return 4;
+      return 3;
      }
    if(arbitration_group == "METALS")
      {
-      ArrayResize(out,4);
+      ArrayResize(out,3);
       out[0] = "GOLD.pro";
       out[1] = "SILVER.pro";
-      out[2] = "PLATIN.pro";
-      out[3] = "COPPER-US.pro";
-      return 4;
+      out[2] = "COPPER-US.pro";
+      return 3;
      }
    if(arbitration_group == "INDEX_EU")
      {
@@ -125,7 +123,7 @@ int MbGetCandidateArbitrationSymbols(const string arbitration_group,string &out[
 
 int MbGetCandidateArbitrationFleetSymbols(string &out[])
   {
-   ArrayResize(out,17);
+   ArrayResize(out,15);
    out[0] = "EURUSD";
    out[1] = "GBPUSD";
    out[2] = "USDCAD";
@@ -136,14 +134,12 @@ int MbGetCandidateArbitrationFleetSymbols(string &out[])
    out[7] = "EURJPY";
    out[8] = "GBPJPY";
    out[9] = "EURAUD";
-   out[10] = "GBPAUD";
-   out[11] = "GOLD.pro";
-   out[12] = "SILVER.pro";
-   out[13] = "PLATIN.pro";
-   out[14] = "COPPER-US.pro";
-   out[15] = "DE30.pro";
-   out[16] = "US500.pro";
-   return 17;
+   out[10] = "GOLD.pro";
+   out[11] = "SILVER.pro";
+   out[12] = "COPPER-US.pro";
+   out[13] = "DE30.pro";
+   out[14] = "US500.pro";
+   return 15;
   }
 
 bool MbIsCandidateArbitrationTrackedMagic(const ulong magic)
@@ -159,11 +155,8 @@ bool MbIsCandidateArbitrationTrackedMagic(const ulong magic)
       magic == 910108UL ||
       magic == 910109UL ||
       magic == 910110UL ||
-      magic == 910111UL ||
       magic == 920201UL ||
       magic == 920202UL ||
-      magic == 920203UL ||
-      magic == 920204UL ||
       magic == 930301UL ||
       magic == 930302UL
    );

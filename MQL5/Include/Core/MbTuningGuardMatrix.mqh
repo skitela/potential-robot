@@ -36,8 +36,7 @@ bool MbResolveTuningGuardFamily(const string family_or_symbol,string &out_family
       key == "FX_CROSS" ||
       key == "EURJPY" ||
       key == "GBPJPY" ||
-      key == "EURAUD" ||
-      key == "GBPAUD"
+      key == "EURAUD"
    )
      {
       out_family = "FX_CROSS";
@@ -56,7 +55,6 @@ bool MbResolveTuningGuardFamily(const string family_or_symbol,string &out_family
 
    if(
       key == "METALS_FUTURES" ||
-      key == "PLATIN" ||
       key == "COPPER-US" ||
       key == "COPPER-USPRO" ||
       key == "COPPER-USPRO,M5" ||

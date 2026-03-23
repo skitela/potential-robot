@@ -32,7 +32,6 @@ function Get-SymbolTimeoutSec {
     $overrides = @{
         "SILVER"    = 14400
         "GOLD"      = 10800
-        "PLATIN"    = 10800
         "COPPER-US" = 10800
         "US500"     = 10800
         "DE30"      = 10800
@@ -45,7 +44,6 @@ function Get-SymbolTimeoutSec {
             "GBPJPY"    = 21600
             "AUDUSD"    = 14400
             "COPPER-US" = 21600
-            "PLATIN"    = 21600
             "SILVER"    = 21600
             "GOLD"      = 21600
             "US500"     = 21600

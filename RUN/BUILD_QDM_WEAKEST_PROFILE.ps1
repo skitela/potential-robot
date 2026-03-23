@@ -138,18 +138,6 @@ function Get-QdmSpec {
                 notes = "weakest_dynamic_fx"
             }
         }
-        "GBPAUD" {
-            return [pscustomobject]@{
-                supported = $true
-                symbol = "GBPAUD"
-                datasource = "dukascopy"
-                datatype = "TICK"
-                date_from = "2016.01.01"
-                date_to = ""
-                mt5_export_name = "MB_GBPAUD_DUKA"
-                notes = "weakest_dynamic_fx"
-            }
-        }
         "GOLD" {
             return [pscustomobject]@{
                 supported = $true
@@ -208,12 +196,6 @@ function Get-QdmSpec {
                 date_to = ""
                 mt5_export_name = "MB_COPPER_DUKA"
                 notes = "weakest_dynamic_metals_problem"
-            }
-        }
-        "PLATIN" {
-            return [pscustomobject]@{
-                supported = $false
-                reason = "QDM CLI rejects XPT.CMD, XPT.CMD_dukascopy and XPTUSD in this installation; keep PLATIN on MT5/runtime fallback."
             }
         }
         "US500" {

@@ -5,6 +5,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1")
+
 $familyPath = Join-Path $ProjectRoot "CONFIG\\family_policy_registry.json"
 $variantPath = Join-Path $ProjectRoot "CONFIG\\strategy_variant_registry.json"
 $registryPath = Join-Path $ProjectRoot "CONFIG\\microbots_registry.json"
@@ -17,33 +19,51 @@ $variantRegistry = Get-Content -Raw -LiteralPath $variantPath | ConvertFrom-Json
 $microbotRegistry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json
 $matrix = Get-Content -Raw -LiteralPath $matrixPath | ConvertFrom-Json
 
-$variantBySymbol = @{}
-$variantByAlias = @{}
+function Resolve-VariantCanonicalSymbol {
+    param([object]$Variant)
+
+    foreach ($candidate in @([string]$Variant.alias_symbol, [string]$Variant.symbol)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        $entry = Find-RegistryEntryByAlias -Registry $microbotRegistry -Alias $candidate
+        if ($null -ne $entry) {
+            $canonical = Get-RegistryCanonicalSymbol -RegistryItem $entry
+            if (-not [string]::IsNullOrWhiteSpace($canonical)) {
+                return $canonical
+            }
+        }
+    }
+
+    if ($Variant.PSObject.Properties.Name -contains 'alias_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$Variant.alias_symbol)) {
+        return [string]$Variant.alias_symbol
+    }
+    return [string]$Variant.symbol
+}
+
+$variantByCanonical = @{}
 foreach ($variant in $variantRegistry.variants) {
-    $variantBySymbol[$variant.symbol] = $variant
-    if ($variant.PSObject.Properties.Name -contains 'alias_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$variant.alias_symbol)) {
-        $variantByAlias[[string]$variant.alias_symbol] = $variant
+    $canonical = Resolve-VariantCanonicalSymbol -Variant $variant
+    if (-not [string]::IsNullOrWhiteSpace($canonical)) {
+        $variantByCanonical[$canonical] = $variant
     }
 }
 
 $activeSymbols = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($item in $microbotRegistry.symbols) {
-    if ($item.PSObject.Properties.Name -contains 'symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.symbol)) {
-        [void]$activeSymbols.Add([string]$item.symbol)
-    }
-    if ($item.PSObject.Properties.Name -contains 'broker_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.broker_symbol)) {
-        [void]$activeSymbols.Add([string]$item.broker_symbol)
-    }
-    if ($item.PSObject.Properties.Name -contains 'code_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.code_symbol)) {
-        [void]$activeSymbols.Add([string]$item.code_symbol)
+    $canonical = Get-RegistryCanonicalSymbol -RegistryItem $item
+    if (-not [string]::IsNullOrWhiteSpace($canonical)) {
+        [void]$activeSymbols.Add($canonical)
     }
 }
 
 $references = @()
 foreach ($plan in $matrix.plans) {
     $sourceSymbol = [string]$plan.source_symbol
+    if ($sourceSymbol.EndsWith(".pro")) {
+        $sourceSymbol = $sourceSymbol.Substring(0, $sourceSymbol.Length - 4)
+    }
     $familyName = [string]$plan.family
-    $sourceVariant = $variantBySymbol[$sourceSymbol]
     $familySummary = $null
     foreach ($family in $familyRegistry.families) {
         if ($family.family -eq $familyName) {
@@ -65,10 +85,8 @@ foreach ($plan in $matrix.plans) {
         $sourceSymbol = [string]$activeTargets[0]
     }
 
-    $sourceVariant = if ($variantBySymbol.ContainsKey($sourceSymbol)) {
-        $variantBySymbol[$sourceSymbol]
-    } elseif ($variantByAlias.ContainsKey($sourceSymbol)) {
-        $variantByAlias[$sourceSymbol]
+    $sourceVariant = if ($variantByCanonical.ContainsKey($sourceSymbol)) {
+        $variantByCanonical[$sourceSymbol]
     } else {
         $null
     }

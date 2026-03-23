@@ -2,6 +2,7 @@
 #define MB_EXECUTION_TELEMETRY_INCLUDED
 
 #include "MbExecutionCommon.mqh"
+#include "MbRuntimeLogRotation.mqh"
 
 struct MbExecutionTelemetryRecord
   {
@@ -66,6 +67,7 @@ void MbExecutionTelemetryFlush()
    if(queued <= 0 || StringLen(g_mb_execution_telemetry_queue_path) <= 0)
       return;
 
+   MbRotateRuntimeLogIfOversized(g_mb_execution_telemetry_queue_path);
    int h = FileOpen(g_mb_execution_telemetry_queue_path, FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;
@@ -112,6 +114,7 @@ void MbAppendExecutionTelemetry(
       return;
      }
 
+   MbRotateRuntimeLogIfOversized(rel_path);
    int h = FileOpen(rel_path, FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;

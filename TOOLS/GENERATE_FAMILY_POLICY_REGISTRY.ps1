@@ -5,6 +5,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1")
+
 $variantPath = Join-Path $ProjectRoot "CONFIG\\strategy_variant_registry.json"
 $registryPath = Join-Path $ProjectRoot "CONFIG\\microbots_registry.json"
 $configPath = Join-Path $ProjectRoot "CONFIG\\family_policy_registry.json"
@@ -13,28 +15,40 @@ $evidencePath = Join-Path $ProjectRoot "EVIDENCE\\family_policy_registry_report.
 $variantRegistry = Get-Content -Raw -LiteralPath $variantPath | ConvertFrom-Json
 $microbotRegistry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json
 
+function Resolve-VariantCanonicalSymbol {
+    param([object]$Variant)
+
+    foreach ($candidate in @([string]$Variant.alias_symbol, [string]$Variant.symbol)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        $entry = Find-RegistryEntryByAlias -Registry $microbotRegistry -Alias $candidate
+        if ($null -ne $entry) {
+            $canonical = Get-RegistryCanonicalSymbol -RegistryItem $entry
+            if (-not [string]::IsNullOrWhiteSpace($canonical)) {
+                return $canonical
+            }
+        }
+    }
+
+    if ($Variant.PSObject.Properties.Name -contains 'alias_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$Variant.alias_symbol)) {
+        return [string]$Variant.alias_symbol
+    }
+    return [string]$Variant.symbol
+}
+
 $activeSymbols = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($item in $microbotRegistry.symbols) {
-    if ($item.PSObject.Properties.Name -contains 'symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.symbol)) {
-        [void]$activeSymbols.Add([string]$item.symbol)
-    }
-    if ($item.PSObject.Properties.Name -contains 'broker_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.broker_symbol)) {
-        [void]$activeSymbols.Add([string]$item.broker_symbol)
-    }
-    if ($item.PSObject.Properties.Name -contains 'code_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.code_symbol)) {
-        [void]$activeSymbols.Add([string]$item.code_symbol)
+    $canonical = Get-RegistryCanonicalSymbol -RegistryItem $item
+    if (-not [string]::IsNullOrWhiteSpace($canonical)) {
+        [void]$activeSymbols.Add($canonical)
     }
 }
 
 $activeVariants = @(
     $variantRegistry.variants | Where-Object {
-        $alias = if ($_.PSObject.Properties.Name -contains 'alias_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$_.alias_symbol)) {
-            [string]$_.alias_symbol
-        } else {
-            [string]$_.symbol
-        }
-
-        $activeSymbols.Contains([string]$_.symbol) -or $activeSymbols.Contains($alias)
+        $canonical = Resolve-VariantCanonicalSymbol -Variant $_
+        $activeSymbols.Contains($canonical)
     }
 )
 
@@ -46,7 +60,9 @@ foreach ($group in ($activeVariants | Group-Object { $_.profile.session_profile 
     $cautionTriggers = @($group.Group | ForEach-Object { [double]$_.decision.caution_trigger_abs } | Sort-Object -Unique)
     $readyTriggers = @($group.Group | ForEach-Object { [double]$_.decision.ready_trigger_abs } | Sort-Object -Unique)
     $setups = @($group.Group | ForEach-Object { $_.decision.setup_labels } | ForEach-Object { $_ } | Sort-Object -Unique)
-    $symbols = @($group.Group | ForEach-Object { $_.symbol } | Sort-Object)
+    $symbols = @($group.Group | ForEach-Object {
+        Resolve-VariantCanonicalSymbol -Variant $_
+    } | Sort-Object -Unique)
 
     $families += [ordered]@{
         family = $group.Name

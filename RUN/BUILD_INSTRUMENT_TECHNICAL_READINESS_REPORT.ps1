@@ -217,10 +217,6 @@ function Get-NextAction {
     }
 
     if ($Readiness -eq "MT5_FALLBACK_ONLY") {
-        if ($Alias -eq "PLATIN") {
-            return "Zostawic na MT5/runtime fallback albo probation; nie blokowac floty przez niedzialajacy QDM mapping."
-        }
-
         return "Pracowac przez MT5 fallback i obnizyc priorytet wobec pelnych sciezek QDM."
     }
 
