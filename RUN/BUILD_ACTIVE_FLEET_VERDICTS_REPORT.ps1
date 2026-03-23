@@ -4,6 +4,7 @@ param(
     [string]$PriorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
     [string]$OnnxRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_symbol_registry_latest.json",
     [string]$OnnxReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_micro_review_latest.json",
+    [string]$OnnxCrossAuditPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_micro_cross_audit_latest.json",
     [string]$ReadinessPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_technical_readiness_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
@@ -25,6 +26,7 @@ function Resolve-FleetVerdict {
     param(
         [string]$BusinessStatus,
         [string]$OnnxQuality,
+        [string]$OnnxCrossVerdict,
         [bool]$QdmReady,
         [string]$PriorityBand
     )
@@ -34,7 +36,10 @@ function Resolve-FleetVerdict {
     }
 
     if ($BusinessStatus -eq "TESTER_POSITIVE") {
-        if ($QdmReady -and $OnnxQuality -ne "FALLBACK_GLOBALNY" -and $OnnxQuality -ne "BRAK") {
+        if ($OnnxCrossVerdict -eq "DOSZKOLIC_MALY_MODEL") {
+            return "DOCISNAC"
+        }
+        if ($QdmReady -and $OnnxCrossVerdict -eq "GOTOWY_DO_ANALIZY_RUNTIME" -and $OnnxQuality -ne "FALLBACK_GLOBALNY" -and $OnnxQuality -ne "BRAK") {
             return "KANDYDAT_PAPER_LIVE"
         }
         return "DOCISNAC"
@@ -74,6 +79,12 @@ else {
 }
 $onnxReview = if (Test-Path -LiteralPath $OnnxReviewPath) {
     Get-Content -LiteralPath $OnnxReviewPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+else {
+    $null
+}
+$onnxCrossAudit = if (Test-Path -LiteralPath $OnnxCrossAuditPath) {
+    Get-Content -LiteralPath $OnnxCrossAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 else {
     $null
@@ -125,6 +136,16 @@ if ($null -ne $onnxReview -and $onnxReview.PSObject.Properties.Name -contains "i
     }
 }
 
+$onnxCrossMap = @{}
+if ($null -ne $onnxCrossAudit -and $onnxCrossAudit.PSObject.Properties.Name -contains "items") {
+    foreach ($item in @($onnxCrossAudit.items)) {
+        $alias = Normalize-SymbolAlias ([string]$item.symbol)
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            $onnxCrossMap[$alias] = $item
+        }
+    }
+}
+
 $readinessMap = @{}
 if ($null -ne $readinessReport -and $readinessReport.PSObject.Properties.Name -contains "entries") {
     foreach ($item in @($readinessReport.entries)) {
@@ -148,8 +169,9 @@ $verdicts = @(
             $priorityRank = if ($null -ne $profit) { [int]$profit.priority_rank } elseif ($null -ne $priority) { [int]$priority.rank } else { 999 }
             $onnxStatus = if ($null -ne $onnx) { [string]$onnx.status } else { "BRAK" }
             $onnxQuality = if ($onnxReviewMap.ContainsKey($alias)) { [string]$onnxReviewMap[$alias].jakosc_onnx } else { "BRAK" }
+            $onnxCrossVerdict = if ($onnxCrossMap.ContainsKey($alias)) { [string]$onnxCrossMap[$alias].werdykt_koncowy } else { "BRAK" }
             $qdmReady = if ($null -ne $profit) { [bool]$profit.qdm_custom_pilot_ready } elseif ($null -ne $readiness) { [string]$readiness.technical_readiness -eq "FULL_QDM_CUSTOM_READY" } else { $false }
-            $verdict = Resolve-FleetVerdict -BusinessStatus $businessStatus -OnnxQuality $onnxQuality -QdmReady $qdmReady -PriorityBand $priorityBand
+            $verdict = Resolve-FleetVerdict -BusinessStatus $businessStatus -OnnxQuality $onnxQuality -OnnxCrossVerdict $onnxCrossVerdict -QdmReady $qdmReady -PriorityBand $priorityBand
 
             [pscustomobject]@{
                 symbol_alias = $alias
@@ -160,6 +182,7 @@ $verdicts = @(
                 technical_readiness = if ($null -ne $readiness) { [string]$readiness.technical_readiness } else { "UNKNOWN" }
                 onnx_status = $onnxStatus
                 onnx_jakosc = $onnxQuality
+                onnx_krzyzowy_audyt = $onnxCrossVerdict
                 qdm_custom_gotowy = $qdmReady
                 tester_pnl_usd = if ($null -ne $profit) { $profit.best_tester_pnl } else { $null }
                 live_net_24h = if ($null -ne $profit) { $profit.live_net_24h } else { $null }
@@ -201,13 +224,14 @@ $lines.Add(("- obserwowac: {0}" -f $summary.obserwowac))
 $lines.Add(("- obnizyc_priorytet: {0}" -f $summary.obnizyc_priorytet))
 $lines.Add("")
 foreach ($item in @($verdicts)) {
-    $lines.Add(("- {0}: werdykt={1}, status={2}, profil={3}, onnx={4}, onnx_jakosc={5}, qdm={6}, tester_pnl_usd={7}, live_net_24h={8}, action={9}" -f
+    $lines.Add(("- {0}: werdykt={1}, status={2}, profil={3}, onnx={4}, onnx_jakosc={5}, onnx_audyt={6}, qdm={7}, tester_pnl_usd={8}, live_net_24h={9}, action={10}" -f
         $item.symbol_alias,
         $item.werdykt_koncowy,
         $item.business_status,
         $item.session_profile,
         $item.onnx_status,
         $item.onnx_jakosc,
+        $item.onnx_krzyzowy_audyt,
         $item.qdm_custom_gotowy,
         $item.tester_pnl_usd,
         $item.live_net_24h,

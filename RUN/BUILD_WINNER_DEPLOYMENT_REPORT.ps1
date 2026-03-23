@@ -3,6 +3,7 @@ param(
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$OnnxRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_symbol_registry_latest.json",
     [string]$OnnxReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_micro_review_latest.json",
+    [string]$OnnxCrossAuditPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_micro_cross_audit_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [double]$TesterCapitalUsd = 10000.0
 )
@@ -49,8 +50,17 @@ function Get-OnnxQuality {
 function Get-RolloutVerdict {
     param(
         [string]$OnnxQuality,
+        [string]$OnnxCrossVerdict,
         [bool]$QdmReady
     )
+
+    if ($OnnxCrossVerdict -eq "DOSZKOLIC_MALY_MODEL") {
+        return "DOSZKOLIC_ONNX_I_POTEM_PAPER_LIVE"
+    }
+
+    if ($OnnxCrossVerdict -in @("GOTOWY_DO_ZBIERANIA_OBSERWACJI", "OBSERWAC_I_DOSZKOLIC")) {
+        return "NAJPIERW_OBSERWACJA_ONNX"
+    }
 
     if ($QdmReady -and $OnnxQuality -in @("MOCNY", "DOBRY")) {
         return "GOTOWY_DO_PILOTA_PAPER_LIVE"
@@ -90,6 +100,12 @@ $onnxReview = if (Test-Path -LiteralPath $OnnxReviewPath) {
 else {
     $null
 }
+$onnxCrossAudit = if (Test-Path -LiteralPath $OnnxCrossAuditPath) {
+    Get-Content -LiteralPath $OnnxCrossAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+else {
+    $null
+}
 
 $activeMap = @{}
 foreach ($item in @($registry.symbols)) {
@@ -119,6 +135,16 @@ if ($null -ne $onnxReview -and $onnxReview.PSObject.Properties.Name -contains "i
     }
 }
 
+$onnxCrossMap = @{}
+if ($null -ne $onnxCrossAudit -and $onnxCrossAudit.PSObject.Properties.Name -contains "items") {
+    foreach ($item in @($onnxCrossAudit.items)) {
+        $alias = Normalize-SymbolAlias ([string]$item.symbol)
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            $onnxCrossMap[$alias] = $item
+        }
+    }
+}
+
 $winners = @(
     @($profitTracking.tester_positive) |
         Where-Object {
@@ -130,6 +156,8 @@ $winners = @(
             $alias = Normalize-SymbolAlias ([string]$_.symbol_alias)
             $onnxStatus = Get-OnnxStatus -OnnxMap $onnxMap -Alias $alias
             $onnxQuality = Get-OnnxQuality -OnnxReviewMap $onnxReviewMap -Alias $alias
+            $onnxCross = if ($onnxCrossMap.ContainsKey($alias)) { $onnxCrossMap[$alias] } else { $null }
+            $onnxCrossVerdict = if ($null -ne $onnxCross) { [string]$onnxCross.werdykt_koncowy } else { "BRAK" }
             [pscustomobject]@{
                 symbol_alias = $alias
                 session_profile = [string]$activeMap[$alias].session_profile
@@ -141,8 +169,15 @@ $winners = @(
                 qdm_custom_symbol = [string]$_.qdm_custom_symbol
                 status_onnx = $onnxStatus
                 jakosc_onnx = $onnxQuality
-                werdykt_rolloutu = Get-RolloutVerdict -OnnxQuality $onnxQuality -QdmReady ([bool]$_.qdm_custom_pilot_ready)
-                zalecenie = if ($onnxQuality -in @("MOCNY", "DOBRY")) {
+                werdykt_krzyzowego_audytu_onnx = $onnxCrossVerdict
+                werdykt_rolloutu = Get-RolloutVerdict -OnnxQuality $onnxQuality -OnnxCrossVerdict $onnxCrossVerdict -QdmReady ([bool]$_.qdm_custom_pilot_ready)
+                zalecenie = if ($onnxCrossVerdict -eq "GOTOWY_DO_ZBIERANIA_OBSERWACJI") {
+                    "utrzymac zwycieskie wejscia, ale najpierw zebrac obserwacje runtime malego onnx"
+                }
+                elseif ($onnxCrossVerdict -eq "DOSZKOLIC_MALY_MODEL") {
+                    "utrzymac zwycieskie wejscia i najpierw przebudowac lub doszkolic maly model"
+                }
+                elseif ($onnxQuality -in @("MOCNY", "DOBRY")) {
                     "utrzymac zwycieskie wejscia i przygotowac pilot paper-live"
                 }
                 elseif ($onnxQuality -eq "OSTROZNIE") {
@@ -188,6 +223,7 @@ foreach ($item in @($winners)) {
     $lines.Add(("- qdm_custom_gotowy: {0}" -f $item.qdm_custom_gotowy))
     $lines.Add(("- status_onnx: {0}" -f $item.status_onnx))
     $lines.Add(("- jakosc_onnx: {0}" -f $item.jakosc_onnx))
+    $lines.Add(("- werdykt_krzyzowego_audytu_onnx: {0}" -f $item.werdykt_krzyzowego_audytu_onnx))
     $lines.Add(("- werdykt_rolloutu: {0}" -f $item.werdykt_rolloutu))
     $lines.Add(("- zalecenie: {0}" -f $item.zalecenie))
     $lines.Add("")
