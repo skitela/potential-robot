@@ -505,6 +505,20 @@ def main() -> int:
     candidate_signals = collect_log_table(common_root, "candidate_signals.csv")
     manifest["datasets"]["candidate_signals"] = export_parquet_only(candidate_signals, "candidate_signals_latest", datasets_dir)
 
+    learning_observations_v2 = collect_log_table(common_root, "learning_observations_v2.csv")
+    manifest["datasets"]["learning_observations_v2"] = export_parquet_only(
+        learning_observations_v2,
+        "learning_observations_v2_latest",
+        datasets_dir,
+    )
+
+    onnx_observations = collect_log_table(common_root, "onnx_observations.csv")
+    manifest["datasets"]["onnx_observations"] = export_parquet_only(
+        onnx_observations,
+        "onnx_observations_latest",
+        datasets_dir,
+    )
+
     tuning_deckhand = collect_log_table(common_root, "tuning_deckhand.csv")
     manifest["datasets"]["tuning_deckhand"] = export_frame(tuning_deckhand, "tuning_deckhand_latest", datasets_dir)
 
@@ -530,6 +544,8 @@ def main() -> int:
             "tester_pass_frames": (datasets_dir / "tester_pass_frames_latest.parquet", int(manifest["datasets"]["tester_pass_frames"]["rows"])),
             "decision_events": (datasets_dir / "decision_events_latest.parquet", int(manifest["datasets"]["decision_events"]["rows"])),
             "candidate_signals": (datasets_dir / "candidate_signals_latest.parquet", int(manifest["datasets"]["candidate_signals"]["rows"])),
+            "learning_observations_v2": (datasets_dir / "learning_observations_v2_latest.parquet", int(manifest["datasets"]["learning_observations_v2"]["rows"])),
+            "onnx_observations": (datasets_dir / "onnx_observations_latest.parquet", int(manifest["datasets"]["onnx_observations"]["rows"])),
             "tuning_deckhand": (datasets_dir / "tuning_deckhand_latest.parquet", int(manifest["datasets"]["tuning_deckhand"]["rows"])),
             "tuning_reasoning": (datasets_dir / "tuning_reasoning_latest.parquet", int(manifest["datasets"]["tuning_reasoning"]["rows"])),
             "tester_summary": (datasets_dir / "tester_summary_latest.parquet", int(manifest["datasets"]["tester_summary"]["rows"])),
