@@ -213,7 +213,7 @@ function Get-QdmSpec {
         "PLATIN" {
             return [pscustomobject]@{
                 supported = $false
-                reason = "no stable QDM datasource mapped in our current flow; keep PLATIN on MT5/runtime fallback"
+                reason = "QDM CLI rejects XPT.CMD, XPT.CMD_dukascopy and XPTUSD in this installation; keep PLATIN on MT5/runtime fallback."
             }
         }
         "US500" {

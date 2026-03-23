@@ -33,7 +33,7 @@ function Get-QdmSpec {
         "DE30" { return [pscustomobject]@{ supported = $true; symbol = "DEUIDXEUR"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_DE30_DUKA"; notes = "registry_indices" } }
         "COPPER-US" { return [pscustomobject]@{ supported = $true; symbol = "COPPERCMDUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_COPPER_DUKA"; notes = "registry_metals_problem" } }
         "COPPERUS" { return [pscustomobject]@{ supported = $true; symbol = "COPPERCMDUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_COPPER_DUKA"; notes = "registry_metals_problem" } }
-        "PLATIN" { return [pscustomobject]@{ supported = $false; reason = "no stable QDM datasource mapped for PLATIN in current flow; use MT5/runtime fallback on laptop" } }
+        "PLATIN" { return [pscustomobject]@{ supported = $false; reason = "QDM CLI rejects XPT.CMD, XPT.CMD_dukascopy and XPTUSD in this installation; keep PLATIN on MT5/runtime fallback." } }
         "US500" { return [pscustomobject]@{ supported = $true; symbol = "USA500IDXUSD"; datasource = "dukascopy"; datatype = "TICK"; date_from = "2018.01.01"; date_to = ""; mt5_export_name = "MB_US500_DUKA"; notes = "registry_indices" } }
         default { return [pscustomobject]@{ supported = $false; reason = "no QDM mapping defined for alias" } }
     }
