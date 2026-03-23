@@ -8,6 +8,9 @@ param(
     [string]$SymbolFilter = "",
     [string]$ArtifactStem = "paper_gate_acceptor_latest",
     [string]$TeacherModelPath = "",
+    [switch]$ExportRuntimeNumeric,
+    [string]$RuntimeOutputRoot = "",
+    [string]$RuntimeArtifactStem = "",
     [int]$MinRows = 10000,
     [int]$MinPositiveRows = 500,
     [int]$MinNegativeRows = 500,
@@ -46,6 +49,15 @@ if (-not [string]::IsNullOrWhiteSpace($SymbolFilter)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($TeacherModelPath)) {
     $arguments += @("--teacher-model-path", $TeacherModelPath)
+}
+if ($ExportRuntimeNumeric) {
+    $arguments += "--export-runtime-numeric"
+}
+if (-not [string]::IsNullOrWhiteSpace($RuntimeOutputRoot)) {
+    $arguments += @("--runtime-output-root", $RuntimeOutputRoot)
+}
+if (-not [string]::IsNullOrWhiteSpace($RuntimeArtifactStem)) {
+    $arguments += @("--runtime-artifact-stem", $RuntimeArtifactStem)
 }
 
 & $ResearchPython @arguments

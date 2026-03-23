@@ -40,6 +40,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbol-filter", default="", help="Optional symbol alias filter for per-instrument training.")
     parser.add_argument("--artifact-stem", default="paper_gate_acceptor_latest", help="Base artifact name without extension.")
     parser.add_argument("--teacher-model-path", default="", help="Optional global teacher pipeline path for per-instrument training.")
+    parser.add_argument("--export-runtime-numeric", action="store_true", help="Also export a numeric-only runtime ONNX artifact.")
+    parser.add_argument("--runtime-output-root", default="", help="Optional output dir for runtime numeric artifacts.")
+    parser.add_argument("--runtime-artifact-stem", default="", help="Optional runtime artifact stem without extension.")
     parser.add_argument("--min-rows", type=int, default=10000, help="Minimum rows required to train the model.")
     parser.add_argument("--min-positive-rows", type=int, default=500, help="Minimum accepted=1 rows required to train the model.")
     parser.add_argument("--min-negative-rows", type=int, default=500, help="Minimum accepted=0 rows required to train the model.")
@@ -484,6 +487,90 @@ def attach_teacher_signal(
     return enriched, True
 
 
+def build_runtime_category_maps(
+    dataset: pd.DataFrame,
+    categorical_features: list[str],
+) -> dict[str, dict[str, int]]:
+    category_maps: dict[str, dict[str, int]] = {}
+    for feature_name in categorical_features:
+        values = sorted({str(v) for v in dataset[feature_name].dropna().tolist()})
+        category_maps[feature_name] = {value: index for index, value in enumerate(values)}
+    return category_maps
+
+
+def encode_runtime_matrix(
+    frame: pd.DataFrame,
+    categorical_features: list[str],
+    numeric_float_features: list[str],
+    numeric_int_features: list[str],
+    category_maps: dict[str, dict[str, int]],
+) -> tuple[np.ndarray, list[str]]:
+    columns: list[np.ndarray] = []
+    feature_names: list[str] = []
+
+    for feature_name in categorical_features:
+        mapping = category_maps.get(feature_name, {})
+        encoded = frame[feature_name].map(mapping).fillna(-1).astype("float32").to_numpy().reshape(-1, 1)
+        columns.append(encoded)
+        feature_names.append(feature_name)
+
+    for feature_name in numeric_float_features:
+        encoded = pd.to_numeric(frame[feature_name], errors="coerce").fillna(0.0).astype("float32").to_numpy().reshape(-1, 1)
+        columns.append(encoded)
+        feature_names.append(feature_name)
+
+    for feature_name in numeric_int_features:
+        encoded = pd.to_numeric(frame[feature_name], errors="coerce").fillna(0).astype("float32").to_numpy().reshape(-1, 1)
+        columns.append(encoded)
+        feature_names.append(feature_name)
+
+    matrix = np.hstack(columns).astype("float32") if columns else np.empty((len(frame.index), 0), dtype="float32")
+    return matrix, feature_names
+
+
+def build_runtime_numeric_pipeline() -> Pipeline:
+    classifier = SGDClassifier(
+        loss="log_loss",
+        penalty="elasticnet",
+        alpha=1e-5,
+        l1_ratio=0.15,
+        max_iter=30,
+        tol=1e-4,
+        random_state=42,
+    )
+    return Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            ("model", classifier),
+        ]
+    )
+
+
+def export_runtime_numeric_onnx(
+    pipeline: Pipeline,
+    output_path: Path,
+    sample_matrix: np.ndarray,
+) -> dict[str, Any]:
+    options = {id(pipeline.named_steps["model"]): {"zipmap": False}}
+    onx = convert_sklearn(
+        pipeline,
+        initial_types=[("features", FloatTensorType([None, sample_matrix.shape[1]]))],
+        target_opset=17,
+        options=options,
+    )
+    save_model(onx, str(output_path))
+
+    sample = sample_matrix[:5].astype(np.float32)
+    session = ort.InferenceSession(str(output_path), providers=["CPUExecutionProvider"])
+    outputs = session.run(None, {"features": sample})
+    return {
+        "onnx_path": str(output_path),
+        "session_inputs": [i.name for i in session.get_inputs()],
+        "session_outputs": [o.name for o in session.get_outputs()],
+        "sample_output_rows": int(len(outputs[1])) if len(outputs) > 1 else int(len(outputs[0])),
+    }
+
+
 def main() -> int:
     args = parse_args()
     db_path = Path(args.db_path)
@@ -599,6 +686,69 @@ def main() -> int:
             "report_path": str(report_path),
         },
     }
+
+    if args.export_runtime_numeric and symbol_filter:
+        runtime_output_root = ensure_dir(Path(args.runtime_output_root) if args.runtime_output_root.strip() else output_root)
+        runtime_artifact_stem = args.runtime_artifact_stem.strip() or f"{artifact_stem}_runtime"
+        runtime_category_maps = build_runtime_category_maps(dataset, categorical_features)
+        runtime_x_train, runtime_feature_names = encode_runtime_matrix(
+            train_df,
+            categorical_features,
+            numeric_float_features,
+            numeric_int_features,
+            runtime_category_maps,
+        )
+        runtime_x_test, _ = encode_runtime_matrix(
+            test_df,
+            categorical_features,
+            numeric_float_features,
+            numeric_int_features,
+            runtime_category_maps,
+        )
+        runtime_pipeline = build_runtime_numeric_pipeline()
+        runtime_pipeline.fit(runtime_x_train, y_train)
+        runtime_y_score = runtime_pipeline.predict_proba(runtime_x_test)[:, 1]
+        runtime_y_pred = (runtime_y_score >= 0.5).astype(int)
+        runtime_metrics = evaluate(y_test, runtime_y_pred, runtime_y_score)
+
+        runtime_joblib_path = runtime_output_root / f"{runtime_artifact_stem}.joblib"
+        runtime_onnx_path = runtime_output_root / f"{runtime_artifact_stem}.onnx"
+        runtime_manifest_path = runtime_output_root / f"{runtime_artifact_stem}_manifest.json"
+        runtime_metrics_path = runtime_output_root / f"{runtime_artifact_stem}_metrics.json"
+
+        joblib.dump(runtime_pipeline, runtime_joblib_path)
+        runtime_onnx_info = export_runtime_numeric_onnx(runtime_pipeline, runtime_onnx_path, runtime_x_test)
+
+        runtime_manifest: dict[str, Any] = {
+            "schema_version": "1.0",
+            "symbol": symbol_filter,
+            "feature_names": runtime_feature_names,
+            "categorical_features": categorical_features,
+            "numeric_float_features": numeric_float_features,
+            "numeric_int_features": numeric_int_features,
+            "category_maps": runtime_category_maps,
+            "teacher_feature_enabled": teacher_feature_enabled,
+            "source_kind": source_kind,
+            "train_rows": int(len(train_df.index)),
+            "test_rows": int(len(test_df.index)),
+        }
+        runtime_manifest_path.write_text(json.dumps(runtime_manifest, indent=2, ensure_ascii=True), encoding="utf-8")
+        runtime_metrics_path.write_text(json.dumps(runtime_metrics, indent=2, ensure_ascii=True), encoding="utf-8")
+
+        metadata["runtime_numeric"] = {
+            "enabled": True,
+            "metrics": runtime_metrics,
+            "manifest_path": str(runtime_manifest_path),
+            "metrics_path": str(runtime_metrics_path),
+            "joblib_path": str(runtime_joblib_path),
+            "onnx_path": str(runtime_onnx_path),
+            "onnx_info": runtime_onnx_info,
+            "feature_count": len(runtime_feature_names),
+        }
+    else:
+        metadata["runtime_numeric"] = {
+            "enabled": False,
+        }
 
     metrics_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
     report_path.write_text(markdown_report(metadata), encoding="utf-8")
