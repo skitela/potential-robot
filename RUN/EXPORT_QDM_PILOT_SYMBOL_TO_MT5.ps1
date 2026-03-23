@@ -8,12 +8,23 @@ param(
     [string]$DateTo = "2026.03.16",
     [string]$SpreadType = "points",
     [double]$SpreadValue = 2,
+    [int]$MaxBusyRetries = 6,
+    [int]$BusyRetryDelaySec = 20,
     [string]$OutputDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\QDM_PILOT",
     [string]$LatestStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\QDM_PILOT\qdm_export_pilot_latest.json"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Test-IsQdmBusyOutput {
+    param(
+        [string[]]$OutputLines
+    )
+
+    $joined = (($OutputLines | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+    return ($joined -match "another instance of QuantDataManager is running")
+}
 
 $qdmCli = Join-Path $QdmRoot "qdmcli.exe"
 if (-not (Test-Path -LiteralPath $qdmCli)) {
@@ -51,27 +62,47 @@ if ($Timeframe -ne "TICK") {
 
 $stdoutPath = Join-Path $OutputDir ("{0}__stdout.log" -f $ExportName)
 $stderrPath = Join-Path $OutputDir ("{0}__stderr.log" -f $ExportName)
-if (Test-Path -LiteralPath $stdoutPath) { Remove-Item -LiteralPath $stdoutPath -Force }
-if (Test-Path -LiteralPath $stderrPath) { Remove-Item -LiteralPath $stderrPath -Force }
-
-try {
-    $process = Start-Process -FilePath $qdmCli `
-        -ArgumentList $arguments `
-        -RedirectStandardOutput $stdoutPath `
-        -RedirectStandardError $stderrPath `
-        -Wait `
-        -PassThru `
-        -NoNewWindow
-    $qdmExitCode = $process.ExitCode
-}
-finally {
-}
-
+$qdmExitCode = -1
 $outputLines = @()
-foreach ($logPath in @($stdoutPath, $stderrPath)) {
-    if (Test-Path -LiteralPath $logPath) {
-        $outputLines += (Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue)
+$attemptCount = 0
+$busyRetryCount = 0
+
+for ($attempt = 1; $attempt -le ($MaxBusyRetries + 1); $attempt++) {
+    $attemptCount = $attempt
+    if (Test-Path -LiteralPath $stdoutPath) { Remove-Item -LiteralPath $stdoutPath -Force }
+    if (Test-Path -LiteralPath $stderrPath) { Remove-Item -LiteralPath $stderrPath -Force }
+
+    try {
+        $process = Start-Process -FilePath $qdmCli `
+            -ArgumentList $arguments `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+        $qdmExitCode = $process.ExitCode
     }
+    finally {
+    }
+
+    $outputLines = @()
+    foreach ($logPath in @($stdoutPath, $stderrPath)) {
+        if (Test-Path -LiteralPath $logPath) {
+            $outputLines += (Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue)
+        }
+    }
+
+    $isBusyOutput = Test-IsQdmBusyOutput -OutputLines $outputLines
+    if (-not $isBusyOutput) {
+        break
+    }
+
+    $busyRetryCount++
+    if ($attempt -ge ($MaxBusyRetries + 1)) {
+        break
+    }
+
+    Start-Sleep -Seconds $BusyRetryDelaySec
 }
 
 $csvExists = Test-Path -LiteralPath $exportCsvPath
@@ -95,6 +126,8 @@ $result = [ordered]@{
     csv_present = $csvExists
     row_count = $rowCount
     qdm_exit_code = $qdmExitCode
+    attempt_count = $attemptCount
+    busy_retry_count = $busyRetryCount
     output_dir = $OutputDir
     qdm_cli = $qdmCli
     stdout_log_path = $(if (Test-Path -LiteralPath $stdoutPath) { $stdoutPath } else { $null })

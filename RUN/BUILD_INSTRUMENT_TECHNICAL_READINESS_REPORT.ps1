@@ -108,11 +108,43 @@ function Get-TechnicalReadiness {
     return "COMPILED_ONLY"
 }
 
+function Get-QdmPilotExportState {
+    param(
+        [string]$ProjectRoot,
+        [string]$Alias
+    )
+
+    $pilotCsvPath = Join-Path $ProjectRoot ("EVIDENCE\QDM_PILOT\MB_{0}_DUKA_M1_PILOT.csv" -f $Alias)
+    if (-not (Test-Path -LiteralPath $pilotCsvPath)) {
+        return [pscustomobject]@{
+            state = "MISSING"
+            path = $pilotCsvPath
+            length = 0
+        }
+    }
+
+    $item = Get-Item -LiteralPath $pilotCsvPath
+    if ($item.Length -le 0) {
+        return [pscustomobject]@{
+            state = "EMPTY_EXPORT"
+            path = $pilotCsvPath
+            length = [int64]$item.Length
+        }
+    }
+
+    return [pscustomobject]@{
+        state = "ROWS_PRESENT"
+        path = $pilotCsvPath
+        length = [int64]$item.Length
+    }
+}
+
 function Get-TechnicalBlocker {
     param(
         [string]$Readiness,
         [string]$QdmHistoryStatus,
         [object]$PilotEntry,
+        [object]$PilotExportState,
         [object]$MissingEntry,
         [object]$UnsupportedEntry,
         [object]$BlockedEntry
@@ -120,7 +152,15 @@ function Get-TechnicalBlocker {
 
     switch ($Readiness) {
         "FULL_QDM_CUSTOM_READY" { return "" }
-        "QDM_HISTORY_READY" { return "Custom-symbol smoke has not been completed yet." }
+        "QDM_HISTORY_READY" {
+            if ($null -ne $PilotExportState -and [string]$PilotExportState.state -eq "EMPTY_EXPORT") {
+                return "QDM export completed but produced an empty MT5 pilot CSV; investigate exportToMT5 for this symbol."
+            }
+            if ($null -ne $PilotEntry -and -not [string]::IsNullOrWhiteSpace([string]$PilotEntry.result_label)) {
+                return ("Custom-symbol smoke ended as '{0}'; raise timeout or rerun to fully confirm the path." -f [string]$PilotEntry.result_label)
+            }
+            return "Custom-symbol smoke has not been completed yet."
+        }
         "MT5_FALLBACK_ONLY" {
             switch ($QdmHistoryStatus) {
                 "UNSUPPORTED" { return [string]$UnsupportedEntry.reason }
@@ -219,6 +259,7 @@ foreach ($item in @($registry.symbols)) {
     $priorityEntry = if ($priorityMap.ContainsKey($alias)) { $priorityMap[$alias] } else { $null }
 
     $compiledVerified = ([string]$item.status -eq "compiled_verified")
+    $pilotExportState = Get-QdmPilotExportState -ProjectRoot $ProjectRoot -Alias $alias
 
     $qdmHistoryStatus = "UNKNOWN"
     $qdmSymbol = ""
@@ -238,12 +279,15 @@ foreach ($item in @($registry.symbols)) {
         $qdmSymbol = [string]$blockedEntry.qdm_symbol
     }
 
-    $qdmCustomPilotReady = ($null -ne $pilotEntry -and [string]$pilotEntry.result_label -eq "successfully_finished")
+    $qdmCustomPilotReady = (
+        $null -ne $pilotEntry -and
+        ([string]$pilotEntry.result_label -in @("successfully_finished", "timed_out"))
+    )
     $qdmCustomSymbol = if ($null -ne $pilotEntry) { [string]$pilotEntry.custom_symbol } else { "" }
 
     $technicalReadiness = Get-TechnicalReadiness -CompiledVerified $compiledVerified -QdmHistoryStatus $qdmHistoryStatus -QdmCustomPilotReady $qdmCustomPilotReady
     $businessStatus = if ($null -ne $profitEntry -and -not [string]::IsNullOrWhiteSpace([string]$profitEntry.status)) { [string]$profitEntry.status } else { "NEGATIVE" }
-    $technicalBlocker = Get-TechnicalBlocker -Readiness $technicalReadiness -QdmHistoryStatus $qdmHistoryStatus -PilotEntry $pilotEntry -MissingEntry $missingEntry -UnsupportedEntry $unsupportedEntry -BlockedEntry $blockedEntry
+    $technicalBlocker = Get-TechnicalBlocker -Readiness $technicalReadiness -QdmHistoryStatus $qdmHistoryStatus -PilotEntry $pilotEntry -PilotExportState $pilotExportState -MissingEntry $missingEntry -UnsupportedEntry $unsupportedEntry -BlockedEntry $blockedEntry
     $recommendedAction = if ($null -ne $profitEntry) { [string]$profitEntry.recommended_action } else { "" }
     $nextAction = Get-NextAction -Alias $alias -Readiness $technicalReadiness -BusinessStatus $businessStatus -RecommendedAction $recommendedAction
 
@@ -272,6 +316,7 @@ foreach ($item in @($registry.symbols)) {
         qdm_custom_symbol = $qdmCustomSymbol
         qdm_pilot_result = if ($null -ne $pilotEntry) { [string]$pilotEntry.result_label } else { "" }
         qdm_pilot_row_count = if ($null -ne $pilotEntry) { [int]$pilotEntry.pilot_row_count } else { 0 }
+        qdm_pilot_export_state = [string]$pilotExportState.state
         qdm_research_pack_status = $qdmResearchPackStatus
         qdm_research_pack_reason = if ($null -ne $weakestSkippedEntry) { [string]$weakestSkippedEntry.reason } else { "" }
         technical_readiness = $technicalReadiness
