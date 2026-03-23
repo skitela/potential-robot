@@ -3,6 +3,7 @@ param(
     [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
     [string]$PriorityPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
+    [string]$ReadinessReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_technical_readiness_latest.json",
     [string]$MlHintsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\ml_tuning_hints_latest.json",
     [string]$PaperLiveFeedbackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$SessionMatrixPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\session_window_matrix_v1.json",
@@ -268,12 +269,17 @@ function Get-ResearchPriorityTier {
     param(
         [object]$PriorityEntry,
         [object]$ProfitEntry,
-        [bool]$QdmSupported
+        [bool]$QdmSupported,
+        [object]$ReadinessEntry
     )
 
     $status = Get-ProfitStatus -ProfitEntry $ProfitEntry
     $qdmCustomPilotReady = Test-QdmCustomPilotReady -PriorityEntry $PriorityEntry -ProfitEntry $ProfitEntry
     $trustState = if ($null -ne $PriorityEntry) { [string]$PriorityEntry.trust_state } else { "" }
+    $technicalReadiness = if ($null -ne $ReadinessEntry) { [string]$ReadinessEntry.technical_readiness } else { "" }
+
+    if ($technicalReadiness -eq "QDM_EXPORT_BLOCKED") { return 9 }
+    if ($technicalReadiness -eq "MT5_FALLBACK_ONLY") { return 10 }
 
     if ($status -eq "TESTER_POSITIVE" -and $qdmCustomPilotReady) { return 0 }
     if ($status -eq "TESTER_POSITIVE") { return 1 }
@@ -284,14 +290,15 @@ function Get-ResearchPriorityTier {
     if ($qdmCustomPilotReady) { return 6 }
     if ($QdmSupported -and $trustState -eq "TRUSTED") { return 7 }
     if ($QdmSupported) { return 8 }
-    return 9
+    return 10
 }
 
 function Get-ResearchPriorityScore {
     param(
         [object]$PriorityEntry,
         [object]$ProfitEntry,
-        [bool]$QdmSupported
+        [bool]$QdmSupported,
+        [object]$ReadinessEntry
     )
 
     $score = 0.0
@@ -356,6 +363,12 @@ function Get-ResearchPriorityScore {
         }
     }
 
+    $technicalReadiness = if ($null -ne $ReadinessEntry) { [string]$ReadinessEntry.technical_readiness } else { "" }
+    switch ($technicalReadiness) {
+        "QDM_EXPORT_BLOCKED" { $score -= 120.0 }
+        "MT5_FALLBACK_ONLY" { $score -= 160.0 }
+    }
+
     return [Math]::Round($score, 3)
 }
 
@@ -383,6 +396,11 @@ if (Test-Path -LiteralPath $PaperLiveFeedbackPath) {
 $profitTracking = $null
 if (Test-Path -LiteralPath $ProfitTrackingPath) {
     $profitTracking = Get-Content -LiteralPath $ProfitTrackingPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
+$readinessReport = $null
+if (Test-Path -LiteralPath $ReadinessReportPath) {
+    $readinessReport = Get-Content -LiteralPath $ReadinessReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
 $qdmProfilePath = Join-Path $EvidenceDir "qdm_weakest_profile_latest.json"
@@ -420,6 +438,16 @@ if ($null -ne $profitTracking) {
     }
 }
 
+$readinessMap = @{}
+if ($null -ne $readinessReport) {
+    foreach ($item in @($readinessReport.entries)) {
+        $key = [string]$item.symbol_alias
+        if (-not [string]::IsNullOrWhiteSpace($key) -and -not $readinessMap.ContainsKey($key)) {
+            $readinessMap[$key] = $item
+        }
+    }
+}
+
 $qdmIncludedMap = @{}
 foreach ($item in @($qdmProfile.included)) {
     $qdmIncludedMap[[string]$item.symbol_alias] = $item
@@ -435,10 +463,11 @@ foreach ($item in @($registry.symbols)) {
     $alias = [string]$item.symbol
     $priorityEntry = if ($priorityMap.ContainsKey($alias)) { $priorityMap[$alias] } else { $null }
     $profitEntry = if ($profitMap.ContainsKey($alias)) { $profitMap[$alias] } else { $null }
+    $readinessEntry = if ($readinessMap.ContainsKey($alias)) { $readinessMap[$alias] } else { $null }
     $qdmSupported = $qdmIncludedMap.ContainsKey($alias)
     $researchPriorityMap[$alias] = [pscustomobject]@{
-        tier = Get-ResearchPriorityTier -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported
-        score = Get-ResearchPriorityScore -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported
+        tier = Get-ResearchPriorityTier -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported -ReadinessEntry $readinessEntry
+        score = Get-ResearchPriorityScore -PriorityEntry $priorityEntry -ProfitEntry $profitEntry -QdmSupported $qdmSupported -ReadinessEntry $readinessEntry
         profit_status = Get-ProfitStatus -ProfitEntry $profitEntry
         qdm_custom_pilot_ready = Test-QdmCustomPilotReady -PriorityEntry $priorityEntry -ProfitEntry $profitEntry
     }
@@ -494,8 +523,33 @@ foreach ($groupName in $groupOrder) {
         $runtimeEntry = if ($runtimeMap.ContainsKey($alias)) { $runtimeMap[$alias] } else { $null }
         $mlEntry = if ($mlMap.ContainsKey($alias)) { $mlMap[$alias] } else { $null }
         $qdmEntry = if ($qdmIncludedMap.ContainsKey($alias)) { $qdmIncludedMap[$alias] } else { $null }
+        $readinessEntry = if ($readinessMap.ContainsKey($alias)) { $readinessMap[$alias] } else { $null }
         $researchPriority = $researchPriorityMap[$alias]
         $slot = $slots[$i]
+        $technicalReadiness = if ($null -ne $readinessEntry) { [string]$readinessEntry.technical_readiness } else { "UNKNOWN" }
+        $technicalBlocker = if ($null -ne $readinessEntry) { [string]$readinessEntry.technical_blocker } else { "" }
+        $researchDataLane = switch ($technicalReadiness) {
+            "FULL_QDM_CUSTOM_READY" { "QDM_PLUS_MT5" }
+            "QDM_HISTORY_READY" { "QDM_PREP_ONLY" }
+            "QDM_EXPORT_BLOCKED" { "MT5_RUNTIME_TESTER_FALLBACK" }
+            "MT5_FALLBACK_ONLY" { "MT5_RUNTIME_TESTER_FALLBACK" }
+            default { if ($null -ne $qdmEntry) { "QDM_PLUS_MT5" } else { "MT5_RUNTIME_TESTER_FALLBACK" } }
+        }
+        $qdmNote = if ($technicalReadiness -eq "QDM_EXPORT_BLOCKED" -and -not [string]::IsNullOrWhiteSpace($technicalBlocker)) {
+            $technicalBlocker
+        }
+        elseif ($null -ne $qdmEntry) {
+            "supported"
+        }
+        elseif ($qdmSkippedMap.ContainsKey($alias)) {
+            [string]$qdmSkippedMap[$alias]
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($technicalBlocker)) {
+            $technicalBlocker
+        }
+        else {
+            "no_qdm_mapping"
+        }
 
         $globalSlotIndex++
         $focusObjective = if ($null -ne $priorityEntry) {
@@ -516,6 +570,8 @@ foreach ($groupName in $groupOrder) {
             research_priority_score = [double]$researchPriority.score
             profit_status = [string]$researchPriority.profit_status
             qdm_custom_pilot_ready = [bool]$researchPriority.qdm_custom_pilot_ready
+            technical_readiness = $technicalReadiness
+            technical_blocker = $technicalBlocker
             priority_rank = if ($null -ne $priorityEntry) { [int]$priorityEntry.rank } else { 999 }
             priority_score = if ($null -ne $priorityEntry) { [double]$priorityEntry.priority_score } else { 0.0 }
             priority_band = if ($null -ne $priorityEntry) { [string]$priorityEntry.priority_band } else { "UNKNOWN" }
@@ -531,8 +587,8 @@ foreach ($groupName in $groupOrder) {
             qdm_symbol = if ($null -ne $qdmEntry) { [string]$qdmEntry.qdm_symbol } else { "" }
             qdm_datasource = if ($null -ne $qdmEntry) { [string]$qdmEntry.datasource } else { "" }
             qdm_export_name = if ($null -ne $qdmEntry) { [string]$qdmEntry.mt5_export_name } else { "" }
-            qdm_note = if ($null -ne $qdmEntry) { "supported" } elseif ($qdmSkippedMap.ContainsKey($alias)) { [string]$qdmSkippedMap[$alias] } else { "no_qdm_mapping" }
-            research_data_lane = if ($null -ne $qdmEntry) { "QDM_PLUS_MT5" } else { "MT5_RUNTIME_TESTER_FALLBACK" }
+            qdm_note = $qdmNote
+            research_data_lane = $researchDataLane
             slot_minutes = $SlotMinutes
             slot_index_in_group = [int]$slot.slot_index
             slot_window_id = [string]$slot.slot_window_id
@@ -640,13 +696,14 @@ foreach ($groupName in $groupOrder) {
     $lines.Add("")
     foreach ($row in $rows) {
         $qdmState = if ($row.qdm_supported) { ("QDM {0} via {1}" -f $row.qdm_symbol, $row.qdm_datasource) } else { ("QDM brak: {0}" -f $row.qdm_note) }
-        $lines.Add(("- slot #{0} {1} {2}: lane_tier={3}, lane_score={4}, profit_status={5}, rank={6}, trust={7}, cost={8}, live_net_24h={9}, ml_risk={10}, {11}" -f
+        $lines.Add(("- slot #{0} {1} {2}: lane_tier={3}, lane_score={4}, profit_status={5}, readiness={6}, rank={7}, trust={8}, cost={9}, live_net_24h={10}, ml_risk={11}, {12}" -f
             $row.slot_index_in_group,
             $row.slot_pl,
             $row.symbol_alias,
             $row.research_priority_tier,
             $row.research_priority_score,
             $(if ([string]::IsNullOrWhiteSpace([string]$row.profit_status)) { "NONE" } else { [string]$row.profit_status }),
+            $row.technical_readiness,
             $row.priority_rank,
             $row.trust_state,
             $row.cost_state,
@@ -654,6 +711,9 @@ foreach ($groupName in $groupOrder) {
             $row.ml_risk_score,
             $qdmState))
         $lines.Add(("  research_lane: {0}" -f $row.research_data_lane))
+        if (-not [string]::IsNullOrWhiteSpace([string]$row.technical_blocker)) {
+            $lines.Add(("  technical_blocker: {0}" -f $row.technical_blocker))
+        }
         $lines.Add(("  focus: {0}" -f $row.focus_objective))
         $lines.Add(("  mt5_followup: {0}" -f $row.mt5_followup_reason))
         $lines.Add(("  ml_hint: {0}" -f $row.ml_first_hint))

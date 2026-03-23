@@ -86,7 +86,8 @@ function Get-TechnicalReadiness {
     param(
         [bool]$CompiledVerified,
         [string]$QdmHistoryStatus,
-        [bool]$QdmCustomPilotReady
+        [bool]$QdmCustomPilotReady,
+        [object]$PilotExportState
     )
 
     if (-not $CompiledVerified) {
@@ -95,6 +96,14 @@ function Get-TechnicalReadiness {
 
     if ($QdmHistoryStatus -eq "PRESENT" -and $QdmCustomPilotReady) {
         return "FULL_QDM_CUSTOM_READY"
+    }
+
+    if (
+        $QdmHistoryStatus -eq "PRESENT" -and
+        $null -ne $PilotExportState -and
+        [string]$PilotExportState.state -eq "EMPTY_EXPORT"
+    ) {
+        return "QDM_EXPORT_BLOCKED"
     }
 
     if ($QdmHistoryStatus -eq "PRESENT") {
@@ -152,6 +161,9 @@ function Get-TechnicalBlocker {
 
     switch ($Readiness) {
         "FULL_QDM_CUSTOM_READY" { return "" }
+        "QDM_EXPORT_BLOCKED" {
+            return "QDM export completed but produced an empty MT5 pilot CSV; quarantine custom-symbol path and use MT5/runtime fallback until export anomaly is resolved."
+        }
         "QDM_HISTORY_READY" {
             if ($null -ne $PilotExportState -and [string]$PilotExportState.state -eq "EMPTY_EXPORT") {
                 return "QDM export completed but produced an empty MT5 pilot CSV; investigate exportToMT5 for this symbol."
@@ -198,6 +210,10 @@ function Get-NextAction {
 
     if ($Readiness -eq "QDM_HISTORY_READY") {
         return "Dopinac custom-symbol smoke, potem wlaczyc do pelnej sciezki QDM."
+    }
+
+    if ($Readiness -eq "QDM_EXPORT_BLOCKED") {
+        return "Odsunac od pelnej sciezki QDM custom, zostawic na MT5/runtime fallback albo probation i nie blokowac reszty floty."
     }
 
     if ($Readiness -eq "MT5_FALLBACK_ONLY") {
@@ -285,7 +301,7 @@ foreach ($item in @($registry.symbols)) {
     )
     $qdmCustomSymbol = if ($null -ne $pilotEntry) { [string]$pilotEntry.custom_symbol } else { "" }
 
-    $technicalReadiness = Get-TechnicalReadiness -CompiledVerified $compiledVerified -QdmHistoryStatus $qdmHistoryStatus -QdmCustomPilotReady $qdmCustomPilotReady
+    $technicalReadiness = Get-TechnicalReadiness -CompiledVerified $compiledVerified -QdmHistoryStatus $qdmHistoryStatus -QdmCustomPilotReady $qdmCustomPilotReady -PilotExportState $pilotExportState
     $businessStatus = if ($null -ne $profitEntry -and -not [string]::IsNullOrWhiteSpace([string]$profitEntry.status)) { [string]$profitEntry.status } else { "NEGATIVE" }
     $technicalBlocker = Get-TechnicalBlocker -Readiness $technicalReadiness -QdmHistoryStatus $qdmHistoryStatus -PilotEntry $pilotEntry -PilotExportState $pilotExportState -MissingEntry $missingEntry -UnsupportedEntry $unsupportedEntry -BlockedEntry $blockedEntry
     $recommendedAction = if ($null -ne $profitEntry) { [string]$profitEntry.recommended_action } else { "" }
@@ -338,6 +354,7 @@ foreach ($item in @($registry.symbols)) {
 
 $entryArray = @($entries.ToArray())
 $fullQdmCustomReady = @($entryArray | Where-Object { $_.technical_readiness -eq "FULL_QDM_CUSTOM_READY" } | Sort-Object priority_rank, symbol_alias)
+$qdmExportBlocked = @($entryArray | Where-Object { $_.technical_readiness -eq "QDM_EXPORT_BLOCKED" } | Sort-Object priority_rank, symbol_alias)
 $qdmHistoryReady = @($entryArray | Where-Object { $_.technical_readiness -eq "QDM_HISTORY_READY" } | Sort-Object priority_rank, symbol_alias)
 $fallbackOnly = @($entryArray | Where-Object { $_.technical_readiness -eq "MT5_FALLBACK_ONLY" } | Sort-Object priority_rank, symbol_alias)
 $compiledOnly = @($entryArray | Where-Object { $_.technical_readiness -eq "COMPILED_ONLY" } | Sort-Object priority_rank, symbol_alias)
@@ -357,6 +374,7 @@ $report = [ordered]@{
         total_symbols = $entryArray.Count
         compiled_verified_count = @($entryArray | Where-Object { $_.compiled_verified }).Count
         full_qdm_custom_ready_count = $fullQdmCustomReady.Count
+        qdm_export_blocked_count = $qdmExportBlocked.Count
         qdm_history_ready_count = $qdmHistoryReady.Count
         fallback_only_count = $fallbackOnly.Count
         compiled_only_count = $compiledOnly.Count
@@ -366,6 +384,7 @@ $report = [ordered]@{
         live_positive_count = @($entryArray | Where-Object { $_.business_status -eq "LIVE_POSITIVE" }).Count
     }
     full_qdm_custom_ready = $fullQdmCustomReady
+    qdm_export_blocked = $qdmExportBlocked
     qdm_history_ready = $qdmHistoryReady
     fallback_only = $fallbackOnly
     compiled_only = $compiledOnly
@@ -389,6 +408,7 @@ $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- total_symbols: {0}" -f $report.summary.total_symbols))
 $lines.Add(("- compiled_verified_count: {0}" -f $report.summary.compiled_verified_count))
 $lines.Add(("- full_qdm_custom_ready_count: {0}" -f $report.summary.full_qdm_custom_ready_count))
+$lines.Add(("- qdm_export_blocked_count: {0}" -f $report.summary.qdm_export_blocked_count))
 $lines.Add(("- qdm_history_ready_count: {0}" -f $report.summary.qdm_history_ready_count))
 $lines.Add(("- fallback_only_count: {0}" -f $report.summary.fallback_only_count))
 $lines.Add(("- tester_positive_count: {0}" -f $report.summary.tester_positive_count))
@@ -398,6 +418,7 @@ $lines.Add("")
 
 $sections = @(
     @{ title = "Full QDM Custom Ready"; items = $fullQdmCustomReady },
+    @{ title = "QDM Export Blocked"; items = $qdmExportBlocked },
     @{ title = "QDM History Ready"; items = $qdmHistoryReady },
     @{ title = "Fallback Only"; items = $fallbackOnly },
     @{ title = "Compiled Only"; items = $compiledOnly },
