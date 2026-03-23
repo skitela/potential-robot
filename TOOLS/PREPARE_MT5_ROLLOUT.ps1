@@ -3,7 +3,8 @@ param(
     [string]$UsbRoot = "C:\GLOBALNY HANDEL VER1\OANDAKEY",
     [switch]$SkipCompile,
     [switch]$SkipPackage,
-    [switch]$SkipTokenSync
+    [switch]$SkipTokenSync,
+    [switch]$AllowBlockedAuditGate
 )
 
 Set-StrictMode -Version Latest
@@ -26,6 +27,13 @@ function Invoke-Step {
 }
 
 $steps = @()
+
+$steps += Invoke-Step -Name "assert_audit_rollout_gate" -Action {
+    & (Join-Path $ProjectRoot "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
+        -ProjectRoot $ProjectRoot `
+        -GateType ROLLOUT `
+        -AllowBlocked:$AllowBlockedAuditGate | Out-Null
+}
 
 if (-not $SkipTokenSync) {
     $steps += Invoke-Step -Name "sync_tokens" -Action {
