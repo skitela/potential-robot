@@ -687,7 +687,7 @@ def main() -> int:
         },
     }
 
-    if args.export_runtime_numeric and symbol_filter:
+    if args.export_runtime_numeric:
         runtime_output_root = ensure_dir(Path(args.runtime_output_root) if args.runtime_output_root.strip() else output_root)
         runtime_artifact_stem = args.runtime_artifact_stem.strip() or f"{artifact_stem}_runtime"
         runtime_category_maps = build_runtime_category_maps(dataset, categorical_features)
@@ -721,7 +721,7 @@ def main() -> int:
 
         runtime_manifest: dict[str, Any] = {
             "schema_version": "1.0",
-            "symbol": symbol_filter,
+            "symbol": (symbol_filter or "GLOBAL"),
             "feature_names": runtime_feature_names,
             "categorical_features": categorical_features,
             "numeric_float_features": numeric_float_features,
