@@ -24,7 +24,6 @@
     {
       "family": "METALS_FUTURES",
       "symbols": [
-        "PLATIN.pro",
         "COPPER-US.pro"
       ],
       "role": "industrial_futures_like",

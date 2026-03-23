@@ -31,8 +31,7 @@ $symbols = @(
     "NZDUSD",
     "EURJPY",
     "GBPJPY",
-    "EURAUD",
-    "GBPAUD"
+    "EURAUD"
 )
 
 $workers = @(

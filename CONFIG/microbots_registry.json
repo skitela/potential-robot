@@ -113,17 +113,6 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "GBPAUD",
-      "broker_symbol": "GBPAUD.pro",
-      "code_symbol": "GBPAUD",
-      "expert": "MicroBot_GBPAUD",
-      "preset": "MicroBot_GBPAUD_Live.set",
-      "magic": 910111,
-      "chart_tf": "M5",
-      "session_profile": "FX_CROSS",
-      "status": "compiled_verified"
-    },
-    {
       "symbol": "GOLD",
       "broker_symbol": "GOLD.pro",
       "code_symbol": "GOLD",
@@ -143,17 +132,6 @@
       "magic": 920202,
       "chart_tf": "M5",
       "session_profile": "METALS_SPOT_PM",
-      "status": "compiled_verified"
-    },
-    {
-      "symbol": "PLATIN",
-      "broker_symbol": "PLATIN.pro",
-      "code_symbol": "PLATIN",
-      "expert": "MicroBot_PLATIN",
-      "preset": "MicroBot_PLATIN_Live.set",
-      "magic": 920203,
-      "chart_tf": "M5",
-      "session_profile": "METALS_FUTURES",
       "status": "compiled_verified"
     },
     {

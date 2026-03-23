@@ -1,5 +1,6 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
+    [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
     [string]$StateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state",
     [string]$RuntimeReviewPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$QdmPilotRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_registry_latest.json",
@@ -455,6 +456,21 @@ function Get-BestTesterSummaries {
 
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 
+if (-not (Test-Path -LiteralPath $RegistryPath)) {
+    throw "Registry not found: $RegistryPath"
+}
+
+$registry = Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$activeAliases = @{}
+foreach ($registryItem in @($registry.symbols)) {
+    foreach ($candidate in @([string]$registryItem.symbol, [string]$registryItem.broker_symbol, [string]$registryItem.code_symbol)) {
+        $normalizedCandidate = Normalize-SymbolAlias $candidate
+        if (-not [string]::IsNullOrWhiteSpace($normalizedCandidate)) {
+            $activeAliases[$normalizedCandidate] = $true
+        }
+    }
+}
+
 $runtimeReview = $null
 if (Test-Path -LiteralPath $RuntimeReviewPath) {
     $runtimeReview = Get-Content -LiteralPath $RuntimeReviewPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -502,6 +518,9 @@ Get-ChildItem -Path $StateRoot -Directory -ErrorAction Stop | ForEach-Object {
 
     $alias = Normalize-SymbolAlias (Get-FirstValue -Object $summary -Names @("symbol", "storage_alias", "symbol_alias"))
     if ([string]::IsNullOrWhiteSpace($alias)) {
+        return
+    }
+    if (-not $activeAliases.ContainsKey($alias)) {
         return
     }
 

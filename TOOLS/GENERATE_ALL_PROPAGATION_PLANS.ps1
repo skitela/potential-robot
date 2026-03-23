@@ -22,7 +22,7 @@ $preferredSources = @{
     "FX_ASIA"         = "USDJPY"
     "FX_CROSS"        = "EURJPY"
     "METALS_SPOT_PM"  = "GOLD.pro"
-    "METALS_FUTURES"  = "PLATIN.pro"
+    "METALS_FUTURES"  = "COPPER-US.pro"
     "INDEX_EU"        = "DE30.pro"
     "INDEX_US"        = "US500.pro"
 }

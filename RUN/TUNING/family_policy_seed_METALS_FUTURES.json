@@ -1,110 +1,84 @@
-﻿{
-    "family":  "METALS_FUTURES",
-    "source_symbol":  "PLATIN.pro",
-    "symbols":  [
-                    "COPPER-US.pro",
-                    "PLATIN.pro"
-                ],
-    "trusted_data":  false,
-    "trust_reason":  "NO_TRUSTED_SYMBOLS",
-    "freeze_new_changes":  true,
-    "symbol_count":  2,
-    "trusted_symbol_count":  0,
-    "degraded_symbol_count":  0,
-    "chaos_symbol_count":  0,
-    "bad_spread_symbol_count":  0,
-    "total_samples":  0,
-    "dominant_confidence_cap":  1,
-    "dominant_risk_cap":  1,
-    "breakout_family_tax":  0,
-    "trend_family_tax":  0,
-    "rejection_range_boost":  0,
-    "action_code":  "FREEZE_FAMILY",
-    "family_invariants":  {
-                              "trade_tf":  "PERIOD_M5",
-                              "atr_period":  "14",
-                              "rsi_period":  "14",
-                              "uses_new_bar_gate":  "True",
-                              "has_live_manage_position":  "True"
-                          },
-    "family_allowed_ranges":  {
-                                  "trade_window_start_hour":  {
-                                                                  "min":  14,
-                                                                  "max":  14
-                                                              },
-                                  "trade_window_end_hour":  {
-                                                                "min":  17,
-                                                                "max":  17
-                                                            },
-                                  "max_spread_points":  {
-                                                            "min":  190,
-                                                            "max":  200
-                                                        },
-                                  "caution_trigger_abs":  {
-                                                              "min":  1.04,
-                                                              "max":  1.08
-                                                          },
-                                  "ready_trigger_abs":  {
-                                                            "min":  0.86,
-                                                            "max":  0.9
-                                                        }
-                              },
-    "family_allowed_setup_labels":  [
-                                        "SETUP_BREAKOUT",
-                                        "SETUP_PULLBACK",
-                                        "SETUP_RANGE",
-                                        "SETUP_TREND"
-                                    ],
-    "snapshots":  [
-                      {
-                          "symbol":  "COPPER-US.pro",
-                          "family":  "METALS_FUTURES",
-                          "runtime_present":  false,
-                          "local_policy_present":  false,
-                          "local_policy_trusted":  false,
-                          "learning_sample_count":  0,
-                          "learning_win_count":  0,
-                          "learning_loss_count":  0,
-                          "loss_ratio":  0,
-                          "loss_streak":  0,
-                          "adaptive_risk_scale":  1,
-                          "market_regime":  "UNKNOWN",
-                          "spread_regime":  "UNKNOWN",
-                          "execution_regime":  "UNKNOWN",
-                          "last_setup_type":  "NONE",
-                          "confidence_cap":  1,
-                          "risk_cap":  1,
-                          "breakout_tax":  0,
-                          "trend_tax":  0,
-                          "rejection_boost":  0,
-                          "trust_reason":  "MISSING",
-                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US.pro\\runtime_state.csv",
-                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US.pro\\tuning_policy.csv"
-                      },
-                      {
-                          "symbol":  "PLATIN.pro",
-                          "family":  "METALS_FUTURES",
-                          "runtime_present":  false,
-                          "local_policy_present":  false,
-                          "local_policy_trusted":  false,
-                          "learning_sample_count":  0,
-                          "learning_win_count":  0,
-                          "learning_loss_count":  0,
-                          "loss_ratio":  0,
-                          "loss_streak":  0,
-                          "adaptive_risk_scale":  1,
-                          "market_regime":  "UNKNOWN",
-                          "spread_regime":  "UNKNOWN",
-                          "execution_regime":  "UNKNOWN",
-                          "last_setup_type":  "NONE",
-                          "confidence_cap":  1,
-                          "risk_cap":  1,
-                          "breakout_tax":  0,
-                          "trend_tax":  0,
-                          "rejection_boost":  0,
-                          "trust_reason":  "MISSING",
-                          "runtime_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\PLATIN.pro\\runtime_state.csv",
-                          "local_policy_path":  "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\PLATIN.pro\\tuning_policy.csv"
-                      }
-                  ]
+{
+  "family": "METALS_FUTURES",
+  "source_symbol": "COPPER-US.pro",
+  "symbols": [
+    "COPPER-US.pro"
+  ],
+  "trusted_data": false,
+  "trust_reason": "NO_TRUSTED_SYMBOLS",
+  "freeze_new_changes": true,
+  "symbol_count": 1,
+  "trusted_symbol_count": 0,
+  "degraded_symbol_count": 0,
+  "chaos_symbol_count": 0,
+  "bad_spread_symbol_count": 0,
+  "total_samples": 0.0,
+  "dominant_confidence_cap": 1.0,
+  "dominant_risk_cap": 1.0,
+  "breakout_family_tax": 0.0,
+  "trend_family_tax": 0.0,
+  "rejection_range_boost": 0.0,
+  "action_code": "FREEZE_FAMILY",
+  "family_invariants": {
+    "trade_tf": "PERIOD_M5",
+    "atr_period": "14",
+    "rsi_period": "14",
+    "uses_new_bar_gate": "True",
+    "has_live_manage_position": "True"
+  },
+  "family_allowed_ranges": {
+    "trade_window_start_hour": {
+      "min": 14,
+      "max": 14
+    },
+    "trade_window_end_hour": {
+      "min": 17,
+      "max": 17
+    },
+    "max_spread_points": {
+      "min": 190,
+      "max": 200
+    },
+    "caution_trigger_abs": {
+      "min": 1.04,
+      "max": 1.08
+    },
+    "ready_trigger_abs": {
+      "min": 0.86,
+      "max": 0.9
+    }
+  },
+  "family_allowed_setup_labels": [
+    "SETUP_BREAKOUT",
+    "SETUP_PULLBACK",
+    "SETUP_RANGE",
+    "SETUP_TREND"
+  ],
+  "snapshots": [
+    {
+      "symbol": "COPPER-US.pro",
+      "family": "METALS_FUTURES",
+      "runtime_present": false,
+      "local_policy_present": false,
+      "local_policy_trusted": false,
+      "learning_sample_count": 0,
+      "learning_win_count": 0,
+      "learning_loss_count": 0,
+      "loss_ratio": 0.0,
+      "loss_streak": 0,
+      "adaptive_risk_scale": 1.0,
+      "market_regime": "UNKNOWN",
+      "spread_regime": "UNKNOWN",
+      "execution_regime": "UNKNOWN",
+      "last_setup_type": "NONE",
+      "confidence_cap": 1.0,
+      "risk_cap": 1.0,
+      "breakout_tax": 0.0,
+      "trend_tax": 0.0,
+      "rejection_boost": 0.0,
+      "trust_reason": "MISSING",
+      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US.pro\\runtime_state.csv",
+      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US.pro\\tuning_policy.csv"
+    }
+  ]
 }

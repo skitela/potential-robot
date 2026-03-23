@@ -52,7 +52,6 @@
                          "symbols":  [
                                          "EURAUD",
                                          "EURJPY",
-                                         "GBPAUD",
                                          "GBPJPY"
                                      ],
                          "invariants":  {
@@ -220,8 +219,7 @@
                      {
                          "family":  "METALS_FUTURES",
                          "symbols":  [
-                                         "COPPER-US.pro",
-                                         "PLATIN.pro"
+                                         "COPPER-US.pro"
                                      ],
                          "invariants":  {
                                             "trade_tf":  "PERIOD_M5",

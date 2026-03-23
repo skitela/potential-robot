@@ -9,7 +9,7 @@ param(
     [string]$ResearchPlanPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_intensive_research_plan_latest.json",
     [switch]$UsePriorityReport = $true,
     [string]$PriorityReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\tuning_priority_latest.json",
-    [int]$PriorityCount = 17
+    [int]$PriorityCount = 15
 )
 
 Set-StrictMode -Version Latest
@@ -115,12 +115,10 @@ if ($symbols.Count -eq 0) {
         "NZDUSD",
         "GBPJPY",
         "SILVER",
-        "PLATIN",
         "DE30",
         "GOLD",
         "EURAUD",
         "COPPER-US",
-        "GBPAUD",
         "AUDUSD",
         "EURJPY",
         "US500",
