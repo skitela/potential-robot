@@ -14,6 +14,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build feedback-loop report for runtime ONNX observations.")
     parser.add_argument("--db-path", default=r"C:\TRADING_DATA\RESEARCH\microbot_research.duckdb")
     parser.add_argument("--output-root", default=r"C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS")
+    parser.add_argument(
+        "--runtime-logs-root",
+        default=r"C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\logs",
+    )
     parser.add_argument("--outcome-horizon-sec", type=int, default=21600)
     parser.add_argument("--score-threshold", type=float, default=0.5)
     return parser.parse_args()
@@ -22,6 +26,37 @@ def parse_args() -> argparse.Namespace:
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def scan_runtime_bootstrap(runtime_logs_root: Path) -> list[dict[str, Any]]:
+    if not runtime_logs_root.exists():
+        return []
+
+    items: list[dict[str, Any]] = []
+    for csv_path in sorted(runtime_logs_root.glob("*/onnx_observations.csv")):
+        symbol_alias = csv_path.parent.name
+        line_count = 0
+        try:
+            with csv_path.open("r", encoding="utf-8") as handle:
+                for _ in handle:
+                    line_count += 1
+        except OSError:
+            continue
+
+        data_rows = max(0, line_count - 1)
+        items.append(
+            {
+                "symbol_alias": symbol_alias,
+                "csv_path": str(csv_path),
+                "file_size_bytes": int(csv_path.stat().st_size),
+                "line_count": line_count,
+                "data_rows": data_rows,
+                "runtime_initialized": line_count >= 1,
+                "has_runtime_rows": data_rows > 0,
+            }
+        )
+
+    return items
 
 
 def table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
@@ -37,7 +72,15 @@ def table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
     return row is not None
 
 
-def empty_report(output_root: Path, db_path: Path, reason: str, horizon_sec: int, score_threshold: float) -> dict[str, Any]:
+def empty_report(
+    output_root: Path,
+    db_path: Path,
+    reason: str,
+    horizon_sec: int,
+    score_threshold: float,
+    runtime_bootstrap_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    runtime_bootstrap_items = runtime_bootstrap_items or []
     report = {
         "generated_at_local": pd.Timestamp.now(tz="Europe/Warsaw").strftime("%Y-%m-%d %H:%M:%S"),
         "generated_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
@@ -51,8 +94,16 @@ def empty_report(output_root: Path, db_path: Path, reason: str, horizon_sec: int
             "liczba_obserwacji_z_kandydatem": 0,
             "liczba_obserwacji_z_wynikiem_rynku": 0,
             "liczba_symboli": 0,
+            "liczba_symboli_z_plikiem_runtime": len(runtime_bootstrap_items),
+            "liczba_symboli_zainicjalizowanych_runtime": sum(
+                1 for item in runtime_bootstrap_items if item["runtime_initialized"]
+            ),
+            "liczba_symboli_z_wierszem_runtime": sum(
+                1 for item in runtime_bootstrap_items if item["has_runtime_rows"]
+            ),
         },
         "powod_braku_danych": reason,
+        "runtime_bootstrap": runtime_bootstrap_items,
         "items": [],
     }
     write_report(report, output_root)
@@ -79,11 +130,29 @@ def write_report(report: dict[str, Any], output_root: Path) -> None:
         f"- liczba_obserwacji_z_kandydatem: {report['summary']['liczba_obserwacji_z_kandydatem']}",
         f"- liczba_obserwacji_z_wynikiem_rynku: {report['summary']['liczba_obserwacji_z_wynikiem_rynku']}",
         f"- liczba_symboli: {report['summary']['liczba_symboli']}",
+        f"- liczba_symboli_z_plikiem_runtime: {report['summary'].get('liczba_symboli_z_plikiem_runtime', 0)}",
+        f"- liczba_symboli_zainicjalizowanych_runtime: {report['summary'].get('liczba_symboli_zainicjalizowanych_runtime', 0)}",
+        f"- liczba_symboli_z_wierszem_runtime: {report['summary'].get('liczba_symboli_z_wierszem_runtime', 0)}",
     ]
 
     reason = report.get("powod_braku_danych")
     if reason:
         lines.extend(["", f"- powod_braku_danych: {reason}"])
+
+    runtime_bootstrap = report.get("runtime_bootstrap", [])
+    if runtime_bootstrap:
+        lines.extend(["", "## Inicjalizacja Runtime", ""])
+        for item in runtime_bootstrap:
+            lines.extend(
+                [
+                    f"### {item['symbol_alias']}",
+                    f"- runtime_initialized: {item['runtime_initialized']}",
+                    f"- has_runtime_rows: {item['has_runtime_rows']}",
+                    f"- data_rows: {item['data_rows']}",
+                    f"- file_size_bytes: {item['file_size_bytes']}",
+                    "",
+                ]
+            )
 
     if report["items"]:
         lines.extend(["", "## Symbole", ""])
@@ -115,9 +184,18 @@ def main() -> int:
     args = parse_args()
     db_path = Path(args.db_path)
     output_root = ensure_dir(Path(args.output_root))
+    runtime_logs_root = Path(args.runtime_logs_root)
+    runtime_bootstrap_items = scan_runtime_bootstrap(runtime_logs_root)
 
     if not db_path.exists():
-        empty_report(output_root, db_path, "brak_bazy_duckdb", args.outcome_horizon_sec, args.score_threshold)
+        empty_report(
+            output_root,
+            db_path,
+            "brak_bazy_duckdb",
+            args.outcome_horizon_sec,
+            args.score_threshold,
+            runtime_bootstrap_items,
+        )
         return 0
 
     with duckdb.connect(str(db_path), read_only=True) as con:
@@ -130,12 +208,26 @@ def main() -> int:
                 f"brak_tabel: {', '.join(missing_tables)}",
                 args.outcome_horizon_sec,
                 args.score_threshold,
+                runtime_bootstrap_items,
             )
             return 0
 
         onnx_rows = int(con.execute("SELECT COUNT(*) FROM onnx_observations").fetchone()[0])
         if onnx_rows <= 0:
-            empty_report(output_root, db_path, "brak_obserwacji_onnx", args.outcome_horizon_sec, args.score_threshold)
+            reason = "brak_obserwacji_onnx"
+            if runtime_bootstrap_items:
+                if any(item["has_runtime_rows"] for item in runtime_bootstrap_items):
+                    reason = "runtime_ma_wiersze_ale_brak_eksportu_onnx"
+                elif any(item["runtime_initialized"] for item in runtime_bootstrap_items):
+                    reason = "runtime_onnx_zainicjalizowany_oczekuje_na_pierwsze_wiersze"
+            empty_report(
+                output_root,
+                db_path,
+                reason,
+                args.outcome_horizon_sec,
+                args.score_threshold,
+                runtime_bootstrap_items,
+            )
             return 0
 
         query = f"""
@@ -369,6 +461,11 @@ def main() -> int:
         "liczba_obserwacji_z_kandydatem": int(summary_row[3] or 0),
         "liczba_obserwacji_z_wynikiem_rynku": int(summary_row[4] or 0),
         "liczba_symboli": int(summary_row[5] or 0),
+        "liczba_symboli_z_plikiem_runtime": len(runtime_bootstrap_items),
+        "liczba_symboli_zainicjalizowanych_runtime": sum(
+            1 for item in runtime_bootstrap_items if item["runtime_initialized"]
+        ),
+        "liczba_symboli_z_wierszem_runtime": sum(1 for item in runtime_bootstrap_items if item["has_runtime_rows"]),
     }
 
     report = {
@@ -379,6 +476,7 @@ def main() -> int:
         "score_threshold": float(args.score_threshold),
         "summary": summary,
         "powod_braku_danych": (None if summary["liczba_obserwacji_onnx"] > 0 else "brak_obserwacji_po_filtrowaniu"),
+        "runtime_bootstrap": runtime_bootstrap_items,
         "items": items_df.to_dict(orient="records"),
     }
     write_report(report, output_root)

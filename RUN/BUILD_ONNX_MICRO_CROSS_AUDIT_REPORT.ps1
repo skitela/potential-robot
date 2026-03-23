@@ -52,6 +52,19 @@ function Get-FeedbackItemMap {
     return $map
 }
 
+function Get-RuntimeBootstrapMap {
+    param(
+        [object[]]$Items
+    )
+
+    $map = @{}
+    foreach ($item in @($Items)) {
+        $map[[string]$item.symbol_alias] = $item
+    }
+
+    return $map
+}
+
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 
 $cableStatus = Read-JsonObject -Path $CableStatusPath
@@ -64,6 +77,7 @@ foreach ($item in @($microReview.items)) {
 }
 
 $feedbackMap = Get-FeedbackItemMap -Items @($feedbackLoop.items)
+$runtimeBootstrapMap = Get-RuntimeBootstrapMap -Items @(Get-SafePropertyValue -Object $feedbackLoop -Name 'runtime_bootstrap' -Default @())
 $feedbackSummary = Get-SafePropertyValue -Object $feedbackLoop -Name 'summary' -Default $null
 $feedbackTotal = [int](Get-SafePropertyValue -Object $feedbackSummary -Name 'liczba_obserwacji_onnx' -Default 0)
 
@@ -73,6 +87,7 @@ foreach ($cableItem in @($cableStatus.items)) {
     $symbol = [string]$cableItem.symbol
     $reviewItem = $reviewMap[$symbol]
     $feedbackItem = $feedbackMap[$symbol]
+    $runtimeBootstrapItem = $runtimeBootstrapMap[$symbol]
 
     $integracja = [string]$cableItem.status_polaczenia
     $jakosc = [string](Get-SafePropertyValue -Object $reviewItem -Name 'jakosc_onnx' -Default 'BRAK_OCENY')
@@ -80,7 +95,17 @@ foreach ($cableItem in @($cableStatus.items)) {
     $feedbackObservations = [int](Get-SafePropertyValue -Object $feedbackItem -Name 'obserwacje_onnx' -Default 0)
     $feedbackLive = [int](Get-SafePropertyValue -Object $feedbackItem -Name 'obserwacje_live' -Default 0)
     $feedbackPaper = [int](Get-SafePropertyValue -Object $feedbackItem -Name 'obserwacje_paper' -Default 0)
-    $feedbackLayer = if ($feedbackObservations -gt 0) { "AKTYWNY" } else { "BRAK_OBSERWACJI" }
+    $runtimeInitialized = [bool](Get-SafePropertyValue -Object $runtimeBootstrapItem -Name 'runtime_initialized' -Default $false)
+    $runtimeRows = [int](Get-SafePropertyValue -Object $runtimeBootstrapItem -Name 'data_rows' -Default 0)
+    $feedbackLayer = if ($feedbackObservations -gt 0) {
+        "AKTYWNY"
+    }
+    elseif ($runtimeInitialized) {
+        "ZAINICJALIZOWANY"
+    }
+    else {
+        "BRAK_OBSERWACJI"
+    }
 
     $werdykt = "OBSERWOWAC"
     $rekomendacja = "utrzymac spokojny monitoring"
@@ -98,8 +123,14 @@ foreach ($cableItem in @($cableStatus.items)) {
         $rekomendacja = "nie promowac dalej, najpierw przebudowac lub doszkolic model"
     }
     elseif ($feedbackObservations -le 0) {
-        $werdykt = "GOTOWY_DO_ZBIERANIA_OBSERWACJI"
-        $rekomendacja = "przeladowac eksperta przy najblizszym kontrolowanym rolloutcie i zaczac zbierac obserwacje"
+        if ($runtimeInitialized) {
+            $werdykt = "RUNTIME_ZYJE_CZEKA_NA_PIERWSZY_WIERSZ"
+            $rekomendacja = "zostawic runtime w spokoju i czekac na pierwszy kwalifikowany sygnal lub kandydat"
+        }
+        else {
+            $werdykt = "GOTOWY_DO_ZBIERANIA_OBSERWACJI"
+            $rekomendacja = "przeladowac eksperta przy najblizszym kontrolowanym rolloutcie i zaczac zbierac obserwacje"
+        }
     }
     elseif ($jakosc -in @("MOCNY", "DOBRY")) {
         $werdykt = "GOTOWY_DO_ANALIZY_RUNTIME"
@@ -119,6 +150,8 @@ foreach ($cableItem in @($cableStatus.items)) {
             obserwacje_onnx = $feedbackObservations
             obserwacje_live = $feedbackLive
             obserwacje_paper = $feedbackPaper
+            runtime_initialized = $runtimeInitialized
+            runtime_rows = $runtimeRows
             pole_pod_krzywa_roc = [double](Get-SafePropertyValue -Object $reviewItem -Name 'roc_auc' -Default 0.0)
             trafnosc_zbalansowana = [double](Get-SafePropertyValue -Object $reviewItem -Name 'trafnosc_zbalansowana' -Default 0.0)
             liczba_wierszy = [int](Get-SafePropertyValue -Object $reviewItem -Name 'liczba_wierszy' -Default 0)
@@ -136,8 +169,12 @@ $summary = [ordered]@{
     brak_obserwacji_runtime = @($items | Where-Object {
         $_.pietro_integracja -eq 'POLACZONY_GOTOWY' -and $_.pietro_sprzezenie_zwrotne -eq 'BRAK_OBSERWACJI'
     }).Count
+    runtime_zainicjalizowany = @($items | Where-Object {
+        $_.pietro_integracja -eq 'POLACZONY_GOTOWY' -and $_.pietro_sprzezenie_zwrotne -eq 'ZAINICJALIZOWANY'
+    }).Count
     obserwacje_onnx_lacznie = $feedbackTotal
     gotowy_do_zbierania_obserwacji = @($items | Where-Object { $_.werdykt_koncowy -eq 'GOTOWY_DO_ZBIERANIA_OBSERWACJI' }).Count
+    runtime_zyje_czeka_na_pierwszy_wiersz = @($items | Where-Object { $_.werdykt_koncowy -eq 'RUNTIME_ZYJE_CZEKA_NA_PIERWSZY_WIERSZ' }).Count
     doszkolic_maly_model = @($items | Where-Object { $_.werdykt_koncowy -eq 'DOSZKOLIC_MALY_MODEL' }).Count
 }
 
@@ -160,6 +197,7 @@ $lines.Add(("- polaczony_gotowy: {0}" -f $summary.polaczony_gotowy))
 $lines.Add(("- fallback_globalny: {0}" -f $summary.fallback_globalny))
 $lines.Add(("- mocny_lub_dobry: {0}" -f $summary.mocny_lub_dobry))
 $lines.Add(("- brak_obserwacji_runtime: {0}" -f $summary.brak_obserwacji_runtime))
+$lines.Add(("- runtime_zainicjalizowany: {0}" -f $summary.runtime_zainicjalizowany))
 $lines.Add(("- obserwacje_onnx_lacznie: {0}" -f $summary.obserwacje_onnx_lacznie))
 $lines.Add("")
 $lines.Add("## Symbole")

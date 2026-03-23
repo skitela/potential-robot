@@ -10,6 +10,33 @@ $ErrorActionPreference = "Stop"
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $profilePath = $ProfileRoot
 
+function Resolve-PreferredCompiledSourceDir {
+    param(
+        [string]$ProjectPath,
+        [string]$FallbackDir
+    )
+
+    $compileReportPath = Join-Path $ProjectPath "EVIDENCE\compile_all_microbots_report.json"
+    if (Test-Path -LiteralPath $compileReportPath) {
+        try {
+            $report = Get-Content -LiteralPath $compileReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $freshest = @($report | Where-Object { $_.compile_ok -eq $true -and -not [string]::IsNullOrWhiteSpace([string]$_.terminal_data_dir) }) |
+                Group-Object terminal_data_dir |
+                Sort-Object Count -Descending |
+                Select-Object -First 1
+            if ($null -ne $freshest -and -not [string]::IsNullOrWhiteSpace([string]$freshest.Name) -and (Test-Path -LiteralPath ([string]$freshest.Name))) {
+                return [string]$freshest.Name
+            }
+        }
+        catch {
+        }
+    }
+
+    return $FallbackDir
+}
+
+$resolvedSourceTerminalDataDir = Resolve-PreferredCompiledSourceDir -ProjectPath $projectPath -FallbackDir $SourceTerminalDataDir
+
 $dirs = @(
     $profilePath,
     (Join-Path $profilePath "MQL5"),
@@ -39,7 +66,7 @@ if (Test-Path -LiteralPath (Join-Path $projectPath "MQL5\\Presets\\ActiveLive"))
 }
 Copy-Item (Join-Path $projectPath "CONFIG\\*.json") (Join-Path $profilePath "CONFIG") -Force
 
-$sourceExperts = Join-Path $SourceTerminalDataDir "MQL5\\Experts\\MicroBots"
+$sourceExperts = Join-Path $resolvedSourceTerminalDataDir "MQL5\\Experts\\MicroBots"
 if (Test-Path -LiteralPath $sourceExperts) {
     Copy-Item (Join-Path $sourceExperts "MicroBot_*.ex5") (Join-Path $profilePath "MQL5\\Experts\\MicroBots") -Force
 }
@@ -60,6 +87,7 @@ $manifest = [ordered]@{
         "MQL5\\Experts\\MicroBots\\*.ex5",
         "CONFIG\\*.json"
     )
+    source_terminal_data_dir = $resolvedSourceTerminalDataDir
 }
 
 $manifest | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $profilePath "server_profile_manifest.json") -Encoding UTF8
