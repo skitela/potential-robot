@@ -66,10 +66,33 @@ function Resolve-HostingLogSelection {
     }
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return [string](Get-FileHash -Algorithm SHA256 -Path $Path).Hash
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $hashBytes = $sha256.ComputeHash($stream)
+            return ([System.BitConverter]::ToString($hashBytes)).Replace("-", "")
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
 function Get-CanonicalLogs {
     param([System.IO.FileInfo[]]$Files)
     $rows = foreach ($file in $Files) {
-        $hash = (Get-FileHash -Algorithm SHA256 -Path $file.FullName).Hash
+        $hash = Get-Sha256Hex -Path $file.FullName
         [pscustomobject]@{
             Path = $file.FullName
             LastWriteTime = $file.LastWriteTime
