@@ -263,7 +263,7 @@ def main() -> int:
                     CAST(accepted AS BIGINT) AS accepted,
                     CAST(reason_code AS VARCHAR) AS candidate_reason_code,
                     CAST(setup_type AS VARCHAR) AS setup_type,
-                    CAST(side AS BIGINT) AS side,
+                    CAST(side AS VARCHAR) AS side,
                     CAST(score AS DOUBLE) AS score,
                     CAST(confidence_score AS DOUBLE) AS confidence_score,
                     CAST(market_regime AS VARCHAR) AS market_regime,
@@ -324,7 +324,7 @@ def main() -> int:
                  AND lo.spread_regime = COALESCE(lc.spread_regime, lo.spread_regime)
                  AND lo.execution_regime = COALESCE(lc.execution_regime, lo.execution_regime)
                  AND lo.confidence_bucket = COALESCE(lc.confidence_bucket, lo.confidence_bucket)
-                 AND CAST(lo.side AS BIGINT) = COALESCE(lc.side, CAST(lo.side AS BIGINT))
+                 AND CAST(lo.side AS VARCHAR) = COALESCE(lc.side, CAST(lo.side AS VARCHAR))
                  AND CAST(lo.renko_run_length AS BIGINT) = COALESCE(lc.renko_run_length, CAST(lo.renko_run_length AS BIGINT))
                  AND CAST(lo.renko_reversal_flag AS BIGINT) = COALESCE(lc.renko_reversal_flag, CAST(lo.renko_reversal_flag AS BIGINT))
                  AND CAST(lo.ts AS BIGINT) >= lc.ts
@@ -392,7 +392,7 @@ def main() -> int:
                     CAST(spread_regime AS VARCHAR) AS spread_regime,
                     CAST(confidence_bucket AS VARCHAR) AS confidence_bucket,
                     CAST(accepted AS BIGINT) AS accepted,
-                    CAST(side AS BIGINT) AS side,
+                    CAST(side AS VARCHAR) AS side,
                     CAST(execution_regime AS VARCHAR) AS execution_regime,
                     CAST(renko_run_length AS BIGINT) AS renko_run_length,
                     CAST(renko_reversal_flag AS BIGINT) AS renko_reversal_flag
@@ -432,7 +432,7 @@ def main() -> int:
                  AND lo.spread_regime = COALESCE(lc.spread_regime, lo.spread_regime)
                  AND lo.execution_regime = COALESCE(lc.execution_regime, lo.execution_regime)
                  AND lo.confidence_bucket = COALESCE(lc.confidence_bucket, lo.confidence_bucket)
-                 AND CAST(lo.side AS BIGINT) = COALESCE(lc.side, CAST(lo.side AS BIGINT))
+                 AND CAST(lo.side AS VARCHAR) = COALESCE(lc.side, CAST(lo.side AS VARCHAR))
                  AND CAST(lo.renko_run_length AS BIGINT) = COALESCE(lc.renko_run_length, CAST(lo.renko_run_length AS BIGINT))
                  AND CAST(lo.renko_reversal_flag AS BIGINT) = COALESCE(lc.renko_reversal_flag, CAST(lo.renko_reversal_flag AS BIGINT))
                  AND CAST(lo.ts AS BIGINT) >= lc.ts
