@@ -128,52 +128,58 @@ def load_dataset(
 
     source_label = ""
     if candidate_parquet_path.exists():
-        con = duckdb.connect(database=":memory:")
-        qdm_available = qdm_parquet_path.exists()
-        source_label = "PARQUET"
-        qdm_join = (
-            """
-                LEFT JOIN read_parquet(?) q
-                  ON q.symbol_alias = c.symbol
-                 AND q.bar_minute = date_trunc('minute', epoch_ms(CAST(c.ts AS BIGINT) * 1000))
-            """
-            if qdm_available
-            else ""
-        )
-        query = base_query.format(
-            candidate_source="read_parquet(?)",
-            qdm_select=(
+        try:
+            con = duckdb.connect(database=":memory:")
+            qdm_available = qdm_parquet_path.exists()
+            source_label = "PARQUET"
+            qdm_join = (
                 """
-                    COALESCE(q.tick_count, 0)::BIGINT AS qdm_tick_count,
-                    COALESCE(q.spread_mean, 0.0)::DOUBLE AS qdm_spread_mean,
-                    COALESCE(q.spread_max, 0.0)::DOUBLE AS qdm_spread_max,
-                    COALESCE(q.mid_range_1m, 0.0)::DOUBLE AS qdm_mid_range_1m,
-                    COALESCE(q.mid_return_1m, 0.0)::DOUBLE AS qdm_mid_return_1m,
-                    CASE WHEN q.bar_minute IS NULL THEN 0 ELSE 1 END::BIGINT AS qdm_data_present
+                    LEFT JOIN read_parquet(?) q
+                      ON q.symbol_alias = c.symbol
+                     AND q.bar_minute = date_trunc('minute', epoch_ms(CAST(c.ts AS BIGINT) * 1000))
                 """
                 if qdm_available
-                else """
-                    0::BIGINT AS qdm_tick_count,
-                    0.0::DOUBLE AS qdm_spread_mean,
-                    0.0::DOUBLE AS qdm_spread_max,
-                    0.0::DOUBLE AS qdm_mid_range_1m,
-                    0.0::DOUBLE AS qdm_mid_return_1m,
-                    0::BIGINT AS qdm_data_present
-                """
-            ),
-            qdm_join=qdm_join,
-            symbol_clause=("AND c.symbol = ?" if symbol_filter else ""),
-        )
-        if sample_limit > 0:
-            query += f" LIMIT {int(sample_limit)}"
-        params: list[str] = [str(candidate_parquet_path)]
-        if qdm_available:
-            params.append(str(qdm_parquet_path))
-        if symbol_filter:
-            params.append(symbol_filter)
-        df = con.execute(query, params).df()
-        con.close()
-        return df, source_label
+                else ""
+            )
+            query = base_query.format(
+                candidate_source="read_parquet(?)",
+                qdm_select=(
+                    """
+                        COALESCE(q.tick_count, 0)::BIGINT AS qdm_tick_count,
+                        COALESCE(q.spread_mean, 0.0)::DOUBLE AS qdm_spread_mean,
+                        COALESCE(q.spread_max, 0.0)::DOUBLE AS qdm_spread_max,
+                        COALESCE(q.mid_range_1m, 0.0)::DOUBLE AS qdm_mid_range_1m,
+                        COALESCE(q.mid_return_1m, 0.0)::DOUBLE AS qdm_mid_return_1m,
+                        CASE WHEN q.bar_minute IS NULL THEN 0 ELSE 1 END::BIGINT AS qdm_data_present
+                    """
+                    if qdm_available
+                    else """
+                        0::BIGINT AS qdm_tick_count,
+                        0.0::DOUBLE AS qdm_spread_mean,
+                        0.0::DOUBLE AS qdm_spread_max,
+                        0.0::DOUBLE AS qdm_mid_range_1m,
+                        0.0::DOUBLE AS qdm_mid_return_1m,
+                        0::BIGINT AS qdm_data_present
+                    """
+                ),
+                qdm_join=qdm_join,
+                symbol_clause=("AND c.symbol = ?" if symbol_filter else ""),
+            )
+            if sample_limit > 0:
+                query += f" LIMIT {int(sample_limit)}"
+            params: list[str] = [str(candidate_parquet_path)]
+            if qdm_available:
+                params.append(str(qdm_parquet_path))
+            if symbol_filter:
+                params.append(symbol_filter)
+            df = con.execute(query, params).df()
+            con.close()
+            return df, source_label
+        except Exception:
+            try:
+                con.close()
+            except Exception:
+                pass
 
     with duckdb.connect(str(db_path), read_only=True) as con:
         source_label = "DUCKDB"
@@ -571,6 +577,16 @@ def export_runtime_numeric_onnx(
     }
 
 
+def build_runtime_feature_sets(
+    categorical_features: list[str],
+    numeric_float_features: list[str],
+    numeric_int_features: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    runtime_numeric_float = [name for name in numeric_float_features if not name.startswith("qdm_")]
+    runtime_numeric_int = [name for name in numeric_int_features if not name.startswith("qdm_")]
+    return categorical_features, runtime_numeric_float, runtime_numeric_int
+
+
 def main() -> int:
     args = parse_args()
     db_path = Path(args.db_path)
@@ -690,19 +706,24 @@ def main() -> int:
     if args.export_runtime_numeric:
         runtime_output_root = ensure_dir(Path(args.runtime_output_root) if args.runtime_output_root.strip() else output_root)
         runtime_artifact_stem = args.runtime_artifact_stem.strip() or f"{artifact_stem}_runtime"
-        runtime_category_maps = build_runtime_category_maps(dataset, categorical_features)
-        runtime_x_train, runtime_feature_names = encode_runtime_matrix(
-            train_df,
+        runtime_categorical_features, runtime_numeric_float_features, runtime_numeric_int_features = build_runtime_feature_sets(
             categorical_features,
             numeric_float_features,
             numeric_int_features,
+        )
+        runtime_category_maps = build_runtime_category_maps(dataset, categorical_features)
+        runtime_x_train, runtime_feature_names = encode_runtime_matrix(
+            train_df,
+            runtime_categorical_features,
+            runtime_numeric_float_features,
+            runtime_numeric_int_features,
             runtime_category_maps,
         )
         runtime_x_test, _ = encode_runtime_matrix(
             test_df,
-            categorical_features,
-            numeric_float_features,
-            numeric_int_features,
+            runtime_categorical_features,
+            runtime_numeric_float_features,
+            runtime_numeric_int_features,
             runtime_category_maps,
         )
         runtime_pipeline = build_runtime_numeric_pipeline()
@@ -723,9 +744,9 @@ def main() -> int:
             "schema_version": "1.0",
             "symbol": (symbol_filter or "GLOBAL"),
             "feature_names": runtime_feature_names,
-            "categorical_features": categorical_features,
-            "numeric_float_features": numeric_float_features,
-            "numeric_int_features": numeric_int_features,
+            "categorical_features": runtime_categorical_features,
+            "numeric_float_features": runtime_numeric_float_features,
+            "numeric_int_features": runtime_numeric_int_features,
             "category_maps": runtime_category_maps,
             "teacher_feature_enabled": teacher_feature_enabled,
             "source_kind": source_kind,

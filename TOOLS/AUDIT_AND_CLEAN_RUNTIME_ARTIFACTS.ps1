@@ -67,7 +67,7 @@ $allowedByRoot = @{
     state = @($expectedSymbols + @("_families","_coordinator","_global","_domains","_groups"))
     logs  = @($expectedSymbols + @("_families","_coordinator"))
     run   = @($expectedSymbols)
-    key   = @($expectedSymbols)
+    key   = @($expectedSymbols + @("_GLOBAL"))
 }
 
 $roots = @(

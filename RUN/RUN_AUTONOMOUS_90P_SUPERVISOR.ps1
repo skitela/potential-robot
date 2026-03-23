@@ -19,6 +19,7 @@ $profitTrackingScript = Join-Path $ProjectRoot "RUN\BUILD_PROFIT_TRACKING_REPORT
 $dailySystemReportScript = Join-Path $ProjectRoot "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
 $paperLiveFeedbackScript = Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1"
 $hostingReportScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_HOSTING_DAILY_REPORT.ps1"
+$technicalReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TECHNICAL_READINESS_REPORT.ps1"
 $trustButVerifyScript = Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 $fullStackAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1"
@@ -48,6 +49,7 @@ foreach ($path in @(
     $dailySystemReportScript,
     $paperLiveFeedbackScript,
     $hostingReportScript,
+    $technicalReadinessScript,
     $trustButVerifyScript,
     $snapshotScript,
     $fullStackAuditScript,
@@ -416,6 +418,11 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "profit_tracking" -Operation {
         & $profitTrackingScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "technical_readiness" -Operation {
+        & $technicalReadinessScript | Out-Null
         "rebuilt"
     } | Out-Null
 
