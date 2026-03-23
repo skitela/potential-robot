@@ -3,6 +3,7 @@ param(
     [string]$SymbolAlias = "NZDUSD",
     [string]$QdmSymbol = "NZDUSD",
     [string]$BrokerTemplateSymbol = "NZDUSD.pro",
+    [string]$ExpertCodeSymbol = "",
     [string]$Period = "M1",
     [string]$FromDate = "2026.03.12",
     [string]$ToDate = "2026.03.16",
@@ -237,6 +238,7 @@ $smokeArgs = @(
     "-ProjectRoot", $ProjectRoot,
     "-TerminalRoot", $TerminalRoot,
     "-SymbolAlias", $normalizedAlias,
+    "-ExpertCodeSymbol", $(if ([string]::IsNullOrWhiteSpace($ExpertCodeSymbol)) { $normalizedAlias } else { $ExpertCodeSymbol }),
     "-PilotCsvPath", $pilotCsvPath,
     "-CommonRelativeCsvPath", $commonRelativeCsvPath,
     "-CustomSymbol", $customSymbol,
@@ -267,6 +269,7 @@ $result = [ordered]@{
     pilot_csv_path = $pilotCsvPath
     custom_symbol = $customSymbol
     broker_template_symbol = $BrokerTemplateSymbol
+    expert_code_symbol = $(if ([string]::IsNullOrWhiteSpace($ExpertCodeSymbol)) { $normalizedAlias } else { $ExpertCodeSymbol })
     export = $exportObject
     smoke = $smokeObject
     state = "completed"

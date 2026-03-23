@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$TerminalRoot = "C:\TRADING_TOOLS\MT5_QDM_CUSTOM_LAB",
     [string]$SymbolAlias = "EURUSD",
+    [string]$ExpertCodeSymbol = "",
     [string]$PilotCsvPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\QDM_PILOT\MB_EURUSD_DUKA_M1_PILOT.csv",
     [string]$CommonRelativeCsvPath = "MAKRO_I_MIKRO_BOT\\qdm_import\\MB_EURUSD_DUKA_M1_PILOT.csv",
     [string]$CustomSymbol = "EURUSD_QDM_M1",
@@ -113,7 +114,8 @@ if (-not [bool]$importResult.import_succeeded) {
     exit 1
 }
 
-$expertName = "MicroBot_{0}" -f $SymbolAlias.ToUpperInvariant()
+$resolvedExpertCodeSymbol = if ([string]::IsNullOrWhiteSpace($ExpertCodeSymbol)) { $SymbolAlias } else { $ExpertCodeSymbol }
+$expertName = "MicroBot_{0}" -f $resolvedExpertCodeSymbol.ToUpperInvariant()
 $testerResult = Convert-ToolResultToObject (& $testerScript `
     -ProjectRoot $ProjectRoot `
     -Mt5Exe $mt5Exe `
@@ -139,6 +141,8 @@ $result = [ordered]@{
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     state = "completed"
     symbol_alias = $SymbolAlias
+    expert_code_symbol = $resolvedExpertCodeSymbol
+    expert_name = $expertName
     pilot_csv_path = $PilotCsvPath
     common_relative_csv_path = $CommonRelativeCsvPath
     custom_symbol = $CustomSymbol
