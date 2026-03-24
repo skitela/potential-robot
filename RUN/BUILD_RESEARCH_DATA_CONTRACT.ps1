@@ -153,7 +153,8 @@ while ($true) {
             continue
         }
 
-        throw "research_export_runner_already_active_and_contract_is_stale"
+        Write-Host ("Research export runner already active; deferring contract rebuild. contract_age_seconds={0}" -f $contractAgeSeconds)
+        return
     }
 
     break
