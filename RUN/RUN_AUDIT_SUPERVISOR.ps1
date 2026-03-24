@@ -3,7 +3,7 @@ param(
     [ValidateSet("Once", "Loop")]
     [string]$Mode = "Once",
     [int]$CycleSeconds = 300,
-    [int]$HeavySweepEveryCycles = 6,
+    [int]$HeavySweepEveryCycles = 36,
     [switch]$ApplySafeAutoHeal
 )
 
@@ -222,6 +222,15 @@ function Get-ShouldRunHeavySweep {
     return (($CycleNumber % $EveryCycles) -eq 0)
 }
 
+function Get-FreshnessEntry {
+    param(
+        [object[]]$Freshness,
+        [string]$Label
+    )
+
+    return ,@($Freshness | Where-Object { $_.label -eq $Label } | Select-Object -First 1)
+}
+
 function Invoke-AuditCycle {
     param(
         [int]$CycleNumber
@@ -234,10 +243,26 @@ function Invoke-AuditCycle {
     $refreshResults = New-Object System.Collections.Generic.List[object]
     $autoHealResults = New-Object System.Collections.Generic.List[object]
 
+    $fullStackPath = Join-Path $opsRoot "full_stack_audit_latest.json"
+    $trustPath = Join-Path $opsRoot "trust_but_verify_latest.json"
+    $learningPath = Join-Path $opsRoot "learning_stack_audit_latest.json"
+    $onnxFeedbackPath = Join-Path $opsRoot "onnx_feedback_loop_latest.json"
+    $onnxCrossAuditPath = Join-Path $opsRoot "onnx_micro_cross_audit_latest.json"
+    $hostilePath = Join-Path $opsRoot "hostile_four_loop_audit_latest.json"
+    $discoveryPath = Join-Path $opsRoot "audit_supervisor_discovery_latest.json"
+    $learningHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
+
     $buildScripts = @(
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                Apply = [bool]$ApplySafeAutoHeal
+            }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1")
@@ -317,6 +342,13 @@ function Invoke-AuditCycle {
 
         $postHealScripts = @(
             @{
+                path = (Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1")
+                params = @{
+                    ProjectRoot = $ProjectRoot
+                    Apply = $true
+                }
+            },
+            @{
                 path = (Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1")
                 params = @{ ProjectRoot = $ProjectRoot }
             },
@@ -329,6 +361,10 @@ function Invoke-AuditCycle {
                 }
             },
             @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_STACK_AUDIT.ps1")
+                params = @{ ProjectRoot = $ProjectRoot }
+            },
+            @{
                 path = (Join-Path $ProjectRoot "RUN\BUILD_ONNX_FEEDBACK_LOOP_REPORT.ps1")
                 params = @{ ProjectRoot = $ProjectRoot }
             }
@@ -337,15 +373,60 @@ function Invoke-AuditCycle {
         foreach ($script in $postHealScripts) {
             $refreshResults.Add((Invoke-PowerShellScript -ScriptPath $script.path -Parameters $script.params)) | Out-Null
         }
-    }
 
-    $fullStackPath = Join-Path $opsRoot "full_stack_audit_latest.json"
-    $trustPath = Join-Path $opsRoot "trust_but_verify_latest.json"
-    $learningPath = Join-Path $opsRoot "learning_stack_audit_latest.json"
-    $onnxFeedbackPath = Join-Path $opsRoot "onnx_feedback_loop_latest.json"
-    $onnxCrossAuditPath = Join-Path $opsRoot "onnx_micro_cross_audit_latest.json"
-    $hostilePath = Join-Path $opsRoot "hostile_four_loop_audit_latest.json"
-    $discoveryPath = Join-Path $opsRoot "audit_supervisor_discovery_latest.json"
+        $postHealFullStack = Read-JsonSafe -Path $fullStackPath
+        $postHealLearningHygiene = Read-JsonSafe -Path $learningHygienePath
+        $postHealFreshness = @()
+        if ($null -ne $postHealFullStack) {
+            $postHealFreshness = @((Get-OptionalValue -Object $postHealFullStack -Name "freshness" -Default @()))
+        }
+
+        $researchManifestEntry = Get-FreshnessEntry -Freshness $postHealFreshness -Label "research_export_manifest"
+        $researchManifestFresh = ($researchManifestEntry.Count -gt 0 -and [bool](Get-OptionalValue -Object $researchManifestEntry[0] -Name "fresh" -Default $false))
+        $learningLogBacklog = 0
+        if ($null -ne $postHealLearningHygiene) {
+            $learningLogBacklog = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $postHealLearningHygiene -Name "refresh_and_train_logs" -Default $null) -Name "archive_candidate_count" -Default 0)
+        }
+
+        if (-not $researchManifestFresh) {
+            $autoHealResults.Add((Invoke-PowerShellScript -ScriptPath (Join-Path $ProjectRoot "RUN\REFRESH_MICROBOT_RESEARCH_DATA.ps1") -Parameters @{
+                ProjectRoot = $ProjectRoot
+                PerfProfile = "Light"
+            })) | Out-Null
+        }
+
+        if ((-not $researchManifestFresh) -or $learningLogBacklog -gt 0 -or $heavySweep) {
+            $focusedRepairScripts = @(
+                @{
+                    path = (Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1")
+                    params = @{
+                        ProjectRoot = $ProjectRoot
+                        Apply = $true
+                    }
+                },
+                @{
+                    path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_STACK_AUDIT.ps1")
+                    params = @{ ProjectRoot = $ProjectRoot }
+                },
+                @{
+                    path = (Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1")
+                    params = @{
+                        ProjectRoot = $ProjectRoot
+                        ApplyRuntimeCleanup = $true
+                        ApplyLogRotation = $true
+                    }
+                },
+                @{
+                    path = (Join-Path $ProjectRoot "RUN\BUILD_ONNX_FEEDBACK_LOOP_REPORT.ps1")
+                    params = @{ ProjectRoot = $ProjectRoot }
+                }
+            )
+
+            foreach ($script in $focusedRepairScripts) {
+                $refreshResults.Add((Invoke-PowerShellScript -ScriptPath $script.path -Parameters $script.params)) | Out-Null
+            }
+        }
+    }
 
     $fullStack = Read-JsonSafe -Path $fullStackPath
     $trust = Read-JsonSafe -Path $trustPath
@@ -354,6 +435,7 @@ function Invoke-AuditCycle {
     $onnxCrossAudit = Read-JsonSafe -Path $onnxCrossAuditPath
     $hostile = Read-JsonSafe -Path $hostilePath
     $discovery = Read-JsonSafe -Path $discoveryPath
+    $learningHygiene = Read-JsonSafe -Path $learningHygienePath
 
     $hostileFindings = @()
     if ($null -ne $hostile) {
@@ -400,6 +482,52 @@ function Invoke-AuditCycle {
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "SPOJNOSC_FLOTY" -Gate "RAPORTUJ" -Severity "info" -Reason "Flota, kolejki i wycofane symbole sa spojne.")) | Out-Null
+    }
+
+    $learningHygieneEvidence = New-Object System.Collections.Generic.List[object]
+    foreach ($result in ([object[]]$refreshResults.ToArray() | Where-Object {
+        -not $_.ok -and (
+            [string]$_.script -like "*CLEAN_LEARNING_PATH_HYGIENE*" -or
+            [string]$_.script -like "*REFRESH_MICROBOT_RESEARCH_DATA*"
+        )
+    })) {
+        $learningHygieneEvidence.Add($result) | Out-Null
+    }
+    foreach ($result in ([object[]]$autoHealResults.ToArray() | Where-Object {
+        -not $_.ok -and [string]$_.script -like "*REFRESH_MICROBOT_RESEARCH_DATA*"
+    })) {
+        $learningHygieneEvidence.Add($result) | Out-Null
+    }
+    if ($null -ne $learningHygiene) {
+        $manifestSection = Get-OptionalValue -Object $learningHygiene -Name "manifest" -Default $null
+        $manifestFresh = [bool](Get-OptionalValue -Object $manifestSection -Name "fresh" -Default $false)
+        $manifestAge = Get-OptionalValue -Object $manifestSection -Name "age_seconds" -Default $null
+        $learningLogsSection = Get-OptionalValue -Object $learningHygiene -Name "refresh_and_train_logs" -Default $null
+        $archiveCandidateCount = [int](Get-OptionalValue -Object $learningLogsSection -Name "archive_candidate_count" -Default 0)
+
+        if (-not $manifestFresh) {
+            $learningHygieneEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "research_export_manifest"
+                message = "Manifest eksportu research nie jest swiezy i wymaga odswiezenia."
+                context = @{ age_seconds = $manifestAge }
+            }) | Out-Null
+        }
+        if ($archiveCandidateCount -gt 0) {
+            $learningHygieneEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_path_logs"
+                message = "Logi sciezki uczenia wymagaja dalszej higieny."
+                context = @{ archive_candidate_count = $archiveCandidateCount }
+            }) | Out-Null
+        }
+    }
+
+    if ($learningHygieneEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_SCIEZKI_UCZENIA" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $learningHygieneEvidence) -Reason "Sciezka uczenia wymaga stalej higieny manifestu i logow." -Evidence $learningHygieneEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_SCIEZKI_UCZENIA" -Gate "RAPORTUJ" -Severity "info" -Reason "Manifest research i logi sciezki uczenia sa pod kontrola.")) | Out-Null
     }
 
     $runtimeEvidence = New-Object System.Collections.Generic.List[object]
@@ -598,6 +726,7 @@ function Invoke-AuditCycle {
         trust_but_verify = $trustPath
         full_stack = $fullStackPath
         learning_stack = $learningPath
+        learning_path_hygiene = $learningHygienePath
         onnx_feedback = $onnxFeedbackPath
         onnx_cross_audit = $onnxCrossAuditPath
         hostile_four_loop = $hostilePath
@@ -613,6 +742,8 @@ function Invoke-AuditCycle {
     $report["mode"] = $Mode
     $report["cycle_number"] = $CycleNumber
     $report["cycle_seconds"] = $CycleSeconds
+    $report["heavy_sweep_every_cycles"] = $HeavySweepEveryCycles
+    $report["heavy_sweep_every_hours"] = [math]::Round((($CycleSeconds * $HeavySweepEveryCycles) / 3600.0), 3)
     $report["heavy_sweep"] = $heavySweep
     $report["apply_safe_auto_heal"] = [bool]$ApplySafeAutoHeal
     $report["refresh_results"] = $refreshResultsArray
