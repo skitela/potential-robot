@@ -213,11 +213,22 @@ def main() -> int:
             return 0
 
         onnx_rows = int(con.execute("SELECT COUNT(*) FROM onnx_observations").fetchone()[0])
-        if onnx_rows <= 0:
+        onnx_runtime_rows = int(
+            con.execute(
+                """
+                SELECT COUNT(*)
+                FROM onnx_observations
+                WHERE stage = 'EVALUATED'
+                  AND CAST(available AS BIGINT) = 1
+                  AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
+                """
+            ).fetchone()[0]
+        )
+        if onnx_runtime_rows <= 0:
             reason = "brak_obserwacji_onnx"
             if runtime_bootstrap_items:
                 if any(item["has_runtime_rows"] for item in runtime_bootstrap_items):
-                    reason = "runtime_ma_wiersze_ale_brak_eksportu_onnx"
+                    reason = "runtime_ma_wiersze_ale_brak_udanej_inferencji_onnx"
                 elif any(item["runtime_initialized"] for item in runtime_bootstrap_items):
                     reason = "runtime_onnx_zainicjalizowany_oczekuje_na_pierwsze_wiersze"
             empty_report(
@@ -254,6 +265,8 @@ def main() -> int:
                     CAST(spread_points AS DOUBLE) AS spread_points
                 FROM onnx_observations
                 WHERE stage = 'EVALUATED'
+                  AND CAST(available AS BIGINT) = 1
+                  AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
             ),
             candidate_base AS (
                 SELECT
@@ -382,6 +395,8 @@ def main() -> int:
                     CAST(confidence_bucket AS VARCHAR) AS confidence_bucket
                 FROM onnx_observations
                 WHERE stage = 'EVALUATED'
+                  AND CAST(available AS BIGINT) = 1
+                  AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
             ),
             candidate_base AS (
                 SELECT

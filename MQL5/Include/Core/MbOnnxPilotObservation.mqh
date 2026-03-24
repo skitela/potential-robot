@@ -25,12 +25,21 @@ long   g_mb_onnx_obs_teacher_handle = INVALID_HANDLE;
 string g_mb_onnx_obs_symbol = "";
 string g_mb_onnx_obs_log_path = "";
 string g_mb_onnx_obs_state_path = "";
+string g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
+string g_mb_onnx_obs_last_signature = "";
+datetime g_mb_onnx_obs_last_init_attempt = 0;
+int    g_mb_onnx_obs_retry_interval_sec = 30;
 string g_mb_onnx_obs_symbol_feature_names[];
 string g_mb_onnx_obs_symbol_map_names[];
 string g_mb_onnx_obs_symbol_map_payloads[];
 string g_mb_onnx_obs_teacher_feature_names[];
 string g_mb_onnx_obs_teacher_map_names[];
 string g_mb_onnx_obs_teacher_map_payloads[];
+
+string MbOnnxObservationInitReason()
+  {
+   return g_mb_onnx_obs_init_reason;
+  }
 
 string MbOnnxObservationEscapeJson(const string value)
   {
@@ -71,6 +80,9 @@ void MbOnnxObservationResetRuntime()
    g_mb_onnx_obs_symbol = "";
    g_mb_onnx_obs_log_path = "";
    g_mb_onnx_obs_state_path = "";
+   g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
+   g_mb_onnx_obs_last_signature = "";
+   g_mb_onnx_obs_last_init_attempt = 0;
    ArrayResize(g_mb_onnx_obs_symbol_feature_names,0);
    ArrayResize(g_mb_onnx_obs_symbol_map_names,0);
    ArrayResize(g_mb_onnx_obs_symbol_map_payloads,0);
@@ -84,7 +96,7 @@ void MbOnnxObservationEnsureCsvHeader(const string rel_path)
    if(StringLen(rel_path) <= 0 || FileIsExist(rel_path,FILE_COMMON))
       return;
 
-   int handle = FileOpen(rel_path,FILE_COMMON | FILE_WRITE | FILE_CSV | FILE_ANSI);
+   int handle = FileOpen(rel_path,FILE_COMMON | FILE_WRITE | FILE_CSV | FILE_ANSI,',');
    if(handle == INVALID_HANDLE)
       return;
 
@@ -168,7 +180,7 @@ void MbOnnxObservationAppendLog(
    if(StringLen(g_mb_onnx_obs_log_path) <= 0)
       return;
 
-   int handle = FileOpen(g_mb_onnx_obs_log_path,FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI);
+   int handle = FileOpen(g_mb_onnx_obs_log_path,FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI,',');
    if(handle == INVALID_HANDLE)
       return;
 
@@ -211,9 +223,12 @@ bool MbOnnxObservationLoadContract(
    ArrayResize(map_payloads,0);
    teacher_feature_enabled = false;
 
-   int handle = FileOpen(contract_rel_path,FILE_COMMON | FILE_READ | FILE_CSV | FILE_ANSI);
+   int handle = FileOpen(contract_rel_path,FILE_COMMON | FILE_READ | FILE_CSV | FILE_ANSI,',');
    if(handle == INVALID_HANDLE)
+     {
+      PrintFormat("MB_ONNX_CONTRACT_OPEN_FAILED path=%s err=%d",contract_rel_path,GetLastError());
       return false;
+     }
 
    while(!FileIsEnding(handle))
      {
@@ -248,7 +263,13 @@ bool MbOnnxObservationLoadContract(
      }
 
    FileClose(handle);
-   return (ArraySize(feature_names) > 0);
+   if(ArraySize(feature_names) <= 0)
+     {
+      PrintFormat("MB_ONNX_CONTRACT_PARSE_FAILED path=%s teacher_feature=%s",contract_rel_path,(teacher_feature_enabled ? "true" : "false"));
+      return false;
+     }
+
+   return true;
   }
 
 int MbOnnxObservationMapLookup(
@@ -284,7 +305,31 @@ int MbOnnxObservationMapLookup(
         }
       return unknown_value;
      }
-   return -1;
+  return -1;
+  }
+
+string MbOnnxObservationBuildSignature(
+   const datetime ts,
+   const string stage,
+   const string symbol,
+   const string runtime_channel,
+   const MbSignalDecision &signal,
+   const double spread_points
+)
+  {
+   return StringFormat(
+      "%I64d|%s|%s|%s|%d|%s|%s|%s|%s|%s",
+      (long)ts,
+      stage,
+      MbCanonicalSymbol(symbol),
+      runtime_channel,
+      (signal.valid ? 1 : 0),
+      signal.setup_type,
+      signal.market_regime,
+      signal.spread_regime,
+      signal.confidence_bucket,
+      signal.reason_code
+   );
   }
 
 float MbOnnxObservationResolveFeatureValue(
@@ -343,27 +388,73 @@ float MbOnnxObservationResolveFeatureValue(
       return 0.0f;
    if(feature_name == "qdm_data_present")
       return 0.0f;
-   return 0.0f;
+  return 0.0f;
+  }
+
+bool MbOnnxObservationLoadModelBuffer(const string model_rel_path,uchar &buffer[])
+  {
+   ArrayResize(buffer,0);
+   if(StringLen(model_rel_path) <= 0 || !FileIsExist(model_rel_path,FILE_COMMON))
+      return false;
+
+   int handle = FileOpen(model_rel_path,FILE_COMMON | FILE_READ | FILE_BIN);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   int file_size = (int)FileSize(handle);
+   if(file_size <= 0)
+     {
+      FileClose(handle);
+      return false;
+     }
+
+   ArrayResize(buffer,file_size);
+   int read_count = FileReadArray(handle,buffer,0,file_size);
+   FileClose(handle);
+   return (read_count == file_size);
   }
 
 bool MbOnnxObservationPrepareSession(
    const string model_rel_path,
    const int feature_count,
-   long &handle
+   long &handle,
+   string &failure_reason
 )
   {
+   failure_reason = "ONNX_SESSION_NOT_PREPARED";
    if(StringLen(model_rel_path) <= 0 || feature_count <= 0)
+     {
+      failure_reason = "ONNX_INVALID_MODEL_SPEC";
       return false;
+     }
 
+   ResetLastError();
    handle = OnnxCreate(model_rel_path,ONNX_COMMON_FOLDER);
    if(handle == INVALID_HANDLE)
-      return false;
+     {
+      int create_error = GetLastError();
+      uchar model_buffer[];
+      if(!MbOnnxObservationLoadModelBuffer(model_rel_path,model_buffer))
+        {
+         failure_reason = StringFormat("ONNX_CREATE_FAILED_%d_AND_BUFFER_READ_FAILED_%d",create_error,GetLastError());
+         return false;
+        }
+
+      ResetLastError();
+      handle = OnnxCreateFromBuffer(model_buffer,0);
+      if(handle == INVALID_HANDLE)
+        {
+         failure_reason = StringFormat("ONNX_CREATE_FAILED_%d_AND_BUFFER_CREATE_FAILED_%d",create_error,GetLastError());
+         return false;
+        }
+     }
 
    ulong input_shape[2];
    input_shape[0] = 1;
    input_shape[1] = (ulong)feature_count;
    if(!OnnxSetInputShape(handle,0,input_shape))
      {
+      failure_reason = StringFormat("ONNX_INPUT_SHAPE_FAILED_%d",GetLastError());
       OnnxRelease(handle);
       handle = INVALID_HANDLE;
       return false;
@@ -373,6 +464,7 @@ bool MbOnnxObservationPrepareSession(
    label_shape[0] = 1;
    if(!OnnxSetOutputShape(handle,0,label_shape))
      {
+      failure_reason = StringFormat("ONNX_OUTPUT0_SHAPE_FAILED_%d",GetLastError());
       OnnxRelease(handle);
       handle = INVALID_HANDLE;
       return false;
@@ -383,11 +475,13 @@ bool MbOnnxObservationPrepareSession(
    probability_shape[1] = 2;
    if(!OnnxSetOutputShape(handle,1,probability_shape))
      {
+      failure_reason = StringFormat("ONNX_OUTPUT1_SHAPE_FAILED_%d",GetLastError());
       OnnxRelease(handle);
       handle = INVALID_HANDLE;
       return false;
      }
 
+   failure_reason = "ONNX_SESSION_READY";
    return true;
   }
 
@@ -428,6 +522,7 @@ bool MbOnnxObservationInit(
 )
   {
    MbOnnxObservationResetRuntime();
+   g_mb_onnx_obs_last_init_attempt = TimeCurrent();
    g_mb_onnx_obs_enabled = enabled;
    g_mb_onnx_obs_symbol = MbCanonicalSymbol(symbol);
    g_mb_onnx_obs_log_path = log_rel_path;
@@ -440,41 +535,105 @@ bool MbOnnxObservationInit(
    string teacher_contract = MbKeyFilePath("_GLOBAL","paper_gate_acceptor_runtime_contract_latest.csv");
    string teacher_model = MbKeyFilePath("_GLOBAL","paper_gate_acceptor_runtime_latest.onnx");
    bool ignored_teacher_feature = false;
-   if(
-      MbOnnxObservationLoadContract(
-         teacher_contract,
-         g_mb_onnx_obs_teacher_feature_names,
-         g_mb_onnx_obs_teacher_map_names,
-         g_mb_onnx_obs_teacher_map_payloads,
-         ignored_teacher_feature
-      ) &&
-      MbOnnxObservationPrepareSession(
-         teacher_model,
-         ArraySize(g_mb_onnx_obs_teacher_feature_names),
-         g_mb_onnx_obs_teacher_handle
+   string teacher_failure_reason = "ONNX_GLOBAL_NOT_ATTEMPTED";
+   bool teacher_contract_loaded = MbOnnxObservationLoadContract(
+      teacher_contract,
+      g_mb_onnx_obs_teacher_feature_names,
+      g_mb_onnx_obs_teacher_map_names,
+      g_mb_onnx_obs_teacher_map_payloads,
+      ignored_teacher_feature
+   );
+   if(teacher_contract_loaded)
+     {
+      if(
+         MbOnnxObservationPrepareSession(
+            teacher_model,
+            ArraySize(g_mb_onnx_obs_teacher_feature_names),
+            g_mb_onnx_obs_teacher_handle,
+            teacher_failure_reason
+         )
       )
-   )
-      g_mb_onnx_obs_teacher_ready = true;
+         g_mb_onnx_obs_teacher_ready = true;
+     }
+   else
+      teacher_failure_reason = "ONNX_GLOBAL_CONTRACT_NOT_READY";
 
    string symbol_contract = MbKeyFilePath(g_mb_onnx_obs_symbol,"paper_gate_acceptor_runtime_contract_latest.csv");
    string symbol_model = MbKeyFilePath(g_mb_onnx_obs_symbol,"paper_gate_acceptor_runtime_latest.onnx");
-   if(
-      MbOnnxObservationLoadContract(
-         symbol_contract,
-         g_mb_onnx_obs_symbol_feature_names,
-         g_mb_onnx_obs_symbol_map_names,
-         g_mb_onnx_obs_symbol_map_payloads,
-         g_mb_onnx_obs_teacher_feature_enabled
-      ) &&
-      MbOnnxObservationPrepareSession(
-         symbol_model,
-         ArraySize(g_mb_onnx_obs_symbol_feature_names),
-         g_mb_onnx_obs_symbol_handle
+   string symbol_failure_reason = "ONNX_SYMBOL_NOT_ATTEMPTED";
+   bool symbol_contract_loaded = MbOnnxObservationLoadContract(
+      symbol_contract,
+      g_mb_onnx_obs_symbol_feature_names,
+      g_mb_onnx_obs_symbol_map_names,
+      g_mb_onnx_obs_symbol_map_payloads,
+      g_mb_onnx_obs_teacher_feature_enabled
+   );
+   if(symbol_contract_loaded)
+     {
+      if(
+         MbOnnxObservationPrepareSession(
+            symbol_model,
+            ArraySize(g_mb_onnx_obs_symbol_feature_names),
+            g_mb_onnx_obs_symbol_handle,
+            symbol_failure_reason
+         )
       )
-   )
-      g_mb_onnx_obs_symbol_ready = true;
+         g_mb_onnx_obs_symbol_ready = true;
+     }
+   else
+      symbol_failure_reason = "ONNX_SYMBOL_CONTRACT_NOT_READY";
+
+   if(!g_mb_onnx_obs_symbol_ready)
+      g_mb_onnx_obs_init_reason = symbol_failure_reason;
+   else if(g_mb_onnx_obs_teacher_feature_enabled && !g_mb_onnx_obs_teacher_ready)
+      g_mb_onnx_obs_init_reason = teacher_failure_reason;
+   else
+      g_mb_onnx_obs_init_reason = "ONNX_READY";
+
+   PrintFormat(
+      "MB_ONNX_INIT symbol=%s symbol_ready=%s teacher_ready=%s teacher_feature=%s reason=%s symbol_model=%s teacher_model=%s",
+      g_mb_onnx_obs_symbol,
+      (g_mb_onnx_obs_symbol_ready ? "true" : "false"),
+      (g_mb_onnx_obs_teacher_ready ? "true" : "false"),
+      (g_mb_onnx_obs_teacher_feature_enabled ? "true" : "false"),
+      g_mb_onnx_obs_init_reason,
+      symbol_model,
+      teacher_model
+   );
 
    return (g_mb_onnx_obs_symbol_ready && (!g_mb_onnx_obs_teacher_feature_enabled || g_mb_onnx_obs_teacher_ready));
+  }
+
+bool MbOnnxObservationBootstrapIncomplete()
+  {
+   if(!g_mb_onnx_obs_enabled)
+      return false;
+   if(!g_mb_onnx_obs_symbol_ready)
+      return true;
+   return (g_mb_onnx_obs_teacher_feature_enabled && !g_mb_onnx_obs_teacher_ready);
+  }
+
+void MbOnnxObservationRetryInitIfNeeded()
+  {
+   if(!MbOnnxObservationBootstrapIncomplete())
+      return;
+
+   datetime now_ts = TimeCurrent();
+   if(g_mb_onnx_obs_last_init_attempt > 0 && (now_ts - g_mb_onnx_obs_last_init_attempt) < g_mb_onnx_obs_retry_interval_sec)
+      return;
+
+   PrintFormat(
+      "MB_ONNX_RETRY_INIT symbol=%s previous_reason=%s",
+      g_mb_onnx_obs_symbol,
+      g_mb_onnx_obs_init_reason
+   );
+
+   MbOnnxObservationInit(
+      g_mb_onnx_obs_symbol,
+      g_mb_onnx_obs_enabled,
+      g_mb_onnx_obs_log_path,
+      g_mb_onnx_obs_state_path
+   );
   }
 
 void MbOnnxObservationShutdown()
@@ -500,11 +659,28 @@ bool MbOnnxObservationEvaluateWithChannel(
       return false;
      }
 
+   MbOnnxObservationRetryInitIfNeeded();
+
+   string observation_signature = MbOnnxObservationBuildSignature(
+      ts,
+      stage,
+      symbol,
+      runtime_channel,
+      signal,
+      spread_points
+   );
+   if(StringLen(observation_signature) > 0 && observation_signature == g_mb_onnx_obs_last_signature)
+     {
+      result.reason_code = "ONNX_DUPLICATE_SKIPPED";
+      return false;
+     }
+
    if(!g_mb_onnx_obs_symbol_ready)
      {
-      result.reason_code = "ONNX_SYMBOL_MODEL_NOT_READY";
+      result.reason_code = g_mb_onnx_obs_init_reason;
       MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
       MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
+      g_mb_onnx_obs_last_signature = observation_signature;
       return false;
      }
 
@@ -520,6 +696,7 @@ bool MbOnnxObservationEvaluateWithChannel(
          result.latency_us = (long)(GetMicrosecondCount() - started_us);
          MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
          MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
+         g_mb_onnx_obs_last_signature = observation_signature;
          return false;
         }
 
@@ -539,6 +716,7 @@ bool MbOnnxObservationEvaluateWithChannel(
          result.latency_us = (long)(GetMicrosecondCount() - started_us);
          MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
          MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
+         g_mb_onnx_obs_last_signature = observation_signature;
          return false;
         }
       result.teacher_used = true;
@@ -560,6 +738,7 @@ bool MbOnnxObservationEvaluateWithChannel(
       result.latency_us = (long)(GetMicrosecondCount() - started_us);
       MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
       MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
+      g_mb_onnx_obs_last_signature = observation_signature;
       return false;
      }
 
@@ -568,6 +747,7 @@ bool MbOnnxObservationEvaluateWithChannel(
    result.latency_us = (long)(GetMicrosecondCount() - started_us);
    MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
    MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
+   g_mb_onnx_obs_last_signature = observation_signature;
    return true;
   }
 

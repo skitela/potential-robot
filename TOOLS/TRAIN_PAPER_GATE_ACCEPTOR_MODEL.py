@@ -11,7 +11,7 @@ import joblib
 import numpy as np
 import onnxruntime as ort
 import pandas as pd
-from onnx import save_model
+from onnx import TensorProto, helper, save_model
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType, Int64TensorType, StringTensorType
 from sklearn.compose import ColumnTransformer
@@ -557,12 +557,51 @@ def export_runtime_numeric_onnx(
     output_path: Path,
     sample_matrix: np.ndarray,
 ) -> dict[str, Any]:
-    options = {id(pipeline.named_steps["model"]): {"zipmap": False}}
-    onx = convert_sklearn(
-        pipeline,
-        initial_types=[("features", FloatTensorType([None, sample_matrix.shape[1]]))],
-        target_opset=17,
-        options=options,
+    scaler: StandardScaler = pipeline.named_steps["scaler"]
+    classifier: SGDClassifier = pipeline.named_steps["model"]
+
+    feature_count = int(sample_matrix.shape[1])
+    mean = np.asarray(scaler.mean_, dtype=np.float32).reshape(1, feature_count)
+    scale = np.asarray(scaler.scale_, dtype=np.float32).reshape(1, feature_count)
+    scale[scale == 0.0] = 1.0
+    weights = np.asarray(classifier.coef_[0], dtype=np.float32).reshape(feature_count, 1)
+    intercept = np.asarray(classifier.intercept_, dtype=np.float32).reshape(1, 1)
+    one = np.asarray([[1.0]], dtype=np.float32)
+
+    initializers = [
+        helper.make_tensor("mean", TensorProto.FLOAT, mean.shape, mean.flatten()),
+        helper.make_tensor("scale", TensorProto.FLOAT, scale.shape, scale.flatten()),
+        helper.make_tensor("weights", TensorProto.FLOAT, weights.shape, weights.flatten()),
+        helper.make_tensor("intercept", TensorProto.FLOAT, intercept.shape, intercept.flatten()),
+        helper.make_tensor("one", TensorProto.FLOAT, one.shape, one.flatten()),
+    ]
+
+    nodes = [
+        helper.make_node("Sub", ["features", "mean"], ["centered"], name="CenterFeatures"),
+        helper.make_node("Div", ["centered", "scale"], ["scaled"], name="ScaleFeatures"),
+        helper.make_node("MatMul", ["scaled", "weights"], ["linear_raw"], name="LinearProjection"),
+        helper.make_node("Add", ["linear_raw", "intercept"], ["logits"], name="LinearBias"),
+        helper.make_node("Sigmoid", ["logits"], ["prob_up"], name="ProbabilityUp"),
+        helper.make_node("Sub", ["one", "prob_up"], ["prob_down"], name="ProbabilityDown"),
+        helper.make_node("Concat", ["prob_down", "prob_up"], ["probabilities"], axis=1, name="ProbabilityStack"),
+        helper.make_node("ArgMax", ["probabilities"], ["label_index"], axis=1, keepdims=0, name="LabelArgMax"),
+        helper.make_node("Cast", ["label_index"], ["label"], to=TensorProto.FLOAT, name="LabelAsFloat"),
+    ]
+
+    graph = helper.make_graph(
+        nodes,
+        "PaperGateRuntimeNumeric",
+        [helper.make_tensor_value_info("features", TensorProto.FLOAT, [None, feature_count])],
+        [
+            helper.make_tensor_value_info("label", TensorProto.FLOAT, [None]),
+            helper.make_tensor_value_info("probabilities", TensorProto.FLOAT, [None, 2]),
+        ],
+        initializer=initializers,
+    )
+    onx = helper.make_model(
+        graph,
+        producer_name="microbot_runtime_numeric_export",
+        opset_imports=[helper.make_opsetid("", 14)],
     )
     save_model(onx, str(output_path))
 

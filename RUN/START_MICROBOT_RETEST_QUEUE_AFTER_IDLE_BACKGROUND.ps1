@@ -164,30 +164,42 @@ function Invoke-TesterScriptWithEnvelope {
     `$stdoutPath = Join-Path `$env:TEMP ("microbot_tester_runner_" + `$runnerToken + ".stdout.log")
     `$stderrPath = Join-Path `$env:TEMP ("microbot_tester_runner_" + `$runnerToken + ".stderr.log")
 
-    `$runnerLines = @(
-        "`$ErrorActionPreference = 'Stop'",
-        "& '" + `$TesterScript + "'",
-        "    -ProjectRoot '" + `$ProjectRootPath + "'",
-        "    -Mt5Exe '" + `$Mt5ExePath + "'",
-        "    -TerminalDataDir '" + `$TerminalDataDirPath + "'",
-        "    -SymbolAlias '" + `$SymbolAlias + "'",
-        "    -WorkerName '" + `$WorkerName + "'",
-        "    -EvidenceSubdir '" + `$EvidenceSubdir + "'",
-        "    -FromDate '" + `$FromDate + "'",
-        "    -ToDate '" + `$ToDate + "'",
-        "    -TimeoutSec " + [string]`$TimeoutSec
-    )
+    `$runnerLines = New-Object System.Collections.Generic.List[string]
+    `$runnerLines.Add("`$ErrorActionPreference = 'Stop'")
+    `$runnerLines.Add("`$invokeParams = @{")
+    `$runnerLines.Add(("    ProjectRoot = '{0}'" -f (`$ProjectRootPath -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    Mt5Exe = '{0}'" -f (`$Mt5ExePath -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    TerminalDataDir = '{0}'" -f (`$TerminalDataDirPath -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    SymbolAlias = '{0}'" -f (`$SymbolAlias -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    WorkerName = '{0}'" -f (`$WorkerName -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    EvidenceSubdir = '{0}'" -f (`$EvidenceSubdir -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    FromDate = '{0}'" -f (`$FromDate -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    ToDate = '{0}'" -f (`$ToDate -replace \"'\", \"''\")))
+    `$runnerLines.Add(("    TimeoutSec = {0}" -f `$TimeoutSec))
+    `$runnerLines.Add("}")
+    `$runnerLines.Add(("& '{0}' @invokeParams" -f (`$TesterScript -replace \"'\", \"''\")))
     (`$runnerLines -join "`r`n") | Set-Content -LiteralPath `$runnerPath -Encoding UTF8
 
     `$proc = `$null
     `$deadline = (Get-Date).AddSeconds([Math]::Max(`$TimeoutSec + 900, 1800))
     try {
-        `$proc = Start-Process -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
-            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `$runnerPath) `
-            -WorkingDirectory `$ProjectRootPath `
-            -RedirectStandardOutput `$stdoutPath `
-            -RedirectStandardError `$stderrPath `
-            -PassThru
+        `$resolvedWorkingDirectory = `$ProjectRootPath
+        if ([string]::IsNullOrWhiteSpace(`$resolvedWorkingDirectory)) {
+            `$resolvedWorkingDirectory = Split-Path -Parent `$TesterScript
+        }
+        if ([string]::IsNullOrWhiteSpace(`$resolvedWorkingDirectory)) {
+            `$resolvedWorkingDirectory = '$ProjectRoot'
+        }
+
+        `$startInfo = @{
+            FilePath = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+            ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `$runnerPath)
+            WorkingDirectory = `$resolvedWorkingDirectory
+            RedirectStandardOutput = `$stdoutPath
+            RedirectStandardError = `$stderrPath
+            PassThru = `$true
+        }
+        `$proc = Start-Process @startInfo
 
         while (-not `$proc.HasExited) {
             Save-QueueStatus -State 'running' -CurrentSymbol `$CurrentSymbol -Completed @(`$Completed) -Pending @(`$Pending) -CurrentNote ("tester_process_id=" + [string]`$proc.Id)
@@ -267,21 +279,23 @@ try {
         `$pending = @(`$symbols | Where-Object { `$completed -notcontains `$_ -and `$_ -ne `$symbolAlias })
         Save-QueueStatus -State 'running' -CurrentSymbol `$symbolAlias -Completed @(`$completed) -Pending `$pending -CurrentNote 'tester_job_started'
 
-        `$testerOutcome = Invoke-TesterScriptWithEnvelope `
-            -TesterScript '$testerScript' `
-            -ProjectRootPath '$ProjectRoot' `
-            -Mt5ExePath '$Mt5Exe' `
-            -TerminalDataDirPath '$TerminalDataDir' `
-            -SymbolAlias `$symbolAlias `
-            -WorkerName `$workerName `
-            -EvidenceSubdir `$evidenceSubdir `
-            -FromDate '$FromDate' `
-            -ToDate '$ToDate' `
-            -TimeoutSec $TimeoutSec `
-            -PulseSeconds $PulseSeconds `
-            -CurrentSymbol `$symbolAlias `
-            -Completed @(`$completed) `
-            -Pending `$pending
+        `$invokeParams = @{
+            TesterScript = '$testerScript'
+            ProjectRootPath = '$ProjectRoot'
+            Mt5ExePath = '$Mt5Exe'
+            TerminalDataDirPath = '$TerminalDataDir'
+            SymbolAlias = `$symbolAlias
+            WorkerName = `$workerName
+            EvidenceSubdir = `$evidenceSubdir
+            FromDate = '$FromDate'
+            ToDate = '$ToDate'
+            TimeoutSec = $TimeoutSec
+            PulseSeconds = $PulseSeconds
+            CurrentSymbol = `$symbolAlias
+            Completed = @(`$completed)
+            Pending = `$pending
+        }
+        `$testerOutcome = Invoke-TesterScriptWithEnvelope @invokeParams
 
         `$completed.Add(`$symbolAlias)
         `$pending = @(`$symbols | Where-Object { `$completed -notcontains `$_ })

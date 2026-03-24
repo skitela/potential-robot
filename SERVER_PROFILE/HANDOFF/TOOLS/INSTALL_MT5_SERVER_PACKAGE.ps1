@@ -3,7 +3,8 @@ param(
     [string]$PackageRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\PACKAGE",
     [string]$TargetTerminalDataDir,
     [string]$TargetCommonFilesDir = (Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Files"),
-    [switch]$CreateRuntimeFolders
+    [switch]$CreateRuntimeFolders,
+    [switch]$AllowBlockedAuditGate
 )
 
 Set-StrictMode -Version Latest
@@ -17,6 +18,11 @@ $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $packagePath = (Resolve-Path -LiteralPath $PackageRoot).Path
 $targetTerminal = $TargetTerminalDataDir
 $targetCommon = $TargetCommonFilesDir
+
+& (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
+    -ProjectRoot $projectPath `
+    -GateType ROLLOUT `
+    -AllowBlocked:$AllowBlockedAuditGate | Out-Null
 
 $targetExperts = Join-Path $targetTerminal "MQL5\Experts\MicroBots"
 $targetCore = Join-Path $targetTerminal "MQL5\Include\Core"

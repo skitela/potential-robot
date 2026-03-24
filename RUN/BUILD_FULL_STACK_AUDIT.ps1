@@ -16,12 +16,14 @@ New-Item -ItemType Directory -Force -Path $opsRoot | Out-Null
 $runtimeArtifactAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_AND_CLEAN_RUNTIME_ARTIFACTS.ps1"
 $runtimePersistenceAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_RUNTIME_PERSISTENCE.ps1"
 $runtimeLogRotationScript = Join-Path $ProjectRoot "TOOLS\ROTATE_RUNTIME_LOGS.ps1"
+$repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 
 foreach ($path in @(
     $runtimeArtifactAuditScript,
     $runtimePersistenceAuditScript,
     $runtimeLogRotationScript,
+    $repoHygieneScript,
     $nearProfitQueueStatusScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -154,6 +156,10 @@ Invoke-JsonAuditTool -ScriptPath $runtimeLogRotationScript -Parameters @{
     ProjectRoot = $ProjectRoot
     Apply = [bool]$ApplyLogRotation
 }
+Invoke-JsonAuditTool -ScriptPath $repoHygieneScript -Parameters @{
+    ProjectRoot = $ProjectRoot
+    OutputRoot = $opsRoot
+}
 Invoke-JsonAuditTool -ScriptPath $nearProfitQueueStatusScript -Parameters @{
     ProjectRoot = $ProjectRoot
     UseDedicatedPortableLabLane = $true
@@ -163,6 +169,7 @@ Invoke-JsonAuditTool -ScriptPath $nearProfitQueueStatusScript -Parameters @{
 $runtimeArtifactAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_artifact_audit_report.json")
 $runtimePersistenceAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_persistence_audit_report.json")
 $runtimeLogRotation = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_log_rotation_report.json")
+$repoHygiene = Read-JsonFile -Path (Join-Path $opsRoot "repo_hygiene_latest.json")
 
 $freshness = @(
     Get-FileFreshness -Label "local_operator_snapshot" -Path (Join-Path $opsRoot "local_operator_snapshot_latest.json") -ThresholdSeconds 600
@@ -506,6 +513,10 @@ $report = [ordered]@{
         git_tracked_count = $gitTrackedCount
         git_untracked_count = $gitUntrackedCount
         git_dirty_head = @($gitStatusLines | Select-Object -First 20)
+        repo_hygiene_verdict = $(if ($null -ne $repoHygiene) { $repoHygiene.verdict } else { $null })
+        git_code_dirty_count = $(if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'code_or_logic' -Default 0) } else { 0 })
+        git_generated_timestamp_only_count = $(if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'generated_timestamp_only' -Default 0) } else { 0 })
+        git_generated_other_count = $(if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'generated_other' -Default 0) } else { 0 })
         runtime_unexpected_dir_count = $runtimeUnexpectedTotal
         rotation_candidate_count = $rotationCandidateCount
         rotation_applied_count = $rotationAppliedCount
@@ -515,6 +526,7 @@ $report = [ordered]@{
         artifact_audit = $runtimeArtifactAudit
         persistence_audit = $runtimePersistenceAudit
         log_rotation = $runtimeLogRotation
+        repo_hygiene = $repoHygiene
     }
     market_context = if ($null -ne $profitTracking) {
         [ordered]@{
@@ -582,6 +594,10 @@ $lines.Add("")
 $lines.Add("## Cleanliness")
 $lines.Add("")
 $lines.Add(("- git_dirty_count: {0}" -f $report.cleanliness.git_dirty_count))
+$lines.Add(("- repo_hygiene_verdict: {0}" -f $report.cleanliness.repo_hygiene_verdict))
+$lines.Add(("- git_code_dirty_count: {0}" -f $report.cleanliness.git_code_dirty_count))
+$lines.Add(("- git_generated_timestamp_only_count: {0}" -f $report.cleanliness.git_generated_timestamp_only_count))
+$lines.Add(("- git_generated_other_count: {0}" -f $report.cleanliness.git_generated_other_count))
 $lines.Add(("- runtime_unexpected_dir_count: {0}" -f $report.cleanliness.runtime_unexpected_dir_count))
 $lines.Add(("- rotation_candidate_count: {0}" -f $report.cleanliness.rotation_candidate_count))
 $lines.Add(("- persistence_overgrowth_count: {0}" -f $report.cleanliness.persistence_overgrowth_count))

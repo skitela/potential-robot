@@ -64,38 +64,61 @@ def discover_related_common_roots(common_root: Path) -> list[Path]:
 
 def read_tsv(path: Path) -> pd.DataFrame:
     try:
-        return pd.read_csv(path, sep="\t", low_memory=False)
-    except ParserError:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            raw_lines = [line.rstrip("\r\n") for line in handle if line.strip()]
+    except Exception:
+        return pd.DataFrame()
+
+    if not raw_lines:
+        return pd.DataFrame()
+
+    delimiter_candidates = ["\t", ",", ";"]
+    header_line = raw_lines[0]
+    header_delimiter = max(delimiter_candidates, key=lambda delim: header_line.count(delim))
+    if header_line.count(header_delimiter) <= 0:
+        header_delimiter = "\t"
+
+    def parse_line(line: str, delimiter: str) -> list[str]:
         try:
-            with path.open("r", encoding="utf-8-sig", newline="") as handle:
-                rows = list(csv.reader(handle, delimiter="\t"))
+            return next(csv.reader([line], delimiter=delimiter))
         except Exception:
-            return pd.DataFrame()
+            return [line]
 
-        if not rows:
-            return pd.DataFrame()
+    header = parse_line(header_line, header_delimiter)
+    expected_len = max(1, len(header))
 
-        header = list(rows[0])
-        body = [list(row) for row in rows[1:] if row]
-        if not body:
-            return pd.DataFrame(columns=header)
+    body = []
+    for line in raw_lines[1:]:
+        best_row = None
+        best_score = None
+        for delimiter in dict.fromkeys([header_delimiter, ",", "\t", ";"]).keys():
+            parsed = parse_line(line, delimiter)
+            score = abs(len(parsed) - expected_len)
+            if best_row is None or score < best_score or (score == best_score and len(parsed) > len(best_row)):
+                best_row = parsed
+                best_score = score
+                if score == 0:
+                    break
+        if best_row:
+            body.append(best_row)
 
-        max_len = max(len(header), *(len(row) for row in body))
-        if len(header) < max_len:
-            header = header + [f"_extra_col_{idx}" for idx in range(1, max_len - len(header) + 1)]
+    if not body:
+        return pd.DataFrame(columns=header)
 
-        normalized_rows = []
-        for row in body:
-            if len(row) < max_len:
-                row = row + [None] * (max_len - len(row))
-            elif len(row) > max_len:
-                row = row[:max_len]
-            normalized_rows.append(row)
+    max_len = max(len(header), *(len(row) for row in body))
+    if len(header) < max_len:
+        header = header + [f"_extra_col_{idx}" for idx in range(1, max_len - len(header) + 1)]
 
-        try:
-            return pd.DataFrame(normalized_rows, columns=header)
-        except Exception:
-            return pd.DataFrame()
+    normalized_rows = []
+    for row in body:
+        if len(row) < max_len:
+            row = row + [None] * (max_len - len(row))
+        elif len(row) > max_len:
+            row = row[:max_len]
+        normalized_rows.append(row)
+
+    try:
+        return pd.DataFrame(normalized_rows, columns=header)
     except Exception:
         return pd.DataFrame()
 

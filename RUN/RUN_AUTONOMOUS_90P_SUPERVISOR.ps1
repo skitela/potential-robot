@@ -12,10 +12,12 @@ $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
 $mt5QueueSyncScript = Join-Path $ProjectRoot "RUN\SYNC_MT5_RETEST_QUEUE_FROM_RESEARCH_PLAN.ps1"
+$retestQueueScript = Join-Path $ProjectRoot "RUN\START_MICROBOT_RETEST_QUEUE_AFTER_IDLE_BACKGROUND.ps1"
 $applyLaptopRuntimeScript = Join-Path $ProjectRoot "RUN\APPLY_LAPTOP_RESEARCH_RUNTIME.ps1"
 $tripleLoopAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MICROBOT_TRIPLE_LOOP_AUDIT.ps1"
 $tuningEffectiveRepairScript = Join-Path $ProjectRoot "RUN\REPAIR_TUNING_EFFECTIVE_SYNC.ps1"
 $profitTrackingScript = Join-Path $ProjectRoot "RUN\BUILD_PROFIT_TRACKING_REPORT.ps1"
+$onnxFeedbackScript = Join-Path $ProjectRoot "RUN\BUILD_ONNX_FEEDBACK_LOOP_REPORT.ps1"
 $dailySystemReportScript = Join-Path $ProjectRoot "TOOLS\GENERATE_DAILY_SYSTEM_REPORTS.ps1"
 $paperLiveFeedbackScript = Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1"
 $hostingReportScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_HOSTING_DAILY_REPORT.ps1"
@@ -33,6 +35,8 @@ $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACK
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
 $statusDir = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $mt5StatusPath = Join-Path $statusDir "mt5_tester_status_latest.json"
+$mt5QueuePath = Join-Path $statusDir "mt5_retest_queue_latest.json"
+$nearProfitQueuePath = Join-Path $statusDir "near_profit_optimization_queue_latest.json"
 $dailySystemReportPath = Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json"
 $secondaryMt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe"
 
@@ -42,10 +46,12 @@ foreach ($path in @(
     $mlHintsScript,
     $researchPlanScript,
     $mt5QueueSyncScript,
+    $retestQueueScript,
     $applyLaptopRuntimeScript,
     $tripleLoopAuditScript,
     $tuningEffectiveRepairScript,
     $profitTrackingScript,
+    $onnxFeedbackScript,
     $dailySystemReportScript,
     $paperLiveFeedbackScript,
     $hostingReportScript,
@@ -176,6 +182,117 @@ function Get-WeakestMt5ActivityCount {
     }
 
     return 0
+}
+
+function Stop-WrapperProcessesByPattern {
+    param([string[]]$Patterns)
+
+    $stopped = 0
+    foreach ($pattern in @($Patterns | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $processes = @(
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Name -eq "powershell.exe" -and
+                    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                    $_.CommandLine -like $pattern
+                }
+        )
+
+        foreach ($proc in $processes) {
+            try {
+                Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+                $stopped++
+            }
+            catch {
+            }
+        }
+    }
+
+    return $stopped
+}
+
+function Get-Mt5RestartAssessment {
+    param(
+        [string]$Mt5StatusPath,
+        [string]$Mt5QueuePath
+    )
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $mt5Status = Read-JsonOrNull -Path $Mt5StatusPath
+    $mt5Queue = Read-JsonOrNull -Path $Mt5QueuePath
+    $statusAge = Get-FileAgeSecondsOrMax -Path $Mt5StatusPath
+    $queueAge = Get-FileAgeSecondsOrMax -Path $Mt5QueuePath
+
+    if ($null -ne $mt5Status) {
+        $statusState = [string]$mt5Status.state
+        $watchedTerminalRunning = [bool]$mt5Status.watched_terminal_running
+        $watchedMetaTesterRunning = [bool]$mt5Status.watched_metatester_running
+        $watchedExecutorRunning = [bool]$mt5Status.watched_executor_running
+        if ($statusState -eq "stale") {
+            [void]$reasons.Add("tester_stale")
+        }
+        elseif ($statusState -eq "running" -and -not ($watchedTerminalRunning -or $watchedMetaTesterRunning -or $watchedExecutorRunning)) {
+            [void]$reasons.Add("tester_running_without_process")
+        }
+    }
+
+    if ($statusAge -gt 900) {
+        [void]$reasons.Add("tester_status_old")
+    }
+
+    if ($null -ne $mt5Queue) {
+        $queueState = [string]$mt5Queue.state
+        if ($queueState -eq "stale") {
+            [void]$reasons.Add("queue_stale")
+        }
+    }
+
+    if ($queueAge -gt 1800) {
+        [void]$reasons.Add("queue_status_old")
+    }
+
+    return [pscustomobject]@{
+        needs_restart = ($reasons.Count -gt 0)
+        reasons = @($reasons)
+    }
+}
+
+function Get-NearProfitRestartAssessment {
+    param([string]$NearProfitQueuePath)
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $queue = Read-JsonOrNull -Path $NearProfitQueuePath
+    $queueAge = Get-FileAgeSecondsOrMax -Path $NearProfitQueuePath
+
+    if ($null -ne $queue) {
+        $state = [string]$queue.state
+        if ($state -eq "stale") {
+            [void]$reasons.Add("near_profit_stale")
+        }
+
+        if ($queue.PSObject.Properties.Name -contains "run_timeout_near" -and [bool]$queue.run_timeout_near) {
+            [void]$reasons.Add("near_profit_timeout")
+        }
+
+        if ($queue.PSObject.Properties.Name -contains "run_remaining_sec") {
+            try {
+                if ([int]$queue.run_remaining_sec -lt -300) {
+                    [void]$reasons.Add("near_profit_negative_remaining")
+                }
+            }
+            catch {
+            }
+        }
+    }
+
+    if ($queueAge -gt 1800) {
+        [void]$reasons.Add("near_profit_status_old")
+    }
+
+    return [pscustomobject]@{
+        needs_restart = ($reasons.Count -gt 0)
+        reasons = @($reasons)
+    }
 }
 
 function Write-SupervisorStatus {
@@ -407,6 +524,9 @@ while ($true) {
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "mt5_queue_sync" -Operation {
+        if ((Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*") -gt 0) {
+            return "skipped queue_wrapper_active"
+        }
         & $mt5QueueSyncScript | Out-Null
         "rebuilt"
     } | Out-Null
@@ -418,6 +538,11 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "profit_tracking" -Operation {
         & $profitTrackingScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "onnx_feedback" -Operation {
+        & $onnxFeedbackScript | Out-Null
         "rebuilt"
     } | Out-Null
 
@@ -467,13 +592,41 @@ while ($true) {
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "weakest_mt5" -Operation {
-        Ensure-BackgroundTask `
+        $assessment = Get-Mt5RestartAssessment -Mt5StatusPath $mt5StatusPath -Mt5QueuePath $mt5QueuePath
+        if ($assessment.needs_restart) {
+            $stopped = Stop-WrapperProcessesByPattern -Patterns @(
+                "*weakest_mt5_batch_wrapper_*",
+                "*mt5_retest_queue_wrapper_*"
+            )
+            & $weakestBatchScript | Out-Host
+            & $retestQueueScript | Out-Host
+            return ("restarted reason={0} stopped={1}" -f (($assessment.reasons -join ",")), $stopped)
+        }
+
+        $weakestState = Ensure-BackgroundTask `
             -Label "weakest_mt5" `
             -IsRunning { (Get-WeakestMt5ActivityCount -Mt5StatusPath $mt5StatusPath) -gt 0 } `
             -StarterPath $weakestBatchScript
+
+        $queueState = Ensure-BackgroundTask `
+            -Label "mt5_retest_queue" `
+            -IsRunning { (Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*") -gt 0 } `
+            -StarterPath $retestQueueScript
+
+        return ("weakest={0}; queue={1}" -f $weakestState, $queueState)
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "near_profit_optimization" -Operation {
+        $assessment = Get-NearProfitRestartAssessment -NearProfitQueuePath $nearProfitQueuePath
+        if ($assessment.needs_restart) {
+            $stopped = Stop-WrapperProcessesByPattern -Patterns @(
+                "*near_profit_optimization_after_idle_wrapper_*",
+                "*near_profit_mt5_risk_popup_guard_wrapper_*"
+            )
+            & $nearProfitBatchScript | Out-Host
+            return ("restarted reason={0} stopped={1}" -f (($assessment.reasons -join ",")), $stopped)
+        }
+
         Ensure-BackgroundTask `
             -Label "near_profit_optimization" `
             -IsRunning { (Get-WrapperCount -Pattern "*near_profit_optimization_after_idle_wrapper_*") -gt 0 } `
