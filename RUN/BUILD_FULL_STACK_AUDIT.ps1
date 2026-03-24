@@ -18,6 +18,7 @@ $runtimePersistenceAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_RUNTIME_PER
 $runtimeLogRotationScript = Join-Path $ProjectRoot "TOOLS\ROTATE_RUNTIME_LOGS.ps1"
 $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
+$learningHotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 
 foreach ($path in @(
     $runtimeArtifactAuditScript,
@@ -170,6 +171,7 @@ $runtimeArtifactAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\ru
 $runtimePersistenceAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_persistence_audit_report.json")
 $runtimeLogRotation = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_log_rotation_report.json")
 $repoHygiene = Read-JsonFile -Path (Join-Path $opsRoot "repo_hygiene_latest.json")
+$learningHotPath = Read-JsonFile -Path $learningHotPathPath
 
 $freshness = @(
     Get-FileFreshness -Label "local_operator_snapshot" -Path (Join-Path $opsRoot "local_operator_snapshot_latest.json") -ThresholdSeconds 600
@@ -235,11 +237,29 @@ if ($null -ne $runtimePersistenceAudit) {
     }
 }
 
+$learningHotPathVerdict = [string](Get-SafeObjectValue -Object $learningHotPath -PropertyName "verdict" -Default "")
+$learningHotPathSummary = Get-SafeObjectValue -Object $learningHotPath -PropertyName "summary" -Default $null
+$learningHotWaitingCount = [int](Get-SafeObjectValue -Object $learningHotPathSummary -PropertyName "waiting_hot_count" -Default 0)
+$learningHotOversizedCount = [int](Get-SafeObjectValue -Object $learningHotPathSummary -PropertyName "oversized_count" -Default 0)
+$runtimeLogsUnderControl = (
+    ($rotationCandidateCount -eq 0) -and (
+        ($persistenceOvergrowthCount -eq 0) -or
+        (
+            $learningHotPathVerdict -eq "GORACY_SZLAK_AKTYWNY" -and
+            $learningHotWaitingCount -gt 0 -and
+            $learningHotOversizedCount -eq $learningHotWaitingCount
+        )
+    )
+)
+
 $wrapperState = [ordered]@{
     supervisor = ((Get-WrapperCount -Pattern "*autonomous_90p_supervisor_wrapper_*") -gt 0)
     archiver = ((Get-WrapperCount -Pattern "*local_operator_archiver_wrapper_*") -gt 0)
     qdm_weakest = ((Get-WrapperCount -Pattern "*qdm_weakest_sync_wrapper_*") -gt 0)
-    ml = ((Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0)
+    ml = (
+        ((Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0) -or
+        (@($freshness | Where-Object { $_.label -eq "ml_tuning_hints" -and $_.fresh }).Count -gt 0)
+    )
     weakest_mt5 = ((Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*") -gt 0 -or (Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*") -gt 0)
     near_profit_optimization = (
         (Get-WrapperCount -Pattern "*near_profit_optimization_after_idle_wrapper_*") -gt 0 -or
@@ -326,7 +346,7 @@ $syncAllowed = (
     $paperLiveFeedbackFresh -and
     $localFresh -and
     ($runtimeUnexpectedTotal -eq 0) -and
-    ($rotationCandidateCount -eq 0) -and
+    $runtimeLogsUnderControl -and
     ($gitDirtyCount -eq 0) -and
     $verificationClean -and
     -not $labBusy
@@ -342,7 +362,7 @@ elseif (-not $localFresh) {
 elseif ($runtimeUnexpectedTotal -gt 0) {
     $releaseVerdict = "CLEAN_RUNTIME_ARTIFACTS_FIRST"
 }
-elseif ($rotationCandidateCount -gt 0) {
+elseif (-not $runtimeLogsUnderControl) {
     $releaseVerdict = "ROTATE_RUNTIME_LOGS_FIRST"
 }
 elseif ($gitDirtyCount -gt 0) {
@@ -521,11 +541,15 @@ $report = [ordered]@{
         rotation_candidate_count = $rotationCandidateCount
         rotation_applied_count = $rotationAppliedCount
         persistence_overgrowth_count = $persistenceOvergrowthCount
+        learning_hot_path_verdict = $learningHotPathVerdict
+        learning_hot_waiting_count = $learningHotWaitingCount
+        runtime_logs_under_control = $runtimeLogsUnderControl
     }
     runtime_audits = [ordered]@{
         artifact_audit = $runtimeArtifactAudit
         persistence_audit = $runtimePersistenceAudit
         log_rotation = $runtimeLogRotation
+        learning_hot_path = $learningHotPath
         repo_hygiene = $repoHygiene
     }
     market_context = if ($null -ne $profitTracking) {
@@ -561,7 +585,8 @@ $report = [ordered]@{
         paper_live_feedback_fresh = $paperLiveFeedbackFresh
         local_lab_fresh = $localFresh
         runtime_artifacts_clean = ($runtimeUnexpectedTotal -eq 0)
-        runtime_logs_rotated = ($rotationCandidateCount -eq 0)
+        runtime_logs_rotated = $runtimeLogsUnderControl
+        runtime_logs_under_control = $runtimeLogsUnderControl
         code_checkpoint_clean = ($gitDirtyCount -eq 0)
         verification_clean = $verificationClean
         lab_busy = $labBusy

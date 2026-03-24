@@ -248,6 +248,7 @@ function Invoke-AuditCycle {
     $learningPath = Join-Path $opsRoot "learning_stack_audit_latest.json"
     $learningHealthPath = Join-Path $opsRoot "learning_health_registry_latest.json"
     $learningPaperRuntimePath = Join-Path $opsRoot "learning_paper_runtime_plan_latest.json"
+    $learningDataContractPath = Join-Path $opsRoot "learning_data_contract_audit_latest.json"
     $onnxFeedbackPath = Join-Path $opsRoot "onnx_feedback_loop_latest.json"
     $onnxCrossAuditPath = Join-Path $opsRoot "onnx_micro_cross_audit_latest.json"
     $hostilePath = Join-Path $opsRoot "hostile_four_loop_audit_latest.json"
@@ -284,6 +285,14 @@ function Invoke-AuditCycle {
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_DATA_CONTRACT_AUDIT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
         },
         @{
@@ -379,6 +388,14 @@ function Invoke-AuditCycle {
                 params = @{ ProjectRoot = $ProjectRoot }
             },
             @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1")
+                params = @{ ProjectRoot = $ProjectRoot }
+            },
+            @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_DATA_CONTRACT_AUDIT.ps1")
+                params = @{ ProjectRoot = $ProjectRoot }
+            },
+            @{
                 path = (Join-Path $ProjectRoot "RUN\BUILD_ONNX_FEEDBACK_LOOP_REPORT.ps1")
                 params = @{ ProjectRoot = $ProjectRoot }
             }
@@ -427,6 +444,14 @@ function Invoke-AuditCycle {
                     params = @{ ProjectRoot = $ProjectRoot }
                 },
                 @{
+                    path = (Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1")
+                    params = @{ ProjectRoot = $ProjectRoot }
+                },
+                @{
+                    path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_DATA_CONTRACT_AUDIT.ps1")
+                    params = @{ ProjectRoot = $ProjectRoot }
+                },
+                @{
                     path = (Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1")
                     params = @{
                         ProjectRoot = $ProjectRoot
@@ -451,6 +476,7 @@ function Invoke-AuditCycle {
     $learning = Read-JsonSafe -Path $learningPath
     $learningHealth = Read-JsonSafe -Path $learningHealthPath
     $learningPaperRuntime = Read-JsonSafe -Path $learningPaperRuntimePath
+    $learningDataContract = Read-JsonSafe -Path $learningDataContractPath
     $onnxFeedback = Read-JsonSafe -Path $onnxFeedbackPath
     $onnxCrossAudit = Read-JsonSafe -Path $onnxCrossAuditPath
     $hostile = Read-JsonSafe -Path $hostilePath
@@ -550,15 +576,67 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_SCIEZKI_UCZENIA" -Gate "RAPORTUJ" -Severity "info" -Reason "Manifest research i logi sciezki uczenia sa pod kontrola.")) | Out-Null
     }
 
+    $learningDataContractEvidence = New-Object System.Collections.Generic.List[object]
+    foreach ($result in ([object[]]$refreshResults.ToArray() | Where-Object {
+        -not $_.ok -and [string]$_.script -like "*BUILD_LEARNING_DATA_CONTRACT_AUDIT*"
+    })) {
+        $learningDataContractEvidence.Add($result) | Out-Null
+    }
+    if ($null -ne $learningDataContract) {
+        $contractVerdict = [string](Get-OptionalValue -Object $learningDataContract -Name "verdict" -Default "")
+        $contractSummary = Get-OptionalValue -Object $learningDataContract -Name "summary" -Default $null
+        $tablesReady = [int](Get-OptionalValue -Object $contractSummary -Name "tables_ready" -Default 0)
+        $tablesChecked = [int](Get-OptionalValue -Object $contractSummary -Name "tables_checked" -Default 0)
+        $contractFresh = [bool](Get-OptionalValue -Object $contractSummary -Name "contract_fresh" -Default $false)
+        $researchFresh = [bool](Get-OptionalValue -Object $contractSummary -Name "research_fresh" -Default $false)
+        $findingsTotal = [int](Get-OptionalValue -Object $contractSummary -Name "findings_total" -Default 0)
+
+        if ($contractVerdict -ne "OK") {
+            $learningDataContractEvidence.Add([pscustomobject]@{
+                severity = $(if ($contractVerdict -eq "NAPRAW_W_CYKLU") { "high" } else { "medium" })
+                component = "learning_data_contract"
+                message = "Kontrakt danych uczenia nie jest jeszcze zielony."
+                context = @{
+                    verdict = $contractVerdict
+                    findings_total = $findingsTotal
+                    tables_ready = $tablesReady
+                    tables_checked = $tablesChecked
+                }
+            }) | Out-Null
+        }
+        if (-not $contractFresh) {
+            $learningDataContractEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_data_contract"
+                message = "Kanoniczny kontrakt danych nie jest swiezy."
+            }) | Out-Null
+        }
+        if (-not $researchFresh) {
+            $learningDataContractEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_data_contract"
+                message = "Manifest research nie jest swiezy wzgledem kontraktu danych."
+            }) | Out-Null
+        }
+    }
+
+    if ($learningDataContractEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "KONTRAKT_DANYCH_UCZENIA" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $learningDataContractEvidence) -Reason "Dane z wielu zrodel musza byc typowane i zgodne, zanim pojda dalej do ONNX i mikrobotow." -Evidence $learningDataContractEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "KONTRAKT_DANYCH_UCZENIA" -Gate "RAPORTUJ" -Severity "info" -Reason "Kanoniczny kontrakt danych uczenia jest swiezy i spojny.")) | Out-Null
+    }
+
     $runtimeEvidence = New-Object System.Collections.Generic.List[object]
     foreach ($finding in @($hostileFindings | Where-Object { $_.component -in @("git", "runtime_logs", "orphan_dirs") })) {
         $runtimeEvidence.Add($finding) | Out-Null
     }
     if ($null -ne $fullStack) {
         $cleanliness = Get-OptionalValue -Object $fullStack -Name "cleanliness" -Default $null
+        $releaseGate = Get-OptionalValue -Object $fullStack -Name "release_gate" -Default $null
         $gitDirtyCount = [int](Get-OptionalValue -Object $cleanliness -Name "git_dirty_count" -Default 0)
-        $runtimeArtifactsClean = [bool](Get-OptionalValue -Object $cleanliness -Name "runtime_artifacts_clean" -Default $false)
-        $runtimeLogsRotated = [bool](Get-OptionalValue -Object $cleanliness -Name "runtime_logs_rotated" -Default $false)
+        $runtimeArtifactsClean = [bool](Get-OptionalValue -Object $releaseGate -Name "runtime_artifacts_clean" -Default $false)
+        $runtimeLogsRotated = [bool](Get-OptionalValue -Object $releaseGate -Name "runtime_logs_under_control" -Default (Get-OptionalValue -Object $releaseGate -Name "runtime_logs_rotated" -Default $false))
 
         if ($gitDirtyCount -gt 0) {
             $runtimeEvidence.Add([pscustomobject]@{
@@ -584,8 +662,12 @@ function Invoke-AuditCycle {
         }
     }
 
-    if ($runtimeEvidence.Count -gt 0) {
+    $runtimeBlockingEvidence = @($runtimeEvidence | Where-Object { [string]$_.severity -ne "low" })
+    if ($runtimeBlockingEvidence.Count -gt 0) {
         $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_RUNTIME" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $runtimeEvidence) -Reason "Higiena runtime wymaga sprzatania albo dalszej rotacji." -Evidence $runtimeEvidence)) | Out-Null
+    }
+    elseif ($runtimeEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_RUNTIME" -Gate "RAPORTUJ" -Severity "info" -Reason "Runtime jest pod kontrola; pozostaly tylko gorace logi oczekujace na bezpieczne okno rotacji." -Evidence $runtimeEvidence)) | Out-Null
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_RUNTIME" -Gate "RAPORTUJ" -Severity "info" -Reason "Runtime jest czysty, a logi sa pod kontrola.")) | Out-Null
@@ -841,6 +923,7 @@ function Invoke-AuditCycle {
         learning_path_hygiene = $learningHygienePath
         learning_health_registry = $learningHealthPath
         learning_paper_runtime_plan = $learningPaperRuntimePath
+        learning_data_contract_audit = $learningDataContractPath
         onnx_feedback = $onnxFeedbackPath
         onnx_cross_audit = $onnxCrossAuditPath
         hostile_four_loop = $hostilePath

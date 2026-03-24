@@ -16,6 +16,8 @@ $activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERD
 $winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
 $learningHealthRegistryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
 $learningPaperRuntimePlanScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1"
+$researchDataContractScript = Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1"
+$learningDataContractAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_DATA_CONTRACT_AUDIT.ps1"
 $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
 $learningHygieneScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1"
 $learningHotPathScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1"
@@ -42,6 +44,7 @@ $qdmWeakestScript = Join-Path $ProjectRoot "RUN\START_QDM_WEAKEST_SYNC_BACKGROUN
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
 $statusDir = Join-Path $ProjectRoot "EVIDENCE\OPS"
+$researchContractManifestPath = "C:\TRADING_DATA\RESEARCH\reports\research_contract_manifest_latest.json"
 $mt5StatusPath = Join-Path $statusDir "mt5_tester_status_latest.json"
 $mt5QueuePath = Join-Path $statusDir "mt5_retest_queue_latest.json"
 $nearProfitQueuePath = Join-Path $statusDir "near_profit_optimization_queue_latest.json"
@@ -57,6 +60,8 @@ foreach ($path in @(
     $winnerDeploymentScript,
     $learningHealthRegistryScript,
     $learningPaperRuntimePlanScript,
+    $researchDataContractScript,
+    $learningDataContractAuditScript,
     $researchPlanScript,
     $learningHygieneScript,
     $learningHotPathScript,
@@ -690,6 +695,34 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "learning_hot_path" -Operation {
         $report = (& $learningHotPathScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
         "verdict=$($report.verdict); rotated=$($report.summary.rotated_count); waiting_hot=$($report.summary.waiting_hot_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "research_data_contract" -Operation {
+        & $researchDataContractScript -ProjectRoot $ProjectRoot | Out-Null
+        $contractManifest = Read-JsonOrNull -Path $researchContractManifestPath
+        if ($null -eq $contractManifest) {
+            return "contract_manifest_missing"
+        }
+
+        $contractVersion = if (Test-ObjectHasProperty -Object $contractManifest -Name "contract_version") {
+            [string]$contractManifest.contract_version
+        }
+        else {
+            "unknown"
+        }
+        $contractSummary = if (Test-ObjectHasProperty -Object $contractManifest -Name "summary") { $contractManifest.summary } else { $null }
+        $tablesReady = if ($null -ne $contractSummary -and (Test-ObjectHasProperty -Object $contractSummary -Name "tables_ready")) {
+            [string]$contractSummary.tables_ready
+        }
+        else {
+            "unknown"
+        }
+        "contract_version=$contractVersion; tables_ready=$tablesReady"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "learning_data_contract_audit" -Operation {
+        $report = (& $learningDataContractAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "verdict=$($report.verdict); tables_ready=$($report.summary.tables_ready); findings=$($report.summary.findings_total); runtime_active=$($report.summary.runtime_active_symbols)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "laptop_runtime" -Operation {

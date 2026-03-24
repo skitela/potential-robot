@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--common-root", default=r"C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT")
     parser.add_argument("--output-root", default=r"C:\TRADING_DATA\RESEARCH")
     parser.add_argument("--qdm-export-root", default=r"C:\TRADING_DATA\QDM_EXPORT\MT5")
+    parser.add_argument("--contract-only", action="store_true")
     return parser.parse_args()
 
 
@@ -308,6 +309,447 @@ def read_json(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def get_parquet_row_count(parquet_path: Path) -> int:
+    if not parquet_path.exists():
+        return 0
+
+    with duckdb.connect() as con:
+        row = con.execute("SELECT COALESCE(SUM(num_rows), 0) FROM parquet_metadata(?)", [str(parquet_path)]).fetchone()
+    return int(row[0] or 0)
+
+
+def relation_has_columns(con: duckdb.DuckDBPyConnection, table_name: str, required_columns: list[str]) -> bool:
+    try:
+        rows = con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    except Exception:
+        return False
+
+    present = {str(row[1]) for row in rows}
+    return all(column in present for column in required_columns)
+
+
+def describe_relation_schema(con: duckdb.DuckDBPyConnection, table_name: str) -> list[dict[str, str]]:
+    try:
+        rows = con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    except Exception:
+        return []
+
+    schema: list[dict[str, str]] = []
+    for row in rows:
+        schema.append(
+            {
+                "name": str(row[1]),
+                "type": str(row[2]),
+            }
+        )
+    return schema
+
+
+def create_empty_normalized_tables(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE onnx_observations_norm AS
+        SELECT
+            CAST(NULL AS BIGINT) AS ts,
+            CAST(NULL AS VARCHAR) AS symbol_alias,
+            CAST(NULL AS VARCHAR) AS stage,
+            CAST(NULL AS VARCHAR) AS runtime_channel,
+            CAST(NULL AS BIGINT) AS available,
+            CAST(NULL AS BIGINT) AS teacher_available,
+            CAST(NULL AS BIGINT) AS teacher_used,
+            CAST(NULL AS DOUBLE) AS teacher_score,
+            CAST(NULL AS DOUBLE) AS symbol_score,
+            CAST(NULL AS DOUBLE) AS latency_us,
+            CAST(NULL AS VARCHAR) AS reason_code,
+            CAST(NULL AS BIGINT) AS signal_valid,
+            CAST(NULL AS VARCHAR) AS setup_type,
+            CAST(NULL AS VARCHAR) AS market_regime,
+            CAST(NULL AS VARCHAR) AS spread_regime,
+            CAST(NULL AS VARCHAR) AS confidence_bucket,
+            CAST(NULL AS DOUBLE) AS score,
+            CAST(NULL AS DOUBLE) AS confidence_score,
+            CAST(NULL AS DOUBLE) AS spread_points,
+            CAST(NULL AS VARCHAR) AS feedback_key,
+            CAST(NULL AS VARCHAR) AS _source_path,
+            CAST(NULL AS VARCHAR) AS _symbol_dir,
+            CAST(NULL AS VARCHAR) AS _log_scope
+        WHERE FALSE
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE candidate_signals_norm AS
+        SELECT
+            CAST(NULL AS BIGINT) AS ts,
+            CAST(NULL AS VARCHAR) AS symbol_alias,
+            CAST(NULL AS VARCHAR) AS stage,
+            CAST(NULL AS BIGINT) AS accepted,
+            CAST(NULL AS VARCHAR) AS reason_code,
+            CAST(NULL AS VARCHAR) AS setup_type,
+            CAST(NULL AS VARCHAR) AS side,
+            CAST(NULL AS VARCHAR) AS side_normalized,
+            CAST(NULL AS DOUBLE) AS score,
+            CAST(NULL AS DOUBLE) AS confidence_score,
+            CAST(NULL AS DOUBLE) AS risk_multiplier,
+            CAST(NULL AS DOUBLE) AS lots,
+            CAST(NULL AS VARCHAR) AS market_regime,
+            CAST(NULL AS VARCHAR) AS spread_regime,
+            CAST(NULL AS VARCHAR) AS execution_regime,
+            CAST(NULL AS VARCHAR) AS confidence_bucket,
+            CAST(NULL AS VARCHAR) AS candle_bias,
+            CAST(NULL AS VARCHAR) AS candle_quality_grade,
+            CAST(NULL AS DOUBLE) AS candle_score,
+            CAST(NULL AS VARCHAR) AS renko_bias,
+            CAST(NULL AS VARCHAR) AS renko_quality_grade,
+            CAST(NULL AS DOUBLE) AS renko_score,
+            CAST(NULL AS BIGINT) AS renko_run_length,
+            CAST(NULL AS BIGINT) AS renko_reversal_flag,
+            CAST(NULL AS DOUBLE) AS spread_points,
+            CAST(NULL AS VARCHAR) AS feedback_key,
+            CAST(NULL AS VARCHAR) AS outcome_key,
+            CAST(NULL AS VARCHAR) AS advisory_match_key,
+            CAST(NULL AS VARCHAR) AS _source_path,
+            CAST(NULL AS VARCHAR) AS _symbol_dir,
+            CAST(NULL AS VARCHAR) AS _log_scope
+        WHERE FALSE
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE learning_observations_v2_norm AS
+        SELECT
+            CAST(NULL AS VARCHAR) AS schema_version,
+            CAST(NULL AS BIGINT) AS ts,
+            CAST(NULL AS VARCHAR) AS symbol_alias,
+            CAST(NULL AS VARCHAR) AS setup_type,
+            CAST(NULL AS VARCHAR) AS market_regime,
+            CAST(NULL AS VARCHAR) AS spread_regime,
+            CAST(NULL AS VARCHAR) AS execution_regime,
+            CAST(NULL AS VARCHAR) AS confidence_bucket,
+            CAST(NULL AS DOUBLE) AS confidence_score,
+            CAST(NULL AS VARCHAR) AS candle_bias,
+            CAST(NULL AS VARCHAR) AS candle_quality_grade,
+            CAST(NULL AS DOUBLE) AS candle_score,
+            CAST(NULL AS VARCHAR) AS renko_bias,
+            CAST(NULL AS VARCHAR) AS renko_quality_grade,
+            CAST(NULL AS DOUBLE) AS renko_score,
+            CAST(NULL AS BIGINT) AS renko_run_length,
+            CAST(NULL AS BIGINT) AS renko_reversal_flag,
+            CAST(NULL AS VARCHAR) AS side,
+            CAST(NULL AS VARCHAR) AS side_normalized,
+            CAST(NULL AS DOUBLE) AS pnl,
+            CAST(NULL AS VARCHAR) AS close_reason,
+            CAST(NULL AS VARCHAR) AS outcome_key,
+            CAST(NULL AS VARCHAR) AS advisory_match_key,
+            CAST(NULL AS VARCHAR) AS _source_path,
+            CAST(NULL AS VARCHAR) AS _symbol_dir,
+            CAST(NULL AS VARCHAR) AS _log_scope
+        WHERE FALSE
+        """
+    )
+    return {
+        "onnx_observations_norm": 0,
+        "candidate_signals_norm": 0,
+        "learning_observations_v2_norm": 0,
+    }
+
+
+def build_normalized_contract_tables(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    onnx_required = [
+        "ts",
+        "symbol",
+        "stage",
+        "runtime_channel",
+        "available",
+        "teacher_available",
+        "teacher_used",
+        "teacher_score",
+        "symbol_score",
+        "latency_us",
+        "reason_code",
+        "signal_valid",
+        "setup_type",
+        "market_regime",
+        "spread_regime",
+        "confidence_bucket",
+        "score",
+        "confidence_score",
+        "spread_points",
+    ]
+    candidate_required = [
+        "ts",
+        "symbol",
+        "stage",
+        "accepted",
+        "reason_code",
+        "setup_type",
+        "side",
+        "score",
+        "confidence_score",
+        "risk_multiplier",
+        "lots",
+        "market_regime",
+        "spread_regime",
+        "execution_regime",
+        "confidence_bucket",
+        "candle_bias",
+        "candle_quality_grade",
+        "candle_score",
+        "renko_bias",
+        "renko_quality_grade",
+        "renko_score",
+        "renko_run_length",
+        "renko_reversal_flag",
+        "spread_points",
+    ]
+    learning_required = [
+        "schema_version",
+        "ts",
+        "symbol",
+        "setup_type",
+        "market_regime",
+        "spread_regime",
+        "execution_regime",
+        "confidence_bucket",
+        "confidence_score",
+        "candle_bias",
+        "candle_quality_grade",
+        "candle_score",
+        "renko_bias",
+        "renko_quality_grade",
+        "renko_score",
+        "renko_run_length",
+        "renko_reversal_flag",
+        "side",
+        "pnl",
+        "close_reason",
+    ]
+
+    if not (
+        relation_has_columns(con, "onnx_observations", onnx_required)
+        and relation_has_columns(con, "candidate_signals", candidate_required)
+        and relation_has_columns(con, "learning_observations_v2", learning_required)
+    ):
+        return create_empty_normalized_tables(con)
+
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE onnx_observations_norm AS
+        WITH base AS (
+            SELECT
+                TRY_CAST(ts AS BIGINT) AS ts,
+                UPPER(TRIM(CAST(symbol AS VARCHAR))) AS symbol_alias,
+                COALESCE(NULLIF(TRIM(CAST(stage AS VARCHAR)), ''), 'UNKNOWN') AS stage,
+                COALESCE(NULLIF(UPPER(TRIM(CAST(runtime_channel AS VARCHAR))), ''), 'UNKNOWN') AS runtime_channel,
+                TRY_CAST(available AS BIGINT) AS available,
+                TRY_CAST(teacher_available AS BIGINT) AS teacher_available,
+                TRY_CAST(teacher_used AS BIGINT) AS teacher_used,
+                TRY_CAST(teacher_score AS DOUBLE) AS teacher_score,
+                TRY_CAST(symbol_score AS DOUBLE) AS symbol_score,
+                TRY_CAST(latency_us AS DOUBLE) AS latency_us,
+                COALESCE(NULLIF(TRIM(CAST(reason_code AS VARCHAR)), ''), 'UNKNOWN') AS reason_code,
+                TRY_CAST(signal_valid AS BIGINT) AS signal_valid,
+                COALESCE(NULLIF(TRIM(CAST(setup_type AS VARCHAR)), ''), 'UNKNOWN') AS setup_type,
+                COALESCE(NULLIF(TRIM(CAST(market_regime AS VARCHAR)), ''), 'UNKNOWN') AS market_regime,
+                COALESCE(NULLIF(TRIM(CAST(spread_regime AS VARCHAR)), ''), 'UNKNOWN') AS spread_regime,
+                COALESCE(NULLIF(TRIM(CAST(confidence_bucket AS VARCHAR)), ''), 'UNKNOWN') AS confidence_bucket,
+                TRY_CAST(score AS DOUBLE) AS score,
+                TRY_CAST(confidence_score AS DOUBLE) AS confidence_score,
+                TRY_CAST(spread_points AS DOUBLE) AS spread_points,
+                CAST(_source_path AS VARCHAR) AS _source_path,
+                CAST(_symbol_dir AS VARCHAR) AS _symbol_dir,
+                CAST(_log_scope AS VARCHAR) AS _log_scope
+            FROM onnx_observations
+        )
+        SELECT
+            *,
+            symbol_alias || '|' || setup_type || '|' || market_regime || '|' || spread_regime || '|' || confidence_bucket AS feedback_key
+        FROM base
+        WHERE ts IS NOT NULL AND symbol_alias <> ''
+        ORDER BY symbol_alias, ts
+        """
+    )
+
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE candidate_signals_norm AS
+        WITH base AS (
+            SELECT
+                TRY_CAST(ts AS BIGINT) AS ts,
+                UPPER(TRIM(CAST(symbol AS VARCHAR))) AS symbol_alias,
+                COALESCE(NULLIF(TRIM(CAST(stage AS VARCHAR)), ''), 'UNKNOWN') AS stage,
+                TRY_CAST(accepted AS BIGINT) AS accepted,
+                COALESCE(NULLIF(TRIM(CAST(reason_code AS VARCHAR)), ''), 'UNKNOWN') AS reason_code,
+                COALESCE(NULLIF(TRIM(CAST(setup_type AS VARCHAR)), ''), 'UNKNOWN') AS setup_type,
+                COALESCE(NULLIF(UPPER(TRIM(CAST(side AS VARCHAR))), ''), 'UNKNOWN') AS side,
+                CASE
+                    WHEN UPPER(TRIM(CAST(side AS VARCHAR))) IN ('BUY', '1', '+1') THEN 'BUY'
+                    WHEN UPPER(TRIM(CAST(side AS VARCHAR))) IN ('SELL', '-1') THEN 'SELL'
+                    ELSE 'UNKNOWN'
+                END AS side_normalized,
+                TRY_CAST(score AS DOUBLE) AS score,
+                TRY_CAST(confidence_score AS DOUBLE) AS confidence_score,
+                TRY_CAST(risk_multiplier AS DOUBLE) AS risk_multiplier,
+                TRY_CAST(lots AS DOUBLE) AS lots,
+                COALESCE(NULLIF(TRIM(CAST(market_regime AS VARCHAR)), ''), 'UNKNOWN') AS market_regime,
+                COALESCE(NULLIF(TRIM(CAST(spread_regime AS VARCHAR)), ''), 'UNKNOWN') AS spread_regime,
+                COALESCE(NULLIF(TRIM(CAST(execution_regime AS VARCHAR)), ''), 'UNKNOWN') AS execution_regime,
+                COALESCE(NULLIF(TRIM(CAST(confidence_bucket AS VARCHAR)), ''), 'UNKNOWN') AS confidence_bucket,
+                COALESCE(NULLIF(TRIM(CAST(candle_bias AS VARCHAR)), ''), 'UNKNOWN') AS candle_bias,
+                COALESCE(NULLIF(TRIM(CAST(candle_quality_grade AS VARCHAR)), ''), 'UNKNOWN') AS candle_quality_grade,
+                TRY_CAST(candle_score AS DOUBLE) AS candle_score,
+                COALESCE(NULLIF(TRIM(CAST(renko_bias AS VARCHAR)), ''), 'UNKNOWN') AS renko_bias,
+                COALESCE(NULLIF(TRIM(CAST(renko_quality_grade AS VARCHAR)), ''), 'UNKNOWN') AS renko_quality_grade,
+                TRY_CAST(renko_score AS DOUBLE) AS renko_score,
+                COALESCE(TRY_CAST(renko_run_length AS BIGINT), -1) AS renko_run_length,
+                COALESCE(TRY_CAST(renko_reversal_flag AS BIGINT), -1) AS renko_reversal_flag,
+                TRY_CAST(spread_points AS DOUBLE) AS spread_points,
+                CAST(_source_path AS VARCHAR) AS _source_path,
+                CAST(_symbol_dir AS VARCHAR) AS _symbol_dir,
+                CAST(_log_scope AS VARCHAR) AS _log_scope
+            FROM candidate_signals
+        )
+        SELECT
+            *,
+            symbol_alias || '|' || setup_type || '|' || market_regime || '|' || spread_regime || '|' || confidence_bucket AS feedback_key,
+            symbol_alias || '|' || setup_type || '|' || market_regime || '|' || spread_regime || '|' || execution_regime || '|' || confidence_bucket || '|' || side || '|' || CAST(renko_run_length AS VARCHAR) || '|' || CAST(renko_reversal_flag AS VARCHAR) AS outcome_key,
+            symbol_alias || '|' || setup_type || '|' || side_normalized AS advisory_match_key
+        FROM base
+        WHERE ts IS NOT NULL AND symbol_alias <> ''
+        ORDER BY symbol_alias, ts
+        """
+    )
+
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE learning_observations_v2_norm AS
+        WITH base AS (
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(schema_version AS VARCHAR)), ''), 'UNKNOWN') AS schema_version,
+                TRY_CAST(ts AS BIGINT) AS ts,
+                UPPER(TRIM(CAST(symbol AS VARCHAR))) AS symbol_alias,
+                COALESCE(NULLIF(TRIM(CAST(setup_type AS VARCHAR)), ''), 'UNKNOWN') AS setup_type,
+                COALESCE(NULLIF(TRIM(CAST(market_regime AS VARCHAR)), ''), 'UNKNOWN') AS market_regime,
+                COALESCE(NULLIF(TRIM(CAST(spread_regime AS VARCHAR)), ''), 'UNKNOWN') AS spread_regime,
+                COALESCE(NULLIF(TRIM(CAST(execution_regime AS VARCHAR)), ''), 'UNKNOWN') AS execution_regime,
+                COALESCE(NULLIF(TRIM(CAST(confidence_bucket AS VARCHAR)), ''), 'UNKNOWN') AS confidence_bucket,
+                TRY_CAST(confidence_score AS DOUBLE) AS confidence_score,
+                COALESCE(NULLIF(TRIM(CAST(candle_bias AS VARCHAR)), ''), 'UNKNOWN') AS candle_bias,
+                COALESCE(NULLIF(TRIM(CAST(candle_quality_grade AS VARCHAR)), ''), 'UNKNOWN') AS candle_quality_grade,
+                TRY_CAST(candle_score AS DOUBLE) AS candle_score,
+                COALESCE(NULLIF(TRIM(CAST(renko_bias AS VARCHAR)), ''), 'UNKNOWN') AS renko_bias,
+                COALESCE(NULLIF(TRIM(CAST(renko_quality_grade AS VARCHAR)), ''), 'UNKNOWN') AS renko_quality_grade,
+                TRY_CAST(renko_score AS DOUBLE) AS renko_score,
+                COALESCE(TRY_CAST(renko_run_length AS BIGINT), -1) AS renko_run_length,
+                COALESCE(TRY_CAST(renko_reversal_flag AS BIGINT), -1) AS renko_reversal_flag,
+                COALESCE(NULLIF(UPPER(TRIM(CAST(side AS VARCHAR))), ''), 'UNKNOWN') AS side,
+                CASE
+                    WHEN UPPER(TRIM(CAST(side AS VARCHAR))) IN ('BUY', '1', '+1') THEN 'BUY'
+                    WHEN UPPER(TRIM(CAST(side AS VARCHAR))) IN ('SELL', '-1') THEN 'SELL'
+                    ELSE 'UNKNOWN'
+                END AS side_normalized,
+                TRY_CAST(pnl AS DOUBLE) AS pnl,
+                COALESCE(NULLIF(TRIM(CAST(close_reason AS VARCHAR)), ''), 'UNKNOWN') AS close_reason,
+                CAST(_source_path AS VARCHAR) AS _source_path,
+                CAST(_symbol_dir AS VARCHAR) AS _symbol_dir,
+                CAST(_log_scope AS VARCHAR) AS _log_scope
+            FROM learning_observations_v2
+        )
+        SELECT
+            *,
+            symbol_alias || '|' || setup_type || '|' || market_regime || '|' || spread_regime || '|' || execution_regime || '|' || confidence_bucket || '|' || side || '|' || CAST(renko_run_length AS VARCHAR) || '|' || CAST(renko_reversal_flag AS VARCHAR) AS outcome_key,
+            symbol_alias || '|' || setup_type || '|' || side_normalized AS advisory_match_key
+        FROM base
+        WHERE ts IS NOT NULL AND symbol_alias <> ''
+        ORDER BY symbol_alias, ts
+        """
+    )
+
+    return {
+        "onnx_observations_norm": int(con.execute("SELECT COUNT(*) FROM onnx_observations_norm").fetchone()[0]),
+        "candidate_signals_norm": int(con.execute("SELECT COUNT(*) FROM candidate_signals_norm").fetchone()[0]),
+        "learning_observations_v2_norm": int(con.execute("SELECT COUNT(*) FROM learning_observations_v2_norm").fetchone()[0]),
+    }
+
+
+def build_research_contract_artifacts(output_root: Path) -> dict[str, Any]:
+    datasets_dir = ensure_dir(output_root / "datasets")
+    reports_dir = ensure_dir(output_root / "reports")
+    contract_dir = ensure_dir(datasets_dir / "contracts")
+    contract_path_map = {
+        "onnx_observations": datasets_dir / "onnx_observations_latest.parquet",
+        "candidate_signals": datasets_dir / "candidate_signals_latest.parquet",
+        "learning_observations_v2": datasets_dir / "learning_observations_v2_latest.parquet",
+    }
+
+    with duckdb.connect() as con:
+        for table_name, parquet_path in contract_path_map.items():
+            if parquet_path.exists():
+                con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_parquet(?)", [str(parquet_path)])
+            else:
+                con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT CAST(NULL AS VARCHAR) AS _empty WHERE FALSE")
+
+        normalized_contract = build_normalized_contract_tables(con)
+        items: dict[str, Any] = {}
+        for source_table, normalized_table in {
+            "onnx_observations": "onnx_observations_norm",
+            "candidate_signals": "candidate_signals_norm",
+            "learning_observations_v2": "learning_observations_v2_norm",
+        }.items():
+            target_path = contract_dir / f"{normalized_table}_latest.parquet"
+            con.execute(f"COPY {normalized_table} TO '{sql_quote(str(target_path))}' (FORMAT PARQUET)")
+            source_rows = int(con.execute(f"SELECT COUNT(*) FROM {source_table}").fetchone()[0])
+            normalized_rows = int(normalized_contract.get(normalized_table, 0))
+            items[normalized_table] = {
+                "source_table": source_table,
+                "path": str(target_path),
+                "rows": normalized_rows,
+                "source_rows": source_rows,
+                "filtered_out_rows": max(0, source_rows - normalized_rows),
+                "schema": describe_relation_schema(con, normalized_table),
+            }
+
+    contract_manifest = {
+        "generated_at": pd.Timestamp.now("UTC").isoformat(),
+        "contract_version": "normalized_v1",
+        "datasets_root": str(datasets_dir),
+        "contract_root": str(contract_dir),
+        "items": items,
+        "summary": {
+            "tables_ready": sum(1 for item in items.values() if int(item["rows"]) >= 0),
+            "rows_onnx": int(items["onnx_observations_norm"]["rows"]),
+            "rows_candidate": int(items["candidate_signals_norm"]["rows"]),
+            "rows_learning": int(items["learning_observations_v2_norm"]["rows"]),
+        },
+    }
+    manifest_path = reports_dir / "research_contract_manifest_latest.json"
+    manifest_path.write_text(json.dumps(contract_manifest, indent=2, ensure_ascii=True), encoding="utf-8")
+    return contract_manifest
+
+
+def refresh_research_manifest_contract_metadata(output_root: Path, contract_status: dict[str, Any]) -> dict[str, Any]:
+    reports_dir = ensure_dir(output_root / "reports")
+    datasets_dir = ensure_dir(output_root / "datasets")
+    manifest_path = reports_dir / "research_export_manifest_latest.json"
+    manifest = read_json(manifest_path)
+    if not manifest:
+        return {}
+
+    datasets = manifest.setdefault("datasets", {})
+    for dataset_name in ("onnx_observations", "candidate_signals", "learning_observations_v2"):
+        dataset = datasets.get(dataset_name)
+        parquet_path = datasets_dir / f"{dataset_name}_latest.parquet"
+        if not isinstance(dataset, dict) or not parquet_path.exists():
+            continue
+        dataset["rows"] = get_parquet_row_count(parquet_path)
+        dataset["parquet_path"] = str(parquet_path)
+
+    manifest["contract_status"] = contract_status
+    manifest["contract_refresh_generated_at"] = pd.Timestamp.now("UTC").isoformat()
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True), encoding="utf-8")
+    return manifest
 
 
 def build_cached_log_table(common_root: Path, output_root: Path, relative_name: str, stem: str) -> dict:
@@ -611,11 +1053,14 @@ def build_duckdb(
                         continue
                     con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_parquet(?)", [str(parquet_path)])
 
+                normalized_contract = build_normalized_contract_tables(con)
+
             return {
                 "updated": True,
                 "locked": False,
                 "attempts_used": attempt,
                 "error": "",
+                "normalized_contract": normalized_contract,
             }
         except duckdb.IOException as exc:
             last_error = str(exc)
@@ -629,6 +1074,7 @@ def build_duckdb(
                     "locked": True,
                     "attempts_used": attempt,
                     "error": last_error,
+                    "normalized_contract": {},
                 }
             time.sleep(lock_retry_seconds)
 
@@ -643,6 +1089,22 @@ def main() -> int:
     datasets_dir = ensure_dir(output_root / "datasets")
     ensure_dir(output_root / "notebooks")
     ensure_dir(output_root / "reports")
+
+    if args.contract_only:
+        contract_status = build_research_contract_artifacts(output_root)
+        refreshed_manifest = refresh_research_manifest_contract_metadata(output_root, contract_status)
+        print(
+            json.dumps(
+                {
+                    "contract_only": True,
+                    "contract_status": contract_status,
+                    "research_manifest_refreshed": bool(refreshed_manifest),
+                },
+                indent=2,
+                ensure_ascii=True,
+            )
+        )
+        return 0
 
     manifest: dict[str, object] = {
         "project_root": str(project_root),
@@ -712,6 +1174,9 @@ def main() -> int:
     qdm_minute_meta, qdm_inventory = build_qdm_minute_bars(qdm_export_root, output_root)
     manifest["datasets"]["qdm_tick_inventory"] = export_frame(qdm_inventory, "qdm_tick_inventory_latest", datasets_dir)
     manifest["datasets"]["qdm_minute_bars"] = qdm_minute_meta
+
+    contract_status = build_research_contract_artifacts(output_root)
+    manifest["contract_status"] = contract_status
 
     duckdb_path = output_root / "microbot_research.duckdb"
     duckdb_status = build_duckdb(

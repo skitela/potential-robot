@@ -142,7 +142,10 @@ $freshness = [ordered]@{
 $wrapperState = [ordered]@{
     supervisor = ((Get-WrapperCount -Pattern "*autonomous_90p_supervisor_wrapper_*") -gt 0)
     mt5_status_watcher = ((Get-WrapperCount -Pattern "*mt5_tester_status_watcher_wrapper_*") -gt 0)
-    ml = ((Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0)
+    ml = (
+        ((Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0) -or
+        $freshness.ml_tuning_hints.fresh
+    )
 }
 
 $processState = [ordered]@{

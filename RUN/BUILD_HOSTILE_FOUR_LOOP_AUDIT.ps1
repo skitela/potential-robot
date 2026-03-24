@@ -33,6 +33,7 @@ $onnxFeedbackPath = Join-Path $opsRoot "onnx_feedback_loop_latest.json"
 $runtimePersistenceAuditPath = Join-Path $evidenceRoot "runtime_persistence_audit_report.json"
 $runtimeArtifactAuditPath = Join-Path $evidenceRoot "runtime_artifact_audit_report.json"
 $symbolPolicyConsistencyPath = Join-Path $evidenceRoot "symbol_policy_consistency_report.json"
+$learningHotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 
 $refreshScripts = @(
     (Join-Path $ProjectRoot "RUN\BUILD_RETIRED_SYMBOL_EXCLUSION_REPORT.ps1"),
@@ -285,6 +286,7 @@ $onnxFeedback = Read-JsonSafe -Path $onnxFeedbackPath
 $runtimePersistence = Read-JsonSafe -Path $runtimePersistenceAuditPath
 $runtimeArtifact = Read-JsonSafe -Path $runtimeArtifactAuditPath
 $symbolPolicyConsistency = Read-JsonSafe -Path $symbolPolicyConsistencyPath
+$learningHotPath = Read-JsonSafe -Path $learningHotPathPath
 
 $activeSymbols = @($registry.symbols | ForEach-Object { [string]$_.symbol })
 $activeSet = Convert-CollectionToSet -Items $activeSymbols
@@ -454,9 +456,40 @@ if ($null -ne $runtimePersistence) {
     }
 }
 if ($overThresholdFiles.Count -gt 0) {
-    Add-Finding -Collection $findings -Loop $loop -Severity "high" -Component "runtime_logs" -Message "Dzienniki runtime sa przegrzane i wymagaja rotacji lub podzialu." -Context @{
-        over_threshold_count = $overThresholdFiles.Count
-        top_files = @($overThresholdFiles | Sort-Object size_mb -Descending | Select-Object -First 12)
+    $hotPathItems = @((Get-OptionalValue -Object $learningHotPath -PropertyName "items" -Default @()))
+    $hotPathControlledMap = @{}
+    foreach ($hotItem in $hotPathItems) {
+        $path = [string](Get-OptionalValue -Object $hotItem -PropertyName "path" -Default "")
+        $action = [string](Get-OptionalValue -Object $hotItem -PropertyName "action" -Default "")
+        if (-not [string]::IsNullOrWhiteSpace($path)) {
+            $hotPathControlledMap[$path.ToLowerInvariant()] = $action
+        }
+    }
+
+    $controlledHotFiles = @(
+        $overThresholdFiles |
+            Where-Object {
+                $action = $hotPathControlledMap[[string]$_.path.ToLowerInvariant()]
+                $action -eq "HOT_ACTIVE_WAIT"
+            }
+    )
+    $allOverThresholdFilesControlled = (
+        $overThresholdFiles.Count -gt 0 -and
+        $controlledHotFiles.Count -eq $overThresholdFiles.Count
+    )
+
+    if ($allOverThresholdFilesControlled) {
+        Add-Finding -Collection $findings -Loop $loop -Severity "low" -Component "runtime_logs" -Message "Dzienniki runtime sa gorace, ale cleaner hot-path juz je kontroluje i czeka na bezpieczne okno rotacji." -Context @{
+            over_threshold_count = $overThresholdFiles.Count
+            controlled_hot_files = @($controlledHotFiles | Sort-Object size_mb -Descending | Select-Object -First 12)
+            hot_path_verdict = [string](Get-OptionalValue -Object $learningHotPath -PropertyName "verdict" -Default "")
+        }
+    }
+    else {
+        Add-Finding -Collection $findings -Loop $loop -Severity "high" -Component "runtime_logs" -Message "Dzienniki runtime sa przegrzane i wymagaja rotacji lub podzialu." -Context @{
+            over_threshold_count = $overThresholdFiles.Count
+            top_files = @($overThresholdFiles | Sort-Object size_mb -Descending | Select-Object -First 12)
+        }
     }
 }
 

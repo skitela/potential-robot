@@ -13,6 +13,7 @@ import pandas as pd
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build feedback-loop report for runtime ONNX observations.")
     parser.add_argument("--db-path", default=r"C:\TRADING_DATA\RESEARCH\microbot_research.duckdb")
+    parser.add_argument("--research-root", default=r"C:\TRADING_DATA\RESEARCH")
     parser.add_argument("--output-root", default=r"C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS")
     parser.add_argument(
         "--runtime-logs-root",
@@ -26,6 +27,10 @@ def parse_args() -> argparse.Namespace:
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def sql_quote_path(path: str) -> str:
+    return path.replace("\\", "/").replace("'", "''")
 
 
 def scan_runtime_bootstrap(runtime_logs_root: Path) -> list[dict[str, Any]]:
@@ -70,6 +75,46 @@ def table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
         [table_name],
     ).fetchone()
     return row is not None
+
+
+def normalized_contract_available(con: duckdb.DuckDBPyConnection) -> bool:
+    required = [
+        "onnx_observations_norm",
+        "candidate_signals_norm",
+        "learning_observations_v2_norm",
+    ]
+    return all(table_exists(con, table_name) for table_name in required)
+
+
+def read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def load_contract_manifest(research_root: Path) -> dict[str, Any]:
+    return read_json_file(research_root / "reports" / "research_contract_manifest_latest.json")
+
+
+def contract_parquet_available(contract_manifest: dict[str, Any]) -> bool:
+    if not contract_manifest:
+        return False
+
+    items = contract_manifest.get("items", {})
+    required = [
+        "onnx_observations_norm",
+        "candidate_signals_norm",
+        "learning_observations_v2_norm",
+    ]
+    for item_name in required:
+        item = items.get(item_name, {})
+        path = item.get("path")
+        if not path or not Path(str(path)).exists():
+            return False
+    return True
 
 
 def empty_report(
@@ -183,47 +228,91 @@ def write_report(report: dict[str, Any], output_root: Path) -> None:
 def main() -> int:
     args = parse_args()
     db_path = Path(args.db_path)
+    research_root = Path(args.research_root)
     output_root = ensure_dir(Path(args.output_root))
     runtime_logs_root = Path(args.runtime_logs_root)
     runtime_bootstrap_items = scan_runtime_bootstrap(runtime_logs_root)
+    contract_manifest = load_contract_manifest(research_root)
+    use_contract_parquet = contract_parquet_available(contract_manifest)
 
-    if not db_path.exists():
+    if (not use_contract_parquet) and (not db_path.exists()):
         empty_report(
             output_root,
             db_path,
-            "brak_bazy_duckdb",
+            "brak_bazy_duckdb_i_kontraktu",
             args.outcome_horizon_sec,
             args.score_threshold,
             runtime_bootstrap_items,
         )
         return 0
 
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        required_tables = ["onnx_observations", "candidate_signals", "learning_observations_v2"]
-        missing_tables = [table for table in required_tables if not table_exists(con, table)]
-        if missing_tables:
-            empty_report(
-                output_root,
-                db_path,
-                f"brak_tabel: {', '.join(missing_tables)}",
-                args.outcome_horizon_sec,
-                args.score_threshold,
-                runtime_bootstrap_items,
-            )
-            return 0
-
-        onnx_rows = int(con.execute("SELECT COUNT(*) FROM onnx_observations").fetchone()[0])
-        onnx_runtime_rows = int(
+    con: duckdb.DuckDBPyConnection | None = None
+    try:
+        if use_contract_parquet:
+            con = duckdb.connect()
+            contract_items = contract_manifest.get("items", {})
             con.execute(
-                """
-                SELECT COUNT(*)
-                FROM onnx_observations
-                WHERE stage = 'EVALUATED'
-                  AND CAST(available AS BIGINT) = 1
-                  AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
-                """
-            ).fetchone()[0]
-        )
+                "CREATE OR REPLACE VIEW onnx_observations_norm AS SELECT * FROM read_parquet('{0}')".format(
+                    sql_quote_path(str(contract_items["onnx_observations_norm"]["path"]))
+                )
+            )
+            con.execute(
+                "CREATE OR REPLACE VIEW candidate_signals_norm AS SELECT * FROM read_parquet('{0}')".format(
+                    sql_quote_path(str(contract_items["candidate_signals_norm"]["path"]))
+                )
+            )
+            con.execute(
+                "CREATE OR REPLACE VIEW learning_observations_v2_norm AS SELECT * FROM read_parquet('{0}')".format(
+                    sql_quote_path(str(contract_items["learning_observations_v2_norm"]["path"]))
+                )
+            )
+            use_normalized_contract = True
+            contract_source = f"parquet_{contract_manifest.get('contract_version', 'v1')}"
+        else:
+            con = duckdb.connect(str(db_path), read_only=True)
+            required_tables = ["onnx_observations", "candidate_signals", "learning_observations_v2"]
+            missing_tables = [table for table in required_tables if not table_exists(con, table)]
+            if missing_tables:
+                empty_report(
+                    output_root,
+                    db_path,
+                    f"brak_tabel: {', '.join(missing_tables)}",
+                    args.outcome_horizon_sec,
+                    args.score_threshold,
+                    runtime_bootstrap_items,
+                )
+                return 0
+
+            use_normalized_contract = normalized_contract_available(con)
+            contract_source = "normalized_v1" if use_normalized_contract else "raw_v0"
+
+        if use_contract_parquet:
+            onnx_rows = int(con.execute("SELECT COUNT(*) FROM onnx_observations_norm").fetchone()[0])
+            onnx_runtime_rows = int(
+                con.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM onnx_observations_norm
+                    WHERE stage = 'EVALUATED'
+                      AND available = 1
+                      AND reason_code = 'ONNX_OBSERVATION_OK'
+                    """
+                ).fetchone()[0]
+            )
+        else:
+            onnx_rows = int(con.execute("SELECT COUNT(*) FROM onnx_observations").fetchone()[0])
+            onnx_runtime_rows = int(
+                con.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM onnx_observations
+                    WHERE stage = 'EVALUATED'
+                      AND CAST(available AS BIGINT) = 1
+                      AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
+                    """
+                ).fetchone()[0]
+            )
+
         if onnx_runtime_rows <= 0:
             reason = "brak_obserwacji_onnx"
             if runtime_bootstrap_items:
@@ -240,9 +329,95 @@ def main() -> int:
                 runtime_bootstrap_items,
             )
             return 0
-
-        query = f"""
-            WITH onnx_base AS (
+        if use_normalized_contract:
+            onnx_base_select = """
+                SELECT
+                    ts,
+                    symbol_alias,
+                    stage,
+                    runtime_channel,
+                    available,
+                    teacher_available,
+                    teacher_used,
+                    teacher_score,
+                    symbol_score,
+                    latency_us,
+                    reason_code AS onnx_reason_code,
+                    signal_valid,
+                    setup_type,
+                    market_regime,
+                    spread_regime,
+                    confidence_bucket,
+                    score,
+                    confidence_score,
+                    spread_points,
+                    feedback_key
+                FROM onnx_observations_norm
+                WHERE stage = 'EVALUATED'
+                  AND available = 1
+                  AND reason_code = 'ONNX_OBSERVATION_OK'
+            """
+            candidate_base_select = """
+                SELECT
+                    ts,
+                    symbol_alias,
+                    stage,
+                    accepted,
+                    reason_code AS candidate_reason_code,
+                    setup_type,
+                    side,
+                    COALESCE(
+                        side_normalized,
+                        CASE
+                            WHEN UPPER(CAST(side AS VARCHAR)) IN ('BUY', '1', '+1') THEN 'BUY'
+                            WHEN UPPER(CAST(side AS VARCHAR)) IN ('SELL', '-1') THEN 'SELL'
+                            ELSE 'UNKNOWN'
+                        END
+                    ) AS side_normalized,
+                    score,
+                    confidence_score,
+                    market_regime,
+                    spread_regime,
+                    execution_regime,
+                    confidence_bucket,
+                    candle_bias,
+                    candle_quality_grade,
+                    candle_score,
+                    renko_bias,
+                    renko_quality_grade,
+                    renko_score,
+                    renko_run_length,
+                    renko_reversal_flag,
+                    spread_points,
+                    feedback_key,
+                    outcome_key
+                FROM candidate_signals_norm
+                WHERE stage = 'EVALUATED'
+            """
+            learning_base_select = """
+                SELECT
+                    ts,
+                    symbol_alias,
+                    setup_type,
+                    COALESCE(
+                        side_normalized,
+                        CASE
+                            WHEN UPPER(CAST(side AS VARCHAR)) IN ('BUY', '1', '+1') THEN 'BUY'
+                            WHEN UPPER(CAST(side AS VARCHAR)) IN ('SELL', '-1') THEN 'SELL'
+                            ELSE 'UNKNOWN'
+                        END
+                    ) AS side_normalized,
+                    pnl,
+                    close_reason
+                FROM learning_observations_v2_norm
+            """
+            candidate_join = """
+                  ON c.ts = o.ts
+                 AND c.symbol_alias = o.symbol_alias
+                 AND c.feedback_key = o.feedback_key
+            """
+        else:
+            onnx_base_select = """
                 SELECT
                     CAST(ts AS BIGINT) AS ts,
                     CAST(symbol AS VARCHAR) AS symbol_alias,
@@ -267,8 +442,8 @@ def main() -> int:
                 WHERE stage = 'EVALUATED'
                   AND CAST(available AS BIGINT) = 1
                   AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
-            ),
-            candidate_base AS (
+            """
+            candidate_base_select = """
                 SELECT
                     CAST(ts AS BIGINT) AS ts,
                     CAST(symbol AS VARCHAR) AS symbol_alias,
@@ -277,6 +452,11 @@ def main() -> int:
                     CAST(reason_code AS VARCHAR) AS candidate_reason_code,
                     CAST(setup_type AS VARCHAR) AS setup_type,
                     CAST(side AS VARCHAR) AS side,
+                    CASE
+                        WHEN UPPER(CAST(side AS VARCHAR)) IN ('BUY', '1', '+1') THEN 'BUY'
+                        WHEN UPPER(CAST(side AS VARCHAR)) IN ('SELL', '-1') THEN 'SELL'
+                        ELSE 'UNKNOWN'
+                    END AS side_normalized,
                     CAST(score AS DOUBLE) AS score,
                     CAST(confidence_score AS DOUBLE) AS confidence_score,
                     CAST(market_regime AS VARCHAR) AS market_regime,
@@ -291,17 +471,86 @@ def main() -> int:
                     CAST(renko_score AS DOUBLE) AS renko_score,
                     CAST(renko_run_length AS BIGINT) AS renko_run_length,
                     CAST(renko_reversal_flag AS BIGINT) AS renko_reversal_flag,
-                    CAST(spread_points AS DOUBLE) AS spread_points
+                    CAST(spread_points AS DOUBLE) AS spread_points,
+                    CAST(symbol AS VARCHAR) || '|' || CAST(setup_type AS VARCHAR) || '|' || CAST(market_regime AS VARCHAR) || '|' || CAST(spread_regime AS VARCHAR) || '|' || CAST(confidence_bucket AS VARCHAR) AS feedback_key,
+                    CAST(symbol AS VARCHAR) || '|' || CAST(setup_type AS VARCHAR) || '|' || CAST(market_regime AS VARCHAR) || '|' || CAST(spread_regime AS VARCHAR) || '|' || CAST(execution_regime AS VARCHAR) || '|' || CAST(confidence_bucket AS VARCHAR) || '|' || CAST(side AS VARCHAR) || '|' || CAST(CAST(renko_run_length AS BIGINT) AS VARCHAR) || '|' || CAST(CAST(renko_reversal_flag AS BIGINT) AS VARCHAR) AS outcome_key
                 FROM candidate_signals
                 WHERE stage = 'EVALUATED'
-            ),
-            linked_candidates AS (
+            """
+            learning_base_select = """
                 SELECT
-                    o.*,
+                    CAST(ts AS BIGINT) AS ts,
+                    CAST(symbol AS VARCHAR) AS symbol_alias,
+                    CAST(setup_type AS VARCHAR) AS setup_type,
+                    CASE
+                        WHEN UPPER(CAST(side AS VARCHAR)) IN ('BUY', '1', '+1') THEN 'BUY'
+                        WHEN UPPER(CAST(side AS VARCHAR)) IN ('SELL', '-1') THEN 'SELL'
+                        ELSE 'UNKNOWN'
+                    END AS side_normalized,
+                    CAST(pnl AS DOUBLE) AS pnl,
+                    CAST(close_reason AS VARCHAR) AS close_reason
+                FROM learning_observations_v2
+            """
+            candidate_join = """
+                  ON c.ts = o.ts
+                 AND c.symbol_alias = o.symbol_alias
+                 AND c.setup_type = o.setup_type
+                 AND c.market_regime = o.market_regime
+                 AND c.spread_regime = o.spread_regime
+                 AND c.confidence_bucket = o.confidence_bucket
+            """
+
+        query = f"""
+            WITH onnx_base AS (
+                SELECT
+                    ROW_NUMBER() OVER () AS onnx_row_id,
+                    *
+                FROM (
+                    {onnx_base_select}
+                )
+            ),
+            candidate_base AS (
+                SELECT
+                    ROW_NUMBER() OVER () AS candidate_row_id,
+                    *
+                FROM (
+                    {candidate_base_select}
+                )
+            ),
+            learning_base AS (
+                {learning_base_select}
+            ),
+            linked_candidates_raw AS (
+                SELECT
+                    o.onnx_row_id,
+                    o.ts,
+                    o.symbol_alias,
+                    o.stage,
+                    o.runtime_channel,
+                    o.available,
+                    o.teacher_available,
+                    o.teacher_used,
+                    o.teacher_score,
+                    o.symbol_score,
+                    o.latency_us,
+                    o.onnx_reason_code,
+                    o.signal_valid,
+                    o.setup_type,
+                    o.market_regime,
+                    o.spread_regime,
+                    o.confidence_bucket,
+                    o.score,
+                    o.confidence_score,
+                    o.spread_points,
+                    o.feedback_key,
+                    c.candidate_row_id,
                     c.accepted,
                     c.candidate_reason_code,
                     c.side,
+                    c.side_normalized,
                     c.execution_regime,
+                    c.feedback_key AS candidate_feedback_key,
+                    c.outcome_key,
                     c.candle_bias,
                     c.candle_quality_grade,
                     c.candle_score,
@@ -309,44 +558,61 @@ def main() -> int:
                     c.renko_quality_grade,
                     c.renko_score,
                     c.renko_run_length,
-                    c.renko_reversal_flag
+                    c.renko_reversal_flag,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY o.onnx_row_id
+                        ORDER BY
+                            CASE WHEN c.candidate_row_id IS NULL THEN 1 ELSE 0 END,
+                            CASE WHEN COALESCE(c.accepted, 0) = 1 THEN 0 ELSE 1 END,
+                            ABS(COALESCE(c.score, 0.0) - COALESCE(o.symbol_score, 0.0)),
+                            COALESCE(c.candidate_row_id, 2147483647)
+                    ) AS candidate_rank
                 FROM onnx_base o
                 LEFT JOIN candidate_base c
-                  ON c.ts = o.ts
-                 AND c.symbol_alias = o.symbol_alias
-                 AND c.setup_type = o.setup_type
-                 AND c.market_regime = o.market_regime
-                 AND c.spread_regime = o.spread_regime
-                 AND c.confidence_bucket = o.confidence_bucket
+                {candidate_join}
+            ),
+            linked_candidates AS (
+                SELECT * EXCLUDE(candidate_rank)
+                FROM linked_candidates_raw
+                WHERE candidate_rank = 1
+            ),
+            accepted_candidates AS (
+                SELECT *
+                FROM linked_candidates
+                WHERE accepted = 1 AND candidate_row_id IS NOT NULL
             ),
             ranked_outcomes AS (
                 SELECT
-                    lc.*,
-                    CAST(lo.ts AS BIGINT) AS outcome_ts,
-                    CAST(lo.pnl AS DOUBLE) AS outcome_pnl,
-                    CAST(lo.close_reason AS VARCHAR) AS outcome_close_reason,
+                    ac.candidate_row_id,
+                    lb.ts AS outcome_ts,
+                    lb.pnl AS outcome_pnl,
+                    lb.close_reason AS outcome_close_reason,
                     ROW_NUMBER() OVER (
-                        PARTITION BY lc.ts, lc.symbol_alias, lc.setup_type
-                        ORDER BY CAST(lo.ts AS BIGINT)
+                        PARTITION BY ac.candidate_row_id
+                        ORDER BY lb.ts
                     ) AS outcome_rank
-                FROM linked_candidates lc
-                LEFT JOIN learning_observations_v2 lo
-                  ON lo.symbol = lc.symbol_alias
-                 AND lo.setup_type = lc.setup_type
-                 AND lo.market_regime = lc.market_regime
-                 AND lo.spread_regime = COALESCE(lc.spread_regime, lo.spread_regime)
-                 AND lo.execution_regime = COALESCE(lc.execution_regime, lo.execution_regime)
-                 AND lo.confidence_bucket = COALESCE(lc.confidence_bucket, lo.confidence_bucket)
-                 AND CAST(lo.side AS VARCHAR) = COALESCE(lc.side, CAST(lo.side AS VARCHAR))
-                 AND CAST(lo.renko_run_length AS BIGINT) = COALESCE(lc.renko_run_length, CAST(lo.renko_run_length AS BIGINT))
-                 AND CAST(lo.renko_reversal_flag AS BIGINT) = COALESCE(lc.renko_reversal_flag, CAST(lo.renko_reversal_flag AS BIGINT))
-                 AND CAST(lo.ts AS BIGINT) >= lc.ts
-                 AND CAST(lo.ts AS BIGINT) <= lc.ts + {int(args.outcome_horizon_sec)}
+                FROM accepted_candidates ac
+                LEFT JOIN learning_base lb
+                  ON lb.symbol_alias = ac.symbol_alias
+                 AND lb.setup_type = ac.setup_type
+                 AND lb.side_normalized = ac.side_normalized
+                 AND lb.ts >= ac.ts
+                 AND lb.ts <= ac.ts + {int(args.outcome_horizon_sec)}
             ),
-            resolved AS (
+            resolved_outcomes AS (
                 SELECT *
                 FROM ranked_outcomes
                 WHERE outcome_rank = 1 OR outcome_rank IS NULL
+            ),
+            resolved AS (
+                SELECT
+                    lc.*,
+                    ro.outcome_ts,
+                    ro.outcome_pnl,
+                    ro.outcome_close_reason
+                FROM linked_candidates lc
+                LEFT JOIN resolved_outcomes ro
+                  ON ro.candidate_row_id = lc.candidate_row_id
             ),
             enriched AS (
                 SELECT
@@ -362,7 +628,7 @@ def main() -> int:
                 COUNT(*) AS obserwacje_onnx,
                 SUM(CASE WHEN runtime_channel = 'LIVE' THEN 1 ELSE 0 END) AS obserwacje_live,
                 SUM(CASE WHEN runtime_channel = 'PAPER' THEN 1 ELSE 0 END) AS obserwacje_paper,
-                SUM(CASE WHEN accepted IS NOT NULL THEN 1 ELSE 0 END) AS obserwacje_z_kandydatem,
+                SUM(CASE WHEN candidate_row_id IS NOT NULL THEN 1 ELSE 0 END) AS obserwacje_z_kandydatem,
                 SUM(CASE WHEN outcome_pnl IS NOT NULL THEN 1 ELSE 0 END) AS obserwacje_z_wynikiem_rynku,
                 ROUND(AVG(symbol_score), 6) AS sredni_wynik_malego_onnx,
                 ROUND(AVG(teacher_score), 6) AS sredni_wynik_nauczyciela,
@@ -382,92 +648,105 @@ def main() -> int:
         summary_query = f"""
             WITH onnx_base AS (
                 SELECT
-                    CAST(ts AS BIGINT) AS ts,
-                    CAST(symbol AS VARCHAR) AS symbol_alias,
-                    CAST(stage AS VARCHAR) AS stage,
-                    CAST(COALESCE(runtime_channel, 'UNKNOWN') AS VARCHAR) AS runtime_channel,
-                    CAST(teacher_score AS DOUBLE) AS teacher_score,
-                    CAST(symbol_score AS DOUBLE) AS symbol_score,
-                    CAST(latency_us AS DOUBLE) AS latency_us,
-                    CAST(setup_type AS VARCHAR) AS setup_type,
-                    CAST(market_regime AS VARCHAR) AS market_regime,
-                    CAST(spread_regime AS VARCHAR) AS spread_regime,
-                    CAST(confidence_bucket AS VARCHAR) AS confidence_bucket
-                FROM onnx_observations
-                WHERE stage = 'EVALUATED'
-                  AND CAST(available AS BIGINT) = 1
-                  AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
+                    ROW_NUMBER() OVER () AS onnx_row_id,
+                    *
+                FROM (
+                    {onnx_base_select}
+                )
             ),
             candidate_base AS (
                 SELECT
-                    CAST(ts AS BIGINT) AS ts,
-                    CAST(symbol AS VARCHAR) AS symbol_alias,
-                    CAST(setup_type AS VARCHAR) AS setup_type,
-                    CAST(market_regime AS VARCHAR) AS market_regime,
-                    CAST(spread_regime AS VARCHAR) AS spread_regime,
-                    CAST(confidence_bucket AS VARCHAR) AS confidence_bucket,
-                    CAST(accepted AS BIGINT) AS accepted,
-                    CAST(side AS VARCHAR) AS side,
-                    CAST(execution_regime AS VARCHAR) AS execution_regime,
-                    CAST(renko_run_length AS BIGINT) AS renko_run_length,
-                    CAST(renko_reversal_flag AS BIGINT) AS renko_reversal_flag
-                FROM candidate_signals
-                WHERE stage = 'EVALUATED'
+                    ROW_NUMBER() OVER () AS candidate_row_id,
+                    *
+                FROM (
+                    {candidate_base_select}
+                )
             ),
-            linked_candidates AS (
+            learning_base AS (
+                {learning_base_select}
+            ),
+            linked_candidates_raw AS (
                 SELECT
-                    o.*,
+                    o.onnx_row_id,
+                    o.ts,
+                    o.symbol_alias,
+                    o.runtime_channel,
+                    o.setup_type,
+                    c.candidate_row_id,
                     c.accepted,
                     c.side,
+                    c.side_normalized,
                     c.execution_regime,
+                    c.feedback_key AS candidate_feedback_key,
+                    c.outcome_key,
                     c.renko_run_length,
-                    c.renko_reversal_flag
+                    c.renko_reversal_flag,
+                    o.market_regime,
+                    o.spread_regime,
+                    o.confidence_bucket,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY o.onnx_row_id
+                        ORDER BY
+                            CASE WHEN c.candidate_row_id IS NULL THEN 1 ELSE 0 END,
+                            CASE WHEN COALESCE(c.accepted, 0) = 1 THEN 0 ELSE 1 END,
+                            COALESCE(c.candidate_row_id, 2147483647)
+                    ) AS candidate_rank
                 FROM onnx_base o
                 LEFT JOIN candidate_base c
-                  ON c.ts = o.ts
-                 AND c.symbol_alias = o.symbol_alias
-                 AND c.setup_type = o.setup_type
-                 AND c.market_regime = o.market_regime
-                 AND c.spread_regime = o.spread_regime
-                 AND c.confidence_bucket = o.confidence_bucket
+                {candidate_join}
+            ),
+            linked_candidates AS (
+                SELECT * EXCLUDE(candidate_rank)
+                FROM linked_candidates_raw
+                WHERE candidate_rank = 1
+            ),
+            accepted_candidates AS (
+                SELECT *
+                FROM linked_candidates
+                WHERE accepted = 1 AND candidate_row_id IS NOT NULL
             ),
             ranked_outcomes AS (
                 SELECT
-                    lc.*,
-                    CAST(lo.pnl AS DOUBLE) AS outcome_pnl,
+                    ac.candidate_row_id,
+                    lb.pnl AS outcome_pnl,
                     ROW_NUMBER() OVER (
-                        PARTITION BY lc.ts, lc.symbol_alias, lc.setup_type
-                        ORDER BY CAST(lo.ts AS BIGINT)
+                        PARTITION BY ac.candidate_row_id
+                        ORDER BY lb.ts
                     ) AS outcome_rank
-                FROM linked_candidates lc
-                LEFT JOIN learning_observations_v2 lo
-                  ON lo.symbol = lc.symbol_alias
-                 AND lo.setup_type = lc.setup_type
-                 AND lo.market_regime = lc.market_regime
-                 AND lo.spread_regime = COALESCE(lc.spread_regime, lo.spread_regime)
-                 AND lo.execution_regime = COALESCE(lc.execution_regime, lo.execution_regime)
-                 AND lo.confidence_bucket = COALESCE(lc.confidence_bucket, lo.confidence_bucket)
-                 AND CAST(lo.side AS VARCHAR) = COALESCE(lc.side, CAST(lo.side AS VARCHAR))
-                 AND CAST(lo.renko_run_length AS BIGINT) = COALESCE(lc.renko_run_length, CAST(lo.renko_run_length AS BIGINT))
-                 AND CAST(lo.renko_reversal_flag AS BIGINT) = COALESCE(lc.renko_reversal_flag, CAST(lo.renko_reversal_flag AS BIGINT))
-                 AND CAST(lo.ts AS BIGINT) >= lc.ts
-                 AND CAST(lo.ts AS BIGINT) <= lc.ts + {int(args.outcome_horizon_sec)}
+                FROM accepted_candidates ac
+                LEFT JOIN learning_base lb
+                  ON lb.symbol_alias = ac.symbol_alias
+                 AND lb.setup_type = ac.setup_type
+                 AND lb.side_normalized = ac.side_normalized
+                 AND lb.ts >= ac.ts
+                 AND lb.ts <= ac.ts + {int(args.outcome_horizon_sec)}
             ),
-            resolved AS (
+            resolved_outcomes AS (
                 SELECT *
                 FROM ranked_outcomes
                 WHERE outcome_rank = 1 OR outcome_rank IS NULL
+            ),
+            resolved AS (
+                SELECT
+                    lc.*,
+                    ro.outcome_pnl
+                FROM linked_candidates lc
+                LEFT JOIN resolved_outcomes ro
+                  ON ro.candidate_row_id = lc.candidate_row_id
             )
             SELECT
                 COUNT(*) AS liczba_obserwacji_onnx,
                 SUM(CASE WHEN runtime_channel = 'LIVE' THEN 1 ELSE 0 END) AS liczba_obserwacji_live,
                 SUM(CASE WHEN runtime_channel = 'PAPER' THEN 1 ELSE 0 END) AS liczba_obserwacji_paper,
-                SUM(CASE WHEN accepted IS NOT NULL THEN 1 ELSE 0 END) AS liczba_obserwacji_z_kandydatem,
+                SUM(CASE WHEN candidate_row_id IS NOT NULL THEN 1 ELSE 0 END) AS liczba_obserwacji_z_kandydatem,
                 SUM(CASE WHEN outcome_pnl IS NOT NULL THEN 1 ELSE 0 END) AS liczba_obserwacji_z_wynikiem_rynku,
                 COUNT(DISTINCT symbol_alias) AS liczba_symboli
             FROM resolved
         """
         summary_row = con.execute(summary_query).fetchone()
+    finally:
+        if con is not None:
+            con.close()
 
     summary = {
         "liczba_obserwacji_onnx": int(summary_row[0] or 0),
@@ -489,13 +768,24 @@ def main() -> int:
         "db_path": str(db_path),
         "outcome_horizon_sec": int(args.outcome_horizon_sec),
         "score_threshold": float(args.score_threshold),
+        "contract_source": contract_source,
         "summary": summary,
         "powod_braku_danych": (None if summary["liczba_obserwacji_onnx"] > 0 else "brak_obserwacji_po_filtrowaniu"),
         "runtime_bootstrap": runtime_bootstrap_items,
         "items": items_df.to_dict(orient="records"),
     }
     write_report(report, output_root)
-    print(json.dumps(report, indent=2, ensure_ascii=True))
+    print(
+        json.dumps(
+            {
+                "generated_at_local": report["generated_at_local"],
+                "contract_source": contract_source,
+                "summary": report["summary"],
+            },
+            indent=2,
+            ensure_ascii=True,
+        )
+    )
     return 0
 
 
