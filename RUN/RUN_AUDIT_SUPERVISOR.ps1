@@ -246,6 +246,8 @@ function Invoke-AuditCycle {
     $fullStackPath = Join-Path $opsRoot "full_stack_audit_latest.json"
     $trustPath = Join-Path $opsRoot "trust_but_verify_latest.json"
     $learningPath = Join-Path $opsRoot "learning_stack_audit_latest.json"
+    $learningHealthPath = Join-Path $opsRoot "learning_health_registry_latest.json"
+    $learningPaperRuntimePath = Join-Path $opsRoot "learning_paper_runtime_plan_latest.json"
     $onnxFeedbackPath = Join-Path $opsRoot "onnx_feedback_loop_latest.json"
     $onnxCrossAuditPath = Join-Path $opsRoot "onnx_micro_cross_audit_latest.json"
     $hostilePath = Join-Path $opsRoot "hostile_four_loop_audit_latest.json"
@@ -274,6 +276,14 @@ function Invoke-AuditCycle {
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_STACK_AUDIT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
         },
         @{
@@ -365,6 +375,10 @@ function Invoke-AuditCycle {
                 params = @{ ProjectRoot = $ProjectRoot }
             },
             @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1")
+                params = @{ ProjectRoot = $ProjectRoot }
+            },
+            @{
                 path = (Join-Path $ProjectRoot "RUN\BUILD_ONNX_FEEDBACK_LOOP_REPORT.ps1")
                 params = @{ ProjectRoot = $ProjectRoot }
             }
@@ -409,6 +423,10 @@ function Invoke-AuditCycle {
                     params = @{ ProjectRoot = $ProjectRoot }
                 },
                 @{
+                    path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1")
+                    params = @{ ProjectRoot = $ProjectRoot }
+                },
+                @{
                     path = (Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1")
                     params = @{
                         ProjectRoot = $ProjectRoot
@@ -431,6 +449,8 @@ function Invoke-AuditCycle {
     $fullStack = Read-JsonSafe -Path $fullStackPath
     $trust = Read-JsonSafe -Path $trustPath
     $learning = Read-JsonSafe -Path $learningPath
+    $learningHealth = Read-JsonSafe -Path $learningHealthPath
+    $learningPaperRuntime = Read-JsonSafe -Path $learningPaperRuntimePath
     $onnxFeedback = Read-JsonSafe -Path $onnxFeedbackPath
     $onnxCrossAudit = Read-JsonSafe -Path $onnxCrossAuditPath
     $hostile = Read-JsonSafe -Path $hostilePath
@@ -633,6 +653,98 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "STOS_UCZENIA" -Gate "RAPORTUJ" -Severity "info" -Reason "Stos uczenia jest aktywny i nie pokazuje czerwonych flag.")) | Out-Null
     }
 
+    $learningHealthEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $learningHealth) {
+        $healthSummary = Get-OptionalValue -Object $learningHealth -Name "summary" -Default $null
+        $fallbacks = [int](Get-OptionalValue -Object $healthSummary -Name "fallback_globalny" -Default 0)
+        $doszkolenie = [int](Get-OptionalValue -Object $healthSummary -Name "wymaga_doszkolenia" -Default 0)
+        $regeneracja = [int](Get-OptionalValue -Object $healthSummary -Name "wymaga_regeneracji" -Default 0)
+        $runtimeActive = [int](Get-OptionalValue -Object $healthSummary -Name "runtime_active_symbols" -Default 0)
+
+        if ($fallbacks -gt 0) {
+            $learningHealthEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_health_fallbacks"
+                message = "Czesc instrumentow nadal korzysta z fallbacku globalnego."
+                context = @{ fallback_globalny = $fallbacks }
+            }) | Out-Null
+        }
+        if ($doszkolenie -gt 0) {
+            $learningHealthEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_health_retrain"
+                message = "Czesc instrumentow wymaga doszkolenia malego ONNX."
+                context = @{ wymaga_doszkolenia = $doszkolenie }
+            }) | Out-Null
+        }
+        if ($regeneracja -gt 0) {
+            $learningHealthEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_health_regeneration"
+                message = "Czesc instrumentow wymaga regeneracji danych lub kosztu."
+                context = @{ wymaga_regeneracji = $regeneracja }
+            }) | Out-Null
+        }
+        if ($runtimeActive -le 0) {
+            $learningHealthEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_health_runtime"
+                message = "Rejestr zdrowia nie widzi jeszcze aktywnych instrumentow runtime ONNX."
+                context = @{ runtime_active_symbols = $runtimeActive }
+            }) | Out-Null
+        }
+    }
+
+    if ($learningHealthEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "ZDROWIE_UCZENIA_PER_INSTRUMENT" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $learningHealthEvidence) -Reason "Stan zdrowia instrumentow wymaga dalszego sterowania i samoregulacji." -Evidence $learningHealthEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "ZDROWIE_UCZENIA_PER_INSTRUMENT" -Gate "RAPORTUJ" -Severity "info" -Reason "Rejestr zdrowia uczenia nie pokazuje swiezych czerwonych flag.")) | Out-Null
+    }
+
+    $paperLearningEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $learningPaperRuntime) {
+        $paperSummary = Get-OptionalValue -Object $learningPaperRuntime -Name "summary" -Default $null
+        $overallAction = [string](Get-OptionalValue -Object $paperSummary -Name "overall_action" -Default "")
+        $refreshCount = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_to_refresh" -Default 0)
+        $collectingCount = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_collecting" -Default 0)
+        $runtimeActive = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_runtime_active" -Default 0)
+
+        if ($overallAction -eq "ODSWIEZ_PAPER_RUNTIME" -and $refreshCount -gt 0) {
+            $paperLearningEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "paper_learning_refresh"
+                message = "Paper-live powinien zostac odswiezony, bo jest elementem sciezki uczenia."
+                context = @{ symbols_to_refresh = $refreshCount; overall_action = $overallAction }
+            }) | Out-Null
+        }
+
+        if ($collectingCount -le 0) {
+            $paperLearningEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "paper_learning_collect"
+                message = "Paper-live nie zbiera obecnie zdrowego strumienia obserwacji dla uczenia."
+                context = @{ symbols_collecting = $collectingCount }
+            }) | Out-Null
+        }
+
+        if ($runtimeActive -le 0) {
+            $paperLearningEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "paper_learning_runtime"
+                message = "Paper-live nie ma jeszcze aktywnego symbolu oddajacego runtime ONNX."
+                context = @{ symbols_runtime_active = $runtimeActive }
+            }) | Out-Null
+        }
+    }
+
+    if ($paperLearningEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_JAKO_ZRODLO_NAUKI" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $paperLearningEvidence) -Reason "Paper-live jest juz czescia samoregulacji i musi pozostawac zdrowym zrodlem swiezych danych." -Evidence $paperLearningEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_JAKO_ZRODLO_NAUKI" -Gate "RAPORTUJ" -Severity "info" -Reason "Paper-live jest swiezym zrodlem danych i nie pokazuje czerwonych flag dla sciezki uczenia.")) | Out-Null
+    }
+
     $onnxEvidence = New-Object System.Collections.Generic.List[object]
     foreach ($finding in @($hostileFindings | Where-Object { $_.component -in @("onnx_feedback", "onnx_runtime", "onnx_fallbacks", "onnx_quality", "triple_loop_audit") })) {
         $onnxEvidence.Add($finding) | Out-Null
@@ -727,6 +839,8 @@ function Invoke-AuditCycle {
         full_stack = $fullStackPath
         learning_stack = $learningPath
         learning_path_hygiene = $learningHygienePath
+        learning_health_registry = $learningHealthPath
+        learning_paper_runtime_plan = $learningPaperRuntimePath
         onnx_feedback = $onnxFeedbackPath
         onnx_cross_audit = $onnxCrossAuditPath
         hostile_four_loop = $hostilePath

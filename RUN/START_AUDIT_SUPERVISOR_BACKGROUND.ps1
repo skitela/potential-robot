@@ -3,7 +3,8 @@ param(
     [string]$LogRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [int]$CycleSeconds = 300,
     [int]$HeavySweepEveryCycles = 36,
-    [switch]$ApplySafeAutoHeal
+    [switch]$ApplySafeAutoHeal,
+    [switch]$StopExisting
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +21,24 @@ $existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
         $_.CommandLine -like "*audit_supervisor_wrapper_*"
     }
+
+if ($StopExisting -and $existing) {
+    foreach ($proc in @($existing)) {
+        try {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+        }
+        catch {
+        }
+    }
+
+    Start-Sleep -Seconds 1
+    $existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "powershell.exe" -and
+            -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+            $_.CommandLine -like "*audit_supervisor_wrapper_*"
+        }
+}
 
 if ($existing) {
     Write-Host "Audit supervisor is already running."

@@ -11,6 +11,11 @@ $ErrorActionPreference = "Stop"
 $priorityScript = Join-Path $ProjectRoot "RUN\BUILD_TUNING_PRIORITY_REPORT.ps1"
 $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
+$onnxMicroReviewScript = Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1"
+$activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERDICTS_REPORT.ps1"
+$winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
+$learningHealthRegistryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
+$learningPaperRuntimePlanScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1"
 $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
 $learningHygieneScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1"
 $learningHotPathScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1"
@@ -47,6 +52,11 @@ foreach ($path in @(
     $priorityScript,
     $qdmProfileScript,
     $mlHintsScript,
+    $onnxMicroReviewScript,
+    $activeFleetVerdictsScript,
+    $winnerDeploymentScript,
+    $learningHealthRegistryScript,
+    $learningPaperRuntimePlanScript,
     $researchPlanScript,
     $learningHygieneScript,
     $learningHotPathScript,
@@ -414,6 +424,25 @@ function Write-SupervisorStatus {
         $qdmHead = @($qdmProfile.included | Select-Object -First 4)
     }
 
+    $learningHealthPath = Join-Path $statusDir "learning_health_registry_latest.json"
+    $learningHealth = $null
+    $learningHealthHead = @()
+    if (Test-Path -LiteralPath $learningHealthPath) {
+        $learningHealth = Get-Content -LiteralPath $learningHealthPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $learningHealthHead = @($learningHealth.top_pressure | Select-Object -First 5)
+    }
+
+    $learningPaperRuntimePath = Join-Path $statusDir "learning_paper_runtime_plan_latest.json"
+    $learningPaperRuntime = $null
+    $learningPaperRuntimeHead = @()
+    if (Test-Path -LiteralPath $learningPaperRuntimePath) {
+        $learningPaperRuntime = Get-Content -LiteralPath $learningPaperRuntimePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $learningPaperRuntimeHead = @($learningPaperRuntime.top_refresh | Select-Object -First 5)
+        if (@($learningPaperRuntimeHead).Count -eq 0) {
+            $learningPaperRuntimeHead = @($learningPaperRuntime.top_runtime_active | Select-Object -First 5)
+        }
+    }
+
     $trustButVerifyPath = Join-Path $statusDir "trust_but_verify_latest.json"
     $trustButVerify = $null
     if (Test-Path -LiteralPath $trustButVerifyPath) {
@@ -443,6 +472,10 @@ function Write-SupervisorStatus {
         top_priority = $priorityHead
         top_ml_hints = $mlHintHead
         top_qdm_profile = $qdmHead
+        learning_health = $learningHealth
+        top_learning_health = $learningHealthHead
+        learning_paper_runtime = $learningPaperRuntime
+        top_learning_paper_runtime = $learningPaperRuntimeHead
         trust_but_verify = $trustButVerify
         mt5_retest_queue = $mt5Queue
     }
@@ -506,6 +539,49 @@ function Write-SupervisorStatus {
             $item.qdm_symbol,
             $item.datasource,
             $item.mt5_export_name))
+    }
+    $lines.Add("")
+    $lines.Add("## Learning Health")
+    $lines.Add("")
+    if ($null -ne $learningHealth) {
+        $lines.Add(("- fallback_globalny: {0}" -f $learningHealth.summary.fallback_globalny))
+        $lines.Add(("- mala_probka: {0}" -f $learningHealth.summary.mala_probka))
+        $lines.Add(("- wymaga_doszkolenia: {0}" -f $learningHealth.summary.wymaga_doszkolenia))
+        $lines.Add(("- wymaga_regeneracji: {0}" -f $learningHealth.summary.wymaga_regeneracji))
+        $lines.Add(("- runtime_active_symbols: {0}" -f $learningHealth.summary.runtime_active_symbols))
+        foreach ($item in $learningHealthHead) {
+            $lines.Add(("- {0}: health={1}, mode={2}, rank={3}, onnx={4}/{5}, runtime_rows={6}" -f
+                $item.symbol_alias,
+                $item.learning_health_state,
+                $item.work_mode,
+                $item.priority_rank,
+                $item.onnx_status,
+                $item.onnx_quality,
+                $item.sample_runtime_onnx_rows))
+        }
+    }
+    else {
+        $lines.Add("- learning health registry not available")
+    }
+    $lines.Add("")
+    $lines.Add("## Paper Runtime Learning")
+    $lines.Add("")
+    if ($null -ne $learningPaperRuntime) {
+        $lines.Add(("- overall_action: {0}" -f $learningPaperRuntime.summary.overall_action))
+        $lines.Add(("- symbols_to_refresh: {0}" -f $learningPaperRuntime.summary.symbols_to_refresh))
+        $lines.Add(("- symbols_collecting: {0}" -f $learningPaperRuntime.summary.symbols_collecting))
+        $lines.Add(("- symbols_runtime_active: {0}" -f $learningPaperRuntime.summary.symbols_runtime_active))
+        foreach ($item in $learningPaperRuntimeHead) {
+            $lines.Add(("- {0}: action={1}, role={2}, health={3}, runtime_rows={4}" -f
+                $item.symbol_alias,
+                $item.migration_action,
+                $item.paper_learning_role,
+                $item.learning_health_state,
+                $item.runtime_rows))
+        }
+    }
+    else {
+        $lines.Add("- learning paper runtime plan not available")
     }
     $lines.Add("")
     $lines.Add("## Trust But Verify")
@@ -601,8 +677,8 @@ while ($true) {
         "rebuilt"
     } | Out-Null
 
-    Invoke-SupervisorAction -Actions $actions -Name "research_plan" -Operation {
-        & $researchPlanScript | Out-Null
+    Invoke-SupervisorAction -Actions $actions -Name "onnx_micro_review" -Operation {
+        & $onnxMicroReviewScript | Out-Null
         "rebuilt"
     } | Out-Null
 
@@ -646,6 +722,31 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "technical_readiness" -Operation {
         & $technicalReadinessScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "active_fleet_verdicts" -Operation {
+        & $activeFleetVerdictsScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "winner_deployment" -Operation {
+        & $winnerDeploymentScript | Out-Null
+        "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "learning_health_registry" -Operation {
+        $report = (& $learningHealthRegistryScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "fallback=$($report.summary.fallback_globalny); regeneracja=$($report.summary.wymaga_regeneracji); docisk=$($report.summary.do_docisku); runtime_active=$($report.summary.runtime_active_symbols)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "learning_paper_runtime_plan" -Operation {
+        $report = (& $learningPaperRuntimePlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "overall=$($report.summary.overall_action); refresh=$($report.summary.symbols_to_refresh); collecting=$($report.summary.symbols_collecting); runtime_active=$($report.summary.symbols_runtime_active)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "research_plan" -Operation {
+        & $researchPlanScript | Out-Null
         "rebuilt"
     } | Out-Null
 
