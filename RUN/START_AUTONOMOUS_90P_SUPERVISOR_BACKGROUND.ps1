@@ -1,7 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$LogRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
-    [int]$CycleSeconds = 180
+    [int]$CycleSeconds = 180,
+    [switch]$StopExisting
 )
 
 Set-StrictMode -Version Latest
@@ -14,18 +15,63 @@ if (-not (Test-Path -LiteralPath $supervisorScript)) {
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 
+if ($StopExisting) {
+    $existing = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "powershell.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                $_.CommandLine -like "*autonomous_90p_supervisor_wrapper_*"
+            }
+    )
+
+    foreach ($proc in $existing) {
+        try {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+        }
+        catch {
+        }
+    }
+}
+
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logPath = Join-Path $LogRoot "autonomous_90p_supervisor_$timestamp.log"
 $wrapperPath = Join-Path $env:TEMP "autonomous_90p_supervisor_wrapper_$timestamp.ps1"
 
 $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'
-Start-Transcript -Path '$logPath' -Force
+function Write-WrapperLog {
+    param([string]`$Message)
+
+    `$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -LiteralPath '$logPath' -Value ('[' + `$timestamp + '] ' + `$Message) -Encoding UTF8
+}
+
+Write-WrapperLog 'wrapper_start'
 try {
-    & '$supervisorScript' -ProjectRoot '$ProjectRoot' -CycleSeconds $CycleSeconds
+    & '$supervisorScript' -ProjectRoot '$ProjectRoot' -CycleSeconds $CycleSeconds *>&1 | ForEach-Object {
+        if (`$_ -is [System.Management.Automation.ErrorRecord]) {
+            Write-WrapperLog ('stream_error=' + (`$_.ToString() -replace '\s+', ' ').Trim())
+        }
+        else {
+            `$line = [string]`$_
+            if (-not [string]::IsNullOrWhiteSpace(`$line)) {
+                Write-WrapperLog (`$line)
+            }
+        }
+    }
+}
+catch {
+    Write-WrapperLog ('wrapper_exception=' + `$_.Exception.Message)
+    if (`$null -ne `$_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace(`$_.InvocationInfo.PositionMessage)) {
+        Write-WrapperLog ('wrapper_position=' + ((`$_.InvocationInfo.PositionMessage -replace '\s+', ' ').Trim()))
+    }
+    if (-not [string]::IsNullOrWhiteSpace(`$_.ScriptStackTrace)) {
+        Write-WrapperLog ('wrapper_stack=' + ((`$_.ScriptStackTrace -replace '\s+', ' ').Trim()))
+    }
 }
 finally {
-    Stop-Transcript
+    Write-WrapperLog 'wrapper_stop'
 }
 "@
 

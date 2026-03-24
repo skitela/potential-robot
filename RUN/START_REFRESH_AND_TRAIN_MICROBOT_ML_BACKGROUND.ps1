@@ -1,6 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$LogRoot = "C:\TRADING_DATA\RESEARCH\reports"
+    [string]$LogRoot = "C:\TRADING_DATA\RESEARCH\reports",
+    [ValidateSet("ConcurrentLab", "OfflineMax", "Light")]
+    [string]$PerfProfile = "ConcurrentLab"
 )
 
 Set-StrictMode -Version Latest
@@ -21,7 +23,7 @@ $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'
 Start-Transcript -Path '$logPath' -Force
 try {
-    & '$pipelineScript'
+    & '$pipelineScript' -PerfProfile '$PerfProfile'
 }
 finally {
     Stop-Transcript
@@ -43,3 +45,4 @@ catch {
 
 Write-Host "Background refresh+train ML pipeline started."
 Write-Host "Log: $logPath"
+Write-Host "Perf profile: $PerfProfile"

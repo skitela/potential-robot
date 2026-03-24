@@ -30,7 +30,7 @@ ulong MbRuntimeLogRotationThresholdBytes(const string file_name)
    if(file_name == "decision_events.csv")
       return (ulong)(8 * 1024 * 1024);
    if(file_name == "candidate_signals.csv")
-      return (ulong)(8 * 1024 * 1024);
+      return (ulong)(24 * 1024 * 1024);
    if(file_name == "execution_telemetry.csv")
       return (ulong)(12 * 1024 * 1024);
    return (ulong)0;

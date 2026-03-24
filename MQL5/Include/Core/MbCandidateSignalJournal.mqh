@@ -2,6 +2,7 @@
 #define MB_CANDIDATE_SIGNAL_JOURNAL_INCLUDED
 
 #include "MbRuntimeTypes.mqh"
+#include "MbRuntimeLogRotation.mqh"
 #include "MbStorage.mqh"
 
 struct MbCandidateSignalRecord
@@ -152,6 +153,7 @@ void MbCandidateSignalJournalFlush()
    for(int i = 0; i < queued; ++i)
       MbWriteCandidateSignalRecord(h,g_mb_candidate_queue[i]);
    FileClose(h);
+   MbRotateRuntimeLogIfOversized(g_mb_candidate_queue_path);
    ArrayResize(g_mb_candidate_queue,0);
   }
 
@@ -214,6 +216,7 @@ void MbAppendCandidateSignal(
    FileSeek(h,0,SEEK_END);
    MbWriteCandidateSignalRecord(h,record);
    FileClose(h);
+   MbRotateRuntimeLogIfOversized(rel_path);
   }
 
 #endif

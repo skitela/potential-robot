@@ -1,7 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [int]$CycleSeconds = 300,
-    [int]$MaxCycles = 0
+    [int]$MaxCycles = 0,
+    [int]$StartupTurboMinutes = 90
 )
 
 Set-StrictMode -Version Latest
@@ -11,6 +12,8 @@ $priorityScript = Join-Path $ProjectRoot "RUN\BUILD_TUNING_PRIORITY_REPORT.ps1"
 $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
+$learningHygieneScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1"
+$learningHotPathScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1"
 $mt5QueueSyncScript = Join-Path $ProjectRoot "RUN\SYNC_MT5_RETEST_QUEUE_FROM_RESEARCH_PLAN.ps1"
 $retestQueueScript = Join-Path $ProjectRoot "RUN\START_MICROBOT_RETEST_QUEUE_AFTER_IDLE_BACKGROUND.ps1"
 $applyLaptopRuntimeScript = Join-Path $ProjectRoot "RUN\APPLY_LAPTOP_RESEARCH_RUNTIME.ps1"
@@ -45,6 +48,8 @@ foreach ($path in @(
     $qdmProfileScript,
     $mlHintsScript,
     $researchPlanScript,
+    $learningHygieneScript,
+    $learningHotPathScript,
     $mt5QueueSyncScript,
     $retestQueueScript,
     $applyLaptopRuntimeScript,
@@ -91,14 +96,23 @@ function Ensure-BackgroundTask {
     param(
         [string]$Label,
         [scriptblock]$IsRunning,
-        [string]$StarterPath
+        [string]$StarterPath = "",
+        [scriptblock]$StarterOperation = $null
     )
 
     if (& $IsRunning) {
         return "already_running"
     }
 
-    & $StarterPath | Out-Host
+    if ($null -ne $StarterOperation) {
+        & $StarterOperation | Out-Host
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($StarterPath)) {
+        & $StarterPath | Out-Host
+    }
+    else {
+        throw "Missing starter for background task: $Label"
+    }
     return "started"
 }
 
@@ -127,6 +141,29 @@ function Read-JsonOrNull {
     }
 }
 
+function Test-ObjectHasProperty {
+    param(
+        $Object,
+        [string]$Name
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $false
+    }
+
+    try {
+        $properties = $Object.PSObject.Properties
+        if ($null -eq $properties) {
+            return $false
+        }
+
+        return ($properties.Name -contains $Name)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Invoke-SupervisorAction {
     param(
         [System.Collections.IDictionary]$Actions,
@@ -134,6 +171,7 @@ function Invoke-SupervisorAction {
         [scriptblock]$Operation
     )
 
+    Write-Host ("[{0}] START {1}" -f (Get-Date -Format "HH:mm:ss"), $Name)
     try {
         $result = & $Operation
         if ($null -eq $result -or [string]::IsNullOrWhiteSpace([string]$result)) {
@@ -142,6 +180,7 @@ function Invoke-SupervisorAction {
         else {
             $Actions[$Name] = [string]$result
         }
+        Write-Host ("[{0}] OK {1} => {2}" -f (Get-Date -Format "HH:mm:ss"), $Name, $Actions[$Name])
         return $true
     }
     catch {
@@ -152,7 +191,17 @@ function Invoke-SupervisorAction {
         else {
             $message = "unknown_error"
         }
+        $position = if ($null -ne $_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
+            ($_.InvocationInfo.PositionMessage -replace '\s+', ' ').Trim()
+        }
+        else {
+            ""
+        }
+        if (-not [string]::IsNullOrWhiteSpace($position)) {
+            $message = "$message | $position"
+        }
         $Actions[$Name] = "failed: $message"
+        Write-Warning ("[{0}] FAIL {1} => {2}" -f (Get-Date -Format "HH:mm:ss"), $Name, $Actions[$Name])
         return $false
     }
 }
@@ -182,6 +231,34 @@ function Get-WeakestMt5ActivityCount {
     }
 
     return 0
+}
+
+function Get-SystemBootAgeMinutes {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        if ($null -eq $os -or $null -eq $os.LastBootUpTime) {
+            return -1
+        }
+
+        return [int][Math]::Round(((Get-Date) - $os.LastBootUpTime).TotalMinutes)
+    }
+    catch {
+        return -1
+    }
+}
+
+function Resolve-LearningPerfProfile {
+    param([int]$StartupTurboMinutes)
+
+    $bootAgeMinutes = Get-SystemBootAgeMinutes
+    $startupTurboActive = ($bootAgeMinutes -ge 0 -and $bootAgeMinutes -le $StartupTurboMinutes)
+    $profile = if ($startupTurboActive) { "OfflineMax" } else { "ConcurrentLab" }
+
+    return [pscustomobject]@{
+        profile = $profile
+        boot_age_minutes = $bootAgeMinutes
+        startup_turbo_active = $startupTurboActive
+    }
 }
 
 function Stop-WrapperProcessesByPattern {
@@ -270,11 +347,11 @@ function Get-NearProfitRestartAssessment {
             [void]$reasons.Add("near_profit_stale")
         }
 
-        if ($queue.PSObject.Properties.Name -contains "run_timeout_near" -and [bool]$queue.run_timeout_near) {
+        if ((Test-ObjectHasProperty -Object $queue -Name "run_timeout_near") -and [bool]$queue.run_timeout_near) {
             [void]$reasons.Add("near_profit_timeout")
         }
 
-        if ($queue.PSObject.Properties.Name -contains "run_remaining_sec") {
+        if (Test-ObjectHasProperty -Object $queue -Name "run_remaining_sec") {
             try {
                 if ([int]$queue.run_remaining_sec -lt -300) {
                     [void]$reasons.Add("near_profit_negative_remaining")
@@ -298,7 +375,10 @@ function Get-NearProfitRestartAssessment {
 function Write-SupervisorStatus {
     param(
         [int]$Cycle,
-        [System.Collections.IDictionary]$Actions
+        [System.Collections.IDictionary]$Actions,
+        [string]$LearningPerfProfile,
+        [int]$BootAgeMinutes,
+        [bool]$StartupTurboActive
     )
 
     $processes = Get-Process -ErrorAction SilentlyContinue |
@@ -355,6 +435,9 @@ function Write-SupervisorStatus {
     $status = [ordered]@{
         generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         cycle = $Cycle
+        learning_perf_profile = $LearningPerfProfile
+        startup_turbo_active = $StartupTurboActive
+        boot_age_minutes = $BootAgeMinutes
         actions = $Actions
         processes = $processes
         top_priority = $priorityHead
@@ -373,6 +456,9 @@ function Write-SupervisorStatus {
     $lines.Add("")
     $lines.Add(("- generated_at_local: {0}" -f $status.generated_at_local))
     $lines.Add(("- cycle: {0}" -f $Cycle))
+    $lines.Add(("- learning_perf_profile: {0}" -f $LearningPerfProfile))
+    $lines.Add(("- startup_turbo_active: {0}" -f $StartupTurboActive))
+    $lines.Add(("- boot_age_minutes: {0}" -f $BootAgeMinutes))
     $lines.Add("")
     $lines.Add("## Actions")
     $lines.Add("")
@@ -464,17 +550,19 @@ function Write-SupervisorStatus {
     ($lines -join "`r`n") | Set-Content -LiteralPath $mdLatest -Encoding UTF8
 }
 
-& $perfScript -ThrottleInteractiveApps -MlPerfProfile "ConcurrentLab" | Out-Host
+$initialPerf = Resolve-LearningPerfProfile -StartupTurboMinutes $StartupTurboMinutes
+& $perfScript -ThrottleInteractiveApps -MlPerfProfile $initialPerf.profile | Out-Host
 
 $cycle = 0
 while ($true) {
     $cycle++
+    $learningPerf = Resolve-LearningPerfProfile -StartupTurboMinutes $StartupTurboMinutes
 
     $actions = [ordered]@{}
 
     Invoke-SupervisorAction -Actions $actions -Name "perf_tuning" -Operation {
-        & $perfScript -ThrottleInteractiveApps -MlPerfProfile "ConcurrentLab" | Out-Null
-        "applied"
+        & $perfScript -ThrottleInteractiveApps -MlPerfProfile $learningPerf.profile | Out-Null
+        "applied profile=$($learningPerf.profile)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "daily_system_report" -Operation {
@@ -516,6 +604,16 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "research_plan" -Operation {
         & $researchPlanScript | Out-Null
         "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "learning_path_hygiene" -Operation {
+        $report = (& $learningHygieneScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
+        "verdict=$($report.verdict); manifest_fresh=$($report.manifest.fresh)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "learning_hot_path" -Operation {
+        $report = (& $learningHotPathScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
+        "verdict=$($report.verdict); rotated=$($report.summary.rotated_count); waiting_hot=$($report.summary.waiting_hot_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "laptop_runtime" -Operation {
@@ -588,7 +686,7 @@ while ($true) {
         Ensure-BackgroundTask `
             -Label "ml" `
             -IsRunning { (Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0 } `
-            -StarterPath $mlScript
+            -StarterOperation { & $mlScript -ProjectRoot $ProjectRoot -PerfProfile $learningPerf.profile }
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "weakest_mt5" -Operation {
@@ -633,7 +731,7 @@ while ($true) {
             -StarterPath $nearProfitBatchScript
     } | Out-Null
 
-    Write-SupervisorStatus -Cycle $cycle -Actions $actions
+    Write-SupervisorStatus -Cycle $cycle -Actions $actions -LearningPerfProfile $learningPerf.profile -BootAgeMinutes $learningPerf.boot_age_minutes -StartupTurboActive $learningPerf.startup_turbo_active
 
     Invoke-SupervisorAction -Actions $actions -Name "trust_but_verify" -Operation {
         & $trustButVerifyScript | Out-Null
@@ -650,7 +748,7 @@ while ($true) {
         "saved"
     } | Out-Null
 
-    Write-SupervisorStatus -Cycle $cycle -Actions $actions
+    Write-SupervisorStatus -Cycle $cycle -Actions $actions -LearningPerfProfile $learningPerf.profile -BootAgeMinutes $learningPerf.boot_age_minutes -StartupTurboActive $learningPerf.startup_turbo_active
 
     if ($MaxCycles -gt 0 -and $cycle -ge $MaxCycles) {
         break

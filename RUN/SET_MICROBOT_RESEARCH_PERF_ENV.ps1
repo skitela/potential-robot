@@ -31,7 +31,7 @@ if (-not $logicalProcessors -or $logicalProcessors -lt 1) {
 
 switch ($Profile) {
     "ConcurrentLab" {
-        $threads = [Math]::Min(5, [Math]::Max(4, $logicalProcessors - 7))
+        $threads = [Math]::Max(4, [Math]::Min([Math]::Max(4, $logicalProcessors - 4), [Math]::Ceiling($logicalProcessors * 0.55)))
     }
     "OfflineMax" {
         $threads = [Math]::Max(2, $logicalProcessors - 2)

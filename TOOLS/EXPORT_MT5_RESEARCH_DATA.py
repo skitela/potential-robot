@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -308,6 +310,114 @@ def read_json(path: Path) -> dict:
         return {}
 
 
+def build_cached_log_table(common_root: Path, output_root: Path, relative_name: str, stem: str) -> dict:
+    datasets_dir = ensure_dir(output_root / "datasets")
+    reports_dir = ensure_dir(output_root / "reports")
+    cache_root = ensure_dir(output_root / "log_cache" / stem)
+    cache_manifest_path = reports_dir / f"{stem}_cache_manifest_latest.json"
+    previous_manifest = read_json(cache_manifest_path)
+    previous_files = previous_manifest.get("files", {})
+
+    logs_root = common_root / "logs"
+    combined_parquet_path = datasets_dir / f"{stem}_latest.parquet"
+    file_entries: list[dict] = []
+    cached_parquet_paths: list[str] = []
+    reused_count = 0
+    rebuilt_count = 0
+
+    source_files = sorted(logs_root.rglob(relative_name)) if logs_root.exists() else []
+    for table_path in source_files:
+        try:
+            relative_parts = table_path.relative_to(logs_root).parts
+            source_key = "/".join(relative_parts)
+            symbol_dir = relative_parts[0] if relative_parts else table_path.parent.name
+            log_scope = "archive" if "archive" in relative_parts else "live"
+        except Exception:
+            source_key = table_path.name
+            symbol_dir = table_path.parent.name
+            log_scope = "unknown"
+
+        source_stat = table_path.stat()
+        cache_name = f"{hashlib.sha1(source_key.encode('utf-8')).hexdigest()}_{table_path.stem}.parquet"
+        cache_path = cache_root / cache_name
+        previous_entry = previous_files.get(source_key, {})
+        reuse_cache = (
+            cache_path.exists()
+            and previous_entry.get("source_size") == int(source_stat.st_size)
+            and previous_entry.get("source_mtime_ns") == int(source_stat.st_mtime_ns)
+        )
+
+        if reuse_cache:
+            reused_count += 1
+            row_count = int(previous_entry.get("rows", 0))
+        else:
+            df = read_tsv(table_path)
+            if not df.empty:
+                df["_source_path"] = str(table_path)
+                df["_symbol_dir"] = symbol_dir
+                df["_log_scope"] = log_scope
+                normalize_frame_for_parquet(df).to_parquet(cache_path, index=False)
+                row_count = int(len(df.index))
+            else:
+                pd.DataFrame().to_parquet(cache_path, index=False)
+                row_count = 0
+            rebuilt_count += 1
+
+        cache_stat = cache_path.stat() if cache_path.exists() else None
+        if row_count > 0 and cache_path.exists():
+            cached_parquet_paths.append(str(cache_path))
+        file_entries.append(
+            {
+                "source_path": str(table_path),
+                "source_key": source_key,
+                "source_size": int(source_stat.st_size),
+                "source_mtime_ns": int(source_stat.st_mtime_ns),
+                "symbol_dir": symbol_dir,
+                "log_scope": log_scope,
+                "rows": row_count,
+                "cache_path": str(cache_path),
+                "cache_size": int(cache_stat.st_size) if cache_stat else 0,
+            }
+        )
+
+    if cached_parquet_paths:
+        file_list_sql = "[" + ", ".join(f"'{sql_quote(path)}'" for path in cached_parquet_paths) + "]"
+        read_expr = f"read_parquet({file_list_sql}, union_by_name = true)"
+        with duckdb.connect() as con:
+            con.execute(
+                f"""
+                COPY (
+                    SELECT * FROM {read_expr}
+                ) TO '{sql_quote(str(combined_parquet_path))}' (FORMAT PARQUET, COMPRESSION ZSTD)
+                """
+            )
+            combined_rows = int(con.execute(f"SELECT COUNT(*) FROM {read_expr}").fetchone()[0])
+    else:
+        pd.DataFrame().to_parquet(combined_parquet_path, index=False)
+        combined_rows = 0
+
+    cache_manifest = {
+        "generated_at_utc": pd.Timestamp.now("UTC").isoformat(),
+        "relative_name": relative_name,
+        "stem": stem,
+        "file_count": len(file_entries),
+        "reused_count": reused_count,
+        "rebuilt_count": rebuilt_count,
+        "files": {entry["source_key"]: entry for entry in file_entries},
+    }
+    cache_manifest_path.write_text(json.dumps(cache_manifest, indent=2, ensure_ascii=True), encoding="utf-8")
+
+    return {
+        "rows": combined_rows,
+        "csv_path": None,
+        "parquet_path": str(combined_parquet_path),
+        "cache_manifest_path": str(cache_manifest_path),
+        "source_file_count": len(file_entries),
+        "cached_file_reused_count": reused_count,
+        "cached_file_rebuilt_count": rebuilt_count,
+    }
+
+
 def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dict, pd.DataFrame]:
     datasets_dir = ensure_dir(output_root / "datasets")
     reports_dir = ensure_dir(output_root / "reports")
@@ -484,14 +594,43 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
     return metadata, inventory
 
 
-def build_duckdb(db_path: Path, tables: dict[str, tuple[Path, int]]) -> None:
-    with duckdb.connect(str(db_path)) as con:
-        for table_name, table_meta in tables.items():
-            parquet_path, row_count = table_meta
-            if row_count <= 0:
-                con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT CAST(NULL AS VARCHAR) AS _empty WHERE FALSE")
-                continue
-            con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_parquet(?)", [str(parquet_path)])
+def build_duckdb(
+    db_path: Path,
+    tables: dict[str, tuple[Path, int]],
+    lock_retry_attempts: int = 6,
+    lock_retry_seconds: int = 10,
+) -> dict[str, Any]:
+    last_error = ""
+    for attempt in range(1, lock_retry_attempts + 1):
+        try:
+            with duckdb.connect(str(db_path)) as con:
+                for table_name, table_meta in tables.items():
+                    parquet_path, row_count = table_meta
+                    if row_count <= 0:
+                        con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT CAST(NULL AS VARCHAR) AS _empty WHERE FALSE")
+                        continue
+                    con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_parquet(?)", [str(parquet_path)])
+
+            return {
+                "updated": True,
+                "locked": False,
+                "attempts_used": attempt,
+                "error": "",
+            }
+        except duckdb.IOException as exc:
+            last_error = str(exc)
+            lowered = last_error.lower()
+            is_lock = ("used by another process" in lowered or "already open" in lowered)
+            if not is_lock:
+                raise
+            if attempt >= lock_retry_attempts:
+                return {
+                    "updated": False,
+                    "locked": True,
+                    "attempts_used": attempt,
+                    "error": last_error,
+                }
+            time.sleep(lock_retry_seconds)
 
 
 def main() -> int:
@@ -522,31 +661,47 @@ def main() -> int:
     tester_pass_frames = collect_jsonl_table(related_common_roots, "run", "tester_optimization_passes.jsonl")
     manifest["datasets"]["tester_pass_frames"] = export_parquet_only(tester_pass_frames, "tester_pass_frames_latest", datasets_dir)
 
-    decision_events = collect_log_table(common_root, "decision_events.csv")
-    manifest["datasets"]["decision_events"] = export_parquet_only(decision_events, "decision_events_latest", datasets_dir)
-
-    candidate_signals = collect_log_table(common_root, "candidate_signals.csv")
-    manifest["datasets"]["candidate_signals"] = export_parquet_only(candidate_signals, "candidate_signals_latest", datasets_dir)
-
-    learning_observations_v2 = collect_log_table(common_root, "learning_observations_v2.csv")
-    manifest["datasets"]["learning_observations_v2"] = export_parquet_only(
-        learning_observations_v2,
-        "learning_observations_v2_latest",
-        datasets_dir,
+    manifest["datasets"]["decision_events"] = build_cached_log_table(
+        common_root,
+        output_root,
+        "decision_events.csv",
+        "decision_events",
     )
 
-    onnx_observations = collect_log_table(common_root, "onnx_observations.csv")
-    manifest["datasets"]["onnx_observations"] = export_parquet_only(
-        onnx_observations,
-        "onnx_observations_latest",
-        datasets_dir,
+    manifest["datasets"]["candidate_signals"] = build_cached_log_table(
+        common_root,
+        output_root,
+        "candidate_signals.csv",
+        "candidate_signals",
     )
 
-    tuning_deckhand = collect_log_table(common_root, "tuning_deckhand.csv")
-    manifest["datasets"]["tuning_deckhand"] = export_frame(tuning_deckhand, "tuning_deckhand_latest", datasets_dir)
+    manifest["datasets"]["learning_observations_v2"] = build_cached_log_table(
+        common_root,
+        output_root,
+        "learning_observations_v2.csv",
+        "learning_observations_v2",
+    )
 
-    tuning_reasoning = collect_log_table(common_root, "tuning_reasoning.csv")
-    manifest["datasets"]["tuning_reasoning"] = export_frame(tuning_reasoning, "tuning_reasoning_latest", datasets_dir)
+    manifest["datasets"]["onnx_observations"] = build_cached_log_table(
+        common_root,
+        output_root,
+        "onnx_observations.csv",
+        "onnx_observations",
+    )
+
+    manifest["datasets"]["tuning_deckhand"] = build_cached_log_table(
+        common_root,
+        output_root,
+        "tuning_deckhand.csv",
+        "tuning_deckhand",
+    )
+
+    manifest["datasets"]["tuning_reasoning"] = build_cached_log_table(
+        common_root,
+        output_root,
+        "tuning_reasoning.csv",
+        "tuning_reasoning",
+    )
 
     tester_summary = collect_tester_jsons(project_root, "_summary.json")
     manifest["datasets"]["tester_summary"] = export_frame(tester_summary, "tester_summary_latest", datasets_dir)
@@ -559,7 +714,7 @@ def main() -> int:
     manifest["datasets"]["qdm_minute_bars"] = qdm_minute_meta
 
     duckdb_path = output_root / "microbot_research.duckdb"
-    build_duckdb(
+    duckdb_status = build_duckdb(
         duckdb_path,
         {
             "runtime_state": (datasets_dir / "runtime_state_latest.parquet", int(manifest["datasets"]["runtime_state"]["rows"])),
@@ -578,6 +733,7 @@ def main() -> int:
         },
     )
     manifest["duckdb_path"] = str(duckdb_path)
+    manifest["duckdb_status"] = duckdb_status
 
     manifest_path = output_root / "reports" / "research_export_manifest_latest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True), encoding="utf-8")
