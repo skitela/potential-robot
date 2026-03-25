@@ -12,6 +12,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $guardScript = Join-Path $projectRoot "TOOLS\mt5_risk_popup_guard.ps1"
 $guardStatus = Join-Path $projectRoot "EVIDENCE\OPS\mt5_risk_guard_status.json"
 $pythonScript = Join-Path $projectRoot "TOOLS\setup_mt5_microbots_profile.py"
+$operatorViewScript = Join-Path $projectRoot "RUN\USTAW_OANDA_MT5_WIDOK_OPERATORA.ps1"
 
 & (Join-Path $projectRoot "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
     -ProjectRoot $projectRoot `
@@ -38,6 +39,12 @@ Start-Sleep -Seconds 1
 & python $pythonScript --terminal-data-dir $TerminalDataDir --mt5-exe $Mt5Exe --profile-name $ProfileName --launch
 
 Start-Sleep -Seconds 8
+
+try {
+    & $operatorViewScript -Mt5Exe $Mt5Exe -ToolboxTab "Eksperci" -VpsTab "Eksperci" -OpenVpsPanel | Out-Null
+} catch {
+    Write-Warning ("Nie udalo sie ustawic widoku operatora MT5: {0}" -f $_.Exception.Message)
+}
 
 if (Test-Path -LiteralPath $guardStatus) {
     Get-Content -LiteralPath $guardStatus -Raw
