@@ -120,6 +120,26 @@ function Add-Finding {
     }) | Out-Null
 }
 
+function Get-RecentActivityAgeSeconds {
+    param([object]$Mt5Status)
+
+    if ($null -eq $Mt5Status) {
+        return $null
+    }
+
+    $lastActivity = [string]$Mt5Status.last_activity_at_local
+    if ([string]::IsNullOrWhiteSpace($lastActivity)) {
+        return $null
+    }
+
+    try {
+        return [int][math]::Round(((Get-Date) - ([datetime]$lastActivity)).TotalSeconds)
+    }
+    catch {
+        return $null
+    }
+}
+
 $mt5StatusPath = Join-Path $opsRoot "mt5_tester_status_latest.json"
 $mt5QueuePath = Join-Path $opsRoot "mt5_retest_queue_latest.json"
 $autonomousPath = Join-Path $opsRoot "autonomous_90p_latest.json"
@@ -142,6 +162,8 @@ $freshness = [ordered]@{
 $wrapperState = [ordered]@{
     supervisor = ((Get-WrapperCount -Pattern "*autonomous_90p_supervisor_wrapper_*") -gt 0)
     mt5_status_watcher = ((Get-WrapperCount -Pattern "*mt5_tester_status_watcher_wrapper_*") -gt 0)
+    weakest_mt5 = ((Get-WrapperCount -Pattern "*weakest_mt5_batch_wrapper_*") -gt 0)
+    mt5_retest_queue = ((Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*") -gt 0)
     ml = (
         ((Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0) -or
         $freshness.ml_tuning_hints.fresh
@@ -188,9 +210,20 @@ if ($null -ne $mt5Status) {
     }
     $watchedExecutorRunning = $watchedTerminalRunning -or $watchedMetaTesterRunning -or ($processState.secondary_metatester -gt 0)
     $currentSymbol = [string]$mt5Status.current_symbol
+    $recentActivityAgeSeconds = Get-RecentActivityAgeSeconds -Mt5Status $mt5Status
+    $weakestLaneLikelyActive = (
+        $wrapperState.weakest_mt5 -or
+        $wrapperState.mt5_retest_queue
+    )
+    $activityStillFresh = ($null -ne $recentActivityAgeSeconds -and $recentActivityAgeSeconds -le 240)
 
     if ($mt5State -eq "running" -and -not $watchedExecutorRunning) {
-        Add-Finding -Findings $findings -Severity "high" -Component "mt5_status" -Message "MT5 status says running, but neither watched tester terminal nor its metatester executor is running."
+        if ($weakestLaneLikelyActive -and $activityStillFresh) {
+            Add-Finding -Findings $findings -Severity "low" -Component "mt5_status" -Message "MT5 tester log jest swiezy, a weakest-lane nadal pracuje; stan procesu jest chwilowo niejednoznaczny i wymaga tylko dalszej obserwacji."
+        }
+        else {
+            Add-Finding -Findings $findings -Severity "high" -Component "mt5_status" -Message "MT5 status says running, but neither watched tester terminal nor its metatester executor is running."
+        }
     }
 
     if ($mt5State -eq "stale") {

@@ -289,6 +289,7 @@ function Invoke-AuditCycle {
     $hostilePath = Join-Path $opsRoot "hostile_four_loop_audit_latest.json"
     $discoveryPath = Join-Path $opsRoot "audit_supervisor_discovery_latest.json"
     $learningHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
+    $learningWellbeingPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 
     $buildScripts = @(
         @{
@@ -321,6 +322,13 @@ function Invoke-AuditCycle {
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\MAINTAIN_LEARNING_WELLBEING.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                Apply = [bool]$ApplySafeAutoHeal
+            }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1")
@@ -517,6 +525,7 @@ function Invoke-AuditCycle {
     $hostile = Read-JsonSafe -Path $hostilePath
     $discovery = Read-JsonSafe -Path $discoveryPath
     $learningHygiene = Read-JsonSafe -Path $learningHygienePath
+    $learningWellbeing = Read-JsonSafe -Path $learningWellbeingPath
 
     $hostileFindings = @()
     if ($null -ne $hostile) {
@@ -605,6 +614,25 @@ function Invoke-AuditCycle {
                 component = "learning_path_logs"
                 message = "Logi sciezki uczenia wymagaja dalszej higieny."
                 context = @{ archive_candidate_count = $archiveCandidateCount }
+            }) | Out-Null
+        }
+    }
+    if ($null -ne $learningWellbeing) {
+        $wellbeingSummary = Get-OptionalValue -Object $learningWellbeing -Name "summary" -Default $null
+        $opsPendingCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "ops_pending_count" -Default 0)
+        $runtimeArchivePendingCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "runtime_archive_pending_count" -Default 0)
+        $runtimeArchiveDeletedCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "runtime_archive_deleted_count" -Default 0)
+        $opsDeletedCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "ops_deleted_count" -Default 0)
+
+        if ($opsPendingCount -gt 0 -or $runtimeArchivePendingCount -gt 0) {
+            $learningHygieneEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_wellbeing"
+                message = "Dobrostan nadal widzi zalegly balast i wymaga dalszego porzadku."
+                context = @{
+                    ops_pending_count = $opsPendingCount
+                    runtime_archive_pending_count = $runtimeArchivePendingCount
+                }
             }) | Out-Null
         }
     }
@@ -1005,6 +1033,7 @@ function Invoke-AuditCycle {
         full_stack = $fullStackPath
         learning_stack = $learningPath
         learning_path_hygiene = $learningHygienePath
+        learning_wellbeing = $learningWellbeingPath
         learning_health_registry = $learningHealthPath
         learning_paper_runtime_plan = $learningPaperRuntimePath
         learning_data_contract_audit = $learningDataContractPath

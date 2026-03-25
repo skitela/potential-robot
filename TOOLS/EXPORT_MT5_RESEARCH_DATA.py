@@ -316,7 +316,22 @@ def get_parquet_row_count(parquet_path: Path) -> int:
         return 0
 
     with duckdb.connect() as con:
-        row = con.execute("SELECT COALESCE(SUM(num_rows), 0) FROM parquet_metadata(?)", [str(parquet_path)]).fetchone()
+        try:
+            row = con.execute(
+                "SELECT COALESCE(SUM(row_group_num_rows), 0) FROM parquet_metadata(?)",
+                [str(parquet_path)],
+            ).fetchone()
+        except duckdb.BinderException:
+            try:
+                row = con.execute(
+                    "SELECT COALESCE(SUM(num_rows), 0) FROM parquet_metadata(?)",
+                    [str(parquet_path)],
+                ).fetchone()
+            except duckdb.BinderException:
+                row = con.execute(
+                    "SELECT COUNT(*) FROM read_parquet(?)",
+                    [str(parquet_path)],
+                ).fetchone()
     return int(row[0] or 0)
 
 

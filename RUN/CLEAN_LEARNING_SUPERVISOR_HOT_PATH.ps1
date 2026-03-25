@@ -38,6 +38,22 @@ function Get-SafeQueueSymbols {
     }
 }
 
+function Add-UniqueSymbol {
+    param(
+        [System.Collections.Generic.List[string]]$List,
+        [string]$Symbol
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Symbol)) {
+        return
+    }
+
+    $value = [string]$Symbol
+    if (-not $List.Contains($value)) {
+        $List.Add($value) | Out-Null
+    }
+}
+
 function Get-SafeManifestState {
     param([string]$ManifestPath)
 
@@ -72,14 +88,15 @@ $thresholdBytes = [long]$HotCandidateSignalsThresholdMB * 1MB
 
 $focusSymbols = New-Object System.Collections.Generic.List[string]
 foreach ($symbol in (Get-SafeQueueSymbols -ResearchPlanPath $researchPlanPath -MaxCount $MaxFocusSymbols)) {
-    if (-not [string]::IsNullOrWhiteSpace($symbol) -and -not $focusSymbols.Contains([string]$symbol)) {
-        $focusSymbols.Add([string]$symbol) | Out-Null
+    Add-UniqueSymbol -List $focusSymbols -Symbol $symbol
+}
+if (Test-Path -LiteralPath $logsRoot) {
+    foreach ($dir in @(Get-ChildItem -LiteralPath $logsRoot -Directory -ErrorAction SilentlyContinue)) {
+        Add-UniqueSymbol -List $focusSymbols -Symbol $dir.Name
     }
 }
 foreach ($symbol in @("GOLD", "SILVER", "US500")) {
-    if (-not $focusSymbols.Contains($symbol)) {
-        $focusSymbols.Add($symbol) | Out-Null
-    }
+    Add-UniqueSymbol -List $focusSymbols -Symbol $symbol
 }
 
 $manifestState = Get-SafeManifestState -ManifestPath $manifestPath

@@ -142,12 +142,26 @@ function Get-LogLineTimestamp {
 function Test-WatchedTerminalRunning {
     param([string]$ExecutablePath)
 
-    $normalized = $ExecutablePath.ToLowerInvariant()
+    $normalized = [System.IO.Path]::GetFullPath($ExecutablePath).ToLowerInvariant()
     $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Name -eq "terminal64.exe" -and
-            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
-            $_.ExecutablePath.ToLowerInvariant() -eq $normalized
+            if ($_.Name -ne "terminal64.exe") {
+                return $false
+            }
+
+            $matchesExecutable = (
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq $normalized)
+            )
+            if ($matchesExecutable) {
+                return $true
+            }
+
+            if ([string]::IsNullOrWhiteSpace($_.CommandLine)) {
+                return $false
+            }
+
+            return ($_.CommandLine.ToLowerInvariant() -like ("*{0}*" -f $normalized))
         }
 
     return (@($processes).Count -gt 0)
@@ -165,12 +179,26 @@ function Test-WatchedMetaTesterRunning {
         return $false
     }
 
-    $normalized = $metaTesterPath.ToLowerInvariant()
+    $normalized = [System.IO.Path]::GetFullPath($metaTesterPath).ToLowerInvariant()
     $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Name -eq "metatester64.exe" -and
-            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
-            $_.ExecutablePath.ToLowerInvariant() -eq $normalized
+            if ($_.Name -ne "metatester64.exe") {
+                return $false
+            }
+
+            $matchesExecutable = (
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                ([System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant() -eq $normalized)
+            )
+            if ($matchesExecutable) {
+                return $true
+            }
+
+            if ([string]::IsNullOrWhiteSpace($_.CommandLine)) {
+                return $false
+            }
+
+            return ($_.CommandLine.ToLowerInvariant() -like ("*{0}*" -f $normalized))
         }
 
     return (@($processes).Count -gt 0)

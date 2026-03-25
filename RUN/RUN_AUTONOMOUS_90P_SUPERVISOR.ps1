@@ -22,6 +22,7 @@ $learningDataContractAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_DA
 $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
 $learningHygieneScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1"
 $learningHotPathScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1"
+$learningWellbeingScript = Join-Path $ProjectRoot "RUN\MAINTAIN_LEARNING_WELLBEING.ps1"
 $mt5QueueSyncScript = Join-Path $ProjectRoot "RUN\SYNC_MT5_RETEST_QUEUE_FROM_RESEARCH_PLAN.ps1"
 $retestQueueScript = Join-Path $ProjectRoot "RUN\START_MICROBOT_RETEST_QUEUE_AFTER_IDLE_BACKGROUND.ps1"
 $applyLaptopRuntimeScript = Join-Path $ProjectRoot "RUN\APPLY_LAPTOP_RESEARCH_RUNTIME.ps1"
@@ -67,6 +68,7 @@ foreach ($path in @(
     $researchPlanScript,
     $learningHygieneScript,
     $learningHotPathScript,
+    $learningWellbeingScript,
     $mt5QueueSyncScript,
     $retestQueueScript,
     $applyLaptopRuntimeScript,
@@ -521,6 +523,12 @@ function Write-SupervisorStatus {
         }
     }
 
+    $learningWellbeingPath = Join-Path $statusDir "learning_wellbeing_latest.json"
+    $learningWellbeing = $null
+    if (Test-Path -LiteralPath $learningWellbeingPath) {
+        $learningWellbeing = Get-Content -LiteralPath $learningWellbeingPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
     $trustButVerifyPath = Join-Path $statusDir "trust_but_verify_latest.json"
     $trustButVerify = $null
     if (Test-Path -LiteralPath $trustButVerifyPath) {
@@ -554,6 +562,7 @@ function Write-SupervisorStatus {
         top_learning_health = $learningHealthHead
         learning_paper_runtime = $learningPaperRuntime
         top_learning_paper_runtime = $learningPaperRuntimeHead
+        learning_wellbeing = $learningWellbeing
         trust_but_verify = $trustButVerify
         mt5_retest_queue = $mt5Queue
     }
@@ -662,6 +671,19 @@ function Write-SupervisorStatus {
         $lines.Add("- learning paper runtime plan not available")
     }
     $lines.Add("")
+    $lines.Add("## Learning Wellbeing")
+    $lines.Add("")
+    if ($null -ne $learningWellbeing) {
+        $lines.Add(("- verdict: {0}" -f $learningWellbeing.verdict))
+        $lines.Add(("- total_freed_gb: {0}" -f $learningWellbeing.summary.total_freed_gb))
+        $lines.Add(("- ops_deleted_count: {0}" -f $learningWellbeing.summary.ops_deleted_count))
+        $lines.Add(("- runtime_archive_deleted_count: {0}" -f $learningWellbeing.summary.runtime_archive_deleted_count))
+        $lines.Add(("- runtime_empty_dirs_removed: {0}" -f $learningWellbeing.summary.runtime_empty_dirs_removed))
+    }
+    else {
+        $lines.Add("- learning wellbeing report not available")
+    }
+    $lines.Add("")
     $lines.Add("## Trust But Verify")
     $lines.Add("")
     if ($null -ne $trustButVerify) {
@@ -768,6 +790,11 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "learning_hot_path" -Operation {
         $report = (& $learningHotPathScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
         "verdict=$($report.verdict); rotated=$($report.summary.rotated_count); waiting_hot=$($report.summary.waiting_hot_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "learning_wellbeing" -Operation {
+        $report = (& $learningWellbeingScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
+        "verdict=$($report.verdict); freed_gb=$($report.summary.total_freed_gb); ops_deleted=$($report.summary.ops_deleted_count); runtime_deleted=$($report.summary.runtime_archive_deleted_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "research_data_contract" -Operation {
