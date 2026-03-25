@@ -26,6 +26,36 @@ function Invoke-Step {
     }
 }
 
+function New-SkippedStep {
+    param(
+        [string]$Name,
+        [string]$Status
+    )
+
+    $ts = (Get-Date).ToUniversalTime().ToString("o")
+    return [pscustomobject]@{
+        step = $Name
+        started_utc = $ts
+        finished_utc = $ts
+        status = $Status
+    }
+}
+
+function Read-JsonSafe {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
 $steps = @()
 
 $steps += Invoke-Step -Name "assert_audit_rollout_gate" -Action {
@@ -34,6 +64,13 @@ $steps += Invoke-Step -Name "assert_audit_rollout_gate" -Action {
         -GateType ROLLOUT `
         -AllowBlocked:$AllowBlockedAuditGate | Out-Null
 }
+
+$auditReport = Read-JsonSafe -Path (Join-Path $ProjectRoot "EVIDENCE\OPS\audit_supervisor_latest.json")
+$liveGate = "UNKNOWN"
+if ($null -ne $auditReport -and ($auditReport.PSObject.Properties.Name -contains "overall")) {
+    $liveGate = [string]$auditReport.overall.live_gate
+}
+$liveGateOpen = ($liveGate -eq "OPEN")
 
 if (-not $SkipTokenSync) {
     $steps += Invoke-Step -Name "sync_tokens" -Action {
@@ -67,8 +104,13 @@ $steps += Invoke-Step -Name "generate_family_reference_registry" -Action {
     & (Join-Path $ProjectRoot "TOOLS\GENERATE_FAMILY_REFERENCE_REGISTRY.ps1") | Out-Null
 }
 
-$steps += Invoke-Step -Name "generate_active_live_presets" -Action {
-    & (Join-Path $ProjectRoot "TOOLS\GENERATE_ACTIVE_LIVE_PRESETS.ps1") | Out-Null
+if ($liveGateOpen) {
+    $steps += Invoke-Step -Name "generate_active_live_presets" -Action {
+        & (Join-Path $ProjectRoot "TOOLS\GENERATE_ACTIVE_LIVE_PRESETS.ps1") | Out-Null
+    }
+}
+else {
+    $steps += New-SkippedStep -Name "generate_active_live_presets" -Status "SKIPPED_LIVE_GATE_BLOCKED"
 }
 
 $steps += Invoke-Step -Name "validate_family_reference_registry" -Action {
@@ -99,8 +141,13 @@ $steps += Invoke-Step -Name "run_contract_tests" -Action {
     & (Join-Path $ProjectRoot "TESTS\RUN_CONTRACT_TESTS.ps1") | Out-Null
 }
 
-$steps += Invoke-Step -Name "validate_prelive_gonogo" -Action {
-    & (Join-Path $ProjectRoot "TOOLS\VALIDATE_PRELIVE_GONOGO.ps1") | Out-Null
+if ($liveGateOpen) {
+    $steps += Invoke-Step -Name "validate_prelive_gonogo" -Action {
+        & (Join-Path $ProjectRoot "TOOLS\VALIDATE_PRELIVE_GONOGO.ps1") | Out-Null
+    }
+}
+else {
+    $steps += New-SkippedStep -Name "validate_prelive_gonogo" -Status "SKIPPED_LIVE_GATE_BLOCKED"
 }
 
 $steps += Invoke-Step -Name "run_resilience_drills" -Action {

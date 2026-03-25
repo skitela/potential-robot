@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 function Invoke-Git {
     param([string[]]$Arguments)
 
-    $output = & git -C $ProjectRoot @Arguments 2>$null
+    $output = & git -c core.safecrlf=false -C $ProjectRoot @Arguments 2>$null
     return @($output)
 }
 

@@ -414,7 +414,7 @@ $loop = "higiena_i_smieci"
 $gitStatusLines = @()
 try {
     $gitStatusLines = @(
-        & git -C $ProjectRoot status --short 2>$null |
+        & git -c core.safecrlf=false -C $ProjectRoot status --short 2>$null |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
 }

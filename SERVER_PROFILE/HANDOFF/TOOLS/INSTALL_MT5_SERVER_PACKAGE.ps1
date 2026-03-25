@@ -18,6 +18,25 @@ $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $packagePath = (Resolve-Path -LiteralPath $PackageRoot).Path
 $targetTerminal = $TargetTerminalDataDir
 $targetCommon = $TargetCommonFilesDir
+$registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
+
+if (-not (Test-Path -LiteralPath $registryPath)) {
+    throw "Missing registry: $registryPath"
+}
+
+$registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+function Get-CodeSymbolFromRegistryRow {
+    param(
+        [psobject]$Row
+    )
+
+    if ($Row.PSObject.Properties.Name -contains 'code_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$Row.code_symbol)) {
+        return [string]$Row.code_symbol
+    }
+
+    return ([string]$Row.expert).Replace("MicroBot_", "")
+}
 
 & (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
     -ProjectRoot $projectPath `
@@ -54,6 +73,52 @@ if ($CreateRuntimeFolders) {
 
 foreach ($dir in $dirs) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+}
+
+$allowedExpertFiles = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+$allowedProfileFiles = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+$allowedStrategyFiles = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+$allowedPresetFiles = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+$allowedActivePresetFiles = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+
+foreach ($row in @($registry.symbols)) {
+    $expert = [string]$row.expert
+    $preset = [string]$row.preset
+    $codeSymbol = Get-CodeSymbolFromRegistryRow -Row $row
+    $activePresetName = "{0}_ACTIVE.set" -f ([System.IO.Path]::GetFileNameWithoutExtension($preset))
+
+    [void]$allowedExpertFiles.Add(("{0}.mq5" -f $expert))
+    [void]$allowedExpertFiles.Add(("{0}.ex5" -f $expert))
+    [void]$allowedProfileFiles.Add(("Profile_{0}.mqh" -f $codeSymbol))
+    [void]$allowedStrategyFiles.Add(("Strategy_{0}.mqh" -f $codeSymbol))
+    [void]$allowedPresetFiles.Add($preset)
+    [void]$allowedActivePresetFiles.Add($activePresetName)
+}
+
+foreach ($file in @(Get-ChildItem -LiteralPath $targetExperts -File -ErrorAction SilentlyContinue)) {
+    if (-not $allowedExpertFiles.Contains($file.Name)) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
+}
+foreach ($file in @(Get-ChildItem -LiteralPath $targetProfiles -File -ErrorAction SilentlyContinue)) {
+    if (-not $allowedProfileFiles.Contains($file.Name)) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
+}
+foreach ($file in @(Get-ChildItem -LiteralPath $targetStrategies -File -ErrorAction SilentlyContinue)) {
+    if (-not $allowedStrategyFiles.Contains($file.Name)) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
+}
+foreach ($file in @(Get-ChildItem -LiteralPath $targetPresets -File -Filter "*.set" -ErrorAction SilentlyContinue)) {
+    if (-not $allowedPresetFiles.Contains($file.Name)) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
+}
+foreach ($file in @(Get-ChildItem -LiteralPath $targetActivePresets -File -Filter "*.set" -ErrorAction SilentlyContinue)) {
+    if (-not $allowedActivePresetFiles.Contains($file.Name)) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
 }
 
 Copy-Item (Join-Path $packagePath "MQL5\Experts\MicroBots\*.mq5") $targetExperts -Force
