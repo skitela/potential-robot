@@ -32,7 +32,8 @@ Set-Content -LiteralPath $wrapperPath -Value $wrapperContent -Encoding UTF8
 
 Start-Process -FilePath "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $wrapperPath) `
-    -WorkingDirectory $ProjectRoot
+    -WorkingDirectory $ProjectRoot `
+    -WindowStyle Hidden
 
 Write-Host "Background QDM focus pipeline started."
 Write-Host "Log: $logPath"
