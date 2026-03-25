@@ -4,6 +4,8 @@ param(
     [string]$CommonRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT",
     [int]$SyncReportMaxAgeSeconds = 900,
     [int]$ExportLagMaxAgeSeconds = 600,
+    [int]$PendingSyncGraceSeconds = 120,
+    [int]$ExportLagRefreshChunkThreshold = 24,
     [switch]$Apply
 )
 
@@ -308,8 +310,9 @@ $exportManifestPath = Join-Path $ResearchRoot "reports\research_export_manifest_
 $inboxRoot = Join-Path $ResearchRoot "vps_spool_inbox"
 $sourceRoot = Join-Path $CommonRoot "spool"
 $syncScript = Join-Path $ProjectRoot "RUN\SYNC_VPS_SPOOL_BACKLOG.ps1"
+$researchContractScript = Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1"
 
-foreach ($path in @($syncScript)) {
+foreach ($path in @($syncScript, $researchContractScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -334,18 +337,29 @@ if ($Apply) {
             $repairActions.Add([pscustomobject]@{
                     action = "prune_state_orphans"
                     removed_count = $removed
-                }) | Out-Null
+            }) | Out-Null
         }
     }
 
+    $postRepairSnapshot = Get-BridgeSnapshot `
+        -SourceRoot $sourceRoot `
+        -InboxRoot $inboxRoot `
+        -SyncReportPath $syncReportPath `
+        -StatePath $statePath `
+        -ExportManifestPath $exportManifestPath
+
     $needsSync = (
-        (-not $initialSnapshot.sync_report_exists) -or
-        ($null -eq $initialSnapshot.sync_report_age_seconds) -or
-        ($initialSnapshot.sync_report_age_seconds -gt $SyncReportMaxAgeSeconds) -or
-        ($initialSnapshot.pending_sync_count -gt 0) -or
-        ($initialSnapshot.state_missing_inbox_count -gt 0) -or
-        ($initialSnapshot.sync_report_missing_data_count -gt 0) -or
-        ($initialSnapshot.sync_report_missing_manifest_count -gt 0)
+        (-not $postRepairSnapshot.sync_report_exists) -or
+        ($null -eq $postRepairSnapshot.sync_report_age_seconds) -or
+        ($postRepairSnapshot.sync_report_age_seconds -gt $SyncReportMaxAgeSeconds) -or
+        (
+            $postRepairSnapshot.pending_sync_count -gt 0 -and
+            $null -ne $postRepairSnapshot.pending_sync_oldest_age_seconds -and
+            $postRepairSnapshot.pending_sync_oldest_age_seconds -gt $PendingSyncGraceSeconds
+        ) -or
+        ($postRepairSnapshot.state_missing_inbox_count -gt 0) -or
+        ($postRepairSnapshot.sync_report_missing_data_count -gt 0) -or
+        ($postRepairSnapshot.sync_report_missing_manifest_count -gt 0)
     )
 
     if ($needsSync) {
@@ -353,6 +367,65 @@ if ($Apply) {
         $repairActions.Add([pscustomobject]@{
                 action = "sync_vps_spool_backlog"
                 reason = "stale_or_pending_bridge"
+            }) | Out-Null
+    }
+
+    $postSyncSnapshot = Get-BridgeSnapshot `
+        -SourceRoot $sourceRoot `
+        -InboxRoot $inboxRoot `
+        -SyncReportPath $syncReportPath `
+        -StatePath $statePath `
+        -ExportManifestPath $exportManifestPath
+
+    $needsExportRefresh = (
+        ($postSyncSnapshot.export_spool_lag_total -gt 0) -and
+        (
+            ($null -eq $postSyncSnapshot.export_manifest_age_seconds) -or
+            (
+                $postSyncSnapshot.export_manifest_age_seconds -gt $ExportLagMaxAgeSeconds -and
+                $postSyncSnapshot.export_spool_lag_total -ge $ExportLagRefreshChunkThreshold
+            )
+        )
+    )
+
+    if ($needsExportRefresh) {
+        $refreshOutput = @(
+            & $researchContractScript `
+                -ProjectRoot $ProjectRoot `
+                -ResearchRoot $ResearchRoot `
+                -FreshContractThresholdSeconds ([Math]::Max(120, [Math]::Min($ExportLagMaxAgeSeconds, 900))) 2>&1
+        ) | ForEach-Object { [string]$_ }
+        $refreshOutputText = ($refreshOutput -join " ").Trim()
+        $refreshOutputSummary = if ([string]::IsNullOrWhiteSpace($refreshOutputText)) {
+            "no_stdout"
+        }
+        elseif ($refreshOutputText -like "*Research export runner already active*") {
+            "export_runner_active_deferred"
+        }
+        elseif ($refreshOutputText -like '*"research_manifest_refreshed": true*') {
+            "research_manifest_refreshed"
+        }
+        elseif ($refreshOutputText -like '*"contract_only": true*') {
+            "contract_rebuilt"
+        }
+        elseif ($refreshOutputText -like "*Traceback*" -or $refreshOutputText -like "*IO Error*") {
+            "refresh_attempt_emitted_error"
+        }
+        else {
+            if ($refreshOutputText.Length -gt 160) {
+                $refreshOutputText.Substring(0, 160)
+            }
+            else {
+                $refreshOutputText
+            }
+        }
+
+        $repairActions.Add([pscustomobject]@{
+                action = "refresh_research_contract"
+                reason = "export_lag_exceeded"
+                lag_total_before = $postSyncSnapshot.export_spool_lag_total
+                manifest_age_seconds_before = $postSyncSnapshot.export_manifest_age_seconds
+                output_summary = $refreshOutputSummary
             }) | Out-Null
     }
 }
@@ -419,7 +492,11 @@ if ($finalSnapshot.inbox_incomplete_count -gt 0) {
         }) | Out-Null
 }
 
-if ($finalSnapshot.pending_sync_count -gt 0) {
+if (
+    $finalSnapshot.pending_sync_count -gt 0 -and
+    $null -ne $finalSnapshot.pending_sync_oldest_age_seconds -and
+    $finalSnapshot.pending_sync_oldest_age_seconds -gt $PendingSyncGraceSeconds
+) {
     $findings.Add([pscustomobject]@{
             severity = "medium"
             component = "vps_spool_pending_sync"
@@ -427,6 +504,7 @@ if ($finalSnapshot.pending_sync_count -gt 0) {
             context = @{
                 pending_sync_count = $finalSnapshot.pending_sync_count
                 oldest_age_seconds = $finalSnapshot.pending_sync_oldest_age_seconds
+                grace_seconds = $PendingSyncGraceSeconds
                 sample_keys = @($finalSnapshot.pending_sync_keys | Select-Object -First 10)
             }
         }) | Out-Null

@@ -804,7 +804,13 @@ function Invoke-AuditCycle {
 
     if ($vpsBridgeEvidence.Count -gt 0) {
         $bridgeHasHigh = @($vpsBridgeEvidence | Where-Object { $_.severity -eq "high" }).Count -gt 0
-        $bridgeGate = if ($bridgeHasHigh) { "NAPRAW_W_CYKLU" } else { "RAPORTUJ" }
+        $bridgeNeedsRepair = (
+            $bridgeHasHigh -or
+            $pendingSync -gt 0 -or
+            $bridgeOrphans -gt 0 -or
+            $bridgeVerdict -in @("MOST_WYMAGA_NAPRAWY", "MOST_WYMAGA_DALSZEJ_NAPRAWY")
+        )
+        $bridgeGate = if ($bridgeNeedsRepair) { "NAPRAW_W_CYKLU" } else { "RAPORTUJ" }
         $domainStatuses.Add((New-DomainStatus -Domain "MOST_VPS_LAPTOP" -Gate $bridgeGate -Severity (Get-HighestSeverity -Findings $vpsBridgeEvidence) -Reason "Most danych miedzy VPS i laptopem musi byc stale diagnozowany i samonaprawialny." -Evidence $vpsBridgeEvidence)) | Out-Null
     }
     else {
