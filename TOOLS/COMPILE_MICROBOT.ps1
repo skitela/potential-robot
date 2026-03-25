@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$ServerName = "OANDATMS-MT5",
+    [string]$TerminalDataDirOverride = "",
     [Alias("BotName")]
     [string]$ExpertName = "MicroBot_EURUSD",
     [string]$Symbol = "",
@@ -132,7 +133,13 @@ if (-not (Test-Path -LiteralPath $expertSource)) {
     throw "Missing expert source: $expertSource"
 }
 
-$terminalDataDir = Resolve-TerminalDataDir -Server $ServerName
+$terminalDataDir = $null
+if (-not [string]::IsNullOrWhiteSpace($TerminalDataDirOverride)) {
+    $terminalDataDir = (Resolve-Path -LiteralPath $TerminalDataDirOverride).Path
+}
+else {
+    $terminalDataDir = Resolve-TerminalDataDir -Server $ServerName
+}
 if (-not $terminalDataDir) {
     throw "Could not resolve MT5 terminal data directory."
 }

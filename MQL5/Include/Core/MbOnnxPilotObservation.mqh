@@ -28,7 +28,9 @@ string g_mb_onnx_obs_state_path = "";
 string g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
 string g_mb_onnx_obs_last_signature = "";
 datetime g_mb_onnx_obs_last_init_attempt = 0;
+datetime g_mb_onnx_obs_last_shadow_idle_ts = 0;
 int    g_mb_onnx_obs_retry_interval_sec = 30;
+int    g_mb_onnx_obs_shadow_idle_interval_sec = 300;
 string g_mb_onnx_obs_symbol_feature_names[];
 string g_mb_onnx_obs_symbol_map_names[];
 string g_mb_onnx_obs_symbol_map_payloads[];
@@ -83,6 +85,7 @@ void MbOnnxObservationResetRuntime()
    g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
    g_mb_onnx_obs_last_signature = "";
    g_mb_onnx_obs_last_init_attempt = 0;
+   g_mb_onnx_obs_last_shadow_idle_ts = 0;
    ArrayResize(g_mb_onnx_obs_symbol_feature_names,0);
    ArrayResize(g_mb_onnx_obs_symbol_map_names,0);
    ArrayResize(g_mb_onnx_obs_symbol_map_payloads,0);
@@ -136,9 +139,14 @@ void MbOnnxObservationWriteLatest(
    if(StringLen(g_mb_onnx_obs_state_path) <= 0)
       return;
 
+   MbEnsureDir(MbSymbolStateDir(MbCanonicalSymbol(symbol)));
+
    int handle = FileOpen(g_mb_onnx_obs_state_path,FILE_COMMON | FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(handle == INVALID_HANDLE)
+     {
+      PrintFormat("MB_ONNX_STATE_WRITE_FAILED path=%s err=%d symbol=%s channel=%s",g_mb_onnx_obs_state_path,GetLastError(),MbCanonicalSymbol(symbol),runtime_channel);
       return;
+     }
 
    string payload = StringFormat(
       "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"runtime_channel\":\"%s\",\"available\":%s,\"teacher_available\":%s,\"teacher_used\":%s,\"run_ok\":%s,\"teacher_score\":%.6f,\"symbol_score\":%.6f,\"latency_us\":%I64d,\"reason_code\":\"%s\",\"signal_valid\":%s,\"setup_type\":\"%s\",\"market_regime\":\"%s\",\"spread_regime\":\"%s\",\"confidence_bucket\":\"%s\",\"score\":%.6f,\"confidence_score\":%.6f,\"spread_points\":%.2f,\"generated_at_utc\":%I64d}",
@@ -180,9 +188,14 @@ void MbOnnxObservationAppendLog(
    if(StringLen(g_mb_onnx_obs_log_path) <= 0)
       return;
 
+   MbEnsureDir(MbSymbolLogDir(MbCanonicalSymbol(symbol)));
+
    int handle = FileOpen(g_mb_onnx_obs_log_path,FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI,',');
    if(handle == INVALID_HANDLE)
+     {
+      PrintFormat("MB_ONNX_LOG_APPEND_FAILED path=%s err=%d symbol=%s stage=%s channel=%s",g_mb_onnx_obs_log_path,GetLastError(),MbCanonicalSymbol(symbol),stage,runtime_channel);
       return;
+     }
 
    FileSeek(handle,0,SEEK_END);
    FileWrite(
@@ -330,6 +343,70 @@ string MbOnnxObservationBuildSignature(
       signal.confidence_bucket,
       signal.reason_code
    );
+  }
+
+bool MbOnnxObservationIsShadowIdleSignal(const MbSignalDecision &signal)
+  {
+   return (StringLen(signal.setup_type) <= 0 || signal.setup_type == "NONE");
+  }
+
+void MbOnnxObservationNormalizeSignalForLogging(MbSignalDecision &signal)
+  {
+   if(!MathIsValidNumber(signal.score))
+      signal.score = 0.0;
+   if(!MathIsValidNumber(signal.confidence_score))
+      signal.confidence_score = 0.0;
+   if(!MathIsValidNumber(signal.candle_score))
+      signal.candle_score = 0.0;
+   if(!MathIsValidNumber(signal.renko_score))
+      signal.renko_score = 0.0;
+
+   if(StringLen(signal.setup_type) <= 0)
+      signal.setup_type = "NONE";
+   if(StringLen(signal.market_regime) <= 0)
+      signal.market_regime = "UNKNOWN";
+   if(StringLen(signal.spread_regime) <= 0)
+      signal.spread_regime = "UNKNOWN";
+   if(StringLen(signal.execution_regime) <= 0)
+      signal.execution_regime = "UNKNOWN";
+   if(StringLen(signal.confidence_bucket) <= 0)
+      signal.confidence_bucket = "UNKNOWN";
+   if(StringLen(signal.candle_bias) <= 0)
+      signal.candle_bias = "UNKNOWN";
+   if(StringLen(signal.candle_quality_grade) <= 0)
+      signal.candle_quality_grade = "UNKNOWN";
+   if(StringLen(signal.renko_bias) <= 0)
+      signal.renko_bias = "UNKNOWN";
+   if(StringLen(signal.renko_quality_grade) <= 0)
+      signal.renko_quality_grade = "UNKNOWN";
+
+   if(MbOnnxObservationIsShadowIdleSignal(signal))
+     {
+      signal.valid = false;
+      signal.side = MB_SIGNAL_NONE;
+      if(StringLen(signal.reason_code) <= 0 || signal.reason_code == "OK")
+         signal.reason_code = "NO_SETUP";
+     }
+   else if(StringLen(signal.reason_code) <= 0)
+      signal.reason_code = "SETUP_READY";
+  }
+
+bool MbOnnxObservationShouldSampleShadowIdle(
+   const datetime ts,
+   const string runtime_channel,
+   const MbSignalDecision &signal
+)
+  {
+   if(runtime_channel != "PAPER")
+      return true;
+
+   if(!MbOnnxObservationIsShadowIdleSignal(signal))
+      return true;
+
+   if(g_mb_onnx_obs_last_shadow_idle_ts <= 0)
+      return true;
+
+   return ((ts - g_mb_onnx_obs_last_shadow_idle_ts) >= g_mb_onnx_obs_shadow_idle_interval_sec);
   }
 
 float MbOnnxObservationResolveFeatureValue(
@@ -786,6 +863,66 @@ bool MbOnnxObservationEvaluate(
       stage,
       symbol,
       "UNKNOWN",
+      signal,
+      spread_points,
+      result
+   );
+  }
+
+bool MbOnnxObservationEvaluateShadowAware(
+   const datetime ts,
+   const string stage,
+   const string symbol,
+   const string runtime_channel,
+   const MbSignalDecision &signal,
+   const double spread_points,
+   MbOnnxObservationResult &result
+)
+  {
+   MbSignalDecision normalized_signal = signal;
+   MbOnnxObservationNormalizeSignalForLogging(normalized_signal);
+
+   bool shadow_idle = MbOnnxObservationIsShadowIdleSignal(normalized_signal);
+   if(!MbOnnxObservationShouldSampleShadowIdle(ts,runtime_channel,normalized_signal))
+     {
+      MbOnnxObservationResetResult(result);
+      result.reason_code = "ONNX_SHADOW_IDLE_THROTTLED";
+      return false;
+     }
+
+   bool run_ok = MbOnnxObservationEvaluateWithChannel(
+      ts,
+      (shadow_idle ? "SHADOW_IDLE" : stage),
+      symbol,
+      runtime_channel,
+      normalized_signal,
+      spread_points,
+      result
+   );
+
+   if(shadow_idle && result.reason_code != "ONNX_DUPLICATE_SKIPPED")
+      g_mb_onnx_obs_last_shadow_idle_ts = ts;
+
+   return run_ok;
+  }
+
+bool MbOnnxObservationEmitTimerShadow(
+   const datetime ts,
+   const string symbol,
+   const string runtime_channel,
+   const double spread_points,
+   MbOnnxObservationResult &result
+)
+  {
+   MbSignalDecision signal;
+   MbSignalDecisionReset(signal);
+   signal.reason_code = "SHADOW_TIMER_HEARTBEAT";
+
+   return MbOnnxObservationEvaluateShadowAware(
+      ts,
+      "TIMER",
+      symbol,
+      runtime_channel,
       signal,
       spread_points,
       result

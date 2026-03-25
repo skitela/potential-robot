@@ -834,6 +834,7 @@ function Invoke-AuditCycle {
         $paperFreshSymbols = [int](Get-OptionalValue -Object $paperSummary -Name "paper_live_fresh_symbols" -Default 0)
         $runtimeFresh180m = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_runtime_fresh_180m" -Default 0)
         $runtimeStale = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_runtime_stale" -Default 0)
+        $shadowGapCount = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_shadow_observation_gap" -Default 0)
         $onnxRecentSymbols180m = [int](Get-OptionalValue -Object $paperSummary -Name "onnx_recent_symbols_180m" -Default 0)
         $onnxRecentRows180m = [int](Get-OptionalValue -Object $paperSummary -Name "onnx_recent_rows_180m" -Default 0)
 
@@ -861,6 +862,19 @@ function Invoke-AuditCycle {
                 component = "paper_learning_collect"
                 message = "Paper-live nie zbiera obecnie zdrowego strumienia obserwacji dla uczenia."
                 context = @{ symbols_collecting = $collectingCount }
+            }) | Out-Null
+        }
+
+        if ($shadowGapCount -gt 0) {
+            $paperLearningEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "paper_learning_shadow_gap"
+                message = "Czesc symboli ma gotowy runtime ONNX i swiezy heartbeat, ale nie zapisuje nawet cienkiego strumienia shadow obserwacji."
+                context = @{
+                    symbols_shadow_observation_gap = $shadowGapCount
+                    overall_action = $overallAction
+                    paper_live_fresh_symbols = $paperFreshSymbols
+                }
             }) | Out-Null
         }
 

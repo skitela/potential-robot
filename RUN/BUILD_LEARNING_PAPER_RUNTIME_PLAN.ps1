@@ -170,7 +170,7 @@ function Get-PaperLearningRole {
     }
 
     if ($RuntimeInitialized) {
-        return "PAPER_CZEKA_NA_SYGNAL"
+        return "PAPER_CIEN_ONNX_BRAK_WIERSZY"
     }
 
     return "PAPER_WYMAGA_WGRANIA_RUNTIME"
@@ -181,6 +181,7 @@ function Get-MigrationAction {
         [bool]$PaperFresh,
         [string]$OnnxStatus,
         [bool]$RuntimeInitialized,
+        [double]$RuntimeRows,
         [bool]$DeployedRuntimeModelExists,
         [string]$LearningHealthState,
         [string]$WorkMode
@@ -192,6 +193,10 @@ function Get-MigrationAction {
 
     if ($OnnxStatus -eq "MODEL_PER_SYMBOL_READY" -and (-not $DeployedRuntimeModelExists -or -not $RuntimeInitialized)) {
         return "ODSWIEZ_PAPER_RUNTIME"
+    }
+
+    if ($PaperFresh -and $OnnxStatus -eq "MODEL_PER_SYMBOL_READY" -and $RuntimeInitialized -and $RuntimeRows -le 0) {
+        return "NAPRAW_CIEN_ONNX_NA_PAPER"
     }
 
     if ($OnnxStatus -eq "GLOBAL_FALLBACK") {
@@ -223,6 +228,7 @@ function Get-Recommendation {
 
     switch ($MigrationAction) {
         "ODSWIEZ_PAPER_RUNTIME" { [void]$parts.Add("odswiezyc paper-live, bo to jest aktywne zrodlo nauki dla laptopa") }
+        "NAPRAW_CIEN_ONNX_NA_PAPER" { [void]$parts.Add("naprawic cien obserwacji ONNX na paper-live, bo runtime jest gotowy, ale nie oddaje nawet lekkich wierszy NO_SETUP") }
         "UTRZYMAJ_PAPER_I_BUDUJ_PROBKE" { [void]$parts.Add("utrzymac paper-live i zbierac probe dla symbolu fallbackowego") }
         "UTRZYMAJ_PAPER_I_ZBIERAJ_DO_REGENERACJI" { [void]$parts.Add("utrzymac paper-live, ale traktowac dane jako material do regeneracji modelu") }
         "UTRZYMAJ_PAPER_I_ZBIERAJ" { [void]$parts.Add("utrzymac paper-live jako biezace zrodlo swiezych obserwacji") }
@@ -231,7 +237,7 @@ function Get-Recommendation {
 
     switch ($PaperLearningRole) {
         "PAPER_ZWROT_ONNX_AKTYWNY" { [void]$parts.Add("maly ONNX juz oddaje runtime feedback") }
-        "PAPER_CZEKA_NA_SYGNAL" { [void]$parts.Add("runtime jest gotowy i czeka na kwalifikowany sygnal") }
+        "PAPER_CIEN_ONNX_BRAK_WIERSZY" { [void]$parts.Add("runtime jest gotowy, ale nie zapisuje nawet cienkiego shadow strumienia ONNX") }
         "PAPER_DLA_PROBKI" { [void]$parts.Add("paper jest potrzebny glownie do budowy lokalnej probki i telemetryki") }
         "PAPER_WYMAGA_WGRANIA_RUNTIME" { [void]$parts.Add("runtime ONNX nie jest jeszcze kompletny na paper-live") }
     }
@@ -330,18 +336,20 @@ $items = foreach ($health in ($healthItems | Sort-Object health_priority, priori
         -PaperFresh $paperFresh `
         -OnnxStatus ([string]$health.onnx_status) `
         -RuntimeInitialized $runtimeInitialized `
+        -RuntimeRows $runtimeRows `
         -DeployedRuntimeModelExists $deployedRuntime.runtime_model_exists `
         -LearningHealthState ([string]$health.learning_health_state) `
         -WorkMode ([string]$health.work_mode)
     $runtimeFlowFresh = ($onnxRecentRows180m -gt 0)
     $runtimeFlowHistoricallyActive = ($runtimeRows -gt 0)
     $runtimeFlowStale = ($runtimeFlowHistoricallyActive -and -not $runtimeFlowFresh)
+    $runtimeShadowGap = ($paperFresh -and $runtimeInitialized -and $runtimeRows -le 0 -and [string]$health.onnx_status -eq "MODEL_PER_SYMBOL_READY")
     $isCollecting = $false
     if ($paperFresh) {
         switch ($paperLearningRole) {
             "PAPER_DLA_PROBKI" { $isCollecting = $true }
             "PAPER_ZWROT_ONNX_AKTYWNY" { $isCollecting = $runtimeFlowFresh }
-            "PAPER_CZEKA_NA_SYGNAL" { $isCollecting = $true }
+            "PAPER_CIEN_ONNX_BRAK_WIERSZY" { $isCollecting = $false }
             default { $isCollecting = $false }
         }
     }
@@ -367,6 +375,7 @@ $items = foreach ($health in ($healthItems | Sort-Object health_priority, priori
         onnx_latest_observation_utc = $onnxLatestObservationUtc
         runtime_flow_fresh = $runtimeFlowFresh
         runtime_flow_stale = $runtimeFlowStale
+        runtime_shadow_gap = $runtimeShadowGap
         is_collecting = $isCollecting
         runtime_model_exists = [bool]$deployedRuntime.runtime_model_exists
         runtime_manifest_exists = [bool]$deployedRuntime.runtime_manifest_exists
@@ -390,10 +399,14 @@ $fallbackProbeItems = @($items | Where-Object { $_.migration_action -eq "UTRZYMA
 $activeRuntimeItems = @($items | Where-Object { $_.paper_learning_role -eq "PAPER_ZWROT_ONNX_AKTYWNY" })
 $freshRuntimeItems = @($items | Where-Object { $_.runtime_flow_fresh })
 $staleRuntimeItems = @($items | Where-Object { $_.runtime_flow_stale })
+$shadowGapItems = @($items | Where-Object { $_.runtime_shadow_gap })
 $observationReadyItems = @($items | Where-Object { $_.learning_health_state -in @("GOTOWY_DO_OBSERWACJI", "UCZY_SIE_ZDROWO", "GOTOWY_DO_MIEKKIEJ_BRAMKI") })
 
 $overallAction = if ($refreshItems.Count -gt 0) {
     "ODSWIEZ_PAPER_RUNTIME"
+}
+elseif ($shadowGapItems.Count -gt 0) {
+    "NAPRAW_CIEN_ONNX_NA_PAPER"
 }
 else {
     "UTRZYMAJ_PAPER_I_ZBIERAJ"
@@ -409,6 +422,7 @@ $summary = [ordered]@{
     symbols_runtime_active = $activeRuntimeItems.Count
     symbols_runtime_fresh_180m = $freshRuntimeItems.Count
     symbols_runtime_stale = $staleRuntimeItems.Count
+    symbols_shadow_observation_gap = $shadowGapItems.Count
     onnx_recent_rows_60m = [int](@($items | Measure-Object -Property onnx_recent_rows_60m -Sum).Sum)
     onnx_recent_rows_180m = [int](@($items | Measure-Object -Property onnx_recent_rows_180m -Sum).Sum)
     onnx_recent_symbols_60m = @($items | Where-Object { $_.onnx_recent_rows_60m -gt 0 }).Count
@@ -440,6 +454,7 @@ $report = [ordered]@{
     top_refresh = @($refreshItems | Select-Object -First 5)
     top_collect = @($collectItems | Select-Object -First 5)
     top_runtime_active = @($activeRuntimeItems | Sort-Object runtime_rows -Descending | Select-Object -First 5)
+    top_shadow_gap = @($shadowGapItems | Select-Object -First 5)
     items = $items
 }
 
@@ -459,6 +474,7 @@ $lines.Add(("- symbols_collecting: {0}" -f $summary.symbols_collecting))
 $lines.Add(("- symbols_runtime_active: {0}" -f $summary.symbols_runtime_active))
 $lines.Add(("- symbols_runtime_fresh_180m: {0}" -f $summary.symbols_runtime_fresh_180m))
 $lines.Add(("- symbols_runtime_stale: {0}" -f $summary.symbols_runtime_stale))
+$lines.Add(("- symbols_shadow_observation_gap: {0}" -f $summary.symbols_shadow_observation_gap))
 $lines.Add(("- onnx_recent_rows_60m: {0}" -f $summary.onnx_recent_rows_60m))
 $lines.Add(("- onnx_recent_rows_180m: {0}" -f $summary.onnx_recent_rows_180m))
 $lines.Add(("- onnx_recent_symbols_180m: {0}" -f $summary.onnx_recent_symbols_180m))
@@ -477,6 +493,23 @@ else {
             $item.migration_action,
             $item.paper_learning_role,
             $item.learning_health_state,
+            $item.paper_fresh))
+    }
+}
+$lines.Add("")
+$lines.Add("## Shadow Gap")
+$lines.Add("")
+if ($shadowGapItems.Count -eq 0) {
+    $lines.Add("- none")
+}
+else {
+    foreach ($item in ($shadowGapItems | Select-Object -First 8)) {
+        $lines.Add(("- {0}: action={1}, role={2}, runtime_initialized={3}, runtime_rows={4}, fresh={5}" -f
+            $item.symbol_alias,
+            $item.migration_action,
+            $item.paper_learning_role,
+            $item.runtime_initialized,
+            $item.runtime_rows,
             $item.paper_fresh))
     }
 }

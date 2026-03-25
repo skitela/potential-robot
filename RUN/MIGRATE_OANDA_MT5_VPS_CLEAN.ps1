@@ -12,14 +12,24 @@ $ErrorActionPreference = "Stop"
 function Get-OandaTerminalProcess {
     param([string]$ExpectedProfile)
 
-    $processes = Get-CimInstance Win32_Process -Filter "Name='terminal64.exe'" |
+    $cimProcesses = Get-CimInstance Win32_Process -Filter "Name='terminal64.exe'" |
         Where-Object {
             $_.ExecutablePath -eq $Mt5Exe -and
             $_.CommandLine -match [regex]::Escape("/profile:$ExpectedProfile")
         } |
         Sort-Object ProcessId -Descending
+    if ($cimProcesses) {
+        return $cimProcesses | Select-Object -First 1
+    }
 
-    return $processes | Select-Object -First 1
+    $windowed = Get-Process terminal64 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Path -eq $Mt5Exe -and
+            $_.MainWindowTitle -like "*OANDA TMS Brokers S.A.*"
+        } |
+        Sort-Object StartTime -Descending
+
+    return $windowed | Select-Object -First 1
 }
 
 $projectRootResolved = (Resolve-Path -LiteralPath $ProjectRoot).Path

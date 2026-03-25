@@ -335,7 +335,7 @@ def main() -> int:
                     """
                     SELECT COUNT(*)
                     FROM onnx_observations_norm
-                    WHERE stage = 'EVALUATED'
+                    WHERE stage IN ('EVALUATED', 'SHADOW_IDLE')
                       AND available = 1
                       AND reason_code = 'ONNX_OBSERVATION_OK'
                     """
@@ -348,7 +348,7 @@ def main() -> int:
                     """
                     SELECT COUNT(*)
                     FROM onnx_observations
-                    WHERE stage = 'EVALUATED'
+                    WHERE stage IN ('EVALUATED', 'SHADOW_IDLE')
                       AND CAST(available AS BIGINT) = 1
                       AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
                     """
@@ -395,7 +395,7 @@ def main() -> int:
                     spread_points,
                     feedback_key
                 FROM onnx_observations_norm
-                WHERE stage = 'EVALUATED'
+                WHERE stage IN ('EVALUATED', 'SHADOW_IDLE')
                   AND available = 1
                   AND reason_code = 'ONNX_OBSERVATION_OK'
             """
@@ -481,7 +481,7 @@ def main() -> int:
                     CAST(confidence_score AS DOUBLE) AS confidence_score,
                     CAST(spread_points AS DOUBLE) AS spread_points
                 FROM onnx_observations
-                WHERE stage = 'EVALUATED'
+                WHERE stage IN ('EVALUATED', 'SHADOW_IDLE')
                   AND CAST(available AS BIGINT) = 1
                   AND CAST(reason_code AS VARCHAR) = 'ONNX_OBSERVATION_OK'
             """

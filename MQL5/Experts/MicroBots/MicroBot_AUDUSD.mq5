@@ -408,6 +408,8 @@ void OnTimer()
    if(g_kill_switch.halt)
       g_state.halt = true;
    MbRuntimeOnTimer(g_state);
+   MbOnnxObservationResult timer_onnx_result;
+   MbOnnxObservationEmitTimerShadow(now,g_profile.symbol,(IsLocalPaperModeActive() ? "PAPER" : "LIVE"),g_market.spread_points,timer_onnx_result);
    MbFlushHeartbeat(g_state);
    MbFlushRuntimeStatus(g_state,(g_kill_switch.halt ? g_kill_switch.reason_code : g_runtime_control.reason_code));
    MbFlushInformationalPolicy(g_profile,g_state,g_market,g_audusd_local_tuning_policy,"BOOTSTRAP",(g_kill_switch.halt ? g_kill_switch.reason_code : g_runtime_control.reason_code));
@@ -731,19 +733,16 @@ void OnTick()
       else if(blocked_by_audusd_breakout_cost_gate)
          signal.reason_code = "AUDUSD_BREAKOUT_COST_BAD_SPREAD_BLOCK";
      }
-   if(signal.setup_type != "NONE")
-     {
-      MbOnnxObservationResult onnx_result;
-      MbOnnxObservationEvaluate(
-         now,
-         "EVALUATED",
-         g_profile.symbol,
-         (IsLocalPaperModeActive() ? "PAPER" : "LIVE"),
-         signal,
-         g_market.spread_points,
-         onnx_result
-      );
-     }
+   MbOnnxObservationResult onnx_result;
+   MbOnnxObservationEvaluateShadowAware(
+      now,
+      "EVALUATED",
+      g_profile.symbol,
+      (IsLocalPaperModeActive() ? "PAPER" : "LIVE"),
+      signal,
+      g_market.spread_points,
+      onnx_result
+   );
    AppendAUDUSDCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
       MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);

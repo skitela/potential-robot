@@ -16,6 +16,7 @@ $activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERD
 $winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
 $learningHealthRegistryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
 $learningPaperRuntimePlanScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1"
+$paperRuntimeMigrationScript = Join-Path $ProjectRoot "RUN\MIGRATE_OANDA_MT5_VPS_CLEAN.ps1"
 $researchDataContractScript = Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1"
 $learningDataContractAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_DATA_CONTRACT_AUDIT.ps1"
 $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_PLAN.ps1"
@@ -60,6 +61,7 @@ foreach ($path in @(
     $winnerDeploymentScript,
     $learningHealthRegistryScript,
     $learningPaperRuntimePlanScript,
+    $paperRuntimeMigrationScript,
     $researchDataContractScript,
     $learningDataContractAuditScript,
     $researchPlanScript,
@@ -154,6 +156,77 @@ function Read-JsonOrNull {
     catch {
         return $null
     }
+}
+
+function Get-PlanSummaryValue {
+    param(
+        [object]$PlanReport,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $PlanReport -or -not (Test-ObjectHasProperty -Object $PlanReport -Name "summary")) {
+        return $Default
+    }
+
+    $summary = $PlanReport.summary
+    if ($null -eq $summary -or -not (Test-ObjectHasProperty -Object $summary -Name $Name)) {
+        return $Default
+    }
+
+    return $summary.$Name
+}
+
+function Get-PaperRuntimeRepairAssessment {
+    param(
+        [object]$PlanReport,
+        [string]$StampPath,
+        [int]$CooldownSeconds = 1800
+    )
+
+    $overallAction = [string](Get-PlanSummaryValue -PlanReport $PlanReport -Name "overall_action" -Default "UNKNOWN")
+    $shadowGap = [int](Get-PlanSummaryValue -PlanReport $PlanReport -Name "symbols_shadow_observation_gap" -Default 0)
+    $rolloutAllowed = [bool](Get-PlanSummaryValue -PlanReport $PlanReport -Name "autonomous_rollout_allowed" -Default $false)
+
+    $result = [ordered]@{
+        needs_repair = $false
+        reason = "not_needed"
+        overall_action = $overallAction
+        shadow_gap = $shadowGap
+    }
+
+    if (-not $rolloutAllowed) {
+        $result.reason = "gate_blocked"
+        return [pscustomobject]$result
+    }
+
+    if ($overallAction -notin @("ODSWIEZ_PAPER_RUNTIME", "NAPRAW_CIEN_ONNX_NA_PAPER")) {
+        return [pscustomobject]$result
+    }
+
+    if ($overallAction -eq "NAPRAW_CIEN_ONNX_NA_PAPER" -and $shadowGap -le 0) {
+        return [pscustomobject]$result
+    }
+
+    if (Test-Path -LiteralPath $StampPath) {
+        try {
+            $stamp = Get-Content -LiteralPath $StampPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $stampAt = if ($stamp.at_local) { [datetime]$stamp.at_local } else { [datetime]::MinValue }
+            if ($stampAt -ne [datetime]::MinValue) {
+                $ageSeconds = [int][math]::Round(((Get-Date) - $stampAt).TotalSeconds)
+                if ($ageSeconds -lt $CooldownSeconds) {
+                    $result.reason = "cooldown_active"
+                    return [pscustomobject]$result
+                }
+            }
+        }
+        catch {
+        }
+    }
+
+    $result.needs_repair = $true
+    $result.reason = "repair_needed"
+    return [pscustomobject]$result
 }
 
 function Test-ObjectHasProperty {
@@ -776,6 +849,23 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "learning_paper_runtime_plan" -Operation {
         $report = (& $learningPaperRuntimePlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "overall=$($report.summary.overall_action); refresh=$($report.summary.symbols_to_refresh); collecting=$($report.summary.symbols_collecting); runtime_active=$($report.summary.symbols_runtime_active)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "paper_runtime_self_heal" -Operation {
+        $report = (& $learningPaperRuntimePlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        $stampPath = Join-Path $statusDir "paper_runtime_self_heal_stamp.json"
+        $assessment = Get-PaperRuntimeRepairAssessment -PlanReport $report -StampPath $stampPath
+        if (-not $assessment.needs_repair) {
+            return $assessment.reason
+        }
+
+        & $paperRuntimeMigrationScript | Out-Null
+        [ordered]@{
+            at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            overall_action = $assessment.overall_action
+            shadow_gap = $assessment.shadow_gap
+        } | ConvertTo-Json | Set-Content -LiteralPath $stampPath -Encoding UTF8
+        return ("repaired action={0}; shadow_gap={1}" -f $assessment.overall_action, $assessment.shadow_gap)
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "research_plan" -Operation {
