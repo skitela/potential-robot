@@ -679,6 +679,11 @@ function Write-SupervisorStatus {
         $lines.Add(("- ops_deleted_count: {0}" -f $learningWellbeing.summary.ops_deleted_count))
         $lines.Add(("- runtime_archive_deleted_count: {0}" -f $learningWellbeing.summary.runtime_archive_deleted_count))
         $lines.Add(("- runtime_empty_dirs_removed: {0}" -f $learningWellbeing.summary.runtime_empty_dirs_removed))
+        if ($null -ne $learningWellbeing.vps_spool_bridge) {
+            $lines.Add(("- vps_spool_bridge: {0}" -f $learningWellbeing.vps_spool_bridge.verdict))
+            $lines.Add(("- vps_bridge_pending_sync_count: {0}" -f $learningWellbeing.summary.vps_bridge_pending_sync_count))
+            $lines.Add(("- vps_bridge_repair_actions_count: {0}" -f $learningWellbeing.summary.vps_bridge_repair_actions_count))
+        }
     }
     else {
         $lines.Add("- learning wellbeing report not available")
@@ -794,7 +799,7 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "learning_wellbeing" -Operation {
         $report = (& $learningWellbeingScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
-        "verdict=$($report.verdict); freed_gb=$($report.summary.total_freed_gb); ops_deleted=$($report.summary.ops_deleted_count); runtime_deleted=$($report.summary.runtime_archive_deleted_count)"
+        "verdict=$($report.verdict); bridge=$($report.vps_spool_bridge.verdict); pending_sync=$($report.summary.vps_bridge_pending_sync_count); repairs=$($report.summary.vps_bridge_repair_actions_count); freed_gb=$($report.summary.total_freed_gb); ops_deleted=$($report.summary.ops_deleted_count); runtime_deleted=$($report.summary.runtime_archive_deleted_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "research_data_contract" -Operation {

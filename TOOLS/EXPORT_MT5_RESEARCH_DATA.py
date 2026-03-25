@@ -800,6 +800,9 @@ def build_cached_log_table(
     spool_files = discover_spool_chunk_files(spool_inbox_root, stem) if spool_inbox_root else []
     source_file_specs: list[tuple[str, Path]] = [("runtime_log", path) for path in source_files]
     source_file_specs.extend(("vps_spool", path) for path in spool_files)
+    observed_source_keys: set[str] = set()
+    carried_forward_count = 0
+    generated_at_utc = pd.Timestamp.now("UTC").isoformat()
     for source_kind, table_path in source_file_specs:
         try:
             if source_kind == "runtime_log":
@@ -818,6 +821,7 @@ def build_cached_log_table(
             symbol_dir = table_path.parent.name
             log_scope = "unknown"
 
+        observed_source_keys.add(source_key)
         source_stat = table_path.stat()
         cache_name = f"{hashlib.sha1(source_key.encode('utf-8')).hexdigest()}_{table_path.stem}.parquet"
         cache_path = cache_root / cache_name
@@ -858,8 +862,47 @@ def build_cached_log_table(
                 "rows": row_count,
                 "cache_path": str(cache_path),
                 "cache_size": int(cache_stat.st_size) if cache_stat else 0,
+                "source_present": True,
+                "retained_from_cache": False,
+                "last_seen_utc": generated_at_utc,
             }
         )
+
+    for source_key, previous_entry in previous_files.items():
+        if not source_key.startswith("vps_spool/"):
+            continue
+        if source_key in observed_source_keys:
+            continue
+
+        cache_path_raw = previous_entry.get("cache_path")
+        if not cache_path_raw:
+            continue
+
+        cache_path = Path(cache_path_raw)
+        if not cache_path.exists():
+            continue
+
+        row_count = int(previous_entry.get("rows", 0))
+        if row_count > 0:
+            cached_parquet_paths.append(str(cache_path))
+
+        cache_stat = cache_path.stat()
+        carried_entry = {
+            "source_path": previous_entry.get("source_path", ""),
+            "source_key": source_key,
+            "source_size": int(previous_entry.get("source_size", 0)),
+            "source_mtime_ns": int(previous_entry.get("source_mtime_ns", 0)),
+            "symbol_dir": previous_entry.get("symbol_dir", ""),
+            "log_scope": previous_entry.get("log_scope", "vps_spool"),
+            "rows": row_count,
+            "cache_path": str(cache_path),
+            "cache_size": int(cache_stat.st_size),
+            "source_present": False,
+            "retained_from_cache": True,
+            "last_seen_utc": previous_entry.get("last_seen_utc", previous_manifest.get("generated_at_utc", generated_at_utc)),
+        }
+        file_entries.append(carried_entry)
+        carried_forward_count += 1
 
     if cached_parquet_paths:
         file_list_sql = "[" + ", ".join(f"'{sql_quote(path)}'" for path in cached_parquet_paths) + "]"
@@ -878,12 +921,13 @@ def build_cached_log_table(
         combined_rows = 0
 
     cache_manifest = {
-        "generated_at_utc": pd.Timestamp.now("UTC").isoformat(),
+        "generated_at_utc": generated_at_utc,
         "relative_name": relative_name,
         "stem": stem,
         "file_count": len(file_entries),
         "reused_count": reused_count,
         "rebuilt_count": rebuilt_count,
+        "carried_forward_count": carried_forward_count,
         "files": {entry["source_key"]: entry for entry in file_entries},
     }
     cache_manifest_path.write_text(json.dumps(cache_manifest, indent=2, ensure_ascii=True), encoding="utf-8")
@@ -898,6 +942,7 @@ def build_cached_log_table(
         "source_file_count_vps_spool": len(spool_files),
         "cached_file_reused_count": reused_count,
         "cached_file_rebuilt_count": rebuilt_count,
+        "cached_file_carried_forward_count": carried_forward_count,
     }
 
 

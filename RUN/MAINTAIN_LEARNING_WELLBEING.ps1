@@ -122,10 +122,11 @@ $manifestPath = Join-Path $reportsRoot "research_export_manifest_latest.json"
 $pathHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
 $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYERS.ps1"
+$vpsSpoolWellbeingScript = Join-Path $ProjectRoot "RUN\BUILD_VPS_SPOOL_WELLBEING_AUDIT.ps1"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -140,6 +141,12 @@ $artifactCleanup = Invoke-JsonScript -ScriptPath $normalizeScript -Parameters @{
     ProjectRoot = $ProjectRoot
     ResearchRoot = $ResearchRoot
 }
+$vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parameters @{
+    ProjectRoot = $ProjectRoot
+    ResearchRoot = $ResearchRoot
+    CommonRoot = $CommonRoot
+    Apply = [bool]$Apply
+} | ConvertFrom-Json
 
 $opsRules = @(
     [pscustomobject]@{ name = "local_operator_snapshot"; regex = '^local_operator_snapshot_\d{8}_\d{6}\.(json|md)$'; keep_count = $OpsSnapshotKeepCount; age_days = 2 },
@@ -273,6 +280,7 @@ $totalFreedGb = [math]::Round((($opsFreedBytes + $runtimeFreedBytes) / 1GB) + [d
 $verdict = if (
     ($pathHygiene -ne $null -and [string]$pathHygiene.verdict -eq "CZYSTO") -and
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
+    ($null -ne $vpsSpoolBridge -and [string]$vpsSpoolBridge.verdict -in @("MOST_STABILNY", "MOST_UTWARDZONY")) -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
     $runtimeArchiveSkippedReason -eq ""
@@ -299,6 +307,7 @@ $report = [ordered]@{
     manifest = $manifestState
     learning_path_hygiene = if ($null -ne $pathHygiene) { [pscustomobject]@{ verdict = [string]$pathHygiene.verdict } } else { $null }
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
+    vps_spool_bridge = $vpsSpoolBridge
     artifact_layers = [ordered]@{
         freed_gb_total = [double]$artifactCleanup.freed_gb_total
         qdm_export_deleted_count = @($artifactCleanup.qdm_export_deleted).Count
@@ -327,6 +336,9 @@ $report = [ordered]@{
         runtime_archive_deleted_count = $runtimeDeleted.Count
         runtime_archive_pending_count = $runtimePending.Count
         runtime_empty_dirs_removed = $runtimeEmptyDirsRemoved
+        vps_bridge_pending_sync_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.pending_sync_count } else { 0 }
+        vps_bridge_repair_actions_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.repair_actions_count } else { 0 }
+        vps_bridge_export_lag_total = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.export_spool_lag_total } else { 0 }
     }
     verdict = $verdict
 }
@@ -346,6 +358,7 @@ $lines.Add("")
 $lines.Add(("- manifest_fresh: {0}" -f $report.manifest.fresh))
 $lines.Add(("- learning_path_hygiene: {0}" -f $(if ($null -ne $report.learning_path_hygiene) { $report.learning_path_hygiene.verdict } else { "BRAK" })))
 $lines.Add(("- learning_hot_path: {0}" -f $(if ($null -ne $report.learning_hot_path) { $report.learning_hot_path.verdict } else { "BRAK" })))
+$lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridge) { $report.vps_spool_bridge.verdict } else { "BRAK" })))
 $lines.Add("")
 $lines.Add("## Akcje")
 $lines.Add("")
@@ -353,6 +366,9 @@ $lines.Add(("- artifact_layers.freed_gb_total: {0}" -f $report.artifact_layers.f
 $lines.Add(("- ops_retention.deleted_count: {0}" -f $report.ops_retention.deleted_count))
 $lines.Add(("- runtime_archive_prune.deleted_count: {0}" -f $report.runtime_archive_prune.deleted_count))
 $lines.Add(("- runtime_archive_prune.empty_dirs_removed: {0}" -f $report.runtime_archive_prune.empty_dirs_removed))
+$lines.Add(("- vps_spool_bridge.pending_sync_count: {0}" -f $report.summary.vps_bridge_pending_sync_count))
+$lines.Add(("- vps_spool_bridge.repair_actions_count: {0}" -f $report.summary.vps_bridge_repair_actions_count))
+$lines.Add(("- vps_spool_bridge.export_spool_lag_total: {0}" -f $report.summary.vps_bridge_export_lag_total))
 if (-not [string]::IsNullOrWhiteSpace($report.runtime_archive_prune.skipped_reason)) {
     $lines.Add(("- runtime_archive_prune.skipped_reason: {0}" -f $report.runtime_archive_prune.skipped_reason))
 }

@@ -290,6 +290,7 @@ function Invoke-AuditCycle {
     $discoveryPath = Join-Path $opsRoot "audit_supervisor_discovery_latest.json"
     $learningHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
     $learningWellbeingPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
+    $vpsSpoolWellbeingPath = Join-Path $opsRoot "vps_spool_wellbeing_latest.json"
 
     $buildScripts = @(
         @{
@@ -526,6 +527,7 @@ function Invoke-AuditCycle {
     $discovery = Read-JsonSafe -Path $discoveryPath
     $learningHygiene = Read-JsonSafe -Path $learningHygienePath
     $learningWellbeing = Read-JsonSafe -Path $learningWellbeingPath
+    $vpsSpoolWellbeing = Read-JsonSafe -Path $vpsSpoolWellbeingPath
 
     $hostileFindings = @()
     if ($null -ne $hostile) {
@@ -739,6 +741,74 @@ function Invoke-AuditCycle {
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_RUNTIME" -Gate "RAPORTUJ" -Severity "info" -Reason "Runtime jest czysty, a logi sa pod kontrola.")) | Out-Null
+    }
+
+    $vpsBridgeEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $vpsSpoolWellbeing) {
+        $bridgeSummary = Get-OptionalValue -Object $vpsSpoolWellbeing -Name "summary" -Default $null
+        $pendingSync = [int](Get-OptionalValue -Object $bridgeSummary -Name "pending_sync_count" -Default 0)
+        $bridgeOrphans = [int](Get-OptionalValue -Object $bridgeSummary -Name "state_orphan_count" -Default 0)
+        $bridgeLag = [int](Get-OptionalValue -Object $bridgeSummary -Name "export_spool_lag_total" -Default 0)
+        $bridgeFindings = [int](Get-OptionalValue -Object $bridgeSummary -Name "findings_total" -Default 0)
+        $bridgeRepairs = [int](Get-OptionalValue -Object $bridgeSummary -Name "repair_actions_count" -Default 0)
+        $bridgeVerdict = [string](Get-OptionalValue -Object $vpsSpoolWellbeing -Name "verdict" -Default "UNKNOWN")
+
+        if ($pendingSync -gt 0) {
+            $vpsBridgeEvidence.Add([pscustomobject]@{
+                    severity = "medium"
+                    component = "vps_spool_pending_sync"
+                    message = "Most VPS-laptop ma zalegly backlog chunkow do odebrania."
+                    context = @{
+                        pending_sync_count = $pendingSync
+                        verdict = $bridgeVerdict
+                    }
+                }) | Out-Null
+        }
+
+        if ($bridgeOrphans -gt 0) {
+            $vpsBridgeEvidence.Add([pscustomobject]@{
+                    severity = "medium"
+                    component = "vps_spool_state_orphans"
+                    message = "Stan mostu VPS-laptop zawiera osierocone wpisy i wymaga sprzatania."
+                    context = @{
+                        state_orphan_count = $bridgeOrphans
+                        repair_actions_count = $bridgeRepairs
+                    }
+                }) | Out-Null
+        }
+
+        if ($bridgeLag -gt 0) {
+            $vpsBridgeEvidence.Add([pscustomobject]@{
+                    severity = "medium"
+                    component = "vps_spool_export_lag"
+                    message = "Research export jest opozniony wzgledem chunkow dostepnych w inboxie VPS spool."
+                    context = @{
+                        export_spool_lag_total = $bridgeLag
+                        findings_total = $bridgeFindings
+                    }
+                }) | Out-Null
+        }
+
+        if ($bridgeVerdict -eq "MOST_WYMAGA_DALSZEJ_NAPRAWY") {
+            $vpsBridgeEvidence.Add([pscustomobject]@{
+                    severity = "high"
+                    component = "vps_spool_bridge_unhealthy"
+                    message = "Most VPS-laptop nie jest zdrowy i wymaga dalszej naprawy."
+                    context = @{
+                        verdict = $bridgeVerdict
+                        findings_total = $bridgeFindings
+                    }
+                }) | Out-Null
+        }
+    }
+
+    if ($vpsBridgeEvidence.Count -gt 0) {
+        $bridgeHasHigh = @($vpsBridgeEvidence | Where-Object { $_.severity -eq "high" }).Count -gt 0
+        $bridgeGate = if ($bridgeHasHigh) { "NAPRAW_W_CYKLU" } else { "RAPORTUJ" }
+        $domainStatuses.Add((New-DomainStatus -Domain "MOST_VPS_LAPTOP" -Gate $bridgeGate -Severity (Get-HighestSeverity -Findings $vpsBridgeEvidence) -Reason "Most danych miedzy VPS i laptopem musi byc stale diagnozowany i samonaprawialny." -Evidence $vpsBridgeEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "MOST_VPS_LAPTOP" -Gate "RAPORTUJ" -Severity "info" -Reason "Most VPS-laptop nie pokazuje swiezych odchylen i backlog jest pod kontrola.")) | Out-Null
     }
 
     $executionEvidence = New-Object System.Collections.Generic.List[object]
@@ -1034,6 +1104,7 @@ function Invoke-AuditCycle {
         learning_stack = $learningPath
         learning_path_hygiene = $learningHygienePath
         learning_wellbeing = $learningWellbeingPath
+        vps_spool_wellbeing = $vpsSpoolWellbeingPath
         learning_health_registry = $learningHealthPath
         learning_paper_runtime_plan = $learningPaperRuntimePath
         learning_data_contract_audit = $learningDataContractPath
