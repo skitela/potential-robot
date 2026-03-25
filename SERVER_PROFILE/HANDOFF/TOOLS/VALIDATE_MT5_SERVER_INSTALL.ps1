@@ -21,8 +21,13 @@ $required = @(
     (Join-Path $targetTerminal "MQL5\Include\Core\MbRuntimeTypes.mqh"),
     (Join-Path $targetTerminal "MQL5\Include\Core\MbKillSwitchGuard.mqh"),
     (Join-Path $targetTerminal "MQL5\Include\Core\MbCandidateArbitration.mqh"),
+    (Join-Path $targetTerminal "MQL5\Include\Core\MbVpsSpool.mqh"),
     (Join-Path $targetTerminal "MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json"),
-    $targetCommon
+    $targetCommon,
+    (Join-Path $targetCommon "spool"),
+    (Join-Path $targetCommon "spool\onnx_observations"),
+    (Join-Path $targetCommon "spool\candidate_signals"),
+    (Join-Path $targetCommon "spool\learning_observations_v2")
 )
 
 foreach ($item in $registry.symbols) {

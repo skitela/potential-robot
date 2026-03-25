@@ -67,7 +67,11 @@ if ($CreateRuntimeFolders) {
     $dirs += @(
         (Join-Path $targetCommonRoot "state"),
         (Join-Path $targetCommonRoot "logs"),
-        (Join-Path $targetCommonRoot "run")
+        (Join-Path $targetCommonRoot "run"),
+        (Join-Path $targetCommonRoot "spool"),
+        (Join-Path $targetCommonRoot "spool\onnx_observations"),
+        (Join-Path $targetCommonRoot "spool\candidate_signals"),
+        (Join-Path $targetCommonRoot "spool\learning_observations_v2")
     )
 }
 

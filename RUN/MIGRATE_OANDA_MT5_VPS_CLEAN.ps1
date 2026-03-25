@@ -126,6 +126,8 @@ try {
     & (Join-Path $projectRootResolved "RUN\BUILD_MT5_HOSTING_DAILY_REPORT.ps1") -ProjectRoot $projectRootResolved | Out-Null
     & (Join-Path $projectRootResolved "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1") -ProjectRoot $projectRootResolved | Out-Null
     & (Join-Path $projectRootResolved "TOOLS\RUN_RUNTIME_WATCHDOG_PL.ps1") -ProjectRoot $projectRootResolved -NoRepair | Out-Null
+    & (Join-Path $projectRootResolved "RUN\SYNC_VPS_SPOOL_BACKLOG.ps1") -ProjectRoot $projectRootResolved | Out-Null
+    & (Join-Path $projectRootResolved "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1") -ProjectRoot $projectRootResolved | Out-Null
 
     $report.ok = $true
     $report.stage = "done"

@@ -4,6 +4,7 @@
 #include "MbRuntimeTypes.mqh"
 #include "MbRuntimeLogRotation.mqh"
 #include "MbStorage.mqh"
+#include "MbVpsSpool.mqh"
 
 struct MbCandidateSignalRecord
   {
@@ -151,7 +152,35 @@ void MbCandidateSignalJournalFlush()
    MbEnsureCandidateSignalHeader(h);
    FileSeek(h,0,SEEK_END);
    for(int i = 0; i < queued; ++i)
+     {
       MbWriteCandidateSignalRecord(h,g_mb_candidate_queue[i]);
+      MbVpsSpoolAppendCandidate(
+         g_mb_candidate_queue[i].ts,
+         g_mb_candidate_queue[i].symbol,
+         g_mb_candidate_queue[i].stage,
+         g_mb_candidate_queue[i].accepted,
+         g_mb_candidate_queue[i].reason_code,
+         g_mb_candidate_queue[i].setup_type,
+         MbCandidateSignalSideName(g_mb_candidate_queue[i].side),
+         g_mb_candidate_queue[i].score,
+         g_mb_candidate_queue[i].confidence_score,
+         g_mb_candidate_queue[i].risk_multiplier,
+         g_mb_candidate_queue[i].lots,
+         g_mb_candidate_queue[i].market_regime,
+         g_mb_candidate_queue[i].spread_regime,
+         g_mb_candidate_queue[i].execution_regime,
+         g_mb_candidate_queue[i].confidence_bucket,
+         g_mb_candidate_queue[i].candle_bias,
+         g_mb_candidate_queue[i].candle_quality_grade,
+         g_mb_candidate_queue[i].candle_score,
+         g_mb_candidate_queue[i].renko_bias,
+         g_mb_candidate_queue[i].renko_quality_grade,
+         g_mb_candidate_queue[i].renko_score,
+         g_mb_candidate_queue[i].renko_run_length,
+         g_mb_candidate_queue[i].renko_reversal_flag,
+         g_mb_candidate_queue[i].spread_points
+      );
+     }
    FileClose(h);
    MbRotateRuntimeLogIfOversized(g_mb_candidate_queue_path);
    ArrayResize(g_mb_candidate_queue,0);
@@ -217,6 +246,32 @@ void MbAppendCandidateSignal(
    MbWriteCandidateSignalRecord(h,record);
    FileClose(h);
    MbRotateRuntimeLogIfOversized(rel_path);
+   MbVpsSpoolAppendCandidate(
+      record.ts,
+      record.symbol,
+      record.stage,
+      record.accepted,
+      record.reason_code,
+      record.setup_type,
+      MbCandidateSignalSideName(record.side),
+      record.score,
+      record.confidence_score,
+      record.risk_multiplier,
+      record.lots,
+      record.market_regime,
+      record.spread_regime,
+      record.execution_regime,
+      record.confidence_bucket,
+      record.candle_bias,
+      record.candle_quality_grade,
+      record.candle_score,
+      record.renko_bias,
+      record.renko_quality_grade,
+      record.renko_score,
+      record.renko_run_length,
+      record.renko_reversal_flag,
+      record.spread_points
+   );
   }
 
 #endif

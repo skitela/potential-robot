@@ -12,12 +12,16 @@ $ErrorActionPreference = "Stop"
 
 $pythonExe = Join-Path $EnvRoot "Scripts\python.exe"
 $scriptPath = Join-Path $ProjectRoot "TOOLS\EXPORT_MT5_RESEARCH_DATA.py"
+$spoolSyncScript = Join-Path $ProjectRoot "RUN\SYNC_VPS_SPOOL_BACKLOG.ps1"
 
 if (-not (Test-Path -LiteralPath $pythonExe)) {
     throw "Research python not found: $pythonExe"
 }
 if (-not (Test-Path -LiteralPath $scriptPath)) {
     throw "Export script not found: $scriptPath"
+}
+if (-not (Test-Path -LiteralPath $spoolSyncScript)) {
+    throw "Spool sync script not found: $spoolSyncScript"
 }
 
 $contractManifestPath = Join-Path $ResearchRoot "reports\research_contract_manifest_latest.json"
@@ -159,6 +163,11 @@ while ($true) {
 
     break
 }
+
+& $spoolSyncScript `
+    -ProjectRoot $ProjectRoot `
+    -EnvRoot $EnvRoot `
+    -ResearchRoot $ResearchRoot | Out-Null
 
 & $pythonExe $scriptPath `
     --project-root $ProjectRoot `

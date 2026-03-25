@@ -3,6 +3,7 @@
 
 #include "MbRuntimeTypes.mqh"
 #include "MbStorage.mqh"
+#include "MbVpsSpool.mqh"
 
 void MbEnsureLearningBucketSummaryHeader(const int h)
   {
@@ -372,6 +373,28 @@ void MbAppendLearningObservationV2(
       close_reason
    );
    FileClose(h);
+
+   MbVpsSpoolAppendLearningV2(
+      symbol,
+      ts,
+      setup_type,
+      market_regime,
+      spread_regime,
+      execution_regime,
+      confidence_bucket,
+      confidence_score,
+      candle_bias,
+      candle_quality_grade,
+      candle_score,
+      renko_bias,
+      renko_quality_grade,
+      renko_score,
+      renko_run_length,
+      renko_reversal_flag,
+      side,
+      pnl,
+      close_reason
+   );
 
    MbUpdateLearningBucketSummary(
       symbol,

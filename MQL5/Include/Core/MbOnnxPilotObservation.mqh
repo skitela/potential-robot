@@ -3,6 +3,7 @@
 
 #include "MbStorage.mqh"
 #include "MbStatusPlane.mqh"
+#include "MbVpsSpool.mqh"
 
 struct MbOnnxObservationResult
   {
@@ -221,6 +222,22 @@ void MbOnnxObservationAppendLog(
       DoubleToString(spread_points,2)
    );
    FileClose(handle);
+
+   MbVpsSpoolAppendOnnx(
+      ts,
+      symbol,
+      stage,
+      runtime_channel,
+      result.available,
+      result.teacher_available,
+      result.teacher_used,
+      result.teacher_score,
+      result.symbol_score,
+      result.latency_us,
+      result.reason_code,
+      signal,
+      spread_points
+   );
   }
 
 bool MbOnnxObservationLoadContract(

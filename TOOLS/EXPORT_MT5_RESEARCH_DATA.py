@@ -284,6 +284,13 @@ def collect_log_table(common_root: Path, relative_name: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def discover_spool_chunk_files(inbox_root: Path, stem: str) -> list[Path]:
+    stream_root = inbox_root / stem
+    if not stream_root.exists():
+        return []
+    return sorted(stream_root.rglob("*.tsv"))
+
+
 def collect_tester_jsons(project_root: Path, suffix: str) -> pd.DataFrame:
     records = []
     evidence_root = project_root / "EVIDENCE" / "STRATEGY_TESTER"
@@ -767,7 +774,14 @@ def refresh_research_manifest_contract_metadata(output_root: Path, contract_stat
     return manifest
 
 
-def build_cached_log_table(common_root: Path, output_root: Path, relative_name: str, stem: str) -> dict:
+def build_cached_log_table(
+    common_root: Path,
+    output_root: Path,
+    relative_name: str,
+    stem: str,
+    *,
+    spool_inbox_root: Path | None = None,
+) -> dict:
     datasets_dir = ensure_dir(output_root / "datasets")
     reports_dir = ensure_dir(output_root / "reports")
     cache_root = ensure_dir(output_root / "log_cache" / stem)
@@ -783,12 +797,22 @@ def build_cached_log_table(common_root: Path, output_root: Path, relative_name: 
     rebuilt_count = 0
 
     source_files = sorted(logs_root.rglob(relative_name)) if logs_root.exists() else []
-    for table_path in source_files:
+    spool_files = discover_spool_chunk_files(spool_inbox_root, stem) if spool_inbox_root else []
+    source_file_specs: list[tuple[str, Path]] = [("runtime_log", path) for path in source_files]
+    source_file_specs.extend(("vps_spool", path) for path in spool_files)
+    for source_kind, table_path in source_file_specs:
         try:
-            relative_parts = table_path.relative_to(logs_root).parts
-            source_key = "/".join(relative_parts)
-            symbol_dir = relative_parts[0] if relative_parts else table_path.parent.name
-            log_scope = "archive" if "archive" in relative_parts else "live"
+            if source_kind == "runtime_log":
+                relative_parts = table_path.relative_to(logs_root).parts
+                source_key = "/".join(relative_parts)
+                symbol_dir = relative_parts[0] if relative_parts else table_path.parent.name
+                log_scope = "archive" if "archive" in relative_parts else "live"
+            else:
+                relative_parts = table_path.relative_to(spool_inbox_root).parts if spool_inbox_root else table_path.parts
+                source_key = "vps_spool/" + "/".join(relative_parts)
+                file_stem = table_path.stem
+                symbol_dir = file_stem.split("__", 1)[0] if "__" in file_stem else table_path.parent.name
+                log_scope = "vps_spool"
         except Exception:
             source_key = table_path.name
             symbol_dir = table_path.parent.name
@@ -870,6 +894,8 @@ def build_cached_log_table(common_root: Path, output_root: Path, relative_name: 
         "parquet_path": str(combined_parquet_path),
         "cache_manifest_path": str(cache_manifest_path),
         "source_file_count": len(file_entries),
+        "source_file_count_runtime": len(source_files),
+        "source_file_count_vps_spool": len(spool_files),
         "cached_file_reused_count": reused_count,
         "cached_file_rebuilt_count": rebuilt_count,
     }
@@ -1128,6 +1154,7 @@ def main() -> int:
         "output_root": str(output_root),
         "datasets": {},
     }
+    spool_inbox_root = output_root / "vps_spool_inbox"
 
     runtime_state = collect_runtime_state(common_root)
     manifest["datasets"]["runtime_state"] = export_frame(runtime_state, "runtime_state_latest", datasets_dir)
@@ -1143,6 +1170,7 @@ def main() -> int:
         output_root,
         "decision_events.csv",
         "decision_events",
+        spool_inbox_root=spool_inbox_root,
     )
 
     manifest["datasets"]["candidate_signals"] = build_cached_log_table(
@@ -1150,6 +1178,7 @@ def main() -> int:
         output_root,
         "candidate_signals.csv",
         "candidate_signals",
+        spool_inbox_root=spool_inbox_root,
     )
 
     manifest["datasets"]["learning_observations_v2"] = build_cached_log_table(
@@ -1157,6 +1186,7 @@ def main() -> int:
         output_root,
         "learning_observations_v2.csv",
         "learning_observations_v2",
+        spool_inbox_root=spool_inbox_root,
     )
 
     manifest["datasets"]["onnx_observations"] = build_cached_log_table(
@@ -1164,6 +1194,7 @@ def main() -> int:
         output_root,
         "onnx_observations.csv",
         "onnx_observations",
+        spool_inbox_root=spool_inbox_root,
     )
 
     manifest["datasets"]["tuning_deckhand"] = build_cached_log_table(
@@ -1171,6 +1202,7 @@ def main() -> int:
         output_root,
         "tuning_deckhand.csv",
         "tuning_deckhand",
+        spool_inbox_root=spool_inbox_root,
     )
 
     manifest["datasets"]["tuning_reasoning"] = build_cached_log_table(
@@ -1178,6 +1210,7 @@ def main() -> int:
         output_root,
         "tuning_reasoning.csv",
         "tuning_reasoning",
+        spool_inbox_root=spool_inbox_root,
     )
 
     tester_summary = collect_tester_jsons(project_root, "_summary.json")

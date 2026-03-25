@@ -50,6 +50,7 @@ bool MbStorageInit(const string symbol)
    ok = MbEnsureDir(MbRootPath() + "\\state\\_domains") && ok;
    ok = MbEnsureDir(MbRootPath() + "\\logs") && ok;
    ok = MbEnsureDir(MbRootPath() + "\\run") && ok;
+   ok = MbEnsureDir(MbRootPath() + "\\spool") && ok;
    ok = MbEnsureDir(MbRootPath() + "\\key") && ok;
    ok = MbEnsureDir(MbSymbolStateDir(canonical_symbol)) && ok;
    ok = MbEnsureDir(MbSymbolLogDir(canonical_symbol)) && ok;
