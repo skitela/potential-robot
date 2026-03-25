@@ -35,6 +35,7 @@ $paperLiveFeedbackScript = Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIV
 $hostingReportScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_HOSTING_DAILY_REPORT.ps1"
 $technicalReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TECHNICAL_READINESS_REPORT.ps1"
 $dataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
+$shadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $trainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
 $trustButVerifyScript = Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
@@ -83,6 +84,7 @@ foreach ($path in @(
     $hostingReportScript,
     $technicalReadinessScript,
     $dataReadinessScript,
+    $shadowDatasetsScript,
     $trainingReadinessScript,
     $trustButVerifyScript,
     $snapshotScript,
@@ -544,6 +546,17 @@ function Write-SupervisorStatus {
         }
     }
 
+    $shadowDatasetsPath = Join-Path $statusDir "instrument_shadow_datasets_latest.json"
+    $shadowDatasets = $null
+    $shadowDatasetsHead = @()
+    if (Test-Path -LiteralPath $shadowDatasetsPath) {
+        $shadowDatasets = Get-Content -LiteralPath $shadowDatasetsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $shadowDatasetsHead = @($shadowDatasets.top_ready | Select-Object -First 5)
+        if (@($shadowDatasetsHead).Count -eq 0) {
+            $shadowDatasetsHead = @($shadowDatasets.top_not_ready | Select-Object -First 5)
+        }
+    }
+
     $trainingReadinessPath = Join-Path $statusDir "instrument_training_readiness_latest.json"
     $trainingReadiness = $null
     $trainingReadinessHead = @()
@@ -591,6 +604,8 @@ function Write-SupervisorStatus {
         learning_wellbeing = $learningWellbeing
         instrument_data_readiness = $dataReadiness
         top_instrument_data_readiness = $dataReadinessHead
+        instrument_shadow_datasets = $shadowDatasets
+        top_instrument_shadow_datasets = $shadowDatasetsHead
         instrument_training_readiness = $trainingReadiness
         top_instrument_training_readiness = $trainingReadinessHead
         trust_but_verify = $trustButVerify
@@ -935,6 +950,11 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "instrument_data_readiness" -Operation {
         $report = (& $dataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "export_pending=$($report.summary.export_pending_count); contract_pending=$($report.summary.contract_pending_count); runtime_ready=$($report.summary.onnx_runtime_ready_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "instrument_shadow_datasets" -Operation {
+        $report = (& $shadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "shadow_ready=$($report.summary.shadow_dataset_ready_count); shadow_runtime=$($report.summary.shadow_dataset_runtime_ready_count); shadow_outcome=$($report.summary.shadow_dataset_outcome_ready_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_training_readiness" -Operation {

@@ -5,6 +5,7 @@ param(
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [string]$QdmRoot = "C:\TRADING_TOOLS\QuantDataManager",
     [string]$ExportRoot = "C:\TRADING_DATA\QDM_EXPORT\MT5",
+    [string]$QdmInventoryCsvPath = "C:\TRADING_DATA\RESEARCH\datasets\qdm_tick_inventory_latest.csv",
     [string]$BlockedSymbolsPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_missing_only_blocked.json",
     [long]$MinimumHistoryBytes = 10485760,
     [long]$MinimumExportBytes = 1024
@@ -120,6 +121,57 @@ function Get-ExportInfo {
     }
 }
 
+function Get-QdmInventoryMaps {
+    param([string]$InventoryCsvPath)
+
+    $result = @{
+        by_export = @{}
+        by_alias = @{}
+    }
+
+    if (-not (Test-Path -LiteralPath $InventoryCsvPath)) {
+        return $result
+    }
+
+    foreach ($row in @(Import-Csv -LiteralPath $InventoryCsvPath -Encoding UTF8)) {
+        if ($null -eq $row) { continue }
+
+        $exportName = Normalize-QdmKey ([string]$row.export_name)
+        $alias = Normalize-QdmKey ([string]$row.symbol_alias)
+        $minuteRows = 0
+        try {
+            $minuteRows = [int64]$row.minute_rows
+        }
+        catch {
+            $minuteRows = 0
+        }
+
+        $minuteParquetPath = [string]$row.minute_parquet_path
+        $cacheReady = (
+            -not [string]::IsNullOrWhiteSpace($minuteParquetPath) -and
+            (Test-Path -LiteralPath $minuteParquetPath) -and
+            $minuteRows -gt 0
+        )
+
+        $entry = [pscustomobject]@{
+            export_name = [string]$row.export_name
+            symbol_alias = [string]$row.symbol_alias
+            minute_rows = $minuteRows
+            minute_parquet_path = $minuteParquetPath
+            cache_ready = $cacheReady
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($exportName)) {
+            $result.by_export[$exportName] = $entry
+        }
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            $result.by_alias[$alias] = $entry
+        }
+    }
+
+    return $result
+}
+
 if (-not (Test-Path -LiteralPath $RegistryPath)) {
     throw "Registry not found: $RegistryPath"
 }
@@ -127,6 +179,7 @@ if (-not (Test-Path -LiteralPath $RegistryPath)) {
 $historyRoot = Join-Path $QdmRoot "user\data\History"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out-Null
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
+$inventoryMaps = Get-QdmInventoryMaps -InventoryCsvPath $QdmInventoryCsvPath
 
 $registry = Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $blockedDefinitions = @()
@@ -226,8 +279,17 @@ foreach ($item in @($registry.symbols)) {
     $usableHistory = @(Get-UsableHistoryCandidates -Candidates $historyCandidates -MinimumBytes $MinimumHistoryBytes)
     $bestHistory = if ($usableHistory.Count -gt 0) { $usableHistory[0] } else { $null }
     $exportInfo = Get-ExportInfo -ExportRoot $ExportRoot -ExportName $spec.mt5_export_name -MinimumBytes $MinimumExportBytes
+    $inventoryEntry = $null
+    $exportKey = Normalize-QdmKey $spec.mt5_export_name
+    if (-not [string]::IsNullOrWhiteSpace($exportKey) -and $inventoryMaps.by_export.ContainsKey($exportKey)) {
+        $inventoryEntry = $inventoryMaps.by_export[$exportKey]
+    }
+    elseif ($inventoryMaps.by_alias.ContainsKey($aliasKey)) {
+        $inventoryEntry = $inventoryMaps.by_alias[$aliasKey]
+    }
+    $cacheReady = ($null -ne $inventoryEntry -and [bool]$inventoryEntry.cache_ready)
 
-    if ($exportInfo.ready) {
+    if ($exportInfo.ready -or $cacheReady) {
         $present.Add([pscustomobject]@{
             symbol_alias = $alias
             qdm_symbol = $spec.symbol
@@ -235,8 +297,12 @@ foreach ($item in @($registry.symbols)) {
             history_size_mb = if ($null -ne $bestHistory) { [math]::Round(($bestHistory.Length / 1MB), 1) } else { 0.0 }
             history_last_write_local = if ($null -ne $bestHistory) { $bestHistory.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
             export_file = Split-Path -Leaf $exportInfo.path
+            export_present = [bool]$exportInfo.ready
             export_size_mb = $exportInfo.size_mb
             export_last_write_local = $exportInfo.last_write_local
+            cache_present = [bool]$cacheReady
+            cache_minute_rows = if ($null -ne $inventoryEntry) { [int64]$inventoryEntry.minute_rows } else { 0 }
+            cache_minute_parquet_path = if ($null -ne $inventoryEntry) { [string]$inventoryEntry.minute_parquet_path } else { $null }
         })
         continue
     }
@@ -268,6 +334,9 @@ foreach ($item in @($registry.symbols)) {
         export_present = [bool]$exportInfo.ready
         export_size_mb = $exportInfo.size_mb
         export_last_write_local = $exportInfo.last_write_local
+        cache_present = [bool]$cacheReady
+        cache_minute_rows = if ($null -ne $inventoryEntry) { [int64]$inventoryEntry.minute_rows } else { 0 }
+        cache_minute_parquet_path = if ($null -ne $inventoryEntry) { [string]$inventoryEntry.minute_parquet_path } else { $null }
         reason = if ($usableHistory.Count -gt 0) { "history_ready_export_missing" } elseif ($historyCandidates.Count -gt 0) { "history_files_exist_but_are_too_small_or_unusable" } else { "history_files_missing_on_disk" }
     }
     $missing.Add($missingEntry)

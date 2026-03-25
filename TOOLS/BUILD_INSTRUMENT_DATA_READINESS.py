@@ -96,10 +96,10 @@ def get_data_readiness_state(
 ) -> str:
     if not raw_history_present:
         return "NO_RAW_HISTORY"
-    if not active_export_present:
-        return "EXPORT_PENDING"
     if qdm_contract_rows <= 0:
-        return "CONTRACT_PENDING"
+        if active_export_present:
+            return "CONTRACT_PENDING"
+        return "EXPORT_PENDING"
     if outcome_rows > 0:
         return "OUTCOME_READY"
     if onnx_runtime_rows > 0:
@@ -169,6 +169,9 @@ def main() -> None:
         export_size_mb = 0.0
         export_last_write_local = None
         export_name = None
+        cache_present = False
+        cache_minute_rows = 0
+        cache_minute_parquet_path = None
 
         source_entry = present_entry or missing_entry or {}
         if source_entry:
@@ -177,6 +180,9 @@ def main() -> None:
             export_size_mb = float(source_entry.get("export_size_mb", 0.0) or 0.0)
             export_last_write_local = source_entry.get("export_last_write_local")
             export_name = source_entry.get("export_file") or source_entry.get("mt5_export_name")
+            cache_present = bool(source_entry.get("cache_present", False))
+            cache_minute_rows = int(float(source_entry.get("cache_minute_rows", 0) or 0))
+            cache_minute_parquet_path = source_entry.get("cache_minute_parquet_path")
 
         data_readiness_state = get_data_readiness_state(
             raw_history_present=raw_history_present,
@@ -201,6 +207,9 @@ def main() -> None:
             "active_export_name": export_name,
             "active_export_size_mb": round(export_size_mb, 1),
             "active_export_last_write_local": export_last_write_local,
+            "qdm_cache_present": cache_present,
+            "qdm_cache_minute_rows": cache_minute_rows,
+            "qdm_cache_minute_parquet_path": cache_minute_parquet_path,
             "qdm_contract_rows": qdm_contract_rows,
             "candidate_contract_rows": candidate_rows,
             "learning_contract_rows": learning_rows,

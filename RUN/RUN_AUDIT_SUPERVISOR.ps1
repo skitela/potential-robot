@@ -292,6 +292,7 @@ function Invoke-AuditCycle {
     $learningWellbeingPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
     $vpsSpoolWellbeingPath = Join-Path $opsRoot "vps_spool_wellbeing_latest.json"
     $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
+    $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
 
     $buildScripts = @(
@@ -324,6 +325,10 @@ function Invoke-AuditCycle {
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
         },
         @{
@@ -530,6 +535,7 @@ function Invoke-AuditCycle {
     $learning = Read-JsonSafe -Path $learningPath
     $learningHealth = Read-JsonSafe -Path $learningHealthPath
     $instrumentDataReadiness = Read-JsonSafe -Path $instrumentDataReadinessPath
+    $instrumentShadowDatasets = Read-JsonSafe -Path $instrumentShadowDatasetsPath
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
     $learningPaperRuntime = Read-JsonSafe -Path $learningPaperRuntimePath
     $learningDataContract = Read-JsonSafe -Path $learningDataContractPath
@@ -987,6 +993,26 @@ function Invoke-AuditCycle {
         }
     }
 
+    if ($null -ne $instrumentShadowDatasets) {
+        $shadowSummary = Get-OptionalValue -Object $instrumentShadowDatasets -Name "summary" -Default $null
+        $shadowBuilt = [int](Get-OptionalValue -Object $shadowSummary -Name "eligible_for_shadow_dataset_count" -Default 0)
+        $shadowReadyDatasets = [int](Get-OptionalValue -Object $shadowSummary -Name "shadow_dataset_ready_count" -Default 0) +
+            [int](Get-OptionalValue -Object $shadowSummary -Name "shadow_dataset_runtime_ready_count" -Default 0) +
+            [int](Get-OptionalValue -Object $shadowSummary -Name "shadow_dataset_outcome_ready_count" -Default 0)
+
+        if ($shadowBuilt -gt 0 -and $shadowReadyDatasets -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = "info"
+                component = "instrument_shadow_datasets"
+                message = "Shadow datasets per instrument sa budowane i zasilaja etap przejsciowy."
+                context = @{
+                    eligible_for_shadow_dataset_count = $shadowBuilt
+                    shadow_dataset_ready_total = $shadowReadyDatasets
+                }
+            }) | Out-Null
+        }
+    }
+
     if (@($instrumentReadinessEvidence | Where-Object { $_.component -in @("instrument_data_export_pending", "instrument_data_contract_pending") }).Count -gt 0) {
         $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_DANYCH_I_TRENINGU_PER_INSTRUMENT" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $instrumentReadinessEvidence) -Reason "Przejscie do uczenia per instrument wymaga stalego odzysku danych i kontroli gotowosci." -Evidence $instrumentReadinessEvidence)) | Out-Null
     }
@@ -1179,6 +1205,7 @@ function Invoke-AuditCycle {
         vps_spool_wellbeing = $vpsSpoolWellbeingPath
         learning_health_registry = $learningHealthPath
         instrument_data_readiness = $instrumentDataReadinessPath
+        instrument_shadow_datasets = $instrumentShadowDatasetsPath
         instrument_training_readiness = $instrumentTrainingReadinessPath
         learning_paper_runtime_plan = $learningPaperRuntimePath
         learning_data_contract_audit = $learningDataContractPath

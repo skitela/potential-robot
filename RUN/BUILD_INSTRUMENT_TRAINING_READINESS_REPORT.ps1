@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$DataReadinessPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_data_readiness_latest.json",
+    [string]$ShadowDatasetsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_shadow_datasets_latest.json",
     [string]$TechnicalReadinessPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_technical_readiness_latest.json",
     [string]$LearningHealthPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\learning_health_registry_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
@@ -49,6 +50,7 @@ function Get-TeacherDependencyLevel {
 function Get-TrainingReadinessState {
     param(
         [object]$DataEntry,
+        [object]$ShadowEntry,
         [object]$TechnicalEntry,
         [object]$HealthEntry
     )
@@ -61,11 +63,14 @@ function Get-TrainingReadinessState {
     $learningRows = [int]$DataEntry.learning_contract_rows
     $runtimeRows = [int]$DataEntry.onnx_runtime_rows
     $outcomeRows = [int]$DataEntry.outcome_rows
+    $shadowState = if ($null -ne $ShadowEntry) { [string]$ShadowEntry.shadow_dataset_state } else { "" }
+    $shadowReady = $shadowState -in @("SHADOW_READY", "SHADOW_RUNTIME_READY", "SHADOW_OUTCOME_READY")
 
     if ($dataState -eq "NO_RAW_HISTORY") { return "FALLBACK_ONLY" }
     if ($dataState -eq "EXPORT_PENDING") { return "EXPORT_PENDING" }
     if ($dataState -eq "CONTRACT_PENDING") { return "CONTRACT_PENDING" }
     if ($technicalReadiness -eq "MT5_FALLBACK_ONLY") { return "FALLBACK_ONLY" }
+    if (-not $shadowReady) { return "TRAINING_SHADOW_READY" }
 
     if (
         $qdmRows -ge 1000 -and
@@ -124,6 +129,7 @@ function Get-NextSafeAction {
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 $dataReadiness = Read-JsonSafe -Path $DataReadinessPath
+$shadowDatasets = Read-JsonSafe -Path $ShadowDatasetsPath
 $technicalReadiness = Read-JsonSafe -Path $TechnicalReadinessPath
 $learningHealth = Read-JsonSafe -Path $LearningHealthPath
 
@@ -133,6 +139,7 @@ if ($null -eq $dataReadiness) {
 
 $technicalMap = New-MapByAlias -Items @($technicalReadiness.entries)
 $healthMap = New-MapByAlias -Items @($learningHealth.items)
+$shadowMap = New-MapByAlias -Items @($shadowDatasets.items)
 
 $items = New-Object System.Collections.Generic.List[object]
 
@@ -141,8 +148,9 @@ foreach ($dataEntry in @($dataReadiness.items)) {
     $key = $alias.Trim().ToUpperInvariant()
     $technicalEntry = if ($technicalMap.ContainsKey($key)) { $technicalMap[$key] } else { $null }
     $healthEntry = if ($healthMap.ContainsKey($key)) { $healthMap[$key] } else { $null }
+    $shadowEntry = if ($shadowMap.ContainsKey($key)) { $shadowMap[$key] } else { $null }
 
-    $trainingReadiness = Get-TrainingReadinessState -DataEntry $dataEntry -TechnicalEntry $technicalEntry -HealthEntry $healthEntry
+    $trainingReadiness = Get-TrainingReadinessState -DataEntry $dataEntry -ShadowEntry $shadowEntry -TechnicalEntry $technicalEntry -HealthEntry $healthEntry
     $teacherDependency = Get-TeacherDependencyLevel -HealthState $(if ($null -ne $healthEntry) { [string]$healthEntry.learning_health_state } else { "" }) -DataState ([string]$dataEntry.data_readiness_state)
     $eligibility = Get-LocalTrainingEligibility -ReadinessState $trainingReadiness
     $nextSafeAction = Get-NextSafeAction -ReadinessState $trainingReadiness -TeacherDependency $teacherDependency -HealthState $(if ($null -ne $healthEntry) { [string]$healthEntry.learning_health_state } else { "" })
@@ -156,6 +164,8 @@ foreach ($dataEntry in @($dataReadiness.items)) {
         teacher_dependency_level = $teacherDependency
         local_training_eligibility = $eligibility
         training_readiness_state = $trainingReadiness
+        shadow_dataset_state = if ($null -ne $shadowEntry) { [string]$shadowEntry.shadow_dataset_state } else { "" }
+        shadow_dataset_present = ($null -ne $shadowEntry -and [string]$shadowEntry.shadow_dataset_state -in @("SHADOW_READY", "SHADOW_RUNTIME_READY", "SHADOW_OUTCOME_READY"))
         qdm_contract_rows = [int]$dataEntry.qdm_contract_rows
         candidate_contract_rows = [int]$dataEntry.candidate_contract_rows
         learning_contract_rows = [int]$dataEntry.learning_contract_rows

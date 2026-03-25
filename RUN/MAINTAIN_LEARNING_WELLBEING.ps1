@@ -125,13 +125,14 @@ $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYER
 $vpsSpoolWellbeingScript = Join-Path $ProjectRoot "RUN\BUILD_VPS_SPOOL_WELLBEING_AUDIT.ps1"
 $qdmMissingProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1"
 $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
+$instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
 $qdmMissingSyncStarterScript = Join-Path $ProjectRoot "RUN\START_QDM_MISSING_SUPPORTED_SYNC_BACKGROUND.ps1"
 $qdmMissingSyncStatusPath = Join-Path $opsRoot "qdm_missing_supported_sync_latest.json"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentTrainingReadinessScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -154,6 +155,7 @@ $vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parame
     Apply = [bool]$Apply
 } | ConvertFrom-Json
 $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $qdmMissingProfile = Read-JsonSafe -Path (Join-Path $opsRoot "qdm_missing_only_profile_latest.json")
 $qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath
@@ -302,6 +304,11 @@ $dataReadinessSummary = if ($null -ne $instrumentDataReadiness) { $instrumentDat
 $trainingReadinessSummary = if ($null -ne $instrumentTrainingReadiness) { $instrumentTrainingReadiness.summary } else { $null }
 $exportPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.export_pending_count } else { 0 }
 $contractPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.contract_pending_count } else { 0 }
+$shadowDatasetReadyCount = if ($null -ne $instrumentShadowDatasets) {
+    [int]$instrumentShadowDatasets.summary.shadow_dataset_ready_count +
+    [int]$instrumentShadowDatasets.summary.shadow_dataset_runtime_ready_count +
+    [int]$instrumentShadowDatasets.summary.shadow_dataset_outcome_ready_count
+} else { 0 }
 $localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
 $localTrainingLimitedCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_limited_count } else { 0 }
 $verdict = if (
@@ -338,6 +345,7 @@ $report = [ordered]@{
     vps_spool_bridge = $vpsSpoolBridge
     qdm_missing_supported_sync = $qdmMissingSyncStatus
     instrument_data_readiness = $instrumentDataReadiness
+    instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
     artifact_layers = [ordered]@{
         freed_gb_total = [double]$artifactCleanup.freed_gb_total
@@ -369,6 +377,7 @@ $report = [ordered]@{
         runtime_empty_dirs_removed = $runtimeEmptyDirsRemoved
         qdm_export_pending_count = $exportPendingCount
         qdm_contract_pending_count = $contractPendingCount
+        shadow_dataset_ready_count = $shadowDatasetReadyCount
         local_training_ready_count = $localTrainingReadyCount
         local_training_limited_count = $localTrainingLimitedCount
         vps_bridge_pending_sync_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.pending_sync_count } else { 0 }
@@ -397,6 +406,7 @@ $lines.Add(("- learning_hot_path: {0}" -f $(if ($null -ne $report.learning_hot_p
 $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridge) { $report.vps_spool_bridge.verdict } else { "BRAK" })))
 $lines.Add(("- qdm_export_pending_count: {0}" -f $report.summary.qdm_export_pending_count))
 $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_pending_count))
+$lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
 $lines.Add(("- local_training_ready_count: {0}" -f $report.summary.local_training_ready_count))
 $lines.Add(("- local_training_limited_count: {0}" -f $report.summary.local_training_limited_count))
 $lines.Add("")
