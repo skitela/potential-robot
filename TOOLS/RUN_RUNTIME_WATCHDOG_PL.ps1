@@ -53,6 +53,22 @@ function Get-HeartbeatAgeSec {
     return $null
 }
 
+function Resolve-StateFilePath {
+    param(
+        [string[]]$Directories,
+        [string]$FileName
+    )
+
+    foreach ($directory in @($Directories | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        $path = Join-Path $directory $FileName
+        if (Test-Path -LiteralPath $path) {
+            return $path
+        }
+    }
+
+    return (Join-Path $Directories[0] $FileName)
+}
+
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $registry = Read-JsonOrNull -Path $registryPath
 if ($null -eq $registry) {
@@ -84,16 +100,19 @@ foreach ($item in @($registry.symbols)) {
     $stateAlias = Resolve-RegistryStateAlias -RegistryItem $item -CommonFilesRoot $commonFilesRootResolved
     $family = [string]$item.session_profile
     $symbolDir = Join-Path $StateRoot $stateAlias
-    $runtimeStatusPath = Join-Path $symbolDir "runtime_status.json"
-    $runtimeStatePath = Join-Path $symbolDir "runtime_state.csv"
-    $heartbeatPath = Join-Path $symbolDir "heartbeat.txt"
-    $executionSummaryPath = Join-Path $symbolDir "execution_summary.json"
+    $canonicalDir = Join-Path $StateRoot $symbol
+    $candidateDirs = @($symbolDir, $canonicalDir)
+    $runtimeStatusPath = Resolve-StateFilePath -Directories $candidateDirs -FileName "runtime_status.json"
+    $runtimeStatePath = Resolve-StateFilePath -Directories $candidateDirs -FileName "runtime_state.csv"
+    $heartbeatPath = Resolve-StateFilePath -Directories $candidateDirs -FileName "heartbeat.txt"
+    $executionSummaryPath = Resolve-StateFilePath -Directories $candidateDirs -FileName "execution_summary.json"
 
     $runtimeStatus = Read-JsonOrNull -Path $runtimeStatusPath
     $heartbeatAgeSec = Get-HeartbeatAgeSec -HeartbeatPath $heartbeatPath -RuntimeStatus $runtimeStatus
     $hasState = (Test-Path -LiteralPath $runtimeStatePath)
     $hasExecution = (Test-Path -LiteralPath $executionSummaryPath)
-    $isMissing = (-not (Test-Path -LiteralPath $symbolDir)) -or (-not $hasState) -or (-not $hasExecution)
+    $hasAnyStateDir = @($candidateDirs | Select-Object -Unique | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0
+    $isMissing = (-not $hasAnyStateDir) -or (-not $hasState) -or (-not $hasExecution)
     $isStale = ($null -eq $heartbeatAgeSec) -or ($heartbeatAgeSec -gt $MaxHeartbeatAgeSec)
 
     if ($isMissing) { $missingSymbols += $symbol }
