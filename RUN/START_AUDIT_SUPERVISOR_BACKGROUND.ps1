@@ -50,7 +50,12 @@ New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logPath = Join-Path $LogRoot ("audit_supervisor_{0}.log" -f $timestamp)
 $wrapperPath = Join-Path $env:TEMP ("audit_supervisor_wrapper_{0}.ps1" -f $timestamp)
-$autoHealFlag = if ($ApplySafeAutoHeal) { "-ApplySafeAutoHeal" } else { "" }
+$autoHealFlag = if ($PSBoundParameters.ContainsKey("ApplySafeAutoHeal")) {
+    if ($ApplySafeAutoHeal) { "-ApplySafeAutoHeal" } else { "" }
+}
+else {
+    "-ApplySafeAutoHeal"
+}
 
 $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'

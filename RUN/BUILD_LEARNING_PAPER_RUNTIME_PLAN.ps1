@@ -183,13 +183,8 @@ function Get-MigrationAction {
         [bool]$RuntimeInitialized,
         [bool]$DeployedRuntimeModelExists,
         [string]$LearningHealthState,
-        [string]$WorkMode,
-        [string]$RolloutGate
+        [string]$WorkMode
     )
-
-    if ($RolloutGate -ne "OPEN") {
-        return "NIE_MIGRUJ_AUTONOMICZNIE"
-    }
 
     if (-not $PaperFresh) {
         return "ODSWIEZ_PAPER_RUNTIME"
@@ -219,6 +214,7 @@ function Get-Recommendation {
         [string]$MigrationAction,
         [string]$PaperLearningRole,
         [double]$RuntimeRows,
+        [double]$OnnxRecentRows180m,
         [double]$PaperNet,
         [bool]$PaperFresh
     )
@@ -242,6 +238,12 @@ function Get-Recommendation {
 
     if ($RuntimeRows -gt 0) {
         [void]$parts.Add(("jest juz {0} runtime rows z paper" -f [int]$RuntimeRows))
+    }
+    if ($OnnxRecentRows180m -gt 0) {
+        [void]$parts.Add(("w ostatnich 180m przyszlo {0} nowych wierszy ONNX" -f [int]$OnnxRecentRows180m))
+    }
+    elseif ($RuntimeRows -gt 0) {
+        [void]$parts.Add("brak swiezego doplywu ONNX w ostatnich 180m")
     }
     if ([math]::Abs($PaperNet) -gt 0.000001) {
         [void]$parts.Add(("biezacy paper_net_pln={0}" -f [math]::Round($PaperNet, 2)))
@@ -274,6 +276,13 @@ if ($null -ne $onnxFeedback -and ($onnxFeedback.PSObject.Properties.Name -contai
 }
 $runtimeMap = New-MapByKeys -Items $runtimeBootstrap -Keys @("symbol_alias")
 
+$onnxFeedbackItems = @()
+if ($null -ne $onnxFeedback -and ($onnxFeedback.PSObject.Properties.Name -contains "items")) {
+    $onnxFeedbackItems = @($onnxFeedback.items)
+}
+$onnxFeedbackMap = New-MapByKeys -Items $onnxFeedbackItems -Keys @("symbol_alias")
+$onnxFeedbackSummary = if ($null -ne $onnxFeedback -and ($onnxFeedback.PSObject.Properties.Name -contains "summary")) { $onnxFeedback.summary } else { $null }
+
 $paperItems = @()
 if ($null -ne $paperLive) {
     if ($paperLive.PSObject.Properties.Name -contains "key_instruments") {
@@ -303,6 +312,7 @@ $items = foreach ($health in ($healthItems | Sort-Object health_priority, priori
     $symbolAlias = Normalize-Symbol -Value ([string]$health.symbol_alias)
     $paper = if ($paperMap.ContainsKey($symbolAlias)) { $paperMap[$symbolAlias] } else { $null }
     $runtime = if ($runtimeMap.ContainsKey($symbolAlias)) { $runtimeMap[$symbolAlias] } else { $null }
+    $onnxItem = if ($onnxFeedbackMap.ContainsKey($symbolAlias)) { $onnxFeedbackMap[$symbolAlias] } else { $null }
     $registryEntry = if ($onnxRegistryMap.ContainsKey($symbolAlias)) { $onnxRegistryMap[$symbolAlias] } else { $null }
     $deployedRuntime = Get-DeployedRuntimeState -SymbolAlias $symbolAlias
 
@@ -312,6 +322,9 @@ $items = foreach ($health in ($healthItems | Sort-Object health_priority, priori
     $paperCloses = [int](Get-OptionalNumber -Object $paper -Name "closes" -Default 0)
     $runtimeInitialized = Get-OptionalBool -Object $runtime -Name "runtime_initialized" -Default $false
     $runtimeRows = [int](Get-OptionalNumber -Object $runtime -Name "data_rows" -Default ([double](Get-OptionalNumber -Object $health -Name "sample_runtime_onnx_rows" -Default 0)))
+    $onnxRecentRows60m = [int](Get-OptionalNumber -Object $onnxItem -Name "obserwacje_60m" -Default 0)
+    $onnxRecentRows180m = [int](Get-OptionalNumber -Object $onnxItem -Name "obserwacje_180m" -Default 0)
+    $onnxLatestObservationUtc = Get-OptionalString -Object $onnxItem -Name "latest_observation_utc" -Default ""
     $paperLearningRole = Get-PaperLearningRole -OnnxStatus ([string]$health.onnx_status) -RuntimeInitialized $runtimeInitialized -RuntimeRows $runtimeRows
     $migrationAction = Get-MigrationAction `
         -PaperFresh $paperFresh `
@@ -319,8 +332,19 @@ $items = foreach ($health in ($healthItems | Sort-Object health_priority, priori
         -RuntimeInitialized $runtimeInitialized `
         -DeployedRuntimeModelExists $deployedRuntime.runtime_model_exists `
         -LearningHealthState ([string]$health.learning_health_state) `
-        -WorkMode ([string]$health.work_mode) `
-        -RolloutGate $rolloutGate
+        -WorkMode ([string]$health.work_mode)
+    $runtimeFlowFresh = ($onnxRecentRows180m -gt 0)
+    $runtimeFlowHistoricallyActive = ($runtimeRows -gt 0)
+    $runtimeFlowStale = ($runtimeFlowHistoricallyActive -and -not $runtimeFlowFresh)
+    $isCollecting = $false
+    if ($paperFresh) {
+        switch ($paperLearningRole) {
+            "PAPER_DLA_PROBKI" { $isCollecting = $true }
+            "PAPER_ZWROT_ONNX_AKTYWNY" { $isCollecting = $runtimeFlowFresh }
+            "PAPER_CZEKA_NA_SYGNAL" { $isCollecting = $true }
+            default { $isCollecting = $false }
+        }
+    }
 
     [pscustomobject]@{
         symbol_alias = $symbolAlias
@@ -338,29 +362,37 @@ $items = foreach ($health in ($healthItems | Sort-Object health_priority, priori
         paper_learning_role = $paperLearningRole
         runtime_initialized = $runtimeInitialized
         runtime_rows = $runtimeRows
+        onnx_recent_rows_60m = $onnxRecentRows60m
+        onnx_recent_rows_180m = $onnxRecentRows180m
+        onnx_latest_observation_utc = $onnxLatestObservationUtc
+        runtime_flow_fresh = $runtimeFlowFresh
+        runtime_flow_stale = $runtimeFlowStale
+        is_collecting = $isCollecting
         runtime_model_exists = [bool]$deployedRuntime.runtime_model_exists
         runtime_manifest_exists = [bool]$deployedRuntime.runtime_manifest_exists
         runtime_contract_exists = [bool]$deployedRuntime.runtime_contract_exists
         migration_action = $migrationAction
+        autonomous_rollout_allowed = ($rolloutGate -eq "OPEN")
+        autonomous_refresh_blocked_by_gate = (($rolloutGate -ne "OPEN") -and ($migrationAction -eq "ODSWIEZ_PAPER_RUNTIME"))
         recommendation = Get-Recommendation `
             -MigrationAction $migrationAction `
             -PaperLearningRole $paperLearningRole `
             -RuntimeRows $runtimeRows `
+            -OnnxRecentRows180m $onnxRecentRows180m `
             -PaperNet $paperNet `
             -PaperFresh $paperFresh
     }
 }
 
 $refreshItems = @($items | Where-Object { $_.migration_action -eq "ODSWIEZ_PAPER_RUNTIME" })
-$collectItems = @($items | Where-Object { $_.migration_action -like "UTRZYMAJ_PAPER*" })
+$collectItems = @($items | Where-Object { $_.is_collecting })
 $fallbackProbeItems = @($items | Where-Object { $_.migration_action -eq "UTRZYMAJ_PAPER_I_BUDUJ_PROBKE" })
 $activeRuntimeItems = @($items | Where-Object { $_.paper_learning_role -eq "PAPER_ZWROT_ONNX_AKTYWNY" })
+$freshRuntimeItems = @($items | Where-Object { $_.runtime_flow_fresh })
+$staleRuntimeItems = @($items | Where-Object { $_.runtime_flow_stale })
 $observationReadyItems = @($items | Where-Object { $_.learning_health_state -in @("GOTOWY_DO_OBSERWACJI", "UCZY_SIE_ZDROWO", "GOTOWY_DO_MIEKKIEJ_BRAMKI") })
 
-$overallAction = if ($rolloutGate -ne "OPEN") {
-    "NIE_ODSWIEZAJ_AUTONOMICZNIE"
-}
-elseif ($refreshItems.Count -gt 0) {
+$overallAction = if ($refreshItems.Count -gt 0) {
     "ODSWIEZ_PAPER_RUNTIME"
 }
 else {
@@ -375,8 +407,20 @@ $summary = [ordered]@{
     symbols_collecting = $collectItems.Count
     symbols_fallback_probe = $fallbackProbeItems.Count
     symbols_runtime_active = $activeRuntimeItems.Count
+    symbols_runtime_fresh_180m = $freshRuntimeItems.Count
+    symbols_runtime_stale = $staleRuntimeItems.Count
+    onnx_recent_rows_60m = [int](@($items | Measure-Object -Property onnx_recent_rows_60m -Sum).Sum)
+    onnx_recent_rows_180m = [int](@($items | Measure-Object -Property onnx_recent_rows_180m -Sum).Sum)
+    onnx_recent_symbols_60m = @($items | Where-Object { $_.onnx_recent_rows_60m -gt 0 }).Count
+    onnx_recent_symbols_180m = @($items | Where-Object { $_.onnx_recent_rows_180m -gt 0 }).Count
     symbols_ready_for_observation = $observationReadyItems.Count
     paper_live_fresh_symbols = @($items | Where-Object { $_.paper_fresh }).Count
+    autonomous_rollout_allowed = ($rolloutGate -eq "OPEN")
+    onnx_feedback_recent_symbols_60m = [int](Get-OptionalNumber -Object $onnxFeedbackSummary -Name "liczba_symboli_aktywnych_60m" -Default 0)
+    onnx_feedback_recent_symbols_180m = [int](Get-OptionalNumber -Object $onnxFeedbackSummary -Name "liczba_symboli_aktywnych_180m" -Default 0)
+    onnx_feedback_recent_rows_60m = [int](Get-OptionalNumber -Object $onnxFeedbackSummary -Name "liczba_obserwacji_onnx_60m" -Default 0)
+    onnx_feedback_recent_rows_180m = [int](Get-OptionalNumber -Object $onnxFeedbackSummary -Name "liczba_obserwacji_onnx_180m" -Default 0)
+    onnx_feedback_latest_observation_utc = Get-OptionalString -Object $onnxFeedbackSummary -Name "najnowsza_obserwacja_utc" -Default ""
 }
 
 $report = [ordered]@{
@@ -413,6 +457,12 @@ $lines.Add(("- overall_action: {0}" -f $summary.overall_action))
 $lines.Add(("- symbols_to_refresh: {0}" -f $summary.symbols_to_refresh))
 $lines.Add(("- symbols_collecting: {0}" -f $summary.symbols_collecting))
 $lines.Add(("- symbols_runtime_active: {0}" -f $summary.symbols_runtime_active))
+$lines.Add(("- symbols_runtime_fresh_180m: {0}" -f $summary.symbols_runtime_fresh_180m))
+$lines.Add(("- symbols_runtime_stale: {0}" -f $summary.symbols_runtime_stale))
+$lines.Add(("- onnx_recent_rows_60m: {0}" -f $summary.onnx_recent_rows_60m))
+$lines.Add(("- onnx_recent_rows_180m: {0}" -f $summary.onnx_recent_rows_180m))
+$lines.Add(("- onnx_recent_symbols_180m: {0}" -f $summary.onnx_recent_symbols_180m))
+$lines.Add(("- paper_live_fresh_symbols: {0}" -f $summary.paper_live_fresh_symbols))
 $lines.Add(("- symbols_ready_for_observation: {0}" -f $summary.symbols_ready_for_observation))
 $lines.Add("")
 $lines.Add("## Top Refresh")

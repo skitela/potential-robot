@@ -95,6 +95,29 @@ def read_json_file(path: Path) -> dict[str, Any]:
         return {}
 
 
+def epoch_to_iso_utc(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    try:
+        epoch = int(value)
+    except Exception:
+        return None
+
+    if epoch <= 0:
+        return None
+
+    try:
+        return pd.Timestamp(epoch, unit="s", tz="UTC").isoformat()
+    except Exception:
+        return None
+
+
 def load_contract_manifest(research_root: Path) -> dict[str, Any]:
     return read_json_file(research_root / "reports" / "research_contract_manifest_latest.json")
 
@@ -138,6 +161,11 @@ def empty_report(
             "liczba_obserwacji_paper": 0,
             "liczba_obserwacji_z_kandydatem": 0,
             "liczba_obserwacji_z_wynikiem_rynku": 0,
+            "liczba_obserwacji_onnx_60m": 0,
+            "liczba_obserwacji_onnx_180m": 0,
+            "liczba_symboli_aktywnych_60m": 0,
+            "liczba_symboli_aktywnych_180m": 0,
+            "najnowsza_obserwacja_utc": None,
             "liczba_symboli": 0,
             "liczba_symboli_z_plikiem_runtime": len(runtime_bootstrap_items),
             "liczba_symboli_zainicjalizowanych_runtime": sum(
@@ -174,11 +202,19 @@ def write_report(report: dict[str, Any], output_root: Path) -> None:
         f"- liczba_obserwacji_paper: {report['summary']['liczba_obserwacji_paper']}",
         f"- liczba_obserwacji_z_kandydatem: {report['summary']['liczba_obserwacji_z_kandydatem']}",
         f"- liczba_obserwacji_z_wynikiem_rynku: {report['summary']['liczba_obserwacji_z_wynikiem_rynku']}",
+        f"- liczba_obserwacji_onnx_60m: {report['summary'].get('liczba_obserwacji_onnx_60m', 0)}",
+        f"- liczba_obserwacji_onnx_180m: {report['summary'].get('liczba_obserwacji_onnx_180m', 0)}",
+        f"- liczba_symboli_aktywnych_60m: {report['summary'].get('liczba_symboli_aktywnych_60m', 0)}",
+        f"- liczba_symboli_aktywnych_180m: {report['summary'].get('liczba_symboli_aktywnych_180m', 0)}",
         f"- liczba_symboli: {report['summary']['liczba_symboli']}",
         f"- liczba_symboli_z_plikiem_runtime: {report['summary'].get('liczba_symboli_z_plikiem_runtime', 0)}",
         f"- liczba_symboli_zainicjalizowanych_runtime: {report['summary'].get('liczba_symboli_zainicjalizowanych_runtime', 0)}",
         f"- liczba_symboli_z_wierszem_runtime: {report['summary'].get('liczba_symboli_z_wierszem_runtime', 0)}",
     ]
+
+    latest_observation_utc = report["summary"].get("najnowsza_obserwacja_utc")
+    if latest_observation_utc:
+        lines.append(f"- najnowsza_obserwacja_utc: {latest_observation_utc}")
 
     reason = report.get("powod_braku_danych")
     if reason:
@@ -210,6 +246,9 @@ def write_report(report: dict[str, Any], output_root: Path) -> None:
                     f"- obserwacje_paper: {item['obserwacje_paper']}",
                     f"- obserwacje_z_kandydatem: {item['obserwacje_z_kandydatem']}",
                     f"- obserwacje_z_wynikiem_rynku: {item['obserwacje_z_wynikiem_rynku']}",
+                    f"- obserwacje_60m: {item.get('obserwacje_60m', 0)}",
+                    f"- obserwacje_180m: {item.get('obserwacje_180m', 0)}",
+                    f"- latest_observation_utc: {item.get('latest_observation_utc', '')}",
                     f"- sredni_wynik_malego_onnx: {item['sredni_wynik_malego_onnx']}",
                     f"- sredni_wynik_nauczyciela: {item['sredni_wynik_nauczyciela']}",
                     f"- srednia_latencja_onnx_us: {item['srednia_latencja_onnx_us']}",
@@ -234,6 +273,9 @@ def main() -> int:
     runtime_bootstrap_items = scan_runtime_bootstrap(runtime_logs_root)
     contract_manifest = load_contract_manifest(research_root)
     use_contract_parquet = contract_parquet_available(contract_manifest)
+    now_epoch = int(pd.Timestamp.now(tz="UTC").timestamp())
+    recent_60_cutoff = now_epoch - 3600
+    recent_180_cutoff = now_epoch - 10800
 
     if (not use_contract_parquet) and (not db_path.exists()):
         empty_report(
@@ -630,6 +672,9 @@ def main() -> int:
                 SUM(CASE WHEN runtime_channel = 'PAPER' THEN 1 ELSE 0 END) AS obserwacje_paper,
                 SUM(CASE WHEN candidate_row_id IS NOT NULL THEN 1 ELSE 0 END) AS obserwacje_z_kandydatem,
                 SUM(CASE WHEN outcome_pnl IS NOT NULL THEN 1 ELSE 0 END) AS obserwacje_z_wynikiem_rynku,
+                SUM(CASE WHEN ts >= {recent_60_cutoff} THEN 1 ELSE 0 END) AS obserwacje_60m,
+                SUM(CASE WHEN ts >= {recent_180_cutoff} THEN 1 ELSE 0 END) AS obserwacje_180m,
+                MAX(ts) AS latest_ts_epoch,
                 ROUND(AVG(symbol_score), 6) AS sredni_wynik_malego_onnx,
                 ROUND(AVG(teacher_score), 6) AS sredni_wynik_nauczyciela,
                 ROUND(AVG(latency_us), 2) AS srednia_latencja_onnx_us,
@@ -740,6 +785,11 @@ def main() -> int:
                 SUM(CASE WHEN runtime_channel = 'PAPER' THEN 1 ELSE 0 END) AS liczba_obserwacji_paper,
                 SUM(CASE WHEN candidate_row_id IS NOT NULL THEN 1 ELSE 0 END) AS liczba_obserwacji_z_kandydatem,
                 SUM(CASE WHEN outcome_pnl IS NOT NULL THEN 1 ELSE 0 END) AS liczba_obserwacji_z_wynikiem_rynku,
+                SUM(CASE WHEN ts >= {recent_60_cutoff} THEN 1 ELSE 0 END) AS liczba_obserwacji_onnx_60m,
+                SUM(CASE WHEN ts >= {recent_180_cutoff} THEN 1 ELSE 0 END) AS liczba_obserwacji_onnx_180m,
+                COUNT(DISTINCT CASE WHEN ts >= {recent_60_cutoff} THEN symbol_alias ELSE NULL END) AS liczba_symboli_aktywnych_60m,
+                COUNT(DISTINCT CASE WHEN ts >= {recent_180_cutoff} THEN symbol_alias ELSE NULL END) AS liczba_symboli_aktywnych_180m,
+                MAX(ts) AS najnowsza_obserwacja_epoch,
                 COUNT(DISTINCT symbol_alias) AS liczba_symboli
             FROM resolved
         """
@@ -754,13 +804,22 @@ def main() -> int:
         "liczba_obserwacji_paper": int(summary_row[2] or 0),
         "liczba_obserwacji_z_kandydatem": int(summary_row[3] or 0),
         "liczba_obserwacji_z_wynikiem_rynku": int(summary_row[4] or 0),
-        "liczba_symboli": int(summary_row[5] or 0),
+        "liczba_obserwacji_onnx_60m": int(summary_row[5] or 0),
+        "liczba_obserwacji_onnx_180m": int(summary_row[6] or 0),
+        "liczba_symboli_aktywnych_60m": int(summary_row[7] or 0),
+        "liczba_symboli_aktywnych_180m": int(summary_row[8] or 0),
+        "najnowsza_obserwacja_utc": epoch_to_iso_utc(summary_row[9]),
+        "liczba_symboli": int(summary_row[10] or 0),
         "liczba_symboli_z_plikiem_runtime": len(runtime_bootstrap_items),
         "liczba_symboli_zainicjalizowanych_runtime": sum(
             1 for item in runtime_bootstrap_items if item["runtime_initialized"]
         ),
         "liczba_symboli_z_wierszem_runtime": sum(1 for item in runtime_bootstrap_items if item["has_runtime_rows"]),
     }
+
+    if not items_df.empty:
+        items_df["latest_observation_utc"] = items_df["latest_ts_epoch"].apply(epoch_to_iso_utc)
+        items_df = items_df.drop(columns=["latest_ts_epoch"])
 
     report = {
         "generated_at_local": pd.Timestamp.now(tz="Europe/Warsaw").strftime("%Y-%m-%d %H:%M:%S"),

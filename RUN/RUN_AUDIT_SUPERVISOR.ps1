@@ -791,6 +791,20 @@ function Invoke-AuditCycle {
         $refreshCount = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_to_refresh" -Default 0)
         $collectingCount = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_collecting" -Default 0)
         $runtimeActive = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_runtime_active" -Default 0)
+        $paperFreshSymbols = [int](Get-OptionalValue -Object $paperSummary -Name "paper_live_fresh_symbols" -Default 0)
+        $runtimeFresh180m = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_runtime_fresh_180m" -Default 0)
+        $runtimeStale = [int](Get-OptionalValue -Object $paperSummary -Name "symbols_runtime_stale" -Default 0)
+        $onnxRecentSymbols180m = [int](Get-OptionalValue -Object $paperSummary -Name "onnx_recent_symbols_180m" -Default 0)
+        $onnxRecentRows180m = [int](Get-OptionalValue -Object $paperSummary -Name "onnx_recent_rows_180m" -Default 0)
+
+        if ($paperFreshSymbols -le 0) {
+            $paperLearningEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "paper_learning_heartbeat_stale"
+                message = "Paper-live nie daje juz swiezych heartbeatow, wiec nie jest zdrowym zrodlem nauki."
+                context = @{ paper_live_fresh_symbols = $paperFreshSymbols }
+            }) | Out-Null
+        }
 
         if ($overallAction -eq "ODSWIEZ_PAPER_RUNTIME" -and $refreshCount -gt 0) {
             $paperLearningEvidence.Add([pscustomobject]@{
@@ -818,10 +832,26 @@ function Invoke-AuditCycle {
                 context = @{ symbols_runtime_active = $runtimeActive }
             }) | Out-Null
         }
+        elseif ($onnxRecentRows180m -le 0 -or $onnxRecentSymbols180m -le 0) {
+            $paperLearningEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "paper_learning_onnx_stale"
+                message = "Male ONNX byly aktywne historycznie, ale w ostatnich 180m nie oddaly swiezego strumienia danych."
+                context = @{
+                    symbols_runtime_active = $runtimeActive
+                    symbols_runtime_fresh_180m = $runtimeFresh180m
+                    symbols_runtime_stale = $runtimeStale
+                    onnx_recent_symbols_180m = $onnxRecentSymbols180m
+                    onnx_recent_rows_180m = $onnxRecentRows180m
+                }
+            }) | Out-Null
+        }
     }
 
     if ($paperLearningEvidence.Count -gt 0) {
-        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_JAKO_ZRODLO_NAUKI" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $paperLearningEvidence) -Reason "Paper-live jest juz czescia samoregulacji i musi pozostawac zdrowym zrodlem swiezych danych." -Evidence $paperLearningEvidence)) | Out-Null
+        $hasBlockingPaperLearning = @($paperLearningEvidence | Where-Object { $_.component -in @("paper_learning_heartbeat_stale", "paper_learning_onnx_stale") }).Count -gt 0
+        $paperGate = if ($hasBlockingPaperLearning) { "BLOKUJ_ROLLOUT" } else { "NAPRAW_W_CYKLU" }
+        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_JAKO_ZRODLO_NAUKI" -Gate $paperGate -Severity (Get-HighestSeverity -Findings $paperLearningEvidence) -Reason "Paper-live jest juz czescia samoregulacji i musi pozostawac zdrowym zrodlem swiezych danych." -Evidence $paperLearningEvidence)) | Out-Null
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_JAKO_ZRODLO_NAUKI" -Gate "RAPORTUJ" -Severity "info" -Reason "Paper-live jest swiezym zrodlem danych i nie pokazuje czerwonych flag dla sciezki uczenia.")) | Out-Null
