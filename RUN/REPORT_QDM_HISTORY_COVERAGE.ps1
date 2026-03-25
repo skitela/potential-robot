@@ -15,6 +15,29 @@ if (-not (Test-Path -LiteralPath $ProfilePath)) {
 
 New-Item -ItemType Directory -Force -Path $ReportRoot | Out-Null
 
+function Get-HistoryCandidates {
+    param(
+        [string]$HistoryRoot,
+        [string]$Symbol,
+        [string]$Datatype
+    )
+
+    $symbolDir = Join-Path $HistoryRoot $Symbol
+    if (-not (Test-Path -LiteralPath $symbolDir)) {
+        return @()
+    }
+
+    $baseName = "{0}_{1}.dat" -f $Symbol, $Datatype
+    return @(
+        Get-ChildItem -LiteralPath $symbolDir -Force -ErrorAction SilentlyContinue |
+            Where-Object {
+                -not $_.PSIsContainer -and
+                ($_.Name -eq $baseName -or $_.Name -eq ($baseName + ".copy"))
+            } |
+            Sort-Object LastWriteTime -Descending
+    )
+}
+
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $jsonPath = Join-Path $ReportRoot ("qdm_history_coverage_{0}.json" -f $timestamp)
 $mdPath = Join-Path $ReportRoot ("qdm_history_coverage_{0}.md" -f $timestamp)
@@ -22,16 +45,19 @@ $latestJson = Join-Path $ReportRoot "qdm_history_coverage_latest.json"
 $latestMd = Join-Path $ReportRoot "qdm_history_coverage_latest.md"
 
 $rows = Import-Csv -LiteralPath $ProfilePath | Where-Object { $_.enabled -eq "1" }
+$historyRoot = Join-Path $QdmRoot "user\data\History"
 $entries = foreach ($row in $rows) {
     $symbol = $row.symbol.Trim()
+    $datatype = if ([string]::IsNullOrWhiteSpace($row.datatype)) { "TICK" } else { $row.datatype.Trim() }
     $exportName = $row.mt5_export_name.Trim()
-    $historyFile = Join-Path $QdmRoot ("user\data\History\{0}\{0}_TICK.dat" -f $symbol)
+    $historyCandidates = @(Get-HistoryCandidates -HistoryRoot $historyRoot -Symbol $symbol -Datatype $datatype)
+    $historyFile = if ($historyCandidates.Count -gt 0) { $historyCandidates[0].FullName } else { Join-Path $historyRoot ("{0}\{0}_{1}.dat" -f $symbol, $datatype) }
     $exportFile = Join-Path $ExportRoot ("{0}.csv" -f $exportName)
 
-    $historyExists = Test-Path -LiteralPath $historyFile
+    $historyExists = ($historyCandidates.Count -gt 0)
     $historySizeMb = 0.0
     if ($historyExists) {
-        $historySizeMb = [math]::Round((Get-Item -LiteralPath $historyFile).Length / 1MB, 2)
+        $historySizeMb = [math]::Round($historyCandidates[0].Length / 1MB, 2)
     }
 
     $exportExists = Test-Path -LiteralPath $exportFile

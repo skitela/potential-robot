@@ -123,10 +123,15 @@ $pathHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
 $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYERS.ps1"
 $vpsSpoolWellbeingScript = Join-Path $ProjectRoot "RUN\BUILD_VPS_SPOOL_WELLBEING_AUDIT.ps1"
+$qdmMissingProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1"
+$instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
+$instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
+$qdmMissingSyncStarterScript = Join-Path $ProjectRoot "RUN\START_QDM_MISSING_SUPPORTED_SYNC_BACKGROUND.ps1"
+$qdmMissingSyncStatusPath = Join-Path $opsRoot "qdm_missing_supported_sync_latest.json"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentTrainingReadinessScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -137,6 +142,7 @@ New-DirectoryIfMissing -Path $opsRoot
 $pathHygiene = Read-JsonSafe -Path $pathHygienePath
 $hotPath = Read-JsonSafe -Path $hotPathPath
 $manifestState = Get-ManifestState -ManifestPath $manifestPath
+$null = & $qdmMissingProfileScript
 $artifactCleanup = Invoke-JsonScript -ScriptPath $normalizeScript -Parameters @{
     ProjectRoot = $ProjectRoot
     ResearchRoot = $ResearchRoot
@@ -147,6 +153,21 @@ $vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parame
     CommonRoot = $CommonRoot
     Apply = [bool]$Apply
 } | ConvertFrom-Json
+$instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$qdmMissingProfile = Read-JsonSafe -Path (Join-Path $opsRoot "qdm_missing_only_profile_latest.json")
+$qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath
+$qdmRepairAction = ""
+
+if ($Apply -and $null -ne $qdmMissingProfile) {
+    $qdmMissingCount = [int]$qdmMissingProfile.qdm_missing_count
+    $syncState = if ($null -ne $qdmMissingSyncStatus) { [string]$qdmMissingSyncStatus.state } else { "" }
+    if ($qdmMissingCount -gt 0 -and $syncState -notin @("running", "export_in_progress")) {
+        & $qdmMissingSyncStarterScript | Out-Null
+        $qdmRepairAction = "started_qdm_missing_supported_sync_background"
+        $qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath
+    }
+}
 
 $opsRules = @(
     [pscustomobject]@{ name = "local_operator_snapshot"; regex = '^local_operator_snapshot_\d{8}_\d{6}\.(json|md)$'; keep_count = $OpsSnapshotKeepCount; age_days = 2 },
@@ -277,10 +298,17 @@ elseif (Test-Path -LiteralPath $logsRoot) {
 }
 
 $totalFreedGb = [math]::Round((($opsFreedBytes + $runtimeFreedBytes) / 1GB) + [double]$artifactCleanup.freed_gb_total, 3)
+$dataReadinessSummary = if ($null -ne $instrumentDataReadiness) { $instrumentDataReadiness.summary } else { $null }
+$trainingReadinessSummary = if ($null -ne $instrumentTrainingReadiness) { $instrumentTrainingReadiness.summary } else { $null }
+$exportPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.export_pending_count } else { 0 }
+$contractPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.contract_pending_count } else { 0 }
+$localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
+$localTrainingLimitedCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_limited_count } else { 0 }
 $verdict = if (
     ($pathHygiene -ne $null -and [string]$pathHygiene.verdict -eq "CZYSTO") -and
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
     ($null -ne $vpsSpoolBridge -and [string]$vpsSpoolBridge.verdict -in @("MOST_STABILNY", "MOST_UTWARDZONY")) -and
+    $contractPendingCount -eq 0 -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
     $runtimeArchiveSkippedReason -eq ""
@@ -308,6 +336,9 @@ $report = [ordered]@{
     learning_path_hygiene = if ($null -ne $pathHygiene) { [pscustomobject]@{ verdict = [string]$pathHygiene.verdict } } else { $null }
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
     vps_spool_bridge = $vpsSpoolBridge
+    qdm_missing_supported_sync = $qdmMissingSyncStatus
+    instrument_data_readiness = $instrumentDataReadiness
+    instrument_training_readiness = $instrumentTrainingReadiness
     artifact_layers = [ordered]@{
         freed_gb_total = [double]$artifactCleanup.freed_gb_total
         qdm_export_deleted_count = @($artifactCleanup.qdm_export_deleted).Count
@@ -336,9 +367,14 @@ $report = [ordered]@{
         runtime_archive_deleted_count = $runtimeDeleted.Count
         runtime_archive_pending_count = $runtimePending.Count
         runtime_empty_dirs_removed = $runtimeEmptyDirsRemoved
+        qdm_export_pending_count = $exportPendingCount
+        qdm_contract_pending_count = $contractPendingCount
+        local_training_ready_count = $localTrainingReadyCount
+        local_training_limited_count = $localTrainingLimitedCount
         vps_bridge_pending_sync_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.pending_sync_count } else { 0 }
         vps_bridge_repair_actions_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.repair_actions_count } else { 0 }
         vps_bridge_export_lag_total = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.export_spool_lag_total } else { 0 }
+        qdm_repair_action = $qdmRepairAction
     }
     verdict = $verdict
 }
@@ -359,6 +395,10 @@ $lines.Add(("- manifest_fresh: {0}" -f $report.manifest.fresh))
 $lines.Add(("- learning_path_hygiene: {0}" -f $(if ($null -ne $report.learning_path_hygiene) { $report.learning_path_hygiene.verdict } else { "BRAK" })))
 $lines.Add(("- learning_hot_path: {0}" -f $(if ($null -ne $report.learning_hot_path) { $report.learning_hot_path.verdict } else { "BRAK" })))
 $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridge) { $report.vps_spool_bridge.verdict } else { "BRAK" })))
+$lines.Add(("- qdm_export_pending_count: {0}" -f $report.summary.qdm_export_pending_count))
+$lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_pending_count))
+$lines.Add(("- local_training_ready_count: {0}" -f $report.summary.local_training_ready_count))
+$lines.Add(("- local_training_limited_count: {0}" -f $report.summary.local_training_limited_count))
 $lines.Add("")
 $lines.Add("## Akcje")
 $lines.Add("")
@@ -366,6 +406,7 @@ $lines.Add(("- artifact_layers.freed_gb_total: {0}" -f $report.artifact_layers.f
 $lines.Add(("- ops_retention.deleted_count: {0}" -f $report.ops_retention.deleted_count))
 $lines.Add(("- runtime_archive_prune.deleted_count: {0}" -f $report.runtime_archive_prune.deleted_count))
 $lines.Add(("- runtime_archive_prune.empty_dirs_removed: {0}" -f $report.runtime_archive_prune.empty_dirs_removed))
+$lines.Add(("- qdm_repair_action: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.qdm_repair_action)) { "none" } else { $report.summary.qdm_repair_action })))
 $lines.Add(("- vps_spool_bridge.pending_sync_count: {0}" -f $report.summary.vps_bridge_pending_sync_count))
 $lines.Add(("- vps_spool_bridge.repair_actions_count: {0}" -f $report.summary.vps_bridge_repair_actions_count))
 $lines.Add(("- vps_spool_bridge.export_spool_lag_total: {0}" -f $report.summary.vps_bridge_export_lag_total))

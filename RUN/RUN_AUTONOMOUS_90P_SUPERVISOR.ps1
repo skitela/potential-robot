@@ -34,6 +34,8 @@ $dailySystemReportScript = Join-Path $ProjectRoot "TOOLS\GENERATE_DAILY_SYSTEM_R
 $paperLiveFeedbackScript = Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1"
 $hostingReportScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_HOSTING_DAILY_REPORT.ps1"
 $technicalReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TECHNICAL_READINESS_REPORT.ps1"
+$dataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
+$trainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
 $trustButVerifyScript = Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 $fullStackAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1"
@@ -80,6 +82,8 @@ foreach ($path in @(
     $paperLiveFeedbackScript,
     $hostingReportScript,
     $technicalReadinessScript,
+    $dataReadinessScript,
+    $trainingReadinessScript,
     $trustButVerifyScript,
     $snapshotScript,
     $fullStackAuditScript,
@@ -529,6 +533,28 @@ function Write-SupervisorStatus {
         $learningWellbeing = Get-Content -LiteralPath $learningWellbeingPath -Raw -Encoding UTF8 | ConvertFrom-Json
     }
 
+    $dataReadinessPath = Join-Path $statusDir "instrument_data_readiness_latest.json"
+    $dataReadiness = $null
+    $dataReadinessHead = @()
+    if (Test-Path -LiteralPath $dataReadinessPath) {
+        $dataReadiness = Get-Content -LiteralPath $dataReadinessPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $dataReadinessHead = @($dataReadiness.top_export_pending | Select-Object -First 5)
+        if (@($dataReadinessHead).Count -eq 0) {
+            $dataReadinessHead = @($dataReadiness.top_runtime_ready | Select-Object -First 5)
+        }
+    }
+
+    $trainingReadinessPath = Join-Path $statusDir "instrument_training_readiness_latest.json"
+    $trainingReadiness = $null
+    $trainingReadinessHead = @()
+    if (Test-Path -LiteralPath $trainingReadinessPath) {
+        $trainingReadiness = Get-Content -LiteralPath $trainingReadinessPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $trainingReadinessHead = @($trainingReadiness.top_local_training_ready | Select-Object -First 5)
+        if (@($trainingReadinessHead).Count -eq 0) {
+            $trainingReadinessHead = @($trainingReadiness.top_shadow_ready | Select-Object -First 5)
+        }
+    }
+
     $trustButVerifyPath = Join-Path $statusDir "trust_but_verify_latest.json"
     $trustButVerify = $null
     if (Test-Path -LiteralPath $trustButVerifyPath) {
@@ -563,6 +589,10 @@ function Write-SupervisorStatus {
         learning_paper_runtime = $learningPaperRuntime
         top_learning_paper_runtime = $learningPaperRuntimeHead
         learning_wellbeing = $learningWellbeing
+        instrument_data_readiness = $dataReadiness
+        top_instrument_data_readiness = $dataReadinessHead
+        instrument_training_readiness = $trainingReadiness
+        top_instrument_training_readiness = $trainingReadinessHead
         trust_but_verify = $trustButVerify
         mt5_retest_queue = $mt5Queue
     }
@@ -626,6 +656,45 @@ function Write-SupervisorStatus {
             $item.qdm_symbol,
             $item.datasource,
             $item.mt5_export_name))
+    }
+    $lines.Add("")
+    $lines.Add("## Instrument Data Readiness")
+    $lines.Add("")
+    if ($null -ne $dataReadiness) {
+        $lines.Add(("- export_pending_count: {0}" -f $dataReadiness.summary.export_pending_count))
+        $lines.Add(("- contract_pending_count: {0}" -f $dataReadiness.summary.contract_pending_count))
+        $lines.Add(("- qdm_contract_ready_count: {0}" -f $dataReadiness.summary.qdm_contract_ready_count))
+        foreach ($item in $dataReadinessHead) {
+            $lines.Add(("- {0}: state={1}, export={2}, qdm_rows={3}, candidate_rows={4}, outcome_rows={5}" -f
+                $item.symbol_alias,
+                $item.data_readiness_state,
+                $item.active_export_present,
+                $item.qdm_contract_rows,
+                $item.candidate_contract_rows,
+                $item.outcome_rows))
+        }
+    }
+    else {
+        $lines.Add("- instrument data readiness report not available")
+    }
+    $lines.Add("")
+    $lines.Add("## Instrument Training Readiness")
+    $lines.Add("")
+    if ($null -ne $trainingReadiness) {
+        $lines.Add(("- shadow_ready_count: {0}" -f $trainingReadiness.summary.training_shadow_ready_count))
+        $lines.Add(("- local_training_limited_count: {0}" -f $trainingReadiness.summary.local_training_limited_count))
+        $lines.Add(("- local_training_ready_count: {0}" -f $trainingReadiness.summary.local_training_ready_count))
+        foreach ($item in $trainingReadinessHead) {
+            $lines.Add(("- {0}: readiness={1}, eligibility={2}, teacher_dependency={3}, action={4}" -f
+                $item.symbol_alias,
+                $item.training_readiness_state,
+                $item.local_training_eligibility,
+                $item.teacher_dependency_level,
+                $item.next_safe_action))
+        }
+    }
+    else {
+        $lines.Add("- instrument training readiness report not available")
     }
     $lines.Add("")
     $lines.Add("## Learning Health")
@@ -861,6 +930,16 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "technical_readiness" -Operation {
         & $technicalReadinessScript | Out-Null
         "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "instrument_data_readiness" -Operation {
+        $report = (& $dataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "export_pending=$($report.summary.export_pending_count); contract_pending=$($report.summary.contract_pending_count); runtime_ready=$($report.summary.onnx_runtime_ready_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "instrument_training_readiness" -Operation {
+        $report = (& $trainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "shadow_ready=$($report.summary.training_shadow_ready_count); limited=$($report.summary.local_training_limited_count); ready=$($report.summary.local_training_ready_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "active_fleet_verdicts" -Operation {

@@ -41,6 +41,29 @@ function Stop-QdmProcesses {
     Start-Sleep -Seconds 2
 }
 
+function Get-HistoryCandidates {
+    param(
+        [string]$HistoryRoot,
+        [string]$Symbol,
+        [string]$Datatype
+    )
+
+    $symbolDir = Join-Path $HistoryRoot $Symbol
+    if (-not (Test-Path -LiteralPath $symbolDir)) {
+        return @()
+    }
+
+    $baseName = "{0}_{1}.dat" -f $Symbol, $Datatype
+    return @(
+        Get-ChildItem -LiteralPath $symbolDir -Force -ErrorAction SilentlyContinue |
+            Where-Object {
+                -not $_.PSIsContainer -and
+                ($_.Name -eq $baseName -or $_.Name -eq ($baseName + ".copy"))
+            } |
+            Sort-Object LastWriteTime -Descending
+    )
+}
+
 if ($StopExistingQdm) {
     Stop-QdmProcesses
 }
@@ -48,19 +71,21 @@ if ($StopExistingQdm) {
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 $rows = Import-Csv -LiteralPath $ProfilePath | Where-Object { $_.enabled -eq "1" }
+$historyRoot = Join-Path $QdmRoot "user\data\History"
 foreach ($row in $rows) {
     $symbol = $row.symbol.Trim()
     $exportName = $row.mt5_export_name.Trim()
-    $historyFile = Join-Path $QdmRoot ("user\data\History\{0}\{0}_TICK.dat" -f $symbol)
+    $datatype = if ([string]::IsNullOrWhiteSpace($row.datatype)) { "TICK" } else { $row.datatype.Trim() }
+    $historyCandidates = @(Get-HistoryCandidates -HistoryRoot $historyRoot -Symbol $symbol -Datatype $datatype)
 
-    if (-not (Test-Path -LiteralPath $historyFile)) {
-        Write-Warning "Skipping export for $symbol - history file missing: $historyFile"
+    if ($historyCandidates.Count -eq 0) {
+        Write-Warning "Skipping export for $symbol - history file missing in $historyRoot"
         continue
     }
 
-    $historyInfo = Get-Item -LiteralPath $historyFile -ErrorAction Stop
+    $historyInfo = $historyCandidates[0]
     if ($historyInfo.Length -le 0) {
-        Write-Warning "Skipping export for $symbol - history file is empty: $historyFile"
+        Write-Warning "Skipping export for $symbol - history file is empty: $($historyInfo.FullName)"
         continue
     }
 
@@ -80,6 +105,6 @@ foreach ($row in $rows) {
         $arguments += "dateto=$($row.date_to.Trim())"
     }
 
-    Write-Host "Exporting to MT5 format: $symbol -> $exportName"
+    Write-Host "Exporting to MT5 format: $symbol -> $exportName using $($historyInfo.Name)"
     & $qdmCli @arguments
 }

@@ -4,8 +4,10 @@ param(
     [string]$OutputPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_missing_only_pack_latest.csv",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [string]$QdmRoot = "C:\TRADING_TOOLS\QuantDataManager",
+    [string]$ExportRoot = "C:\TRADING_DATA\QDM_EXPORT\MT5",
     [string]$BlockedSymbolsPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_missing_only_blocked.json",
-    [long]$MinimumHistoryBytes = 10485760
+    [long]$MinimumHistoryBytes = 10485760,
+    [long]$MinimumExportBytes = 1024
 )
 
 Set-StrictMode -Version Latest
@@ -90,6 +92,34 @@ function Get-UsableHistoryCandidates {
     )
 }
 
+function Get-ExportInfo {
+    param(
+        [string]$ExportRoot,
+        [string]$ExportName,
+        [long]$MinimumBytes
+    )
+
+    $exportPath = Join-Path $ExportRoot ("{0}.csv" -f $ExportName)
+    $exists = Test-Path -LiteralPath $exportPath
+    $sizeBytes = 0L
+    $lastWriteLocal = $null
+
+    if ($exists) {
+        $item = Get-Item -LiteralPath $exportPath -ErrorAction Stop
+        $sizeBytes = [long]$item.Length
+        $lastWriteLocal = $item.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+    }
+
+    return [pscustomobject]@{
+        path = $exportPath
+        exists = $exists
+        size_bytes = $sizeBytes
+        size_mb = [math]::Round(($sizeBytes / 1MB), 1)
+        last_write_local = $lastWriteLocal
+        ready = ($exists -and $sizeBytes -ge $MinimumBytes)
+    }
+}
+
 if (-not (Test-Path -LiteralPath $RegistryPath)) {
     throw "Registry not found: $RegistryPath"
 }
@@ -153,6 +183,7 @@ function Get-BlockedReason {
 $rows = New-Object System.Collections.Generic.List[object]
 $present = New-Object System.Collections.Generic.List[object]
 $missing = New-Object System.Collections.Generic.List[object]
+$historyReadyExportPending = New-Object System.Collections.Generic.List[object]
 $unsupported = New-Object System.Collections.Generic.List[object]
 $blocked = New-Object System.Collections.Generic.List[object]
 $seenQdmSymbols = @{}
@@ -193,15 +224,19 @@ foreach ($item in @($registry.symbols)) {
 
     $historyCandidates = @(Get-HistoryCandidates -HistoryRoot $historyRoot -Symbol $spec.symbol -Datatype $spec.datatype)
     $usableHistory = @(Get-UsableHistoryCandidates -Candidates $historyCandidates -MinimumBytes $MinimumHistoryBytes)
+    $bestHistory = if ($usableHistory.Count -gt 0) { $usableHistory[0] } else { $null }
+    $exportInfo = Get-ExportInfo -ExportRoot $ExportRoot -ExportName $spec.mt5_export_name -MinimumBytes $MinimumExportBytes
 
-    if ($usableHistory.Count -gt 0) {
-        $best = $usableHistory[0]
+    if ($exportInfo.ready) {
         $present.Add([pscustomobject]@{
             symbol_alias = $alias
             qdm_symbol = $spec.symbol
-            history_file = $best.Name
-            size_mb = [math]::Round(($best.Length / 1MB), 1)
-            last_write_local = $best.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+            history_file = if ($null -ne $bestHistory) { $bestHistory.Name } else { $null }
+            history_size_mb = if ($null -ne $bestHistory) { [math]::Round(($bestHistory.Length / 1MB), 1) } else { 0.0 }
+            history_last_write_local = if ($null -ne $bestHistory) { $bestHistory.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
+            export_file = Split-Path -Leaf $exportInfo.path
+            export_size_mb = $exportInfo.size_mb
+            export_last_write_local = $exportInfo.last_write_local
         })
         continue
     }
@@ -217,21 +252,35 @@ foreach ($item in @($registry.symbols)) {
         notes = $spec.notes
     }
     $rows.Add($row)
-    $missing.Add([pscustomobject]@{
+    $missingEntry = [pscustomobject]@{
         symbol_alias = $alias
         broker_symbol = [string]$item.broker_symbol
         qdm_symbol = $spec.symbol
         datasource = $spec.datasource
         datatype = $spec.datatype
         mt5_export_name = $spec.mt5_export_name
-        reason = if ($historyCandidates.Count -gt 0) { "history files exist but are too small or unusable" } else { "history files missing on disk" }
-    })
+        history_ready = ($usableHistory.Count -gt 0)
+        history_file = if ($null -ne $bestHistory) { $bestHistory.Name } else { $null }
+        history_size_mb = if ($null -ne $bestHistory) { [math]::Round(($bestHistory.Length / 1MB), 1) } else { 0.0 }
+        history_last_write_local = if ($null -ne $bestHistory) { $bestHistory.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
+        export_file = Split-Path -Leaf $exportInfo.path
+        export_path = $exportInfo.path
+        export_present = [bool]$exportInfo.ready
+        export_size_mb = $exportInfo.size_mb
+        export_last_write_local = $exportInfo.last_write_local
+        reason = if ($usableHistory.Count -gt 0) { "history_ready_export_missing" } elseif ($historyCandidates.Count -gt 0) { "history_files_exist_but_are_too_small_or_unusable" } else { "history_files_missing_on_disk" }
+    }
+    $missing.Add($missingEntry)
+    if ($usableHistory.Count -gt 0) {
+        $historyReadyExportPending.Add($missingEntry)
+    }
 }
 
 $rows | Export-Csv -LiteralPath $OutputPath -Encoding UTF8 -NoTypeInformation
 
 $presentArray = @($present.ToArray())
 $missingArray = @($missing.ToArray())
+$historyReadyExportPendingArray = @($historyReadyExportPending.ToArray())
 $unsupportedArray = @($unsupported.ToArray())
 $blockedArray = @($blocked.ToArray())
 
@@ -242,10 +291,12 @@ $report = @{
     total_registry_symbols = @($registry.symbols).Count
     qdm_present_count = $present.Count
     qdm_missing_count = $missing.Count
+    qdm_history_ready_export_pending_count = $historyReadyExportPending.Count
     qdm_unsupported_count = $unsupported.Count
     qdm_blocked_count = $blocked.Count
     present = $presentArray
     missing = $missingArray
+    history_ready_export_pending = $historyReadyExportPendingArray
     unsupported = $unsupportedArray
     blocked = $blockedArray
 }
@@ -267,8 +318,26 @@ $lines.Add(("- output_profile_path: {0}" -f $report.output_profile_path))
 $lines.Add(("- total_registry_symbols: {0}" -f $report.total_registry_symbols))
 $lines.Add(("- qdm_present_count: {0}" -f $report.qdm_present_count))
 $lines.Add(("- qdm_missing_count: {0}" -f $report.qdm_missing_count))
+$lines.Add(("- qdm_history_ready_export_pending_count: {0}" -f $report.qdm_history_ready_export_pending_count))
 $lines.Add(("- qdm_unsupported_count: {0}" -f $report.qdm_unsupported_count))
 $lines.Add(("- qdm_blocked_count: {0}" -f $report.qdm_blocked_count))
+$lines.Add("")
+$lines.Add("## History Ready Export Pending")
+$lines.Add("")
+if (@($report.history_ready_export_pending).Count -eq 0) {
+    $lines.Add("- none")
+}
+else {
+    foreach ($item in @($report.history_ready_export_pending)) {
+        $lines.Add(("- {0} -> {1} export={2} history={3} ({4} MB, {5})" -f
+            $item.symbol_alias,
+            $item.qdm_symbol,
+            $item.export_file,
+            $item.history_file,
+            $item.history_size_mb,
+            $item.history_last_write_local))
+    }
+}
 $lines.Add("")
 $lines.Add("## Missing")
 $lines.Add("")
@@ -277,12 +346,13 @@ if (@($report.missing).Count -eq 0) {
 }
 else {
     foreach ($item in @($report.missing)) {
-        $lines.Add(("- {0} -> {1} ({2}/{3}) export={4} reason={5}" -f
+        $lines.Add(("- {0} -> {1} ({2}/{3}) export={4} history_ready={5} reason={6}" -f
             $item.symbol_alias,
             $item.qdm_symbol,
             $item.datasource,
             $item.datatype,
             $item.mt5_export_name,
+            $item.history_ready,
             $item.reason))
     }
 }
@@ -312,12 +382,15 @@ $lines.Add("")
 $lines.Add("## Present")
 $lines.Add("")
 foreach ($item in @($report.present)) {
-    $lines.Add(("- {0} -> {1}: {2} ({3} MB, {4})" -f
+    $lines.Add(("- {0} -> {1}: history={2} ({3} MB, {4}) export={5} ({6} MB, {7})" -f
         $item.symbol_alias,
         $item.qdm_symbol,
         $item.history_file,
-        $item.size_mb,
-        $item.last_write_local))
+        $item.history_size_mb,
+        $item.history_last_write_local,
+        $item.export_file,
+        $item.export_size_mb,
+        $item.export_last_write_local))
 }
 
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdLatest -Encoding UTF8

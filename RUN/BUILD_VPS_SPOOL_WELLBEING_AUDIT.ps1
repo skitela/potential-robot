@@ -53,7 +53,22 @@ function Get-RelativeChunkKey {
 
     $rootItem = Get-Item -LiteralPath $RootPath
     $dataItem = Get-Item -LiteralPath $DataPath
-    $relative = [System.IO.Path]::GetRelativePath($rootItem.FullName, $dataItem.FullName)
+    $rootFull = [System.IO.Path]::GetFullPath($rootItem.FullName)
+    $dataFull = [System.IO.Path]::GetFullPath($dataItem.FullName)
+
+    if (-not $rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootFull = $rootFull + [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    if ($dataFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $relative = $dataFull.Substring($rootFull.Length)
+        return ($relative -replace '\\', '/')
+    }
+
+    $rootUri = New-Object System.Uri($rootFull)
+    $dataUri = New-Object System.Uri($dataFull)
+    $relativeUri = $rootUri.MakeRelativeUri($dataUri)
+    $relative = [System.Uri]::UnescapeDataString($relativeUri.ToString())
     return ($relative -replace '\\', '/')
 }
 

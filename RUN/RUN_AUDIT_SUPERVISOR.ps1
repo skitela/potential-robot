@@ -291,6 +291,8 @@ function Invoke-AuditCycle {
     $learningHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
     $learningWellbeingPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
     $vpsSpoolWellbeingPath = Join-Path $opsRoot "vps_spool_wellbeing_latest.json"
+    $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
+    $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
 
     $buildScripts = @(
         @{
@@ -318,6 +320,14 @@ function Invoke-AuditCycle {
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
         },
         @{
@@ -519,6 +529,8 @@ function Invoke-AuditCycle {
     $trust = Read-JsonSafe -Path $trustPath
     $learning = Read-JsonSafe -Path $learningPath
     $learningHealth = Read-JsonSafe -Path $learningHealthPath
+    $instrumentDataReadiness = Read-JsonSafe -Path $instrumentDataReadinessPath
+    $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
     $learningPaperRuntime = Read-JsonSafe -Path $learningPaperRuntimePath
     $learningDataContract = Read-JsonSafe -Path $learningDataContractPath
     $onnxFeedback = Read-JsonSafe -Path $onnxFeedbackPath
@@ -928,6 +940,60 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "ZDROWIE_UCZENIA_PER_INSTRUMENT" -Gate "RAPORTUJ" -Severity "info" -Reason "Rejestr zdrowia uczenia nie pokazuje swiezych czerwonych flag.")) | Out-Null
     }
 
+    $instrumentReadinessEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $instrumentDataReadiness) {
+        $dataSummary = Get-OptionalValue -Object $instrumentDataReadiness -Name "summary" -Default $null
+        $exportPending = [int](Get-OptionalValue -Object $dataSummary -Name "export_pending_count" -Default 0)
+        $contractPending = [int](Get-OptionalValue -Object $dataSummary -Name "contract_pending_count" -Default 0)
+
+        if ($exportPending -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "instrument_data_export_pending"
+                message = "Czesc instrumentow ma gotowa historie raw, ale nadal nie ma aktywnego eksportu do treningu."
+                context = @{ export_pending_count = $exportPending }
+            }) | Out-Null
+        }
+        if ($contractPending -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "instrument_data_contract_pending"
+                message = "Czesc instrumentow ma eksport, ale kontrakt research jeszcze ich nie widzi."
+                context = @{ contract_pending_count = $contractPending }
+            }) | Out-Null
+        }
+    }
+    if ($null -ne $instrumentTrainingReadiness) {
+        $trainingSummary = Get-OptionalValue -Object $instrumentTrainingReadiness -Name "summary" -Default $null
+        $shadowReady = [int](Get-OptionalValue -Object $trainingSummary -Name "training_shadow_ready_count" -Default 0)
+        $localLimited = [int](Get-OptionalValue -Object $trainingSummary -Name "local_training_limited_count" -Default 0)
+        $localReady = [int](Get-OptionalValue -Object $trainingSummary -Name "local_training_ready_count" -Default 0)
+
+        if ($shadowReady -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = "info"
+                component = "instrument_training_shadow_ready"
+                message = "Czesc instrumentow jest gotowa do shadowowego budowania lokalnych datasetow."
+                context = @{ training_shadow_ready_count = $shadowReady }
+            }) | Out-Null
+        }
+        if (($localLimited + $localReady) -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = "info"
+                component = "instrument_training_local_candidates"
+                message = "Pojawili sie kandydaci do lokalnego treningu ograniczonego lub gotowego."
+                context = @{ local_training_limited_count = $localLimited; local_training_ready_count = $localReady }
+            }) | Out-Null
+        }
+    }
+
+    if (@($instrumentReadinessEvidence | Where-Object { $_.component -in @("instrument_data_export_pending", "instrument_data_contract_pending") }).Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_DANYCH_I_TRENINGU_PER_INSTRUMENT" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $instrumentReadinessEvidence) -Reason "Przejscie do uczenia per instrument wymaga stalego odzysku danych i kontroli gotowosci." -Evidence $instrumentReadinessEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_DANYCH_I_TRENINGU_PER_INSTRUMENT" -Gate "RAPORTUJ" -Severity (Get-HighestSeverity -Findings $instrumentReadinessEvidence) -Reason "Gotowosc danych i treningu per instrument jest pod kontrola." -Evidence $instrumentReadinessEvidence)) | Out-Null
+    }
+
     $paperLearningEvidence = New-Object System.Collections.Generic.List[object]
     if ($null -ne $learningPaperRuntime) {
         $paperSummary = Get-OptionalValue -Object $learningPaperRuntime -Name "summary" -Default $null
@@ -1112,6 +1178,8 @@ function Invoke-AuditCycle {
         learning_wellbeing = $learningWellbeingPath
         vps_spool_wellbeing = $vpsSpoolWellbeingPath
         learning_health_registry = $learningHealthPath
+        instrument_data_readiness = $instrumentDataReadinessPath
+        instrument_training_readiness = $instrumentTrainingReadinessPath
         learning_paper_runtime_plan = $learningPaperRuntimePath
         learning_data_contract_audit = $learningDataContractPath
         onnx_feedback = $onnxFeedbackPath
