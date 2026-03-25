@@ -83,6 +83,18 @@ $steps += Invoke-Step -Name "validate_deployment_readiness" -Action {
     & (Join-Path $ProjectRoot "TOOLS\VALIDATE_DEPLOYMENT_READINESS.ps1") | Out-Null
 }
 
+$steps += Invoke-Step -Name "build_onnx_micro_review" -Action {
+    & (Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1") | Out-Null
+}
+
+$steps += Invoke-Step -Name "build_onnx_feedback_loop" -Action {
+    & (Join-Path $ProjectRoot "RUN\BUILD_ONNX_FEEDBACK_LOOP_REPORT.ps1") | Out-Null
+}
+
+$steps += Invoke-Step -Name "build_onnx_micro_cross_audit" -Action {
+    & (Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_CROSS_AUDIT_REPORT.ps1") | Out-Null
+}
+
 $steps += Invoke-Step -Name "run_contract_tests" -Action {
     & (Join-Path $ProjectRoot "TESTS\RUN_CONTRACT_TESTS.ps1") | Out-Null
 }

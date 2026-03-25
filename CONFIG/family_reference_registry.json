@@ -1,330 +1,330 @@
-{
-  "schema_version": "1.0",
-  "generated_at_utc": "2026-03-23T21:05:45.5994708Z",
-  "project_root": "C:\\\\MAKRO_I_MIKRO_BOT",
-  "references": [
-    {
-      "family": "FX_ASIA",
-      "source_symbol": "USDJPY",
-      "source_strategy_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_USDJPY.mqh",
-      "source_profile_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_USDJPY.mqh",
-      "target_symbols": [
-        "AUDUSD",
-        "NZDUSD",
-        "USDJPY"
-      ],
-      "family_invariants": {
-        "trade_tf": "PERIOD_M5",
-        "atr_period": "14",
-        "rsi_period": "14",
-        "uses_new_bar_gate": "True",
-        "has_live_manage_position": "True"
-      },
-      "family_allowed_ranges": {
-        "trade_window_start_hour": {
-          "max": 0.0,
-          "min": 0.0
-        },
-        "trade_window_end_hour": {
-          "max": 5.0,
-          "min": 3.0
-        },
-        "max_spread_points": {
-          "max": 25.0,
-          "min": 25.0
-        },
-        "caution_trigger_abs": {
-          "max": 1.0,
-          "min": 0.98
-        },
-        "ready_trigger_abs": {
-          "max": 0.82,
-          "min": 0.8
-        }
-      },
-      "family_allowed_setup_labels": [
-        "SETUP_BREAKOUT",
-        "SETUP_PULLBACK",
-        "SETUP_RANGE",
-        "SETUP_TREND"
-      ],
-      "propagation_scope": "family"
-    },
-    {
-      "family": "FX_CROSS",
-      "source_symbol": "EURJPY",
-      "source_strategy_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_EURJPY.mqh",
-      "source_profile_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_EURJPY.mqh",
-      "target_symbols": [
-        "EURAUD",
-        "EURJPY",
-        "GBPJPY"
-      ],
-      "family_invariants": {
-        "trade_tf": "PERIOD_M5",
-        "atr_period": "14",
-        "rsi_period": "14",
-        "uses_new_bar_gate": "True",
-        "has_live_manage_position": "True"
-      },
-      "family_allowed_ranges": {
-        "trade_window_start_hour": {
-          "max": 7.0,
-          "min": 7.0
-        },
-        "trade_window_end_hour": {
-          "max": 12.0,
-          "min": 11.0
-        },
-        "max_spread_points": {
-          "max": 48.0,
-          "min": 34.0
-        },
-        "caution_trigger_abs": {
-          "max": 1.0,
-          "min": 0.98
-        },
-        "ready_trigger_abs": {
-          "max": 0.84,
-          "min": 0.82
-        }
-      },
-      "family_allowed_setup_labels": [
-        "SETUP_BREAKOUT",
-        "SETUP_PULLBACK",
-        "SETUP_RANGE",
-        "SETUP_TREND"
-      ],
-      "propagation_scope": "family"
-    },
-    {
-      "family": "FX_MAIN",
-      "source_symbol": "EURUSD",
-      "source_strategy_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_EURUSD.mqh",
-      "source_profile_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_EURUSD.mqh",
-      "target_symbols": [
-        "EURUSD",
-        "GBPUSD",
-        "USDCAD",
-        "USDCHF"
-      ],
-      "family_invariants": {
-        "trade_tf": "PERIOD_M5",
-        "atr_period": "14",
-        "rsi_period": "14",
-        "uses_new_bar_gate": "True",
-        "has_live_manage_position": "False,True"
-      },
-      "family_allowed_ranges": {
-        "trade_window_start_hour": {
-          "max": 8.0,
-          "min": 8.0
-        },
-        "trade_window_end_hour": {
-          "max": 12.0,
-          "min": 11.0
-        },
-        "max_spread_points": {
-          "max": 25.0,
-          "min": 24.0
-        },
-        "caution_trigger_abs": {
-          "max": 0.95,
-          "min": 0.9
-        },
-        "ready_trigger_abs": {
-          "max": 0.78,
-          "min": 0.72
-        }
-      },
-      "family_allowed_setup_labels": [
-        "SETUP_BREAKOUT",
-        "SETUP_PULLBACK",
-        "SETUP_REJECTION",
-        "SETUP_TREND"
-      ],
-      "propagation_scope": "family"
-    },
-    {
-      "family": "INDEX_EU",
-      "source_symbol": "DE30",
-      "source_strategy_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_DE30.mqh",
-      "source_profile_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_DE30.mqh",
-      "target_symbols": [
-        "DE30"
-      ],
-      "family_invariants": {
-        "trade_tf": "PERIOD_M5",
-        "atr_period": "14",
-        "rsi_period": "14",
-        "uses_new_bar_gate": "True",
-        "has_live_manage_position": "True"
-      },
-      "family_allowed_ranges": {
-        "trade_window_start_hour": {
-          "max": 12.0,
-          "min": 12.0
-        },
-        "trade_window_end_hour": {
-          "max": 14.0,
-          "min": 14.0
-        },
-        "max_spread_points": {
-          "max": 110.0,
-          "min": 110.0
-        },
-        "caution_trigger_abs": {
-          "max": 0.98,
-          "min": 0.98
-        },
-        "ready_trigger_abs": {
-          "max": 0.82,
-          "min": 0.82
-        }
-      },
-      "family_allowed_setup_labels": [
-        "SETUP_BREAKOUT",
-        "SETUP_PULLBACK",
-        "SETUP_RANGE",
-        "SETUP_TREND"
-      ],
-      "propagation_scope": "family"
-    },
-    {
-      "family": "INDEX_US",
-      "source_symbol": "US500",
-      "source_strategy_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_US500.mqh",
-      "source_profile_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_US500.mqh",
-      "target_symbols": [
-        "US500"
-      ],
-      "family_invariants": {
-        "trade_tf": "PERIOD_M5",
-        "atr_period": "14",
-        "rsi_period": "14",
-        "uses_new_bar_gate": "True",
-        "has_live_manage_position": "True"
-      },
-      "family_allowed_ranges": {
-        "trade_window_start_hour": {
-          "max": 17.0,
-          "min": 17.0
-        },
-        "trade_window_end_hour": {
-          "max": 20.0,
-          "min": 20.0
-        },
-        "max_spread_points": {
-          "max": 95.0,
-          "min": 95.0
-        },
-        "caution_trigger_abs": {
-          "max": 1.0,
-          "min": 1.0
-        },
-        "ready_trigger_abs": {
-          "max": 0.84,
-          "min": 0.84
-        }
-      },
-      "family_allowed_setup_labels": [
-        "SETUP_BREAKOUT",
-        "SETUP_PULLBACK",
-        "SETUP_RANGE",
-        "SETUP_TREND"
-      ],
-      "propagation_scope": "family"
-    },
-    {
-      "family": "METALS_FUTURES",
-      "source_symbol": "COPPER-US",
-      "source_strategy_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_COPPERUS.mqh",
-      "source_profile_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_COPPERUS.mqh",
-      "target_symbols": [
-        "COPPER-US"
-      ],
-      "family_invariants": {
-        "trade_tf": "PERIOD_M5",
-        "atr_period": "14",
-        "rsi_period": "14",
-        "uses_new_bar_gate": "True",
-        "has_live_manage_position": "True"
-      },
-      "family_allowed_ranges": {
-        "trade_window_start_hour": {
-          "max": 14.0,
-          "min": 14.0
-        },
-        "trade_window_end_hour": {
-          "max": 17.0,
-          "min": 17.0
-        },
-        "max_spread_points": {
-          "max": 200.0,
-          "min": 200.0
-        },
-        "caution_trigger_abs": {
-          "max": 1.08,
-          "min": 1.08
-        },
-        "ready_trigger_abs": {
-          "max": 0.9,
-          "min": 0.9
-        }
-      },
-      "family_allowed_setup_labels": [
-        "SETUP_BREAKOUT",
-        "SETUP_PULLBACK",
-        "SETUP_RANGE",
-        "SETUP_TREND"
-      ],
-      "propagation_scope": "family"
-    },
-    {
-      "family": "METALS_SPOT_PM",
-      "source_symbol": "GOLD",
-      "source_strategy_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GOLD.mqh",
-      "source_profile_file": "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GOLD.mqh",
-      "target_symbols": [
-        "GOLD",
-        "SILVER"
-      ],
-      "family_invariants": {
-        "trade_tf": "PERIOD_M5",
-        "atr_period": "14",
-        "rsi_period": "14",
-        "uses_new_bar_gate": "True",
-        "has_live_manage_position": "True"
-      },
-      "family_allowed_ranges": {
-        "trade_window_start_hour": {
-          "max": 14.0,
-          "min": 14.0
-        },
-        "trade_window_end_hour": {
-          "max": 17.0,
-          "min": 17.0
-        },
-        "max_spread_points": {
-          "max": 170.0,
-          "min": 120.0
-        },
-        "caution_trigger_abs": {
-          "max": 1.06,
-          "min": 1.02
-        },
-        "ready_trigger_abs": {
-          "max": 0.88,
-          "min": 0.84
-        }
-      },
-      "family_allowed_setup_labels": [
-        "SETUP_BREAKOUT",
-        "SETUP_PULLBACK",
-        "SETUP_REJECTION",
-        "SETUP_TREND"
-      ],
-      "propagation_scope": "family"
-    }
-  ]
+﻿{
+    "schema_version":  "1.0",
+    "generated_at_utc":  "2026-03-25T08:33:11.7701671Z",
+    "project_root":  "C:\\\\MAKRO_I_MIKRO_BOT",
+    "references":  [
+                       {
+                           "family":  "FX_ASIA",
+                           "source_symbol":  "USDJPY",
+                           "source_strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_USDJPY.mqh",
+                           "source_profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_USDJPY.mqh",
+                           "target_symbols":  [
+                                                  "AUDUSD",
+                                                  "NZDUSD",
+                                                  "USDJPY"
+                                              ],
+                           "family_invariants":  {
+                                                     "trade_tf":  "PERIOD_M5",
+                                                     "atr_period":  "14",
+                                                     "rsi_period":  "14",
+                                                     "uses_new_bar_gate":  "True",
+                                                     "has_live_manage_position":  "True"
+                                                 },
+                           "family_allowed_ranges":  {
+                                                         "trade_window_start_hour":  {
+                                                                                         "min":  0,
+                                                                                         "max":  0
+                                                                                     },
+                                                         "trade_window_end_hour":  {
+                                                                                       "min":  3,
+                                                                                       "max":  5
+                                                                                   },
+                                                         "max_spread_points":  {
+                                                                                   "min":  25,
+                                                                                   "max":  25
+                                                                               },
+                                                         "caution_trigger_abs":  {
+                                                                                     "min":  0.98,
+                                                                                     "max":  1
+                                                                                 },
+                                                         "ready_trigger_abs":  {
+                                                                                   "min":  0.8,
+                                                                                   "max":  0.82
+                                                                               }
+                                                     },
+                           "family_allowed_setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ],
+                           "propagation_scope":  "family"
+                       },
+                       {
+                           "family":  "FX_CROSS",
+                           "source_symbol":  "EURJPY",
+                           "source_strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_EURJPY.mqh",
+                           "source_profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_EURJPY.mqh",
+                           "target_symbols":  [
+                                                  "EURAUD",
+                                                  "EURJPY",
+                                                  "GBPJPY"
+                                              ],
+                           "family_invariants":  {
+                                                     "trade_tf":  "PERIOD_M5",
+                                                     "atr_period":  "14",
+                                                     "rsi_period":  "14",
+                                                     "uses_new_bar_gate":  "True",
+                                                     "has_live_manage_position":  "True"
+                                                 },
+                           "family_allowed_ranges":  {
+                                                         "trade_window_start_hour":  {
+                                                                                         "min":  7,
+                                                                                         "max":  7
+                                                                                     },
+                                                         "trade_window_end_hour":  {
+                                                                                       "min":  11,
+                                                                                       "max":  12
+                                                                                   },
+                                                         "max_spread_points":  {
+                                                                                   "min":  34,
+                                                                                   "max":  48
+                                                                               },
+                                                         "caution_trigger_abs":  {
+                                                                                     "min":  0.98,
+                                                                                     "max":  1
+                                                                                 },
+                                                         "ready_trigger_abs":  {
+                                                                                   "min":  0.82,
+                                                                                   "max":  0.84
+                                                                               }
+                                                     },
+                           "family_allowed_setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ],
+                           "propagation_scope":  "family"
+                       },
+                       {
+                           "family":  "FX_MAIN",
+                           "source_symbol":  "EURUSD",
+                           "source_strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_EURUSD.mqh",
+                           "source_profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_EURUSD.mqh",
+                           "target_symbols":  [
+                                                  "EURUSD",
+                                                  "GBPUSD",
+                                                  "USDCAD",
+                                                  "USDCHF"
+                                              ],
+                           "family_invariants":  {
+                                                     "trade_tf":  "PERIOD_M5",
+                                                     "atr_period":  "14",
+                                                     "rsi_period":  "14",
+                                                     "uses_new_bar_gate":  "True",
+                                                     "has_live_manage_position":  "False,True"
+                                                 },
+                           "family_allowed_ranges":  {
+                                                         "trade_window_start_hour":  {
+                                                                                         "min":  8,
+                                                                                         "max":  8
+                                                                                     },
+                                                         "trade_window_end_hour":  {
+                                                                                       "min":  11,
+                                                                                       "max":  12
+                                                                                   },
+                                                         "max_spread_points":  {
+                                                                                   "min":  24,
+                                                                                   "max":  25
+                                                                               },
+                                                         "caution_trigger_abs":  {
+                                                                                     "min":  0.9,
+                                                                                     "max":  0.95
+                                                                                 },
+                                                         "ready_trigger_abs":  {
+                                                                                   "min":  0.72,
+                                                                                   "max":  0.78
+                                                                               }
+                                                     },
+                           "family_allowed_setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ],
+                           "propagation_scope":  "family"
+                       },
+                       {
+                           "family":  "INDEX_EU",
+                           "source_symbol":  "DE30",
+                           "source_strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_DE30.mqh",
+                           "source_profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_DE30.mqh",
+                           "target_symbols":  [
+                                                  "DE30"
+                                              ],
+                           "family_invariants":  {
+                                                     "trade_tf":  "PERIOD_M5",
+                                                     "atr_period":  "14",
+                                                     "rsi_period":  "14",
+                                                     "uses_new_bar_gate":  "True",
+                                                     "has_live_manage_position":  "True"
+                                                 },
+                           "family_allowed_ranges":  {
+                                                         "trade_window_start_hour":  {
+                                                                                         "min":  12,
+                                                                                         "max":  12
+                                                                                     },
+                                                         "trade_window_end_hour":  {
+                                                                                       "min":  14,
+                                                                                       "max":  14
+                                                                                   },
+                                                         "max_spread_points":  {
+                                                                                   "min":  110,
+                                                                                   "max":  110
+                                                                               },
+                                                         "caution_trigger_abs":  {
+                                                                                     "min":  0.98,
+                                                                                     "max":  0.98
+                                                                                 },
+                                                         "ready_trigger_abs":  {
+                                                                                   "min":  0.82,
+                                                                                   "max":  0.82
+                                                                               }
+                                                     },
+                           "family_allowed_setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ],
+                           "propagation_scope":  "family"
+                       },
+                       {
+                           "family":  "INDEX_US",
+                           "source_symbol":  "US500",
+                           "source_strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_US500.mqh",
+                           "source_profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_US500.mqh",
+                           "target_symbols":  [
+                                                  "US500"
+                                              ],
+                           "family_invariants":  {
+                                                     "trade_tf":  "PERIOD_M5",
+                                                     "atr_period":  "14",
+                                                     "rsi_period":  "14",
+                                                     "uses_new_bar_gate":  "True",
+                                                     "has_live_manage_position":  "True"
+                                                 },
+                           "family_allowed_ranges":  {
+                                                         "trade_window_start_hour":  {
+                                                                                         "min":  17,
+                                                                                         "max":  17
+                                                                                     },
+                                                         "trade_window_end_hour":  {
+                                                                                       "min":  20,
+                                                                                       "max":  20
+                                                                                   },
+                                                         "max_spread_points":  {
+                                                                                   "min":  95,
+                                                                                   "max":  95
+                                                                               },
+                                                         "caution_trigger_abs":  {
+                                                                                     "min":  1,
+                                                                                     "max":  1
+                                                                                 },
+                                                         "ready_trigger_abs":  {
+                                                                                   "min":  0.84,
+                                                                                   "max":  0.84
+                                                                               }
+                                                     },
+                           "family_allowed_setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ],
+                           "propagation_scope":  "family"
+                       },
+                       {
+                           "family":  "METALS_FUTURES",
+                           "source_symbol":  "COPPER-US",
+                           "source_strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_COPPERUS.mqh",
+                           "source_profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_COPPERUS.mqh",
+                           "target_symbols":  [
+                                                  "COPPER-US"
+                                              ],
+                           "family_invariants":  {
+                                                     "trade_tf":  "PERIOD_M5",
+                                                     "atr_period":  "14",
+                                                     "rsi_period":  "14",
+                                                     "uses_new_bar_gate":  "True",
+                                                     "has_live_manage_position":  "True"
+                                                 },
+                           "family_allowed_ranges":  {
+                                                         "trade_window_start_hour":  {
+                                                                                         "min":  14,
+                                                                                         "max":  14
+                                                                                     },
+                                                         "trade_window_end_hour":  {
+                                                                                       "min":  17,
+                                                                                       "max":  17
+                                                                                   },
+                                                         "max_spread_points":  {
+                                                                                   "min":  200,
+                                                                                   "max":  200
+                                                                               },
+                                                         "caution_trigger_abs":  {
+                                                                                     "min":  1.08,
+                                                                                     "max":  1.08
+                                                                                 },
+                                                         "ready_trigger_abs":  {
+                                                                                   "min":  0.9,
+                                                                                   "max":  0.9
+                                                                               }
+                                                     },
+                           "family_allowed_setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_RANGE",
+                                                               "SETUP_TREND"
+                                                           ],
+                           "propagation_scope":  "family"
+                       },
+                       {
+                           "family":  "METALS_SPOT_PM",
+                           "source_symbol":  "GOLD",
+                           "source_strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GOLD.mqh",
+                           "source_profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GOLD.mqh",
+                           "target_symbols":  [
+                                                  "GOLD",
+                                                  "SILVER"
+                                              ],
+                           "family_invariants":  {
+                                                     "trade_tf":  "PERIOD_M5",
+                                                     "atr_period":  "14",
+                                                     "rsi_period":  "14",
+                                                     "uses_new_bar_gate":  "True",
+                                                     "has_live_manage_position":  "True"
+                                                 },
+                           "family_allowed_ranges":  {
+                                                         "trade_window_start_hour":  {
+                                                                                         "min":  14,
+                                                                                         "max":  14
+                                                                                     },
+                                                         "trade_window_end_hour":  {
+                                                                                       "min":  17,
+                                                                                       "max":  17
+                                                                                   },
+                                                         "max_spread_points":  {
+                                                                                   "min":  120,
+                                                                                   "max":  170
+                                                                               },
+                                                         "caution_trigger_abs":  {
+                                                                                     "min":  1.02,
+                                                                                     "max":  1.06
+                                                                                 },
+                                                         "ready_trigger_abs":  {
+                                                                                   "min":  0.84,
+                                                                                   "max":  0.88
+                                                                               }
+                                                     },
+                           "family_allowed_setup_labels":  [
+                                                               "SETUP_BREAKOUT",
+                                                               "SETUP_PULLBACK",
+                                                               "SETUP_REJECTION",
+                                                               "SETUP_TREND"
+                                                           ],
+                           "propagation_scope":  "family"
+                       }
+                   ]
 }

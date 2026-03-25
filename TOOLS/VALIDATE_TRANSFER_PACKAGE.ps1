@@ -9,6 +9,57 @@ $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $packageRoot = Join-Path $projectPath "SERVER_PROFILE\PACKAGE"
 $handoffRoot = Join-Path $projectPath "SERVER_PROFILE\HANDOFF"
 $issues = New-Object System.Collections.Generic.List[string]
+$registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
+
+if (-not (Test-Path -LiteralPath $registryPath)) {
+    throw "Missing registry: $registryPath"
+}
+
+$registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$configAllowList = @(
+    "candidate_arbitration_contract_v1.json",
+    "capital_risk_contract_v1.json",
+    "core_capital_contract_v1.json",
+    "domain_architecture_registry_v1.json",
+    "family_policy_registry.json",
+    "family_reference_registry.json",
+    "microbots_registry.json",
+    "project_config.json",
+    "rollover_guard_v1.json",
+    "session_capital_coordinator_v1.json",
+    "session_window_matrix_v1.json",
+    "tuning_cost_window_guard_matrix_v1.json",
+    "tuning_fleet_registry.json"
+)
+
+function Get-CodeSymbolFromRegistryRow {
+    param(
+        [psobject]$Row
+    )
+
+    if ($Row.PSObject.Properties.Name -contains 'code_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$Row.code_symbol)) {
+        return [string]$Row.code_symbol
+    }
+
+    return ([string]$Row.expert).Replace("MicroBot_", "")
+}
+
+function Get-RelativeNames {
+    param(
+        [string]$LiteralPath,
+        [string]$Filter = "*"
+    )
+
+    if (-not (Test-Path -LiteralPath $LiteralPath)) {
+        return @()
+    }
+
+    return @(
+        Get-ChildItem -LiteralPath $LiteralPath -File -Filter $Filter |
+            Select-Object -ExpandProperty Name |
+            Sort-Object -Unique
+    )
+}
 
 $required = @(
     (Join-Path $packageRoot "server_profile_manifest.json"),
@@ -91,6 +142,103 @@ if ($null -ne $handoffManifest) {
     }
     if (-not ($handoffManifest.copied -contains "RUN\GENERATE_EVENING_REPORT_NOW.ps1")) {
         $issues.Add("HANDOFF_EVENING_REPORT_RUNNER_NOT_DECLARED")
+    }
+}
+
+$expectedExperts = New-Object System.Collections.Generic.List[string]
+$expectedProfiles = New-Object System.Collections.Generic.List[string]
+$expectedStrategies = New-Object System.Collections.Generic.List[string]
+$expectedPresets = New-Object System.Collections.Generic.List[string]
+$expectedActivePresets = New-Object System.Collections.Generic.List[string]
+$expectedActiveSymbols = New-Object System.Collections.Generic.List[string]
+
+foreach ($row in @($registry.symbols)) {
+    $expert = [string]$row.expert
+    $preset = [string]$row.preset
+    $codeSymbol = Get-CodeSymbolFromRegistryRow -Row $row
+    $activePresetName = "{0}_ACTIVE.set" -f ([System.IO.Path]::GetFileNameWithoutExtension($preset))
+
+    [void]$expectedExperts.Add(("{0}.mq5" -f $expert))
+    [void]$expectedExperts.Add(("{0}.ex5" -f $expert))
+    [void]$expectedProfiles.Add(("Profile_{0}.mqh" -f $codeSymbol))
+    [void]$expectedStrategies.Add(("Strategy_{0}.mqh" -f $codeSymbol))
+    [void]$expectedPresets.Add($preset)
+    [void]$expectedActivePresets.Add($activePresetName)
+    [void]$expectedActiveSymbols.Add([string]$row.symbol)
+}
+
+$expectedExperts = @($expectedExperts | Sort-Object -Unique)
+$expectedProfiles = @($expectedProfiles | Sort-Object -Unique)
+$expectedStrategies = @($expectedStrategies | Sort-Object -Unique)
+$expectedPresets = @($expectedPresets | Sort-Object -Unique)
+$expectedActivePresets = @($expectedActivePresets | Sort-Object -Unique)
+$expectedActiveSymbols = @($expectedActiveSymbols | Sort-Object -Unique)
+
+$packageExperts = Get-RelativeNames -LiteralPath (Join-Path $packageRoot "MQL5\Experts\MicroBots")
+$packageProfiles = Get-RelativeNames -LiteralPath (Join-Path $packageRoot "MQL5\Include\Profiles")
+$packageStrategies = Get-RelativeNames -LiteralPath (Join-Path $packageRoot "MQL5\Include\Strategies")
+$packagePresets = Get-RelativeNames -LiteralPath (Join-Path $packageRoot "MQL5\Presets") -Filter "*.set"
+$packageActivePresets = Get-RelativeNames -LiteralPath (Join-Path $packageRoot "MQL5\Presets\ActiveLive") -Filter "*.set"
+$packageConfigs = Get-RelativeNames -LiteralPath (Join-Path $packageRoot "CONFIG") -Filter "*.json"
+
+$extraExperts = @($packageExperts | Where-Object { $_ -notin $expectedExperts })
+$extraProfiles = @($packageProfiles | Where-Object { $_ -notin $expectedProfiles })
+$extraStrategies = @($packageStrategies | Where-Object { $_ -notin $expectedStrategies })
+$extraPresets = @($packagePresets | Where-Object { $_ -notin $expectedPresets })
+$extraActivePresets = @($packageActivePresets | Where-Object { $_ -notin $expectedActivePresets })
+$extraConfigs = @($packageConfigs | Where-Object { $_ -notin $configAllowList })
+
+foreach ($name in @($expectedExperts | Where-Object { $_ -notin $packageExperts })) {
+    $issues.Add("PACKAGE_MISSING_EXPERT:" + $name)
+}
+foreach ($name in @($expectedProfiles | Where-Object { $_ -notin $packageProfiles })) {
+    $issues.Add("PACKAGE_MISSING_PROFILE:" + $name)
+}
+foreach ($name in @($expectedStrategies | Where-Object { $_ -notin $packageStrategies })) {
+    $issues.Add("PACKAGE_MISSING_STRATEGY:" + $name)
+}
+foreach ($name in @($expectedPresets | Where-Object { $_ -notin $packagePresets })) {
+    $issues.Add("PACKAGE_MISSING_PRESET:" + $name)
+}
+foreach ($name in @($expectedActivePresets | Where-Object { $_ -notin $packageActivePresets })) {
+    $issues.Add("PACKAGE_MISSING_ACTIVE_PRESET:" + $name)
+}
+foreach ($name in @($extraExperts)) {
+    $issues.Add("PACKAGE_EXTRA_EXPERT:" + $name)
+}
+foreach ($name in @($extraProfiles)) {
+    $issues.Add("PACKAGE_EXTRA_PROFILE:" + $name)
+}
+foreach ($name in @($extraStrategies)) {
+    $issues.Add("PACKAGE_EXTRA_STRATEGY:" + $name)
+}
+foreach ($name in @($extraPresets)) {
+    $issues.Add("PACKAGE_EXTRA_PRESET:" + $name)
+}
+foreach ($name in @($extraActivePresets)) {
+    $issues.Add("PACKAGE_EXTRA_ACTIVE_PRESET:" + $name)
+}
+foreach ($name in @($configAllowList | Where-Object { $_ -notin $packageConfigs })) {
+    $issues.Add("PACKAGE_MISSING_CONFIG:" + $name)
+}
+foreach ($name in @($extraConfigs)) {
+    $issues.Add("PACKAGE_EXTRA_CONFIG:" + $name)
+}
+
+foreach ($retiredToken in @("GBPAUD", "PLATIN")) {
+    $retiredHits = @(
+        $packageExperts + $packageProfiles + $packageStrategies + $packagePresets + $packageActivePresets + $packageConfigs |
+            Where-Object { $_ -match $retiredToken }
+    )
+    if ($retiredHits.Count -gt 0) {
+        $issues.Add("PACKAGE_RETIRED_SYMBOL_PRESENT:{0}:{1}" -f $retiredToken, ($retiredHits -join ","))
+    }
+}
+
+if ($null -ne $packageManifest) {
+    $manifestActiveSymbols = @($packageManifest.active_symbols | ForEach-Object { [string]$_ } | Sort-Object -Unique)
+    if (@($manifestActiveSymbols).Count -ne @($expectedActiveSymbols).Count -or (Compare-Object -ReferenceObject $expectedActiveSymbols -DifferenceObject $manifestActiveSymbols)) {
+        $issues.Add("PACKAGE_MANIFEST_ACTIVE_SYMBOLS_MISMATCH")
     }
 }
 

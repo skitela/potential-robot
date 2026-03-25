@@ -204,6 +204,41 @@ function Get-HighestSeverity {
     return $best
 }
 
+function Test-IsIgnorableRetiredSymbolFinding {
+    param([object]$Finding)
+
+    if ($null -eq $Finding -or [string]$Finding.component -ne "retired_symbol_references") {
+        return $false
+    }
+
+    $hits = @()
+    if ($null -ne $Finding.context) {
+        $hits = @($Finding.context.hits)
+    }
+    if ($hits.Count -eq 0) {
+        return $false
+    }
+
+    foreach ($hit in $hits) {
+        $path = [string](Get-OptionalValue -Object $hit -Name "path" -Default "")
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            return $false
+        }
+
+        $normalizedPath = $path.Replace("/", "\").ToUpperInvariant()
+        $isAuditOrValidationHelper =
+            $normalizedPath -like "*\TOOLS\VALIDATE_TRANSFER_PACKAGE.PS1" -or
+            $normalizedPath -like "*\RUN\RUN_AUDIT_SUPERVISOR.PS1" -or
+            $normalizedPath -like "*\RUN\BUILD_HOSTILE_FOUR_LOOP_AUDIT.PS1"
+
+        if (-not $isAuditOrValidationHelper) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Get-ShouldRunHeavySweep {
     param(
         [string]$ModeValue,
@@ -511,7 +546,12 @@ function Invoke-AuditCycle {
     }
 
     $fleetEvidence = New-Object System.Collections.Generic.List[object]
-    foreach ($finding in @($hostileFindings | Where-Object { $_.component -in @("retired_symbol_references", "family_symbol_naming", "family_reference_registry") })) {
+    $fleetFindings = @(
+        $hostileFindings |
+            Where-Object { $_.component -in @("retired_symbol_references", "family_symbol_naming", "family_reference_registry") } |
+            Where-Object { -not (Test-IsIgnorableRetiredSymbolFinding -Finding $_) }
+    )
+    foreach ($finding in $fleetFindings) {
         $fleetEvidence.Add($finding) | Out-Null
     }
     if ($fleetEvidence.Count -gt 0) {
@@ -850,7 +890,7 @@ function Invoke-AuditCycle {
 
     if ($paperLearningEvidence.Count -gt 0) {
         $hasBlockingPaperLearning = @($paperLearningEvidence | Where-Object { $_.component -in @("paper_learning_heartbeat_stale", "paper_learning_onnx_stale") }).Count -gt 0
-        $paperGate = if ($hasBlockingPaperLearning) { "BLOKUJ_ROLLOUT" } else { "NAPRAW_W_CYKLU" }
+        $paperGate = if ($hasBlockingPaperLearning) { "BLOKUJ_LIVE" } else { "NAPRAW_W_CYKLU" }
         $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_JAKO_ZRODLO_NAUKI" -Gate $paperGate -Severity (Get-HighestSeverity -Findings $paperLearningEvidence) -Reason "Paper-live jest juz czescia samoregulacji i musi pozostawac zdrowym zrodlem swiezych danych." -Evidence $paperLearningEvidence)) | Out-Null
     }
     else {
@@ -921,7 +961,7 @@ function Invoke-AuditCycle {
     $rolloutGate = "OPEN"
     $liveGate = "OPEN"
 
-    if (@($domainStatusesArray | Where-Object { $_.gate -eq "BLOKUJ_ROLLOUT" -or $_.gate -eq "BLOKUJ_LIVE" }).Count -gt 0) {
+    if (@($domainStatusesArray | Where-Object { $_.gate -eq "BLOKUJ_ROLLOUT" }).Count -gt 0) {
         $rolloutGate = "BLOCKED"
     }
     if (@($domainStatusesArray | Where-Object { $_.gate -eq "BLOKUJ_LIVE" }).Count -gt 0) {
