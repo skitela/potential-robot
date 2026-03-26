@@ -88,14 +88,39 @@ $limitedCandidates = Sort-TrainingItems -Items @(
 )
 $shadowCandidates = Sort-TrainingItems -Items @($items | Where-Object { $_.training_readiness_state -eq "TRAINING_SHADOW_READY" })
 
-$startGroup = @($readyCandidates | Select-Object -First $MaxStartGroupSize)
+$limitedStartGroupSize = [Math]::Min([Math]::Max($MaxStartGroupSize, 1), 1)
+$startGroup = @(
+    if (@($readyCandidates).Count -gt 0) {
+        @($readyCandidates | Select-Object -First $MaxStartGroupSize)
+    }
+    else {
+        @($limitedCandidates | Select-Object -First $limitedStartGroupSize)
+    }
+)
 $reserveReady = @($readyCandidates | Select-Object -Skip $MaxStartGroupSize)
-$limitedWatchlist = @($limitedCandidates | Select-Object -First $MaxLimitedWatchlistSize)
+$limitedWatchlist = @(
+    if (@($readyCandidates).Count -gt 0) {
+        @($limitedCandidates | Select-Object -First $MaxLimitedWatchlistSize)
+    }
+    else {
+        @($limitedCandidates | Select-Object -Skip $limitedStartGroupSize | Select-Object -First $MaxLimitedWatchlistSize)
+    }
+)
 
-$nextAction = if ($startGroup.Count -gt 0) {
-    "START_READY_GROUP"
+$startGroupMode = if (@($readyCandidates).Count -gt 0) {
+    "READY"
 }
-elseif ($limitedWatchlist.Count -gt 0) {
+elseif (@($startGroup).Count -gt 0) {
+    "LIMITED"
+}
+else {
+    "NONE"
+}
+
+$nextAction = if (@($startGroup).Count -gt 0) {
+    if ($startGroupMode -eq "READY") { "START_READY_GROUP" } else { "START_LIMITED_GROUP" }
+}
+elseif (@($limitedWatchlist).Count -gt 0) {
     "OBSERVE_LIMITED_GROUP"
 }
 else {
@@ -109,6 +134,7 @@ $report = [ordered]@{
     execution_mode = "TEACHER_GUARDED_SMALL_SPOON"
     max_start_group_size = $MaxStartGroupSize
     max_limited_watchlist_size = $MaxLimitedWatchlistSize
+    start_group_mode = $startGroupMode
     next_action = $nextAction
     summary = [ordered]@{
         total_symbols = @($items).Count
@@ -116,6 +142,7 @@ $report = [ordered]@{
         limited_candidates_count = @($limitedCandidates).Count
         shadow_candidates_count = @($shadowCandidates).Count
         start_group_count = @($startGroup).Count
+        limited_start_group_count = if ($startGroupMode -eq "LIMITED") { @($startGroup).Count } else { 0 }
         reserve_ready_count = @($reserveReady).Count
         probation_excluded_from_start_count = @(
             $items | Where-Object {
@@ -140,6 +167,7 @@ $lines.Add("# Instrument Local Training Plan")
 $lines.Add("")
 $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- execution_mode: {0}" -f $report.execution_mode))
+$lines.Add(("- start_group_mode: {0}" -f $report.start_group_mode))
 $lines.Add(("- next_action: {0}" -f $report.next_action))
 foreach ($property in $report.summary.GetEnumerator()) {
     $lines.Add(("- {0}: {1}" -f $property.Key, $property.Value))

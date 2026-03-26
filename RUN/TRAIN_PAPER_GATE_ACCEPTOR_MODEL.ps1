@@ -60,7 +60,20 @@ if (-not [string]::IsNullOrWhiteSpace($RuntimeArtifactStem)) {
     $arguments += @("--runtime-artifact-stem", $RuntimeArtifactStem)
 }
 
-& $ResearchPython @arguments
-if ($LASTEXITCODE -ne 0) {
-    throw "Paper gate trainer failed with exit code $LASTEXITCODE"
+try {
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+}
+catch {
+    $previousNativeErrorPreference = $null
+}
+
+try {
+    $PSNativeCommandUseErrorActionPreference = $false
+    & $ResearchPython @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Paper gate trainer failed with exit code $LASTEXITCODE"
+    }
+}
+finally {
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
 }

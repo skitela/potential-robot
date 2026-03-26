@@ -615,15 +615,20 @@ bool MbOnnxObservationInit(
    const string state_rel_path
 )
   {
+   string requested_symbol = symbol;
+   bool requested_enabled = enabled;
+   string requested_log_path = log_rel_path;
+   string requested_state_path = state_rel_path;
+
    MbOnnxObservationResetRuntime();
    g_mb_onnx_obs_last_init_attempt = TimeCurrent();
-   g_mb_onnx_obs_enabled = enabled;
-   g_mb_onnx_obs_symbol = MbCanonicalSymbol(symbol);
-   g_mb_onnx_obs_log_path = log_rel_path;
-   g_mb_onnx_obs_state_path = state_rel_path;
+   g_mb_onnx_obs_enabled = requested_enabled;
+   g_mb_onnx_obs_symbol = MbCanonicalSymbol(requested_symbol);
+   g_mb_onnx_obs_log_path = requested_log_path;
+   g_mb_onnx_obs_state_path = requested_state_path;
    MbOnnxObservationEnsureCsvHeader(g_mb_onnx_obs_log_path);
 
-   if(!enabled)
+   if(!requested_enabled)
       return false;
 
    string teacher_contract = MbKeyFilePath("_GLOBAL","paper_gate_acceptor_runtime_contract_latest.csv");
@@ -722,11 +727,16 @@ void MbOnnxObservationRetryInitIfNeeded()
       g_mb_onnx_obs_init_reason
    );
 
+   string retry_symbol = g_mb_onnx_obs_symbol;
+   bool retry_enabled = g_mb_onnx_obs_enabled;
+   string retry_log_path = g_mb_onnx_obs_log_path;
+   string retry_state_path = g_mb_onnx_obs_state_path;
+
    MbOnnxObservationInit(
-      g_mb_onnx_obs_symbol,
-      g_mb_onnx_obs_enabled,
-      g_mb_onnx_obs_log_path,
-      g_mb_onnx_obs_state_path
+      retry_symbol,
+      retry_enabled,
+      retry_log_path,
+      retry_state_path
    );
   }
 
@@ -769,7 +779,7 @@ bool MbOnnxObservationEvaluateWithChannel(
       return false;
      }
 
-   if(!g_mb_onnx_obs_symbol_ready)
+   if(!g_mb_onnx_obs_symbol_ready && !g_mb_onnx_obs_teacher_ready)
      {
       result.reason_code = g_mb_onnx_obs_init_reason;
       MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
@@ -781,6 +791,41 @@ bool MbOnnxObservationEvaluateWithChannel(
    ulong started_us = GetMicrosecondCount();
    result.available = true;
    result.teacher_available = g_mb_onnx_obs_teacher_ready;
+
+   // If the symbol-local runtime model is not ready yet, keep the feedback loop alive
+   // by emitting a teacher-only shadow observation instead of waiting silently.
+   if(!g_mb_onnx_obs_symbol_ready && g_mb_onnx_obs_teacher_ready)
+     {
+      if(!MbOnnxObservationRunModel(
+            g_mb_onnx_obs_teacher_handle,
+            symbol,
+            signal,
+            spread_points,
+            0.0,
+            g_mb_onnx_obs_teacher_feature_names,
+            g_mb_onnx_obs_teacher_map_names,
+            g_mb_onnx_obs_teacher_map_payloads,
+            result.teacher_score
+         ))
+        {
+         result.reason_code = "ONNX_GLOBAL_RUN_FAILED";
+         result.latency_us = (long)(GetMicrosecondCount() - started_us);
+         MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
+         MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
+         g_mb_onnx_obs_last_signature = observation_signature;
+         return false;
+        }
+
+      result.teacher_used = true;
+      result.symbol_score = result.teacher_score;
+      result.run_ok = true;
+      result.reason_code = "ONNX_OBSERVATION_OK";
+      result.latency_us = (long)(GetMicrosecondCount() - started_us);
+      MbOnnxObservationWriteLatest(symbol,runtime_channel,signal,spread_points,result);
+      MbOnnxObservationAppendLog(ts,symbol,stage,runtime_channel,signal,spread_points,result);
+      g_mb_onnx_obs_last_signature = observation_signature;
+      return true;
+     }
 
    if(g_mb_onnx_obs_teacher_feature_enabled)
      {

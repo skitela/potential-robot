@@ -303,7 +303,7 @@ def build_pipeline(
         penalty="elasticnet",
         alpha=1e-5,
         l1_ratio=0.15,
-        max_iter=30,
+        max_iter=120,
         tol=1e-4,
         random_state=42,
     )
@@ -540,7 +540,7 @@ def build_runtime_numeric_pipeline() -> Pipeline:
         penalty="elasticnet",
         alpha=1e-5,
         l1_ratio=0.15,
-        max_iter=30,
+        max_iter=120,
         tol=1e-4,
         random_state=42,
     )

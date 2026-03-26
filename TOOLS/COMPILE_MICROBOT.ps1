@@ -2,6 +2,7 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$ServerName = "OANDATMS-MT5",
     [string]$TerminalDataDirOverride = "",
+    [string]$PreferredProductionTerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
     [Alias("BotName")]
     [string]$ExpertName = "MicroBot_EURUSD",
     [string]$Symbol = "",
@@ -72,6 +73,103 @@ function Resolve-MetaEditor {
     return ($candidates | Select-Object -First 1)
 }
 
+function Get-CompiledExpertCandidates {
+    param([string]$CompiledExpertName)
+
+    $base = Join-Path $env:APPDATA "MetaQuotes\\Terminal"
+    if (-not (Test-Path -LiteralPath $base)) {
+        return @()
+    }
+
+    $rows = @()
+    Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $candidate = Join-Path $_.FullName ("MQL5\\Experts\\MicroBots\\{0}.ex5" -f $CompiledExpertName)
+        if (Test-Path -LiteralPath $candidate) {
+            try {
+                $item = Get-Item -LiteralPath $candidate -ErrorAction Stop
+                $rows += [pscustomobject]@{
+                    expert_path = $candidate
+                    terminal_data_dir = $_.FullName
+                    last_write_utc = $item.LastWriteTimeUtc
+                    size = $item.Length
+                }
+            }
+            catch {
+            }
+        }
+    }
+
+    return @($rows)
+}
+
+function Resolve-FreshCompiledExpertArtifact {
+    param(
+        [string]$CompiledExpertName,
+        [datetime]$CompileStartedUtc,
+        [string]$PreferredTerminalDataDir
+    )
+
+    $candidates = @(Get-CompiledExpertCandidates -CompiledExpertName $CompiledExpertName)
+    if (-not $candidates) {
+        return $null
+    }
+
+    $recentThreshold = $CompileStartedUtc.AddMinutes(-2)
+    $recent = @($candidates | Where-Object { $_.last_write_utc -ge $recentThreshold })
+    if ($recent.Count -gt 0) {
+        return @(
+            $recent |
+                Sort-Object @{Expression = { if ($_.terminal_data_dir -eq $PreferredTerminalDataDir) { 1 } else { 0 } }; Descending = $true },
+                            @{Expression = { $_.last_write_utc }; Descending = $true },
+                            @{Expression = { $_.size }; Descending = $true }
+        )[0]
+    }
+
+    return @(
+        $candidates |
+            Sort-Object @{Expression = { if ($_.terminal_data_dir -eq $PreferredTerminalDataDir) { 1 } else { 0 } }; Descending = $true },
+                        @{Expression = { $_.last_write_utc }; Descending = $true },
+                        @{Expression = { $_.size }; Descending = $true }
+    )[0]
+}
+
+function Sync-CompiledExpertToTerminalDataDir {
+    param(
+        [string]$SourceExpertPath,
+        [string]$TargetTerminalDataDir,
+        [string]$CompiledExpertName
+    )
+
+    $result = [ordered]@{
+        attempted = $false
+        source_path = $SourceExpertPath
+        target_path = $null
+        synced = $false
+        skipped_reason = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($SourceExpertPath) -or -not (Test-Path -LiteralPath $SourceExpertPath)) {
+        $result.skipped_reason = "compiled_expert_missing"
+        return [pscustomobject]$result
+    }
+
+    $targetDir = Join-Path $TargetTerminalDataDir "MQL5\\Experts\\MicroBots"
+    $targetPath = Join-Path $targetDir ("{0}.ex5" -f $CompiledExpertName)
+    $result.attempted = $true
+    $result.target_path = $targetPath
+
+    try {
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        Copy-Item -LiteralPath $SourceExpertPath -Destination $targetPath -Force -ErrorAction Stop
+        $result.synced = $true
+        return [pscustomobject]$result
+    }
+    catch {
+        $result.skipped_reason = $_.Exception.Message
+        return [pscustomobject]$result
+    }
+}
+
 function Sync-CompiledExpertToPortableLab {
     param(
         [string]$SourceTerminalDataDir,
@@ -137,6 +235,9 @@ $terminalDataDir = $null
 if (-not [string]::IsNullOrWhiteSpace($TerminalDataDirOverride)) {
     $terminalDataDir = (Resolve-Path -LiteralPath $TerminalDataDirOverride).Path
 }
+elseif ($ServerName -eq "OANDATMS-MT5" -and -not [string]::IsNullOrWhiteSpace($PreferredProductionTerminalDataDir) -and (Test-Path -LiteralPath $PreferredProductionTerminalDataDir)) {
+    $terminalDataDir = (Resolve-Path -LiteralPath $PreferredProductionTerminalDataDir).Path
+}
 else {
     $terminalDataDir = Resolve-TerminalDataDir -Server $ServerName
 }
@@ -183,6 +284,7 @@ if (-not (Test-Path -LiteralPath $expertTarget)) {
     throw "Expert file not present in terminal data dir. Re-run with -CopySourcesToTerminal."
 }
 
+$compileStartedUtc = (Get-Date).ToUniversalTime()
 & $metaEditor "/compile:$expertTarget" "/log:$compileLog" | Out-Null
 
 $compileOk = $false
@@ -202,6 +304,31 @@ if (Test-Path -LiteralPath $compileLog) {
     }
 }
 
+$compiledArtifact = $null
+$terminalSync = $null
+if ($compileOk) {
+    $compiledArtifact = Resolve-FreshCompiledExpertArtifact `
+        -CompiledExpertName $ExpertName `
+        -CompileStartedUtc $compileStartedUtc `
+        -PreferredTerminalDataDir $terminalDataDir
+
+    if ($null -ne $compiledArtifact) {
+        $terminalSync = Sync-CompiledExpertToTerminalDataDir `
+            -SourceExpertPath ([string]$compiledArtifact.expert_path) `
+            -TargetTerminalDataDir $terminalDataDir `
+            -CompiledExpertName $ExpertName
+    }
+    else {
+        $terminalSync = [pscustomobject]@{
+            attempted = $false
+            source_path = $null
+            target_path = (Join-Path $terminalDataDir ("MQL5\\Experts\\MicroBots\\{0}.ex5" -f $ExpertName))
+            synced = $false
+            skipped_reason = "compiled_artifact_not_found"
+        }
+    }
+}
+
 $result = [ordered]@{
     schema_version = "1.0"
     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
@@ -213,6 +340,9 @@ $result = [ordered]@{
     copied_sources = [bool]$shouldCopySources
     compile_log = $compileLog
     compile_ok = $compileOk
+    actual_compiled_expert_path = if ($null -ne $compiledArtifact) { [string]$compiledArtifact.expert_path } else { $null }
+    actual_compiled_terminal_data_dir = if ($null -ne $compiledArtifact) { [string]$compiledArtifact.terminal_data_dir } else { $null }
+    terminal_sync = $terminalSync
 }
 
 if ($compileOk) {

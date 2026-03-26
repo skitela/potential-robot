@@ -59,7 +59,31 @@ if ($null -eq $plan) {
     throw "Local training plan missing after build: $PlanPath"
 }
 
+$selectedEntries = @($plan.start_group)
 $selectedSymbols = ConvertTo-SymbolSet -Items @($plan.start_group)
+$selectedTrainingStates = @(
+    @($selectedEntries) |
+        ForEach-Object { [string]$_.training_readiness_state } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique
+)
+$allowedTrainingStates = if (@($selectedTrainingStates).Count -gt 0) {
+    @($selectedTrainingStates)
+}
+else {
+    @("LOCAL_TRAINING_READY")
+}
+$trainerMinRows = 30000
+$trainerMinPositiveRows = 1000
+$trainerMinNegativeRows = 1000
+$limitedOnlyStartGroup = (@($selectedTrainingStates).Count -gt 0 -and (@($selectedTrainingStates | Where-Object { $_ -ne "LOCAL_TRAINING_LIMITED" }).Count -eq 0))
+if ($limitedOnlyStartGroup) {
+    # Limitowany tor dostaje mniejsza lyzke i pozostaje pod probation, a nie pelnym awansem.
+    $trainerMinRows = 20000
+    $trainerMinPositiveRows = 500
+    $trainerMinNegativeRows = 500
+}
+
 $previous = Read-JsonSafe -Path $latestPath
 $now = Get-Date
 $cooldownActive = $false
@@ -105,9 +129,12 @@ else {
     $null = & $TrainerScriptPath `
         -ProjectRoot $ProjectRoot `
         -TrainingReadinessPath (Join-Path $OutputRoot "instrument_training_readiness_latest.json") `
-        -AllowedTrainingStates @("LOCAL_TRAINING_READY") `
+        -AllowedTrainingStates $allowedTrainingStates `
         -SymbolAllowList $selectedSymbols `
         -MaxSymbols @($selectedSymbols).Count `
+        -MinRows $trainerMinRows `
+        -MinPositiveRows $trainerMinPositiveRows `
+        -MinNegativeRows $trainerMinNegativeRows `
         -PerfProfile $PerfProfile
 
     & $OnnxReviewScriptPath | Out-Null
@@ -176,6 +203,10 @@ $report = [ordered]@{
     max_start_group_size = $MaxStartGroupSize
     cooldown_minutes = $CooldownMinutes
     cooldown_minutes_left = $cooldownMinutesLeft
+    allowed_training_states = @($allowedTrainingStates)
+    trainer_min_rows = $trainerMinRows
+    trainer_min_positive_rows = $trainerMinPositiveRows
+    trainer_min_negative_rows = $trainerMinNegativeRows
     next_action = [string]$plan.next_action
     start_group = @($plan.start_group)
     trained_symbols = @($trainedSymbols | Sort-Object -Unique)
@@ -206,6 +237,10 @@ $lines.Add("")
 $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- state: {0}" -f $report.state))
 $lines.Add(("- perf_profile: {0}" -f $report.perf_profile))
+$lines.Add(("- allowed_training_states: {0}" -f ((@($report.allowed_training_states) -join ", "))))
+$lines.Add(("- trainer_min_rows: {0}" -f $report.trainer_min_rows))
+$lines.Add(("- trainer_min_positive_rows: {0}" -f $report.trainer_min_positive_rows))
+$lines.Add(("- trainer_min_negative_rows: {0}" -f $report.trainer_min_negative_rows))
 $lines.Add(("- next_action: {0}" -f $report.next_action))
 $lines.Add(("- start_group_count: {0}" -f $report.summary.start_group_count))
 $lines.Add(("- trained_symbols_count: {0}" -f $report.summary.trained_symbols_count))
