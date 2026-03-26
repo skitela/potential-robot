@@ -115,6 +115,19 @@ function Invoke-JsonScript {
     return (& $ScriptPath @Parameters)
 }
 
+function Get-WrapperCount {
+    param([string]$Pattern)
+
+    return @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "powershell.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                $_.CommandLine -like $Pattern
+            }
+    ).Count
+}
+
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $logsRoot = Join-Path $CommonRoot "logs"
 $reportsRoot = Join-Path $ResearchRoot "reports"
@@ -203,7 +216,8 @@ if ($Apply -and $null -ne $qdmMissingProfile) {
     $qdmMissingCount = [int]$qdmMissingProfile.qdm_missing_count
     $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
     $syncState = if ($null -ne $qdmMissingSyncStatus) { [string]$qdmMissingSyncStatus.state } else { "" }
-    if (($qdmMissingCount -gt 0 -or $qdmRefreshRequiredCount -gt 0) -and $syncState -notin @("running", "export_in_progress")) {
+    $syncWrapperActive = (Get-WrapperCount -Pattern "*qdm_missing_supported_sync_wrapper_*") -gt 0
+    if (($qdmMissingCount -gt 0 -or $qdmRefreshRequiredCount -gt 0) -and -not $syncWrapperActive -and $syncState -notin @("running", "export_in_progress", "queue_waiting_next_batch")) {
         & $qdmMissingSyncStarterScript | Out-Null
         $qdmRepairAction = "started_qdm_missing_supported_sync_background"
         $qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath

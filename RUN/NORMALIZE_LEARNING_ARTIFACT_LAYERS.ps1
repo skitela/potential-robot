@@ -23,9 +23,30 @@ function Read-JsonFile {
     }
 }
 
+function Get-QdmRefreshPreserveSet {
+    param([string]$RefreshProfilePath)
+
+    $preserve = @{}
+    $refreshProfile = Read-JsonFile -Path $RefreshProfilePath
+    if ($null -eq $refreshProfile -or $null -eq $refreshProfile.PSObject.Properties["refresh_required"]) {
+        return $preserve
+    }
+
+    foreach ($item in @($refreshProfile.refresh_required)) {
+        if ($null -eq $item) { continue }
+        $name = [string]$item.mt5_export_name
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $preserve[$name.Trim().ToUpperInvariant()] = $true
+    }
+
+    return $preserve
+}
+
 $datasetsDir = Join-Path $ResearchRoot "datasets"
 $cacheManifestPath = Join-Path $ResearchRoot "reports\qdm_cache_manifest_latest.json"
+$refreshProfilePath = Join-Path $ProjectRoot "EVIDENCE\OPS\qdm_visibility_refresh_profile_latest.json"
 $cacheManifest = Read-JsonFile -Path $cacheManifestPath
+$refreshPreserveSet = Get-QdmRefreshPreserveSet -RefreshProfilePath $refreshProfilePath
 $cacheFiles = @{}
 
 if ($null -ne $cacheManifest -and $cacheManifest.PSObject.Properties.Name -contains "files") {
@@ -40,6 +61,10 @@ $freedBytes = [int64]0
 
 foreach ($csvFile in @(Get-ChildItem -LiteralPath $QdmExportRoot -File -Filter "MB_*.csv" -ErrorAction SilentlyContinue)) {
     $stem = [System.IO.Path]::GetFileNameWithoutExtension($csvFile.Name)
+    $stemKey = $stem.Trim().ToUpperInvariant()
+    if ($refreshPreserveSet.ContainsKey($stemKey)) {
+        continue
+    }
     if (-not $cacheFiles.ContainsKey($stem)) {
         continue
     }

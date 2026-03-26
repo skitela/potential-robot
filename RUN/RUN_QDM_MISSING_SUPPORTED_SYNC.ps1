@@ -27,6 +27,60 @@ function Read-JsonFile {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
+function Remove-StaleQdmCacheForExports {
+    param(
+        [string]$ProjectRoot,
+        [string[]]$ExportNames
+    )
+
+    $manifestPath = Join-Path $ProjectRoot "EVIDENCE\OPS\qdm_visibility_refresh_profile_latest.json"
+    $cacheManifestPath = "C:\TRADING_DATA\RESEARCH\reports\qdm_cache_manifest_latest.json"
+    $removedPaths = New-Object System.Collections.Generic.List[string]
+    if (-not (Test-Path -LiteralPath $cacheManifestPath)) {
+        return @()
+    }
+
+    $cacheManifest = Read-JsonFile -Path $cacheManifestPath
+    if ($null -eq $cacheManifest -or $null -eq $cacheManifest.PSObject.Properties["files"]) {
+        return @()
+    }
+
+    $refreshManifest = Read-JsonFile -Path $manifestPath
+    $refreshSet = @{}
+    if ($null -ne $refreshManifest -and $null -ne $refreshManifest.PSObject.Properties["refresh_required"]) {
+        foreach ($item in @($refreshManifest.refresh_required)) {
+            if ($null -eq $item) { continue }
+            $name = [string]$item.mt5_export_name
+            if (-not [string]::IsNullOrWhiteSpace($name)) {
+                $refreshSet[$name.Trim().ToUpperInvariant()] = $true
+            }
+        }
+    }
+
+    foreach ($exportName in @($ExportNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $key = $exportName.Trim().ToUpperInvariant()
+        if (-not $refreshSet.ContainsKey($key)) {
+            continue
+        }
+        $entry = $cacheManifest.files.PSObject.Properties[$exportName]
+        if ($null -eq $entry) {
+            continue
+        }
+
+        $cachePath = [string]$entry.Value.minute_parquet_path
+        if ([string]::IsNullOrWhiteSpace($cachePath) -or -not (Test-Path -LiteralPath $cachePath)) {
+            continue
+        }
+
+        Remove-Item -LiteralPath $cachePath -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $cachePath)) {
+            $removedPaths.Add($cachePath) | Out-Null
+        }
+    }
+
+    return @($removedPaths.ToArray())
+}
+
 function Get-ActiveQdmExport {
     $process = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
@@ -335,6 +389,8 @@ try {
 
         & $SyncScriptPath -ProfilePath $BatchProfilePath
         & $ExportScriptPath -ProfilePath $BatchProfilePath
+        $batchExportNames = @($batchRows | ForEach-Object { [string]$_.mt5_export_name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $null = Remove-StaleQdmCacheForExports -ProjectRoot $ProjectRoot -ExportNames $batchExportNames
         & $RefreshResearchScriptPath -ProjectRoot $ProjectRoot -PerfProfile $ResearchPerfProfile | Out-Null
         $researchRefreshed = $true
 

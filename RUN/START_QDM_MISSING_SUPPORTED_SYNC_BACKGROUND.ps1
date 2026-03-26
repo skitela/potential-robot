@@ -6,7 +6,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$runnerPath = Join-Path $ProjectRoot "RUN\RUN_QDM_MISSING_SUPPORTED_SYNC.ps1"
+$runnerPath = Join-Path $ProjectRoot "RUN\RUN_QDM_MISSING_SUPPORTED_QUEUE.ps1"
 if (-not (Test-Path -LiteralPath $runnerPath)) {
     throw "Missing runner script: $runnerPath"
 }
