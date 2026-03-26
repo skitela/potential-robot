@@ -15,8 +15,6 @@ $reportPath = Join-Path $opsRoot "system_open_latest.json"
 $reportMdPath = Join-Path $opsRoot "system_open_latest.md"
 
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
-$haltScript = Join-Path $ProjectRoot "RUN\ZATRZYMAJ_SYSTEM.ps1"
-$normalScript = Join-Path $ProjectRoot "RUN\WLACZ_TRYB_NORMALNY_SYSTEMU.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 $auditScript = Join-Path $ProjectRoot "RUN\START_AUDIT_SUPERVISOR_BACKGROUND.ps1"
 $autonomousScript = Join-Path $ProjectRoot "RUN\START_AUTONOMOUS_90P_SUPERVISOR_BACKGROUND.ps1"
@@ -31,8 +29,6 @@ $openMt5Script = Join-Path $ProjectRoot "RUN\OPEN_OANDA_MT5_WITH_MICROBOTS.ps1"
 
 foreach ($path in @(
     $perfScript,
-    $haltScript,
-    $normalScript,
     $snapshotScript,
     $auditScript,
     $autonomousScript,
@@ -100,10 +96,6 @@ try {
         & $snapshotScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot | Out-Null
     }
 
-    Invoke-Step -Step "set_halt_for_boot" -Operation {
-        & $haltScript -ProjectRoot $ProjectRoot | Out-Null
-    }
-
     Invoke-Step -Step "apply_perf_profile" -Operation {
         & $perfScript -ThrottleInteractiveApps -MlPerfProfile $MlPerfProfile
     }
@@ -151,10 +143,6 @@ try {
     Invoke-Step -Step "boot_settle_wait" -Operation {
         Start-Sleep -Seconds 8
         "waited_8s"
-    }
-
-    Invoke-Step -Step "set_runtime_normal" -Operation {
-        & $normalScript -ProjectRoot $ProjectRoot | Out-Null
     }
 
     $verdict = "SYSTEM_OTWARTY"

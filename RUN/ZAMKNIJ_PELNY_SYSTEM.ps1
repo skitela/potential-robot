@@ -9,10 +9,9 @@ $ErrorActionPreference = "Stop"
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $reportPath = Join-Path $opsRoot "system_close_latest.json"
 $reportMdPath = Join-Path $opsRoot "system_close_latest.md"
-$haltScript = Join-Path $ProjectRoot "RUN\ZATRZYMAJ_SYSTEM.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 
-foreach ($path in @($haltScript, $snapshotScript)) {
+foreach ($path in @($snapshotScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -190,16 +189,6 @@ try {
     Invoke-Step -Step "snapshot_before_stop" -Operation {
         & $snapshotScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot | Out-Null
         "saved"
-    }
-
-    Invoke-Step -Step "set_halt" -Operation {
-        & $haltScript -ProjectRoot $ProjectRoot | Out-Null
-        "halt_set"
-    }
-
-    Invoke-Step -Step "halt_settle_wait" -Operation {
-        Start-Sleep -Seconds 3
-        "waited_3s"
     }
 
     $supervisorPatterns = @(

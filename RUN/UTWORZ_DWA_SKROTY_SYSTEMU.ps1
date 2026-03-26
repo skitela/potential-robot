@@ -77,8 +77,8 @@ foreach ($path in @($openScript, $closeScript)) {
 }
 
 $created = @(
-    New-DesktopShortcut -Name "OTWORZ SYSTEM.lnk" -ScriptPath $openScript -Description "Uruchamia caly system Makro i Mikro Bot wraz z MT5 i supervisorami." -IconLocation "$env:SystemRoot\System32\shell32.dll,220"
-    New-DesktopShortcut -Name "ZAMKNIJ SYSTEM.lnk" -ScriptPath $closeScript -Description "Zatrzymuje caly system Makro i Mikro Bot w bezpiecznej kolejnosci." -IconLocation "$env:SystemRoot\System32\shell32.dll,131"
+    New-DesktopShortcut -Name "OTWORZ SYSTEM.lnk" -ScriptPath $openScript -Description "Uruchamia lokalny system laptopa: MT5, supervisory i tory nauki. Nie steruje serwerem VPS." -IconLocation "$env:SystemRoot\System32\shell32.dll,220"
+    New-DesktopShortcut -Name "ZAMKNIJ SYSTEM.lnk" -ScriptPath $closeScript -Description "Zatrzymuje tylko lokalny system laptopa w bezpiecznej kolejnosci. Nie wysyla HALT na serwer VPS." -IconLocation "$env:SystemRoot\System32\shell32.dll,131"
 )
 
 $report = [ordered]@{
