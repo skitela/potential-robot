@@ -998,7 +998,8 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_shadow_datasets" -Operation {
         $report = (& $shadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
-        "shadow_ready=$($report.summary.shadow_dataset_ready_count); shadow_runtime=$($report.summary.shadow_dataset_runtime_ready_count); shadow_outcome=$($report.summary.shadow_dataset_outcome_ready_count)"
+        $summary = if ($null -ne $report -and $null -ne $report.summary) { $report.summary } else { [pscustomobject]@{} }
+        "shadow_ready=$($summary.shadow_dataset_ready_count); shadow_runtime=$($summary.shadow_dataset_runtime_ready_count); shadow_outcome=$($summary.shadow_dataset_outcome_ready_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_training_readiness" -Operation {
@@ -1012,7 +1013,7 @@ while ($true) {
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_lane" -Operation {
-        $report = (& $localTrainingLaneScript -ProjectRoot $ProjectRoot -PerfProfile $LearningPerfProfile | ConvertFrom-Json)
+        $report = (& $localTrainingLaneScript -ProjectRoot $ProjectRoot -PerfProfile $learningPerf.profile | ConvertFrom-Json)
         "state=$($report.state); trained=$($report.summary.trained_symbols_count); start_group=$($report.summary.start_group_count)"
     } | Out-Null
 
