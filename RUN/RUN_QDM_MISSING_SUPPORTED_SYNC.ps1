@@ -1,9 +1,11 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$ProfileBuilderPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1",
+    [string]$RefreshProfileBuilderPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1",
     [string]$SyncScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\SYNC_QDM_FOCUS_PACK.ps1",
     [string]$ExportScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\EXPORT_QDM_FOCUS_PACK_TO_MT5.ps1",
     [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_missing_only_pack_latest.csv",
+    [string]$RefreshProfilePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_visibility_refresh_pack_latest.csv",
     [string]$BatchProfilePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_missing_supported_batch_latest.csv",
     [string]$RefreshResearchScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\REFRESH_MICROBOT_RESEARCH_DATA.ps1",
     [ValidateSet("ConcurrentLab", "OfflineMax", "Light")]
@@ -53,32 +55,69 @@ function Get-ActiveQdmExport {
 function Get-ProfileSnapshot {
     param(
         [string]$ProjectRoot,
-        [string]$ProfileStatusPath
+        [string]$ProfileStatusPath,
+        [string]$RefreshStatusPath
     )
 
     & $ProfileBuilderPath | Out-Null
+    & $RefreshProfileBuilderPath | Out-Null
 
     $profileStatus = Read-JsonFile -Path $ProfileStatusPath
     if ($null -eq $profileStatus) {
         throw "Missing profile status not found: $ProfileStatusPath"
     }
+    $refreshStatus = Read-JsonFile -Path $RefreshStatusPath
 
-    $pendingItems = @()
+    $pendingItems = New-Object System.Collections.Generic.List[object]
     if ($null -ne $profileStatus.PSObject.Properties["history_ready_export_pending"]) {
-        $pendingItems = @($profileStatus.history_ready_export_pending)
+        foreach ($item in @($profileStatus.history_ready_export_pending)) {
+            if ($null -ne $item) {
+                $pendingItems.Add($item) | Out-Null
+            }
+        }
     }
     elseif ($null -ne $profileStatus.PSObject.Properties["missing"]) {
-        $pendingItems = @($profileStatus.missing)
+        foreach ($item in @($profileStatus.missing)) {
+            if ($null -ne $item) {
+                $pendingItems.Add($item) | Out-Null
+            }
+        }
+    }
+
+    $refreshRequiredSymbols = @()
+    $refreshRequiredCount = 0
+    if ($null -ne $refreshStatus) {
+        if ($null -ne $refreshStatus.PSObject.Properties["summary"]) {
+            $refreshRequiredCount = [int]$refreshStatus.summary.refresh_required_count
+        }
+        if ($null -ne $refreshStatus.PSObject.Properties["refresh_required"]) {
+            $refreshItems = @($refreshStatus.refresh_required)
+            $refreshRequiredSymbols = @($refreshItems | ForEach-Object { [string]$_.symbol_alias } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            foreach ($item in $refreshItems) {
+                if ($null -eq $item) { continue }
+                $alreadyTracked = @($pendingItems | Where-Object { [string]$_.mt5_export_name -eq [string]$item.mt5_export_name }).Count -gt 0
+                if (-not $alreadyTracked) {
+                    $pendingItems.Add([pscustomobject]@{
+                        symbol_alias = [string]$item.symbol_alias
+                        mt5_export_name = [string]$item.mt5_export_name
+                        reason = [string]$item.main_root_cause
+                        refresh_required = $true
+                    }) | Out-Null
+                }
+            }
+        }
     }
 
     return [pscustomobject]@{
         missing_count = [int]$profileStatus.qdm_missing_count
+        refresh_required_count = $refreshRequiredCount
         blocked_count = [int]$profileStatus.qdm_blocked_count
         unsupported_count = [int]$profileStatus.qdm_unsupported_count
-        missing_symbols = @($pendingItems | ForEach-Object { [string]$_.symbol_alias } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        missing_symbols = @($pendingItems | ForEach-Object { [string]$_.symbol_alias } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+        refresh_symbols = @($refreshRequiredSymbols | Select-Object -Unique)
         unsupported_symbols = @($profileStatus.unsupported | ForEach-Object { [string]$_.symbol_alias })
         current_focus = if ($pendingItems.Count -gt 0) { [string]$pendingItems[0].symbol_alias } else { $null }
-        pending_items = $pendingItems
+        pending_items = @($pendingItems.ToArray())
     }
 }
 
@@ -111,16 +150,23 @@ function Get-QdmRecoveryPriorityMap {
 
 function Get-BatchRows {
     param(
-        [string]$ProfilePath,
+        [string[]]$ProfilePaths,
         [object[]]$PendingItems,
         [int]$BatchSize
     )
 
-    if (-not (Test-Path -LiteralPath $ProfilePath)) {
-        return @()
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($candidatePath in @($ProfilePaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        if (-not (Test-Path -LiteralPath $candidatePath)) {
+            continue
+        }
+        foreach ($row in @(Import-Csv -LiteralPath $candidatePath -Encoding UTF8)) {
+            if ($null -ne $row) {
+                $rows.Add($row) | Out-Null
+            }
+        }
     }
-
-    $rows = @(Import-Csv -LiteralPath $ProfilePath -Encoding UTF8)
+    $rows = @($rows.ToArray())
     if ($rows.Count -eq 0 -or $PendingItems.Count -eq 0) {
         return @()
     }
@@ -188,9 +234,11 @@ function Write-LatestStatus {
         [string]$State,
         [bool]$SyncStarted,
         [int]$MissingCount,
+        [int]$RefreshRequiredCount,
         [int]$BlockedCount,
         [int]$UnsupportedCount,
         [string[]]$MissingSymbols,
+        [string[]]$RefreshSymbols,
         [string[]]$UnsupportedSymbols,
         [string]$ProfilePath,
         [string]$LatestStatusPath,
@@ -207,9 +255,11 @@ function Write-LatestStatus {
         generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
         state = $State
         qdm_missing_count = $MissingCount
+        qdm_refresh_required_count = $RefreshRequiredCount
         qdm_blocked_count = $BlockedCount
         qdm_unsupported_count = $UnsupportedCount
         missing_symbols = $MissingSymbols
+        refresh_symbols = $RefreshSymbols
         unsupported_symbols = $UnsupportedSymbols
         profile_path = $ProfilePath
         sync_started = $SyncStarted
@@ -229,49 +279,52 @@ function Write-LatestStatus {
     $payload | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $LatestStatusPath -Encoding UTF8
 }
 
-foreach ($path in @($ProfileBuilderPath, $SyncScriptPath, $ExportScriptPath, $RefreshResearchScriptPath)) {
+foreach ($path in @($ProfileBuilderPath, $RefreshProfileBuilderPath, $SyncScriptPath, $ExportScriptPath, $RefreshResearchScriptPath)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
 }
 
 $profileStatusPath = Join-Path $ProjectRoot "EVIDENCE\OPS\qdm_missing_only_profile_latest.json"
-$profileSnapshot = Get-ProfileSnapshot -ProjectRoot $ProjectRoot -ProfileStatusPath $profileStatusPath
+$refreshStatusPath = Join-Path $ProjectRoot "EVIDENCE\OPS\qdm_visibility_refresh_profile_latest.json"
+$profileSnapshot = Get-ProfileSnapshot -ProjectRoot $ProjectRoot -ProfileStatusPath $profileStatusPath -RefreshStatusPath $refreshStatusPath
 $missingCount = $profileSnapshot.missing_count
+$refreshRequiredCount = $profileSnapshot.refresh_required_count
 $blockedCount = $profileSnapshot.blocked_count
 $unsupportedCount = $profileSnapshot.unsupported_count
 $missingSymbols = @($profileSnapshot.missing_symbols)
+$refreshSymbols = @($profileSnapshot.refresh_symbols)
 $unsupportedSymbols = @($profileSnapshot.unsupported_symbols)
 $currentFocus = $profileSnapshot.current_focus
 $pendingItems = @($profileSnapshot.pending_items)
-$batchRows = @(Get-BatchRows -ProfilePath $ProfilePath -PendingItems $pendingItems -BatchSize $BatchSize)
+$batchRows = @(Get-BatchRows -ProfilePaths @($ProfilePath, $RefreshProfilePath) -PendingItems $pendingItems -BatchSize $BatchSize)
 $batchSymbols = @($batchRows | ForEach-Object { [string]$_.symbol_alias } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $recoveredSymbols = @()
 $researchRefreshed = $false
 
 $state = "noop"
 $syncStarted = $false
-$note = "no_missing_exports"
+$note = "no_qdm_repairs_required"
 $activeExport = Get-ActiveQdmExport
 
 if ($null -ne $activeExport) {
     $currentFocus = if (-not [string]::IsNullOrWhiteSpace($activeExport.symbol)) { $activeExport.symbol } else { $currentFocus }
     $note = "qdm_export_already_running"
-    Write-LatestStatus -State "export_in_progress" -SyncStarted $false -MissingCount $missingCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $ProfilePath -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ResearchRefreshed $researchRefreshed
+    Write-LatestStatus -State "export_in_progress" -SyncStarted $false -MissingCount $missingCount -RefreshRequiredCount $refreshRequiredCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -RefreshSymbols $refreshSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $ProfilePath -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ResearchRefreshed $researchRefreshed
     Get-Content -LiteralPath $LatestStatusPath -Raw -Encoding UTF8
     return
 }
 
 try {
-    if ($missingCount -gt 0) {
+    if (($missingCount + $refreshRequiredCount) -gt 0) {
         $state = "running"
         $syncStarted = $true
-        $note = "sync_and_export_missing_qdm_batch"
+        $note = if ($refreshRequiredCount -gt 0) { "sync_and_export_missing_or_stale_qdm_batch" } else { "sync_and_export_missing_qdm_batch" }
 
         if ($batchRows.Count -eq 0) {
             $state = "blocked_no_batch"
-            $note = "missing_exports_detected_but_no_batch_rows_selected"
-            Write-LatestStatus -State $state -SyncStarted $false -MissingCount $missingCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $ProfilePath -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ResearchRefreshed $researchRefreshed
+            $note = "qdm_repair_detected_but_no_batch_rows_selected"
+            Write-LatestStatus -State $state -SyncStarted $false -MissingCount $missingCount -RefreshRequiredCount $refreshRequiredCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -RefreshSymbols $refreshSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $ProfilePath -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ResearchRefreshed $researchRefreshed
             Get-Content -LiteralPath $LatestStatusPath -Raw -Encoding UTF8
             return
         }
@@ -285,29 +338,31 @@ try {
         & $RefreshResearchScriptPath -ProjectRoot $ProjectRoot -PerfProfile $ResearchPerfProfile | Out-Null
         $researchRefreshed = $true
 
-        $profileSnapshot = Get-ProfileSnapshot -ProjectRoot $ProjectRoot -ProfileStatusPath $profileStatusPath
+        $profileSnapshot = Get-ProfileSnapshot -ProjectRoot $ProjectRoot -ProfileStatusPath $profileStatusPath -RefreshStatusPath $refreshStatusPath
         $missingCount = $profileSnapshot.missing_count
+        $refreshRequiredCount = $profileSnapshot.refresh_required_count
         $blockedCount = $profileSnapshot.blocked_count
         $unsupportedCount = $profileSnapshot.unsupported_count
         $missingSymbols = @($profileSnapshot.missing_symbols)
+        $refreshSymbols = @($profileSnapshot.refresh_symbols)
         $unsupportedSymbols = @($profileSnapshot.unsupported_symbols)
         $currentFocus = $profileSnapshot.current_focus
-        $recoveredSymbols = @($batchSymbols | Where-Object { $missingSymbols -notcontains $_ })
+        $recoveredSymbols = @($batchSymbols | Where-Object { $missingSymbols -notcontains $_ -and $refreshSymbols -notcontains $_ })
 
-        if ($missingCount -gt 0) {
+        if (($missingCount + $refreshRequiredCount) -gt 0) {
             $state = "completed_with_remaining_missing"
-            $note = "batch_completed_some_exports_still_missing"
+            $note = "batch_completed_some_qdm_repairs_still_pending"
         }
         else {
             $state = "completed"
-            $note = "all_missing_exports_repaired"
+            $note = "all_qdm_repairs_completed"
         }
     }
 
-    Write-LatestStatus -State $state -SyncStarted $syncStarted -MissingCount $missingCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $(if ($batchRows.Count -gt 0) { $BatchProfilePath } else { $ProfilePath }) -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ResearchRefreshed $researchRefreshed
+    Write-LatestStatus -State $state -SyncStarted $syncStarted -MissingCount $missingCount -RefreshRequiredCount $refreshRequiredCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -RefreshSymbols $refreshSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $(if ($batchRows.Count -gt 0) { $BatchProfilePath } else { $ProfilePath }) -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ResearchRefreshed $researchRefreshed
     Get-Content -LiteralPath $LatestStatusPath -Raw -Encoding UTF8
 }
 catch {
-    Write-LatestStatus -State "failed" -SyncStarted $syncStarted -MissingCount $missingCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $(if ($batchRows.Count -gt 0) { $BatchProfilePath } else { $ProfilePath }) -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ErrorMessage $_.Exception.Message -ResearchRefreshed $researchRefreshed
+    Write-LatestStatus -State "failed" -SyncStarted $syncStarted -MissingCount $missingCount -RefreshRequiredCount $refreshRequiredCount -BlockedCount $blockedCount -UnsupportedCount $unsupportedCount -MissingSymbols $missingSymbols -RefreshSymbols $refreshSymbols -UnsupportedSymbols $unsupportedSymbols -ProfilePath $(if ($batchRows.Count -gt 0) { $BatchProfilePath } else { $ProfilePath }) -LatestStatusPath $LatestStatusPath -CurrentFocus $currentFocus -BatchSymbols $batchSymbols -RecoveredSymbols $recoveredSymbols -Note $note -ErrorMessage $_.Exception.Message -ResearchRefreshed $researchRefreshed
     throw
 }

@@ -295,6 +295,8 @@ function Invoke-AuditCycle {
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
     $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
+    $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
+    $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
     $instrumentLocalTrainingPlanPath = Join-Path $opsRoot "instrument_local_training_plan_latest.json"
     $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
     $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
@@ -346,6 +348,17 @@ function Invoke-AuditCycle {
                 ProjectRoot = $ProjectRoot
                 ResearchRoot = "C:\TRADING_DATA\RESEARCH"
             }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = "C:\TRADING_DATA\RESEARCH"
+            }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1")
@@ -558,6 +571,8 @@ function Invoke-AuditCycle {
     $instrumentShadowDatasets = Read-JsonSafe -Path $instrumentShadowDatasetsPath
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
     $learningSourceAudit = Read-JsonSafe -Path $learningSourceAuditPath
+    $qdmVisibilityRefresh = Read-JsonSafe -Path $qdmVisibilityRefreshPath
+    $paperLiveActionGapAudit = Read-JsonSafe -Path $paperLiveActionGapAuditPath
     $instrumentLocalTrainingPlan = Read-JsonSafe -Path $instrumentLocalTrainingPlanPath
     $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
     $instrumentLocalTrainingAudit = Read-JsonSafe -Path $instrumentLocalTrainingAuditPath
@@ -1187,6 +1202,75 @@ function Invoke-AuditCycle {
 
     if ($learningSourceEvidence.Count -gt 0) {
         $domainStatuses.Add((New-DomainStatus -Domain "ZRODLA_UCZENIA_GLOBALNE_I_LOKALNE" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $learningSourceEvidence) -Reason "Tor uczenia musi stale kontrolowac zaleznosc od nauczyciela globalnego i gotowosc lokalnych modeli." -Evidence $learningSourceEvidence)) | Out-Null
+    }
+
+    $qdmRootCauseEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $qdmVisibilityRefresh) {
+        $refreshSummary = Get-OptionalValue -Object $qdmVisibilityRefresh -Name "summary" -Default $null
+        $refreshRequiredCount = [int](Get-OptionalValue -Object $refreshSummary -Name "refresh_required_count" -Default 0)
+        $retrainRequiredCount = [int](Get-OptionalValue -Object $refreshSummary -Name "retrain_required_count" -Default 0)
+        $currentVisibleCount = [int](Get-OptionalValue -Object $refreshSummary -Name "current_contract_qdm_visible_symbols_count" -Default 0)
+        $trainedVisibleCount = [int](Get-OptionalValue -Object $refreshSummary -Name "trained_global_qdm_visible_symbols_count" -Default 0)
+
+        if ($refreshRequiredCount -gt 0) {
+            $qdmRootCauseEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "qdm_refresh_required"
+                message = "Czesc symboli ma kandydaty, ale ich QDM jest starsze niz okno kandydatow i wymaga odswiezenia eksportu."
+                context = @{ refresh_required_count = $refreshRequiredCount }
+            }) | Out-Null
+        }
+        if ($retrainRequiredCount -gt 0) {
+            $qdmRootCauseEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "global_training_stale"
+                message = "Aktualny kontrakt widzi wiecej QDM niz ostatni globalny trening lub jego metryki."
+                context = @{
+                    retrain_required_count = $retrainRequiredCount
+                    current_contract_qdm_visible_symbols_count = $currentVisibleCount
+                    trained_global_qdm_visible_symbols_count = $trainedVisibleCount
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($qdmRootCauseEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "PRZYCZYNY_WIDOCZNOSCI_QDM" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $qdmRootCauseEvidence) -Reason "QDM wymaga rozroznienia miedzy brakiem, staroscia i nieaktualnym treningiem globalnym." -Evidence $qdmRootCauseEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "PRZYCZYNY_WIDOCZNOSCI_QDM" -Gate "RAPORTUJ" -Severity "info" -Reason "Audyt widocznosci QDM nie pokazuje swiezej luki w kontrakcie ani w treningu globalnym.")) | Out-Null
+    }
+
+    $paperActionEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $paperLiveActionGapAudit) {
+        $paperSummary = Get-OptionalValue -Object $paperLiveActionGapAudit -Name "summary" -Default $null
+        $freshIdleCount = [int](Get-OptionalValue -Object $paperSummary -Name "fresh_but_idle_count" -Default 0)
+        $activeTradeCount = [int](Get-OptionalValue -Object $paperSummary -Name "active_trade_count" -Default 0)
+        $fleetFreezeCount = [int](Get-OptionalValue -Object $paperSummary -Name "fleet_freeze_count" -Default 0)
+        $familyFreezeCount = [int](Get-OptionalValue -Object $paperSummary -Name "family_freeze_count" -Default 0)
+        $costBlockCount = [int](Get-OptionalValue -Object $paperSummary -Name "cost_block_count" -Default 0)
+
+        if ($freshIdleCount -gt 0) {
+            $paperActionEvidence.Add([pscustomobject]@{
+                severity = if ($freshIdleCount -ge 10 -and $activeTradeCount -le 2) { "high" } else { "medium" }
+                component = "paper_live_idle_symbols"
+                message = "Wiekszosc symboli na paper-live zyje i zbiera heartbeat, ale nie wchodzi w dzialania."
+                context = @{
+                    fresh_but_idle_count = $freshIdleCount
+                    active_trade_count = $activeTradeCount
+                    fleet_freeze_count = $fleetFreezeCount
+                    family_freeze_count = $familyFreezeCount
+                    cost_block_count = $costBlockCount
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($paperActionEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_LUKA_AKCJI" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $paperActionEvidence) -Reason "Paper-live wymaga rozbicia na blokady zaufania, kosztu i zamrozenia strojenia." -Evidence $paperActionEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_LUKA_AKCJI" -Gate "RAPORTUJ" -Severity "info" -Reason "Paper-live nie pokazuje swiezej luki miedzy zyciem symbolu a brakiem akcji.")) | Out-Null
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "ZRODLA_UCZENIA_GLOBALNE_I_LOKALNE" -Gate "RAPORTUJ" -Severity "info" -Reason "Przeplyw wiedzy miedzy modelem globalnym i lokalnymi modelami jest pod kontrola.")) | Out-Null

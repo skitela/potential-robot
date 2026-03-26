@@ -13,6 +13,8 @@ $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $onnxMicroReviewScript = Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
+$qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
+$paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERDICTS_REPORT.ps1"
 $winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
 $learningHealthRegistryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
@@ -66,6 +68,8 @@ foreach ($path in @(
     $mlHintsScript,
     $onnxMicroReviewScript,
     $learningSourceAuditScript,
+    $qdmVisibilityRefreshScript,
+    $paperLiveActionGapAuditScript,
     $activeFleetVerdictsScript,
     $winnerDeploymentScript,
     $learningHealthRegistryScript,
@@ -584,6 +588,25 @@ function Write-SupervisorStatus {
         $learningSourceAuditHead = @($learningSourceAudit.top_critical | Select-Object -First 5)
     }
 
+    $qdmVisibilityRefreshPath = Join-Path $statusDir "qdm_visibility_refresh_profile_latest.json"
+    $qdmVisibilityRefresh = $null
+    $qdmVisibilityRefreshHead = @()
+    if (Test-Path -LiteralPath $qdmVisibilityRefreshPath) {
+        $qdmVisibilityRefresh = Get-Content -LiteralPath $qdmVisibilityRefreshPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $qdmVisibilityRefreshHead = @($qdmVisibilityRefresh.refresh_required | Select-Object -First 5)
+        if (@($qdmVisibilityRefreshHead).Count -eq 0) {
+            $qdmVisibilityRefreshHead = @($qdmVisibilityRefresh.retrain_required | Select-Object -First 5)
+        }
+    }
+
+    $paperLiveActionGapPath = Join-Path $statusDir "paper_live_action_gap_audit_latest.json"
+    $paperLiveActionGap = $null
+    $paperLiveActionGapHead = @()
+    if (Test-Path -LiteralPath $paperLiveActionGapPath) {
+        $paperLiveActionGap = Get-Content -LiteralPath $paperLiveActionGapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $paperLiveActionGapHead = @($paperLiveActionGap.top_idle_symbols | Select-Object -First 5)
+    }
+
     $localTrainingPlanPath = Join-Path $statusDir "instrument_local_training_plan_latest.json"
     $localTrainingPlan = $null
     $localTrainingPlanHead = @()
@@ -648,6 +671,10 @@ function Write-SupervisorStatus {
         top_instrument_training_readiness = $trainingReadinessHead
         learning_source_audit = $learningSourceAudit
         top_learning_source_audit = $learningSourceAuditHead
+        qdm_visibility_refresh = $qdmVisibilityRefresh
+        top_qdm_visibility_refresh = $qdmVisibilityRefreshHead
+        paper_live_action_gap_audit = $paperLiveActionGap
+        top_paper_live_action_gap = $paperLiveActionGapHead
         instrument_local_training_plan = $localTrainingPlan
         top_instrument_local_training_plan = $localTrainingPlanHead
         instrument_local_training_lane = $localTrainingLane
@@ -766,6 +793,41 @@ function Write-SupervisorStatus {
     }
     else {
         $lines.Add("- instrument local training audit report not available")
+    }
+    $lines.Add("")
+    $lines.Add("## QDM Visibility Refresh")
+    $lines.Add("")
+    if ($null -ne $qdmVisibilityRefresh) {
+        $lines.Add(("- refresh_required_count: {0}" -f $qdmVisibilityRefresh.summary.refresh_required_count))
+        $lines.Add(("- retrain_required_count: {0}" -f $qdmVisibilityRefresh.summary.retrain_required_count))
+        foreach ($item in $qdmVisibilityRefreshHead) {
+            $lines.Add(("- {0}: cause={1}, refresh={2}, retrain={3}" -f
+                $item.symbol_alias,
+                $item.main_root_cause,
+                $item.refresh_required,
+                $item.retrain_required))
+        }
+    }
+    else {
+        $lines.Add("- qdm visibility refresh report not available")
+    }
+    $lines.Add("")
+    $lines.Add("## Paper Live Action Gap")
+    $lines.Add("")
+    if ($null -ne $paperLiveActionGap) {
+        $lines.Add(("- fresh_but_idle_count: {0}" -f $paperLiveActionGap.summary.fresh_but_idle_count))
+        $lines.Add(("- active_trade_count: {0}" -f $paperLiveActionGap.summary.active_trade_count))
+        foreach ($item in $paperLiveActionGapHead) {
+            $lines.Add(("- {0}: direct_block={1}, why={2}, trust={3}, cost={4}" -f
+                $item.symbol_alias,
+                $item.direct_block,
+                $item.deeper_why,
+                $item.trust_state,
+                $item.cost_pressure))
+        }
+    }
+    else {
+        $lines.Add("- paper live action gap report not available")
     }
     $lines.Add("")
     $lines.Add("## Learning Health")
@@ -930,6 +992,16 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "learning_source_audit" -Operation {
         $report = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "global_gap=$($report.summary.globalny_model_qdm_visibility_gap_count); candidate_gap=$($report.summary.candidate_gap_count); blocked=$($report.summary.blocked_count); target60_missed=$($report.summary.target_60p_missed_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "qdm_visibility_refresh" -Operation {
+        $report = (& $qdmVisibilityRefreshScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "refresh_required=$($report.summary.refresh_required_count); retrain_required=$($report.summary.retrain_required_count); current_visible=$($report.summary.current_contract_qdm_visible_symbols_count); trained_visible=$($report.summary.trained_global_qdm_visible_symbols_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "paper_live_action_gap_audit" -Operation {
+        $report = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "idle=$($report.summary.fresh_but_idle_count); active=$($report.summary.active_trade_count); fleet_freeze=$($report.summary.fleet_freeze_count); cost_block=$($report.summary.cost_block_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "learning_path_hygiene" -Operation {

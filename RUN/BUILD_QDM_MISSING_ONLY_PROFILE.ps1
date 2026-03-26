@@ -325,11 +325,20 @@ foreach ($item in @($registry.symbols)) {
     if ($exportInfo.ready -or $cacheReady) {
         $present.Add([pscustomobject]@{
             symbol_alias = $alias
+            broker_symbol = $brokerSymbol
             qdm_symbol = $spec.symbol
+            datasource = $spec.datasource
+            datatype = $spec.datatype
+            date_from = $spec.date_from
+            date_to = $spec.date_to
+            notes = $spec.notes
+            mt5_export_name = $spec.mt5_export_name
+            history_ready = ($usableHistory.Count -gt 0)
             history_file = if ($null -ne $bestHistory) { $bestHistory.Name } else { $null }
             history_size_mb = if ($null -ne $bestHistory) { [math]::Round(($bestHistory.Length / 1MB), 1) } else { 0.0 }
             history_last_write_local = if ($null -ne $bestHistory) { $bestHistory.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
             export_file = Split-Path -Leaf $exportInfo.path
+            export_path = $exportInfo.path
             export_present = [bool]$exportInfo.ready
             export_size_mb = $exportInfo.size_mb
             export_last_write_local = $exportInfo.last_write_local
@@ -358,6 +367,9 @@ foreach ($item in @($registry.symbols)) {
         datasource = $spec.datasource
         datatype = $spec.datatype
         mt5_export_name = $spec.mt5_export_name
+        date_from = $spec.date_from
+        date_to = $spec.date_to
+        notes = $spec.notes
         history_ready = ($usableHistory.Count -gt 0)
         history_file = if ($null -ne $bestHistory) { $bestHistory.Name } else { $null }
         history_size_mb = if ($null -ne $bestHistory) { [math]::Round(($bestHistory.Length / 1MB), 1) } else { 0.0 }

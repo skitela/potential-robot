@@ -124,10 +124,12 @@ $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYERS.ps1"
 $vpsSpoolWellbeingScript = Join-Path $ProjectRoot "RUN\BUILD_VPS_SPOOL_WELLBEING_AUDIT.ps1"
 $qdmMissingProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1"
+$qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
 $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
+$paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $shadowRuntimeBootstrapScript = Join-Path $ProjectRoot "RUN\ENSURE_SHADOW_RUNTIME_BOOTSTRAP.ps1"
 $instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
 $instrumentLocalTrainingAuditScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1"
@@ -137,11 +139,13 @@ $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training
 $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
 $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
+$qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
+$paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
 $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_latest.json"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $paperLiveActionGapAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -153,6 +157,7 @@ $pathHygiene = Read-JsonSafe -Path $pathHygienePath
 $hotPath = Read-JsonSafe -Path $hotPathPath
 $manifestState = Get-ManifestState -ManifestPath $manifestPath
 $null = & $qdmMissingProfileScript
+$qdmVisibilityRefresh = (& $qdmVisibilityRefreshScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
 $artifactCleanup = Invoke-JsonScript -ScriptPath $normalizeScript -Parameters @{
     ProjectRoot = $ProjectRoot
     ResearchRoot = $ResearchRoot
@@ -167,12 +172,14 @@ $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $Proje
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
+$paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $shadowRuntimeBootstrap = (& $shadowRuntimeBootstrapScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -Apply:$Apply | ConvertFrom-Json)
 if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootstrap.summary.applied_count -gt 0) {
     $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
+    $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 }
 $instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
@@ -191,8 +198,9 @@ $qdmRecoveryResearchRefreshed = if ($null -ne $qdmMissingSyncStatus) { [bool]$qd
 
 if ($Apply -and $null -ne $qdmMissingProfile) {
     $qdmMissingCount = [int]$qdmMissingProfile.qdm_missing_count
+    $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
     $syncState = if ($null -ne $qdmMissingSyncStatus) { [string]$qdmMissingSyncStatus.state } else { "" }
-    if ($qdmMissingCount -gt 0 -and $syncState -notin @("running", "export_in_progress")) {
+    if (($qdmMissingCount -gt 0 -or $qdmRefreshRequiredCount -gt 0) -and $syncState -notin @("running", "export_in_progress")) {
         & $qdmMissingSyncStarterScript | Out-Null
         $qdmRepairAction = "started_qdm_missing_supported_sync_background"
         $qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath
@@ -339,6 +347,10 @@ $shadowDatasetReadyCount = if ($null -ne $instrumentShadowDatasets) {
 } else { 0 }
 $learningSourceGapCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.globalny_model_qdm_visibility_gap_count } else { 0 }
 $learningSourceBlockedCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.blocked_count } else { 0 }
+$qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
+$qdmRetrainRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.retrain_required_count } else { 0 }
+$paperLiveIdleCount = if ($null -ne $paperLiveActionGapAudit) { [int]$paperLiveActionGapAudit.summary.fresh_but_idle_count } else { 0 }
+$paperLiveActiveTradeCount = if ($null -ne $paperLiveActionGapAudit) { [int]$paperLiveActionGapAudit.summary.active_trade_count } else { 0 }
 $shadowRuntimeBootstrapAppliedCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.applied_count } else { 0 }
 $shadowRuntimeBootstrapPendingCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.pending_count } else { 0 }
 $localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
@@ -384,10 +396,12 @@ $report = [ordered]@{
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
     vps_spool_bridge = $vpsSpoolBridge
     qdm_missing_supported_sync = $qdmMissingSyncStatus
+    qdm_visibility_refresh = $qdmVisibilityRefresh
     instrument_data_readiness = $instrumentDataReadiness
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
     learning_source_audit = $learningSourceAudit
+    paper_live_action_gap_audit = $paperLiveActionGapAudit
     shadow_runtime_bootstrap = $shadowRuntimeBootstrap
     instrument_local_training_plan = $instrumentLocalTrainingPlan
     instrument_local_training_lane = $instrumentLocalTrainingLane
@@ -426,6 +440,10 @@ $report = [ordered]@{
         shadow_dataset_ready_count = $shadowDatasetReadyCount
         learning_source_gap_count = $learningSourceGapCount
         learning_source_blocked_count = $learningSourceBlockedCount
+        qdm_refresh_required_count = $qdmRefreshRequiredCount
+        qdm_retrain_required_count = $qdmRetrainRequiredCount
+        paper_live_idle_count = $paperLiveIdleCount
+        paper_live_active_trade_count = $paperLiveActiveTradeCount
         shadow_runtime_bootstrap_applied_count = $shadowRuntimeBootstrapAppliedCount
         shadow_runtime_bootstrap_pending_count = $shadowRuntimeBootstrapPendingCount
         local_training_ready_count = $localTrainingReadyCount
@@ -469,6 +487,10 @@ $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
 $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_source_gap_count))
 $lines.Add(("- learning_source_blocked_count: {0}" -f $report.summary.learning_source_blocked_count))
+$lines.Add(("- qdm_refresh_required_count: {0}" -f $report.summary.qdm_refresh_required_count))
+$lines.Add(("- qdm_retrain_required_count: {0}" -f $report.summary.qdm_retrain_required_count))
+$lines.Add(("- paper_live_idle_count: {0}" -f $report.summary.paper_live_idle_count))
+$lines.Add(("- paper_live_active_trade_count: {0}" -f $report.summary.paper_live_active_trade_count))
 $lines.Add(("- shadow_runtime_bootstrap_applied_count: {0}" -f $report.summary.shadow_runtime_bootstrap_applied_count))
 $lines.Add(("- shadow_runtime_bootstrap_pending_count: {0}" -f $report.summary.shadow_runtime_bootstrap_pending_count))
 $lines.Add(("- local_training_ready_count: {0}" -f $report.summary.local_training_ready_count))
