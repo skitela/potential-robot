@@ -7,7 +7,8 @@
     "This layer does not change immutable capital contract values; it only decides which domain may risk live capital at a given time.",
     "Reserve activation is prepared structurally in V1 and may be tightened further when INDICES runtime is rolled out.",
     "PAPER_ONLY is now a first-class runtime mode used for capital-protection degradation and same-day reentry gating.",
-    "V2 adds coordinator risk caps for LIVE_DEFENSIVE, RESERVE takeover and REENTRY probation without moving heavy logic into the tick path."
+    "V2 adds coordinator risk caps for LIVE_DEFENSIVE, RESERVE takeover and REENTRY probation without moving heavy logic into the tick path.",
+    "Paper defensive mode keeps paper trading alive with reduced risk instead of freezing the whole fleet after a paper drawdown."
   ],
   "rules": {
     "sleep_requested_mode": "CLOSE_ONLY",
@@ -15,11 +16,13 @@
     "observation_requested_mode": "CLOSE_ONLY",
     "trade_requested_mode": "RUN",
     "paper_requested_mode": "PAPER_ONLY",
+    "paper_defensive_requested_mode": "RUN",
     "manual_paper_requested_mode": "PAPER_ONLY",
     "manual_close_only_requested_mode": "CLOSE_ONLY",
     "manual_halt_requested_mode": "HALT",
     "reentry_recover_fraction": 0.60,
     "defensive_family_loss_fraction": 0.50,
+    "paper_defensive_risk_cap": 0.35,
     "reentry_probation_risk_cap": 0.35,
     "reserve_takeover_risk_cap": 0.50
   },

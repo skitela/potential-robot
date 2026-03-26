@@ -6,6 +6,24 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Read-KeyValueTable {
+    param([string]$Path)
+
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $map
+    }
+
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $parts = $line -split "`t", 2
+        if ($parts.Count -ne 2) { continue }
+        $map[[string]$parts[0]] = [string]$parts[1]
+    }
+
+    return $map
+}
+
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 if ([string]::IsNullOrWhiteSpace($CommonFilesRoot)) {
     $CommonFilesRoot = Join-Path $env:APPDATA "MetaQuotes\\Terminal\\Common\\Files\\MAKRO_I_MIKRO_BOT"
@@ -44,11 +62,17 @@ if (Test-Path -LiteralPath $coordPath) {
     if ([string]::IsNullOrWhiteSpace([string]$coord.rules.paper_requested_mode)) {
         $issues.Add("Coordinator rules must define paper_requested_mode")
     }
+    if ([string]::IsNullOrWhiteSpace([string]$coord.rules.paper_defensive_requested_mode)) {
+        $issues.Add("Coordinator rules must define paper_defensive_requested_mode")
+    }
     if ([double]$coord.rules.reentry_recover_fraction -le 0.0) {
         $issues.Add("Coordinator rules must define positive reentry_recover_fraction")
     }
     if ([double]$coord.rules.defensive_family_loss_fraction -le 0.0) {
         $issues.Add("Coordinator rules must define positive defensive_family_loss_fraction")
+    }
+    if ([double]$coord.rules.paper_defensive_risk_cap -le 0.0 -or [double]$coord.rules.paper_defensive_risk_cap -gt 1.0) {
+        $issues.Add("Coordinator rules must define paper_defensive_risk_cap in (0,1]")
     }
     if ([double]$coord.rules.reentry_probation_risk_cap -le 0.0 -or [double]$coord.rules.reentry_probation_risk_cap -gt 1.0) {
         $issues.Add("Coordinator rules must define reentry_probation_risk_cap in (0,1]")
@@ -76,6 +100,23 @@ if (Test-Path -LiteralPath $rolloverPath) {
 
 if (-not (Test-Path -LiteralPath $globalPath)) {
     $issues.Add("Missing global coordinator state: $globalPath")
+}
+else {
+    $globalState = Read-KeyValueTable -Path $globalPath
+    $runtimeProfile = [string]$globalState["runtime_profile"]
+    $capitalThresholdProfile = [string]$globalState["capital_threshold_profile"]
+
+    if ([string]::IsNullOrWhiteSpace($capitalThresholdProfile)) {
+        $issues.Add("Global coordinator state must define capital_threshold_profile")
+    }
+    elseif ($runtimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH")) {
+        if ($capitalThresholdProfile -ne "paper") {
+            $issues.Add("Runtime profile '$runtimeProfile' must use paper capital thresholds, got '$capitalThresholdProfile'.")
+        }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($runtimeProfile) -and $capitalThresholdProfile -ne "live") {
+        $issues.Add("Runtime profile '$runtimeProfile' must use live capital thresholds outside paper modes, got '$capitalThresholdProfile'.")
+    }
 }
 
 $domainReports = @()

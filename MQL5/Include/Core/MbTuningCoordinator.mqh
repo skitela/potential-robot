@@ -38,7 +38,9 @@ void MbTuningSummarizeCoordinatorAction(const MbTuningCoordinatorState &state,st
   {
    out_code = "REBALANCE_FLEET";
 
-   if(state.freeze_new_changes)
+   if(state.trust_reason == "FLEET_DAILY_LOSS_DEFENSIVE" && !state.freeze_new_changes)
+      out_code = "DEFENSIVE_FLEET";
+   else if(state.freeze_new_changes)
       out_code = "FREEZE_FLEET";
    else if(state.degraded_family_count >= 2)
       out_code = "COOL_FLEET";
@@ -176,14 +178,29 @@ bool MbRunTuningCoordinator(const string &families[],MbTuningCoordinatorState &s
 
    if(degraded_family_count >= family_count && family_count > 0)
      {
-      next.freeze_new_changes = true;
-      next.max_local_changes_per_cycle = 0;
+      if(next.paper_mode_active && trusted_family_count > 0)
+        {
+         next.freeze_new_changes = false;
+         next.max_local_changes_per_cycle = MathMax(next.max_local_changes_per_cycle,1);
+         next.global_confidence_cap = MathMin(next.global_confidence_cap,0.80);
+         next.global_risk_cap = MathMin(next.global_risk_cap,0.70);
+        }
+      else
+        {
+         next.freeze_new_changes = true;
+         next.max_local_changes_per_cycle = 0;
+        }
      }
    else if(trusted_family_count < family_count && family_count > 1)
       next.max_local_changes_per_cycle = 1;
 
    if(!next.trusted_data)
       next.freeze_new_changes = true;
+
+   bool pre_capital_freeze = next.freeze_new_changes;
+   bool pre_capital_trusted_data = next.trusted_data;
+   string pre_capital_trust_reason = next.trust_reason;
+   int pre_capital_change_budget = next.max_local_changes_per_cycle;
 
    if(fleet_equity_anchor_day > 0.0)
      {
@@ -192,12 +209,33 @@ bool MbRunTuningCoordinator(const string &families[],MbTuningCoordinatorState &s
 
       if(next.fleet_daily_loss_pct >= contract.account_hard_daily_loss_pct)
         {
-         next.global_confidence_cap = 0.0;
-         next.global_risk_cap = 0.0;
-         next.freeze_new_changes = true;
-         next.max_local_changes_per_cycle = 0;
-         next.trusted_data = false;
-         next.trust_reason = "FLEET_DAILY_LOSS_HARD";
+         if(fleet_paper_mode)
+           {
+            next.global_confidence_cap = MathMin(next.global_confidence_cap,0.80);
+            next.global_risk_cap = MathMin(next.global_risk_cap,contract.soft_loss_risk_factor);
+            next.trusted_data = pre_capital_trusted_data;
+            if(pre_capital_trusted_data)
+              {
+               next.freeze_new_changes = false;
+               next.max_local_changes_per_cycle = 1;
+               next.trust_reason = "FLEET_DAILY_LOSS_DEFENSIVE";
+              }
+            else
+              {
+               next.freeze_new_changes = pre_capital_freeze;
+               next.max_local_changes_per_cycle = (pre_capital_freeze ? pre_capital_change_budget : 0);
+               next.trust_reason = pre_capital_trust_reason;
+              }
+           }
+         else
+           {
+            next.global_confidence_cap = 0.0;
+            next.global_risk_cap = 0.0;
+            next.freeze_new_changes = true;
+            next.max_local_changes_per_cycle = 0;
+            next.trusted_data = false;
+            next.trust_reason = "FLEET_DAILY_LOSS_HARD";
+           }
         }
       else if(next.fleet_daily_loss_pct >= contract.account_soft_daily_loss_pct)
         {
@@ -209,7 +247,8 @@ bool MbRunTuningCoordinator(const string &families[],MbTuningCoordinatorState &s
         }
      }
 
-   if(state.cooldown_until > 0 && TimeCurrent() < state.cooldown_until && trusted_family_count == state.trusted_family_count && degraded_family_count == state.degraded_family_count)
+   bool force_recheck_paper_hard = (fleet_paper_mode && state.trust_reason == "FLEET_DAILY_LOSS_HARD");
+   if(!force_recheck_paper_hard && state.cooldown_until > 0 && TimeCurrent() < state.cooldown_until && trusted_family_count == state.trusted_family_count && degraded_family_count == state.degraded_family_count)
      {
       out_reason = "COOLDOWN";
       return false;

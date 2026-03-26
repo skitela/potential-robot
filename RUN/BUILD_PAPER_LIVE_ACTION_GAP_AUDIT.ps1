@@ -109,6 +109,7 @@ function Get-FamilyPolicyState {
         paper_mode_active = (Get-MapBool -Map $raw -Key "paper_mode_active")
         trust_reason = (Get-MapString -Map $raw -Key "trust_reason" -Default "UNASSESSED")
         family_daily_loss_pct = (Get-MapDouble -Map $raw -Key "family_daily_loss_pct")
+        paper_defensive = ((Get-MapString -Map $raw -Key "trust_reason" -Default "") -eq "FAMILY_DAILY_LOSS_DEFENSIVE")
     }
 }
 
@@ -158,7 +159,9 @@ function Resolve-DirectBlock {
         [int]$Opens,
         [int]$Closes,
         [bool]$FleetPaperLock,
-        [bool]$FamilyPaperLock
+        [bool]$FamilyPaperLock,
+        [bool]$FleetPaperDefensive,
+        [bool]$FamilyPaperDefensive
     )
 
     if (($Opens + $Closes) -gt 0) {
@@ -173,9 +176,19 @@ function Resolve-DirectBlock {
         return "BLOKADA_KAPITALU_RODZINY"
     }
 
+    if ($FleetPaperDefensive) {
+        return "STEROWANIE_DEFENSYWNE_FLOTY"
+    }
+
+    if ($FamilyPaperDefensive) {
+        return "STEROWANIE_DEFENSYWNE_RODZINY"
+    }
+
     $reasons = @($LatestReason, $DominantReason) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     foreach ($reason in $reasons) {
         switch -Regex ($reason) {
+            '^DEFENSIVE_FAMILY$' { return "STEROWANIE_DEFENSYWNE_RODZINY" }
+            '^DEFENSIVE_FLEET$' { return "STEROWANIE_DEFENSYWNE_FLOTY" }
             '^LOW_SAMPLE$' { return "MALA_PROBKA" }
             '^FOREFIELD_DIRTY' { return "BRUDNY_FOREGROUND" }
             '^PAPER_CONVERSION_BLOCKED' { return "BLOKADA_KONWERSJI_PAPER" }
@@ -207,6 +220,12 @@ function Resolve-DeeperWhy {
     }
     if ($DirectBlock -eq "BLOKADA_KAPITALU_RODZINY") {
         return ("przekroczono twardy dzienny limit straty rodziny: {0:N2}% > {1:N2}%" -f $FamilyDailyLossPct, $FamilyHardLossPct)
+    }
+    if ($DirectBlock -eq "STEROWANIE_DEFENSYWNE_FLOTY") {
+        return ("flota paper przeszla w tryb obronny po stracie {0:N2}%%; wejscia zostaly ograniczone, ale nie zamrozone" -f $FleetDailyLossPct)
+    }
+    if ($DirectBlock -eq "STEROWANIE_DEFENSYWNE_RODZINY") {
+        return ("rodzina przeszla w tryb obronny po stracie {0:N2}%%; ryzyko jest scisniete, ale nauka nadal trwa" -f $FamilyDailyLossPct)
     }
     if ($TrustState -eq "LOW_SAMPLE") {
         return "za mala probka lokalna"
@@ -251,6 +270,8 @@ function Resolve-Recommendation {
             if ($BlockSensible) { return "utrzymac blokade rodziny i najpierw zredukowac strate albo chaos tej rodziny" }
             return "sprawdzic koordynator kapitalu rodziny; blokada wyglada ostrzej niz wynika z kontraktu"
         }
+        "STEROWANIE_DEFENSYWNE_FLOTY" { return "utrzymac tryb obronny floty i diagnozowac zrodlo strat zamiast odmrazac calosc" }
+        "STEROWANIE_DEFENSYWNE_RODZINY" { return "utrzymac tryb obronny rodziny i poprawiac jej jakosc wejsc bez twardego freeze" }
         "MALA_PROBKA" { return "dalej budowac probe i nie wymuszac wejsc" }
         "BRUDNY_FOREGROUND" { return "oczyscic foreground i sprawdzic invalidacje kandydatow" }
         "BLOKADA_KONWERSJI_PAPER" { return "sprawdzic kontrakt bezpieczenstwa paper i powod blokady konwersji" }
@@ -292,8 +313,12 @@ $paperHardDailyLossPct = if ($null -ne $capitalContract -and $null -ne $capitalC
 $paperFamilyHardLossPct = if ($null -ne $capitalContract -and $null -ne $capitalContract.paper) { [double]$capitalContract.paper.family_hard_daily_loss_pct } else { 0.0 }
 $fleetPaperLock = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_lock"
 $fleetPaperLockReason = Get-MapString -Map $sessionCoordinator -Key "fleet_paper_lock_reason" -Default "NONE"
+$fleetPaperDefensive = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_defensive"
+$fleetPaperDefensiveReason = Get-MapString -Map $sessionCoordinator -Key "fleet_paper_defensive_reason" -Default "NONE"
 $fleetDailyLossPct = Get-MapDouble -Map $sessionCoordinator -Key "fleet_daily_loss_pct"
 $runtimeProfile = Get-MapString -Map $sessionCoordinator -Key "runtime_profile" -Default "UNKNOWN"
+$capitalThresholdProfile = Get-MapString -Map $sessionCoordinator -Key "capital_threshold_profile" -Default ""
+$paperThresholdProfileMismatch = (($runtimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH")) -and $capitalThresholdProfile -ne "paper")
 
 $activeFleetVerdicts = Read-JsonSafe -Path $ActiveFleetVerdictsPath
 $fleetMap = @{}
@@ -321,6 +346,10 @@ foreach ($instrument in @($dailyReport.instrumenty)) {
     $sessionProfile = if ($null -ne $meta) { [string]$meta.session_profile } else { "" }
     $familyPolicy = Get-FamilyPolicyState -FamilyStatesRootPath $FamilyStatesRoot -SessionProfile $sessionProfile
     $familyPaperLock = [bool]$familyPolicy.paper_mode_active
+    if ([string]$familyPolicy.trust_reason -ne "FAMILY_DAILY_LOSS_HARD") {
+        $familyPaperLock = $false
+    }
+    $familyPaperDefensive = [bool]$familyPolicy.paper_defensive
     $familyDailyLossPct = [double]$familyPolicy.family_daily_loss_pct
     $decisionPath = Join-Path (Join-Path $DecisionLogsRoot $alias) "decision_events.csv"
     $decisionSummary = Get-DecisionReasonSummary -DecisionCsvPath $decisionPath -Window $DecisionWindow
@@ -334,7 +363,9 @@ foreach ($instrument in @($dailyReport.instrumenty)) {
         -Opens $opens `
         -Closes $closes `
         -FleetPaperLock $fleetPaperLock `
-        -FamilyPaperLock $familyPaperLock
+        -FamilyPaperLock $familyPaperLock `
+        -FleetPaperDefensive $fleetPaperDefensive `
+        -FamilyPaperDefensive $familyPaperDefensive
     $blockSensible = $false
     if ($directBlock -eq "BLOKADA_KAPITALU_FLOTY" -and $paperHardDailyLossPct -gt 0) {
         $blockSensible = ($fleetDailyLossPct -ge $paperHardDailyLossPct)
@@ -372,10 +403,13 @@ foreach ($instrument in @($dailyReport.instrumenty)) {
         deeper_why = $deeperWhy
         blokada_kapitalu_floty = $fleetPaperLock
         powod_blokady_floty = $fleetPaperLockReason
+        sterowanie_defensywne_floty = $fleetPaperDefensive
+        powod_sterowania_defensywnego_floty = $fleetPaperDefensiveReason
         strata_floty_proc = [math]::Round($fleetDailyLossPct, 4)
         prog_twardy_floty_proc = [math]::Round($paperHardDailyLossPct, 4)
         blokada_kapitalu_rodziny = $familyPaperLock
         powod_blokady_rodziny = [string]$familyPolicy.trust_reason
+        sterowanie_defensywne_rodziny = $familyPaperDefensive
         strata_rodziny_proc = [math]::Round($familyDailyLossPct, 4)
         prog_twardy_rodziny_proc = [math]::Round($paperFamilyHardLossPct, 4)
         blokada_sensowna = $blockSensible
@@ -395,12 +429,18 @@ $summary = [ordered]@{
     active_trade_count = @($itemsArray | Where-Object { $_.otwarcia_dzis -gt 0 }).Count
     fresh_but_idle_count = $idleFresh.Count
     runtime_profile = $runtimeProfile
+    capital_threshold_profile = $capitalThresholdProfile
+    paper_threshold_profile_match = (-not $paperThresholdProfileMismatch)
     fleet_capital_lock_active = $fleetPaperLock
     fleet_capital_lock_reason = $fleetPaperLockReason
+    fleet_capital_defensive_active = $fleetPaperDefensive
+    fleet_capital_defensive_reason = $fleetPaperDefensiveReason
     fleet_daily_loss_pct = [math]::Round($fleetDailyLossPct, 4)
     paper_hard_daily_loss_pct = [math]::Round($paperHardDailyLossPct, 4)
     fleet_capital_lock_symbol_count = @($itemsArray | Where-Object { $_.direct_block -eq "BLOKADA_KAPITALU_FLOTY" }).Count
     family_capital_lock_symbol_count = @($itemsArray | Where-Object { $_.direct_block -eq "BLOKADA_KAPITALU_RODZINY" }).Count
+    fleet_defensive_count = @($itemsArray | Where-Object { $_.direct_block -eq "STEROWANIE_DEFENSYWNE_FLOTY" }).Count
+    family_defensive_count = @($itemsArray | Where-Object { $_.direct_block -eq "STEROWANIE_DEFENSYWNE_RODZINY" }).Count
     fleet_freeze_count = @($itemsArray | Where-Object { $_.direct_block -eq "ZAMROZENIE_FLOTY" }).Count
     family_freeze_count = @($itemsArray | Where-Object { $_.direct_block -eq "ZAMROZENIE_RODZINY" }).Count
     low_sample_count = @($itemsArray | Where-Object { $_.direct_block -eq "MALA_PROBKA" }).Count

@@ -120,6 +120,7 @@ $expectedStates = @(
     "PREWARM",
     "LIVE",
     "LIVE_DEFENSIVE",
+    "PAPER_DEFENSIVE",
     "PAPER_ACTIVE",
     "PAPER_SHADOW",
     "RESERVE_RESEARCH",
@@ -219,7 +220,7 @@ foreach ($domain in $domains) {
         Add-Issue $issues "Domain '$domain' is SLEEP but still has active_group '$activeGroup'."
     }
 
-    if ($domainState -in @("PREWARM","LIVE","LIVE_DEFENSIVE","PAPER_ACTIVE","PAPER_SHADOW","REENTRY_PROBATION")) {
+    if ($domainState -in @("PREWARM","LIVE","LIVE_DEFENSIVE","PAPER_DEFENSIVE","PAPER_ACTIVE","PAPER_SHADOW","REENTRY_PROBATION")) {
         if ([string]::IsNullOrWhiteSpace($activeGroup)) {
             Add-Issue $issues "Domain '$domain' state '$domainState' requires non-empty active_group."
         }
@@ -230,6 +231,9 @@ foreach ($domain in $domains) {
     }
     if ($domainState -eq "REENTRY_PROBATION" -and $requestedMode -ne "RUN") {
         Add-Issue $issues "Domain '$domain' is REENTRY_PROBATION but requested_mode is '$requestedMode' instead of RUN."
+    }
+    if ($domainState -eq "PAPER_DEFENSIVE" -and $requestedMode -ne "RUN") {
+        Add-Issue $issues "Domain '$domain' is PAPER_DEFENSIVE but requested_mode is '$requestedMode' instead of RUN."
     }
     if ($domainState -eq "PAPER_ACTIVE" -and $requestedMode -ne "PAPER_ONLY") {
         Add-Issue $issues "Domain '$domain' is PAPER_ACTIVE but requested_mode is '$requestedMode' instead of PAPER_ONLY."

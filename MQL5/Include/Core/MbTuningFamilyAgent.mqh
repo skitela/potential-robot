@@ -61,7 +61,9 @@ void MbTuningSummarizeFamilyAction(const MbTuningFamilyPolicy &policy,string &ou
   {
    out_code = "REBALANCE_FAMILY";
 
-   if(policy.freeze_new_changes)
+   if(policy.trust_reason == "FAMILY_DAILY_LOSS_DEFENSIVE" && !policy.freeze_new_changes)
+      out_code = "DEFENSIVE_FAMILY";
+   else if(policy.freeze_new_changes)
       out_code = "FREEZE_FAMILY";
    else if(policy.breakout_family_tax >= policy.trend_family_tax && policy.breakout_family_tax >= 0.05)
       out_code = "DAMP_FAMILY_BREAKOUT";
@@ -329,23 +331,42 @@ bool MbRunTuningFamilyAgent(const string family,const string &symbols[],MbTuning
    if(degraded_symbols >= (symbol_count - 1))
       next.freeze_new_changes = true;
 
+   bool pre_capital_freeze = next.freeze_new_changes;
+   bool pre_capital_trusted_data = next.trusted_data;
+   string pre_capital_trust_reason = next.trust_reason;
+
    if(family_equity_anchor_day > 0.0)
      {
       MbCapitalRiskContract contract;
       MbResolveCapitalRiskContract(family_paper_mode,contract);
       if(next.family_daily_loss_pct >= contract.family_hard_daily_loss_pct)
         {
-         next.dominant_confidence_cap = 0.0;
-         next.dominant_risk_cap = 0.0;
-         next.freeze_new_changes = true;
-         next.trusted_data = false;
-         next.trust_reason = "FAMILY_DAILY_LOSS_HARD";
+         if(family_paper_mode)
+           {
+            next.dominant_confidence_cap = MathMin(next.dominant_confidence_cap,0.78);
+            next.dominant_risk_cap = MathMin(next.dominant_risk_cap,contract.soft_loss_risk_factor);
+            next.freeze_new_changes = pre_capital_freeze;
+            next.trusted_data = pre_capital_trusted_data;
+            if(pre_capital_trusted_data)
+               next.trust_reason = "FAMILY_DAILY_LOSS_DEFENSIVE";
+            else
+               next.trust_reason = pre_capital_trust_reason;
+           }
+         else
+           {
+            next.dominant_confidence_cap = 0.0;
+            next.dominant_risk_cap = 0.0;
+            next.freeze_new_changes = true;
+            next.trusted_data = false;
+            next.trust_reason = "FAMILY_DAILY_LOSS_HARD";
+           }
         }
      }
 
    MbApplyTuningGuardToFamilyPolicy(family,next);
 
-   if(policy.cooldown_until > 0 && TimeCurrent() < policy.cooldown_until && total_samples == policy.last_total_samples)
+   bool force_recheck_paper_hard = (family_paper_mode && policy.trust_reason == "FAMILY_DAILY_LOSS_HARD");
+   if(!force_recheck_paper_hard && policy.cooldown_until > 0 && TimeCurrent() < policy.cooldown_until && total_samples == policy.last_total_samples)
      {
       out_reason = "COOLDOWN";
       return false;

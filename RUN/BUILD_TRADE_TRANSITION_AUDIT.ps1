@@ -137,12 +137,18 @@ $trainerUsesServerLatency = ($trainerText -match 'server_local_latency_us_avg' -
 $paperSummary = Get-OptionalValue -Object $paperGap -Name "summary" -Default $null
 $activeTradeCount = [int](Get-OptionalValue -Object $paperSummary -Name "active_trade_count" -Default 0)
 $runtimeProfile = [string](Get-OptionalValue -Object $paperSummary -Name "runtime_profile" -Default "")
+$capitalThresholdProfile = [string](Get-OptionalValue -Object $paperSummary -Name "capital_threshold_profile" -Default "")
+$paperThresholdProfileMatch = [bool](Get-OptionalValue -Object $paperSummary -Name "paper_threshold_profile_match" -Default $false)
 $fleetCapitalLockActive = [bool](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_lock_active" -Default $false)
 $fleetCapitalLockReason = [string](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_lock_reason" -Default "")
+$fleetCapitalDefensiveActive = [bool](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_defensive_active" -Default $false)
+$fleetCapitalDefensiveReason = [string](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_defensive_reason" -Default "")
 $fleetDailyLossPct = [double](Get-OptionalValue -Object $paperSummary -Name "fleet_daily_loss_pct" -Default 0.0)
 $paperHardDailyLossPct = [double](Get-OptionalValue -Object $paperSummary -Name "paper_hard_daily_loss_pct" -Default 0.0)
 $fleetCapitalLockSymbolCount = [int](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_lock_symbol_count" -Default 0)
 $familyCapitalLockSymbolCount = [int](Get-OptionalValue -Object $paperSummary -Name "family_capital_lock_symbol_count" -Default 0)
+$fleetDefensiveCount = [int](Get-OptionalValue -Object $paperSummary -Name "fleet_defensive_count" -Default 0)
+$familyDefensiveCount = [int](Get-OptionalValue -Object $paperSummary -Name "family_defensive_count" -Default 0)
 $fleetFreezeCount = [int](Get-OptionalValue -Object $paperSummary -Name "fleet_freeze_count" -Default 0)
 $familyFreezeCount = [int](Get-OptionalValue -Object $paperSummary -Name "family_freeze_count" -Default 0)
 $costBlockCount = [int](Get-OptionalValue -Object $paperSummary -Name "cost_block_count" -Default 0)
@@ -173,10 +179,20 @@ elseif (-not $migrationConfirmed) {
     $dlategoZe = "Nie ma jeszcze swiezego, zgodnego dowodu udanej migracji serwera na aktywnych presetach."
     $recommendation = "Naprawic automatyke migracji albo zapis swiezego raportu synchronizacji zanim beda analizowane blokady decyzyjne."
 }
+elseif (-not $paperThresholdProfileMatch) {
+    $verdict = "NIEZGODNY_PROFIL_PROGOW_PAPER"
+    $dlategoZe = ("Koordynator sesyjny dla profilu '{0}' nie pracuje na papierowych progach ryzyka, wiec decyzje blokad i trybu obronnego sa niewiarygodne." -f $runtimeProfile)
+    $recommendation = "Przelaczyc koordynator na papierowy kontrakt progow, odswiezyc runtime i dopiero potem oceniac blokady decyzyjne."
+}
 elseif ($fleetCapitalLockActive) {
     $verdict = "AKTYWNA_BLOKADA_KAPITALU_FLOTY"
     $dlategoZe = ("Koordynator kapitalu trzyma cala flote w trybie papierowym, bo dzienna strata paper wynosi {0:N2}% przy twardym limicie {1:N2}%." -f $fleetDailyLossPct, $paperHardDailyLossPct)
     $recommendation = "Nie odmrazac recznie. Najpierw naprawiac przyczyny strat, bo to jest glowna blokada przejscia z obserwacji do handlu."
+}
+elseif ($fleetCapitalDefensiveActive) {
+    $verdict = "PAPER_DEFENSYWNY_ALE_AKTYWNY"
+    $dlategoZe = ("Koordynator kapitalu nie zamrozil juz floty papierowej, ale przelaczyl ja w tryb obronny po stracie {0:N2}%; ryzyko jest przyciete, a wejscia maja byc selektywne." -f $fleetDailyLossPct)
+    $recommendation = "Utrzymac tryb obronny i rozbijac przyczyne strat instrument po instrumencie zamiast wracac do twardego freeze."
 }
 elseif ($activeTradeCount -le 0 -and ($fleetFreezeCount + $familyFreezeCount + $costBlockCount + $lowSampleCount + $foregroundDirtyCount) -gt 0) {
     $verdict = "BLOKADY_DECYZYJNE_DOMINUJA"
@@ -209,12 +225,18 @@ $summary = [ordered]@{
     global_model_uses_server_latency = $trainerUsesServerLatency
     paper_active_trade_count = $activeTradeCount
     paper_runtime_profile = $runtimeProfile
+    paper_capital_threshold_profile = $capitalThresholdProfile
+    paper_threshold_profile_match = $paperThresholdProfileMatch
     paper_fleet_capital_lock_active = $fleetCapitalLockActive
     paper_fleet_capital_lock_reason = $fleetCapitalLockReason
+    paper_fleet_capital_defensive_active = $fleetCapitalDefensiveActive
+    paper_fleet_capital_defensive_reason = $fleetCapitalDefensiveReason
     paper_fleet_daily_loss_pct = $fleetDailyLossPct
     paper_hard_daily_loss_pct = $paperHardDailyLossPct
     paper_fleet_capital_lock_symbol_count = $fleetCapitalLockSymbolCount
     paper_family_capital_lock_symbol_count = $familyCapitalLockSymbolCount
+    paper_fleet_defensive_count = $fleetDefensiveCount
+    paper_family_defensive_count = $familyDefensiveCount
     paper_fleet_freeze_count = $fleetFreezeCount
     paper_family_freeze_count = $familyFreezeCount
     paper_cost_block_count = $costBlockCount
@@ -256,6 +278,8 @@ $lines.Add(("- global_model_uses_server_latency: {0}" -f ([string]$summary.globa
 $lines.Add(("- paper_runtime_profile: {0}" -f $summary.paper_runtime_profile))
 $lines.Add(("- paper_fleet_capital_lock_active: {0}" -f ([string]$summary.paper_fleet_capital_lock_active).ToLowerInvariant()))
 $lines.Add(("- paper_fleet_capital_lock_reason: {0}" -f $summary.paper_fleet_capital_lock_reason))
+$lines.Add(("- paper_fleet_capital_defensive_active: {0}" -f ([string]$summary.paper_fleet_capital_defensive_active).ToLowerInvariant()))
+$lines.Add(("- paper_fleet_capital_defensive_reason: {0}" -f $summary.paper_fleet_capital_defensive_reason))
 $lines.Add(("- paper_fleet_daily_loss_pct: {0}" -f $summary.paper_fleet_daily_loss_pct))
 $lines.Add(("- paper_hard_daily_loss_pct: {0}" -f $summary.paper_hard_daily_loss_pct))
 $lines.Add("")

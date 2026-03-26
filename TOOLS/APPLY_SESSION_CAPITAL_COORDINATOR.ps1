@@ -391,7 +391,9 @@ function Get-FamilyAssessment {
 
     $presentCount = @($rows | Where-Object { $_.present }).Count
     $trustedCount = @($rows | Where-Object { $_.present -and $_.trusted_data }).Count
-    $paperLockRow = @($rows | Where-Object { $_.paper_mode_active -or $_.trust_reason -eq "FAMILY_DAILY_LOSS_HARD" } | Select-Object -First 1)
+    $paperRuntimeActive = @($rows | Where-Object { $_.paper_mode_active }).Count -gt 0
+    $paperLockRow = @($rows | Where-Object { $_.trust_reason -eq "FAMILY_DAILY_LOSS_HARD" } | Select-Object -First 1)
+    $paperDefensiveRow = @($rows | Where-Object { $_.trust_reason -eq "FAMILY_DAILY_LOSS_DEFENSIVE" } | Select-Object -First 1)
     $maxLoss = 0.0
     foreach ($row in $rows) {
         if ([double]$row.family_daily_loss_pct -gt $maxLoss) {
@@ -401,12 +403,12 @@ function Get-FamilyAssessment {
 
     $paperLockReason = "NONE"
     if ($paperLockRow.Count -gt 0) {
-        if ($paperLockRow[0].trust_reason -eq "FAMILY_DAILY_LOSS_HARD") {
-            $paperLockReason = "FAMILY_DAILY_LOSS_HARD"
-        }
-        else {
-            $paperLockReason = "FAMILY_PAPER_MODE_ACTIVE"
-        }
+        $paperLockReason = "FAMILY_DAILY_LOSS_HARD"
+    }
+
+    $paperDefensiveReason = "NONE"
+    if ($paperDefensiveRow.Count -gt 0) {
+        $paperDefensiveReason = "FAMILY_DAILY_LOSS_DEFENSIVE"
     }
 
     return [pscustomobject]@{
@@ -414,8 +416,11 @@ function Get-FamilyAssessment {
         present_count = $presentCount
         trusted_count = $trustedCount
         trusted = ($presentCount -gt 0 -and $trustedCount -eq $presentCount)
+        paper_runtime_active = $paperRuntimeActive
         paper_lock = ($paperLockRow.Count -gt 0)
         paper_lock_reason = $paperLockReason
+        paper_defensive = ($paperDefensiveRow.Count -gt 0)
+        paper_defensive_reason = $paperDefensiveReason
         max_family_daily_loss_pct = $maxLoss
     }
 }
@@ -429,8 +434,11 @@ function Get-FleetAssessment {
         return [pscustomobject]@{
             present = $false
             trusted_data = $false
+            paper_runtime_active = $false
             paper_lock = $false
             paper_lock_reason = "MISSING"
+            paper_defensive = $false
+            paper_defensive_reason = "MISSING"
             fleet_daily_loss_pct = 0.0
             trust_reason = "MISSING"
         }
@@ -442,15 +450,20 @@ function Get-FleetAssessment {
     if ($trustReason -eq "FLEET_DAILY_LOSS_HARD") {
         $paperLockReason = "FLEET_DAILY_LOSS_HARD"
     }
-    elseif ($paperModeActive) {
-        $paperLockReason = "FLEET_PAPER_MODE_ACTIVE"
+
+    $paperDefensiveReason = "NONE"
+    if ($trustReason -eq "FLEET_DAILY_LOSS_DEFENSIVE") {
+        $paperDefensiveReason = "FLEET_DAILY_LOSS_DEFENSIVE"
     }
 
     return [pscustomobject]@{
         present = $true
         trusted_data = (Get-MapBool -Map $raw -Key "trusted_data")
-        paper_lock = ($paperModeActive -or $trustReason -eq "FLEET_DAILY_LOSS_HARD")
+        paper_runtime_active = $paperModeActive
+        paper_lock = ($trustReason -eq "FLEET_DAILY_LOSS_HARD")
         paper_lock_reason = $paperLockReason
+        paper_defensive = ($trustReason -eq "FLEET_DAILY_LOSS_DEFENSIVE")
+        paper_defensive_reason = $paperDefensiveReason
         fleet_daily_loss_pct = (Get-MapDouble -Map $raw -Key "fleet_daily_loss_pct")
         trust_reason = $trustReason
     }
@@ -463,6 +476,7 @@ function Resolve-RequestedMode {
         [string]$ManualOverride,
         $Rules,
         [double]$LiveDefensiveRiskCap,
+        [double]$PaperDefensiveRiskCap,
         [double]$ReentryProbationRiskCap,
         [double]$ReserveTakeoverRiskCap
     )
@@ -501,6 +515,21 @@ function Resolve-RequestedMode {
         return [pscustomobject]@{ requested_mode = [string]$Rules.paper_requested_mode; reason = $State.fleet_paper_lock_reason; source = "FLEET_LOCK"; risk_cap = 1.0; state_override = "PAPER_ACTIVE"; force_flatten = $false }
     }
 
+    if ($State.fleet_paper_defensive) {
+        $paperDefensiveMode = [string]$Rules.paper_defensive_requested_mode
+        if ([string]::IsNullOrWhiteSpace($paperDefensiveMode)) {
+            $paperDefensiveMode = [string]$Rules.trade_requested_mode
+        }
+        return [pscustomobject]@{
+            requested_mode = $paperDefensiveMode
+            reason = $State.fleet_paper_defensive_reason
+            source = "FLEET_DEFENSIVE"
+            risk_cap = [math]::Max(0.0,[math]::Min(1.0,$PaperDefensiveRiskCap))
+            state_override = "PAPER_DEFENSIVE"
+            force_flatten = $false
+        }
+    }
+
     if ($State.family_paper_lock) {
         if ([string]$State.window_state -eq "LIVE" -and $State.reentry_ready) {
             return [pscustomobject]@{
@@ -513,6 +542,21 @@ function Resolve-RequestedMode {
             }
         }
         return [pscustomobject]@{ requested_mode = [string]$Rules.paper_requested_mode; reason = $State.family_paper_lock_reason; source = "FAMILY_LOCK"; risk_cap = 1.0; state_override = "PAPER_ACTIVE"; force_flatten = $false }
+    }
+
+    if ($State.family_paper_defensive) {
+        $paperDefensiveMode = [string]$Rules.paper_defensive_requested_mode
+        if ([string]::IsNullOrWhiteSpace($paperDefensiveMode)) {
+            $paperDefensiveMode = [string]$Rules.trade_requested_mode
+        }
+        return [pscustomobject]@{
+            requested_mode = $paperDefensiveMode
+            reason = $State.family_paper_defensive_reason
+            source = "FAMILY_DEFENSIVE"
+            risk_cap = [math]::Max(0.0,[math]::Min(1.0,$PaperDefensiveRiskCap))
+            state_override = "PAPER_DEFENSIVE"
+            force_flatten = $false
+        }
     }
 
     if ([string]$State.window_state -eq "RESERVE_RESEARCH" -and -not [string]::IsNullOrWhiteSpace([string]$State.reserve_requested_by)) {
@@ -574,12 +618,15 @@ $fleetAssessment = Get-FleetAssessment -CommonRoot $CommonFilesRoot
 
 $reentryRecoverFraction = [double]$effectiveRules.reentry_recover_fraction
 $defensiveFamilyLossFraction = [double]$effectiveRules.defensive_family_loss_fraction
+$paperDefensiveRiskCap = if ($null -ne $effectiveRules.PSObject.Properties["paper_defensive_risk_cap"]) { [double]$effectiveRules.paper_defensive_risk_cap } else { [double]$effectiveRules.reentry_probation_risk_cap }
 $reentryProbationRiskCap = [double]$effectiveRules.reentry_probation_risk_cap
 $reserveTakeoverRiskCap = [double]$effectiveRules.reserve_takeover_risk_cap
-$familyReentryThreshold = [double]$capital.live.family_hard_daily_loss_pct * $reentryRecoverFraction
-$fleetReentryThreshold = [double]$capital.live.account_hard_daily_loss_pct * $reentryRecoverFraction
-$familyDefensiveThreshold = [double]$capital.live.family_hard_daily_loss_pct * $defensiveFamilyLossFraction
-$fleetSoftThreshold = [double]$capital.live.account_soft_daily_loss_pct
+$capitalThresholdProfileName = if ($RuntimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH")) { "paper" } else { "live" }
+$capitalThresholdProfile = if ($capitalThresholdProfileName -eq "paper") { $capital.paper } else { $capital.live }
+$familyReentryThreshold = [double]$capitalThresholdProfile.family_hard_daily_loss_pct * $reentryRecoverFraction
+$fleetReentryThreshold = [double]$capitalThresholdProfile.account_hard_daily_loss_pct * $reentryRecoverFraction
+$familyDefensiveThreshold = [double]$capitalThresholdProfile.family_hard_daily_loss_pct * $defensiveFamilyLossFraction
+$fleetSoftThreshold = [double]$capitalThresholdProfile.account_soft_daily_loss_pct
 $liveDefensiveRiskCap = [double]$capital.live.soft_loss_risk_factor
 
 $tzPl = Resolve-TimeZoneInfo -TimeZoneName "Europe/Warsaw"
@@ -627,14 +674,20 @@ foreach ($domain in $coord.domains) {
         requested_mode_source = "WINDOW"
         family_paper_lock = $false
         family_paper_lock_reason = "NONE"
+        family_paper_defensive = $false
+        family_paper_defensive_reason = "NONE"
         family_trusted = $false
         family_max_daily_loss_pct = 0.0
         fleet_paper_lock = $false
         fleet_paper_lock_reason = "NONE"
+        fleet_paper_defensive = $false
+        fleet_paper_defensive_reason = "NONE"
         fleet_daily_loss_pct = 0.0
         reentry_ready = $false
         paper_lock = $false
         paper_lock_reason = "NONE"
+        paper_defensive = $false
+        paper_defensive_reason = "NONE"
         defensive_mode = $false
         requested_risk_cap = 1.0
         requested_force_flatten = $false
@@ -651,6 +704,7 @@ $stateRank = @{
     "SLEEP" = 0
     "RESERVE_RESEARCH" = 1
     "PAPER_SHADOW" = 2
+    "PAPER_DEFENSIVE" = 2
     "PREWARM" = 3
     "LIVE" = 4
 }
@@ -771,10 +825,14 @@ foreach ($domainName in @($domainStates.Keys)) {
 
     $state.family_paper_lock = [bool]$familyAssessment.paper_lock
     $state.family_paper_lock_reason = [string]$familyAssessment.paper_lock_reason
+    $state.family_paper_defensive = [bool]$familyAssessment.paper_defensive
+    $state.family_paper_defensive_reason = [string]$familyAssessment.paper_defensive_reason
     $state.family_trusted = [bool]$familyAssessment.trusted
     $state.family_max_daily_loss_pct = [double]$familyAssessment.max_family_daily_loss_pct
     $state.fleet_paper_lock = [bool]$fleetAssessment.paper_lock
     $state.fleet_paper_lock_reason = [string]$fleetAssessment.paper_lock_reason
+    $state.fleet_paper_defensive = [bool]$fleetAssessment.paper_defensive
+    $state.fleet_paper_defensive_reason = [string]$fleetAssessment.paper_defensive_reason
     $state.fleet_daily_loss_pct = [double]$fleetAssessment.fleet_daily_loss_pct
 
     if ($state.fleet_paper_lock) {
@@ -784,6 +842,23 @@ foreach ($domainName in @($domainStates.Keys)) {
     elseif ($state.family_paper_lock) {
         $state.paper_lock = $true
         $state.paper_lock_reason = [string]$state.family_paper_lock_reason
+    }
+    else {
+        $state.paper_lock = $false
+        $state.paper_lock_reason = "NONE"
+    }
+
+    if ($state.fleet_paper_defensive) {
+        $state.paper_defensive = $true
+        $state.paper_defensive_reason = [string]$state.fleet_paper_defensive_reason
+    }
+    elseif ($state.family_paper_defensive) {
+        $state.paper_defensive = $true
+        $state.paper_defensive_reason = [string]$state.family_paper_defensive_reason
+    }
+    else {
+        $state.paper_defensive = $false
+        $state.paper_defensive_reason = "NONE"
     }
 
     $state.reentry_ready = (
@@ -799,6 +874,7 @@ foreach ($domainName in @($domainStates.Keys)) {
     $state.defensive_mode = (
         [string]$state.window_state -eq "LIVE" -and
         -not $state.paper_lock -and
+        -not $state.paper_defensive -and
         (
             [double]$state.family_max_daily_loss_pct -ge $familyDefensiveThreshold -or
             [double]$state.fleet_daily_loss_pct -ge $fleetSoftThreshold
@@ -846,6 +922,7 @@ foreach ($domainName in @($domainStates.Keys)) {
         -ManualOverride ([string]$state.manual_override) `
         -Rules $effectiveRules `
         -LiveDefensiveRiskCap $liveDefensiveRiskCap `
+        -PaperDefensiveRiskCap $paperDefensiveRiskCap `
         -ReentryProbationRiskCap $reentryProbationRiskCap `
         -ReserveTakeoverRiskCap $reserveTakeoverRiskCap
     $state.requested_mode = [string]$requested.requested_mode
@@ -869,6 +946,7 @@ $globalPath = Join-Path $globalDir "session_capital_coordinator.csv"
 $globalLines = @(
     "ts_utc`t$((Get-Date).ToUniversalTime().ToString('o'))"
     "runtime_profile`t$RuntimeProfile"
+    "capital_threshold_profile`t$capitalThresholdProfileName"
     "operator_time_pl`t$($nowPl.ToString('yyyy-MM-dd HH:mm'))"
     "operator_time_ny`t$($nowNy.ToString('yyyy-MM-dd HH:mm'))"
     "is_dst`t$([int]$isDst)"
@@ -877,6 +955,8 @@ $globalLines = @(
     "active_observation_groups`t$((@($activeGroups | Where-Object { $_.mode -ne 'TRADE' } | ForEach-Object { $_.group }) -join ','))"
     "fleet_paper_lock`t$([int][bool]$fleetAssessment.paper_lock)"
     "fleet_paper_lock_reason`t$($fleetAssessment.paper_lock_reason)"
+    "fleet_paper_defensive`t$([int][bool]$fleetAssessment.paper_defensive)"
+    "fleet_paper_defensive_reason`t$($fleetAssessment.paper_defensive_reason)"
     "fleet_daily_loss_pct`t$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture,'{0:F4}',$fleetAssessment.fleet_daily_loss_pct))"
     "rollover_daily_block`t$([int][bool]$dailyRolloverBlock)"
     "rollover_daily_force_flatten`t$([int][bool]$dailyRolloverForceFlatten)"
@@ -895,6 +975,7 @@ foreach ($domainName in @($domainStates.Keys | Sort-Object)) {
     $statePath = Join-Path $domainDir "session_capital_state.csv"
     @(
         "domain`t$($state.domain)"
+        "capital_threshold_profile`t$capitalThresholdProfileName"
         "state`t$($state.state)"
         "active_group`t$($state.active_group)"
         "active_window_id`t$($state.active_window_id)"
@@ -911,12 +992,18 @@ foreach ($domainName in @($domainStates.Keys | Sort-Object)) {
         "requested_mode_source`t$($state.requested_mode_source)"
         "paper_lock`t$([int][bool]$state.paper_lock)"
         "paper_lock_reason`t$($state.paper_lock_reason)"
+        "paper_defensive`t$([int][bool]$state.paper_defensive)"
+        "paper_defensive_reason`t$($state.paper_defensive_reason)"
         "family_paper_lock`t$([int][bool]$state.family_paper_lock)"
         "family_paper_lock_reason`t$($state.family_paper_lock_reason)"
+        "family_paper_defensive`t$([int][bool]$state.family_paper_defensive)"
+        "family_paper_defensive_reason`t$($state.family_paper_defensive_reason)"
         "family_trusted`t$([int][bool]$state.family_trusted)"
         "family_max_daily_loss_pct`t$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture,'{0:F4}',$state.family_max_daily_loss_pct))"
         "fleet_paper_lock`t$([int][bool]$state.fleet_paper_lock)"
         "fleet_paper_lock_reason`t$($state.fleet_paper_lock_reason)"
+        "fleet_paper_defensive`t$([int][bool]$state.fleet_paper_defensive)"
+        "fleet_paper_defensive_reason`t$($state.fleet_paper_defensive_reason)"
         "fleet_daily_loss_pct`t$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture,'{0:F4}',$state.fleet_daily_loss_pct))"
         "defensive_mode`t$([int][bool]$state.defensive_mode)"
         "reentry_ready`t$([int][bool]$state.reentry_ready)"
@@ -931,6 +1018,7 @@ foreach ($domainName in @($domainStates.Keys | Sort-Object)) {
     $runtimeRiskCap = [math]::Max(0.0,[math]::Min(1.0,[double]$state.requested_risk_cap))
     $domainReports += [pscustomobject]@{
         domain = $state.domain
+        capital_threshold_profile = $capitalThresholdProfileName
         state = $state.state
         window_state = $state.window_state
         requested_mode = $state.requested_mode
@@ -940,6 +1028,8 @@ foreach ($domainName in @($domainStates.Keys | Sort-Object)) {
         requested_mode_source = $state.requested_mode_source
         paper_lock = [bool]$state.paper_lock
         paper_lock_reason = $state.paper_lock_reason
+        paper_defensive = [bool]$state.paper_defensive
+        paper_defensive_reason = $state.paper_defensive_reason
         defensive_mode = [bool]$state.defensive_mode
         reentry_ready = [bool]$state.reentry_ready
         rollover_block = [bool]$state.rollover_block
@@ -1054,13 +1144,14 @@ $reportDir = Join-Path $projectPath "EVIDENCE"
 Ensure-Dir $reportDir
 $reportPath = Join-Path $reportDir ("APPLY_SESSION_CAPITAL_COORDINATOR_{0}.json" -f ((Get-Date).ToUniversalTime().ToString("yyyyMMdd_HHmmss")))
 $result = [ordered]@{
-    schema_version = "1.4"
+    schema_version = "1.5"
     ts_utc = (Get-Date).ToUniversalTime().ToString("o")
     project_root = $projectPath
     common_files_root = $CommonFilesRoot
     global_state_path = $globalPath
     rollover_config_path = $rolloverPath
     operator_time_ny = $nowNy.ToString("yyyy-MM-dd HH:mm")
+    capital_threshold_profile = $capitalThresholdProfileName
     daily_rollover_block = [bool]$dailyRolloverBlock
     daily_rollover_force_flatten = [bool]$dailyRolloverForceFlatten
     daily_rollover_reason = $dailyRolloverReason
@@ -1071,6 +1162,7 @@ $result = [ordered]@{
     fleet_reentry_threshold_pct = [math]::Round($fleetReentryThreshold,4)
     fleet_soft_threshold_pct = [math]::Round($fleetSoftThreshold,4)
     live_defensive_risk_cap = [math]::Round($liveDefensiveRiskCap,4)
+    paper_defensive_risk_cap = [math]::Round($paperDefensiveRiskCap,4)
     reentry_probation_risk_cap = [math]::Round($reentryProbationRiskCap,4)
     reserve_takeover_risk_cap = [math]::Round($reserveTakeoverRiskCap,4)
     domains = @($domainReports)
