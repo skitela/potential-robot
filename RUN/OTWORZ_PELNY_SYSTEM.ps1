@@ -81,7 +81,11 @@ function Invoke-Step {
     }
 
     try {
-        $output = @(& $Operation 2>&1) | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $output = @(
+            @(& $Operation 2>&1) |
+                ForEach-Object { ([string]$_).Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
         $message = if ($output.Count -gt 0) { ($output -join " | ") } else { "ok" }
         Add-ActionResult -Step $Step -Status "ok" -Message $message
     }
