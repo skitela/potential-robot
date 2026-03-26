@@ -3,6 +3,10 @@ param(
     [string]$DailyReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\DAILY\raport_dzienny_latest.json",
     [string]$ActiveFleetVerdictsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\active_fleet_verdicts_latest.json",
     [string]$DecisionLogsRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\logs",
+    [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
+    [string]$SessionCoordinatorPath = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state\_global\session_capital_coordinator.csv",
+    [string]$FamilyStatesRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state\_families",
+    [string]$CapitalContractPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\capital_risk_contract_v1.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [int]$DecisionWindow = 80
 )
@@ -33,6 +37,79 @@ function Normalize-SymbolAlias {
     }
 
     return ($Symbol.Trim().ToUpperInvariant() -replace "\.PRO$", "")
+}
+
+function Read-KeyValueTable {
+    param([string]$Path)
+
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $map
+    }
+
+    foreach ($line in @(Get-Content -LiteralPath $Path -Encoding UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch "`t") {
+            continue
+        }
+        $parts = $line -split "`t", 2
+        if ($parts.Count -eq 2) {
+            $map[[string]$parts[0]] = [string]$parts[1]
+        }
+    }
+
+    return $map
+}
+
+function Get-MapString {
+    param($Map,[string]$Key,[string]$Default = "")
+    if ($null -eq $Map -or -not $Map.ContainsKey($Key)) { return $Default }
+    return [string]$Map[$Key]
+}
+
+function Get-MapBool {
+    param($Map,[string]$Key,[bool]$Default = $false)
+    if ($null -eq $Map -or -not $Map.ContainsKey($Key)) { return $Default }
+    return ([int]$Map[$Key]) -ne 0
+}
+
+function Get-MapDouble {
+    param($Map,[string]$Key,[double]$Default = 0.0)
+    if ($null -eq $Map -or -not $Map.ContainsKey($Key)) { return $Default }
+    return [double]::Parse([string]$Map[$Key],[System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Get-FamilyPolicyState {
+    param(
+        [string]$FamilyStatesRootPath,
+        [string]$SessionProfile
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SessionProfile)) {
+        return [pscustomobject]@{
+            present = $false
+            paper_mode_active = $false
+            trust_reason = "MISSING"
+            family_daily_loss_pct = 0.0
+        }
+    }
+
+    $path = Join-Path $FamilyStatesRootPath ("{0}\tuning_family_policy.csv" -f $SessionProfile)
+    $raw = Read-KeyValueTable -Path $path
+    if ($raw.Count -le 0) {
+        return [pscustomobject]@{
+            present = $false
+            paper_mode_active = $false
+            trust_reason = "MISSING"
+            family_daily_loss_pct = 0.0
+        }
+    }
+
+    return [pscustomobject]@{
+        present = $true
+        paper_mode_active = (Get-MapBool -Map $raw -Key "paper_mode_active")
+        trust_reason = (Get-MapString -Map $raw -Key "trust_reason" -Default "UNASSESSED")
+        family_daily_loss_pct = (Get-MapDouble -Map $raw -Key "family_daily_loss_pct")
+    }
 }
 
 function Get-DecisionReasonSummary {
@@ -79,11 +156,21 @@ function Resolve-DirectBlock {
         [string]$LatestReason,
         [string]$DominantReason,
         [int]$Opens,
-        [int]$Closes
+        [int]$Closes,
+        [bool]$FleetPaperLock,
+        [bool]$FamilyPaperLock
     )
 
     if (($Opens + $Closes) -gt 0) {
         return "AKTYWNY_HANDLOWO"
+    }
+
+    if ($FleetPaperLock) {
+        return "BLOKADA_KAPITALU_FLOTY"
+    }
+
+    if ($FamilyPaperLock) {
+        return "BLOKADA_KAPITALU_RODZINY"
     }
 
     $reasons = @($LatestReason, $DominantReason) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
@@ -108,9 +195,19 @@ function Resolve-DeeperWhy {
     param(
         [string]$TrustState,
         [string]$CostPressure,
-        [string]$DirectBlock
+        [string]$DirectBlock,
+        [double]$FleetDailyLossPct,
+        [double]$FleetHardLossPct,
+        [double]$FamilyDailyLossPct,
+        [double]$FamilyHardLossPct
     )
 
+    if ($DirectBlock -eq "BLOKADA_KAPITALU_FLOTY") {
+        return ("przekroczono twardy dzienny limit straty floty paper: {0:N2}% > {1:N2}%" -f $FleetDailyLossPct, $FleetHardLossPct)
+    }
+    if ($DirectBlock -eq "BLOKADA_KAPITALU_RODZINY") {
+        return ("przekroczono twardy dzienny limit straty rodziny: {0:N2}% > {1:N2}%" -f $FamilyDailyLossPct, $FamilyHardLossPct)
+    }
     if ($TrustState -eq "LOW_SAMPLE") {
         return "za mala probka lokalna"
     }
@@ -140,11 +237,20 @@ function Resolve-Recommendation {
     param(
         [string]$DirectBlock,
         [string]$TrustState,
-        [string]$CostPressure
+        [string]$CostPressure,
+        [bool]$BlockSensible
     )
 
     switch ($DirectBlock) {
         "AKTYWNY_HANDLOWO" { return "utrzymac pod obserwacja; symbol juz pracuje na paper-live" }
+        "BLOKADA_KAPITALU_FLOTY" {
+            if ($BlockSensible) { return "utrzymac blokade kapitalowa i naprawiac strate floty zamiast odmrazac recznie" }
+            return "sprawdzic koordynator kapitalu; blokada floty wyglada ostrzej niz wynika z kontraktu"
+        }
+        "BLOKADA_KAPITALU_RODZINY" {
+            if ($BlockSensible) { return "utrzymac blokade rodziny i najpierw zredukowac strate albo chaos tej rodziny" }
+            return "sprawdzic koordynator kapitalu rodziny; blokada wyglada ostrzej niz wynika z kontraktu"
+        }
         "MALA_PROBKA" { return "dalej budowac probe i nie wymuszac wejsc" }
         "BRUDNY_FOREGROUND" { return "oczyscic foreground i sprawdzic invalidacje kandydatow" }
         "BLOKADA_KONWERSJI_PAPER" { return "sprawdzic kontrakt bezpieczenstwa paper i powod blokady konwersji" }
@@ -169,6 +275,26 @@ if ($null -eq $dailyReport -or $null -eq $dailyReport.instrumenty) {
     throw "Brakuje raportu dziennego z instrumentami: $DailyReportPath"
 }
 
+$registry = Read-JsonSafe -Path $RegistryPath
+$capitalContract = Read-JsonSafe -Path $CapitalContractPath
+$sessionCoordinator = Read-KeyValueTable -Path $SessionCoordinatorPath
+$symbolMetaMap = @{}
+if ($null -ne $registry) {
+    foreach ($row in @($registry.symbols)) {
+        $alias = Normalize-SymbolAlias ([string]$row.symbol)
+        if (-not [string]::IsNullOrWhiteSpace($alias)) {
+            $symbolMetaMap[$alias] = $row
+        }
+    }
+}
+
+$paperHardDailyLossPct = if ($null -ne $capitalContract -and $null -ne $capitalContract.paper) { [double]$capitalContract.paper.account_hard_daily_loss_pct } else { 0.0 }
+$paperFamilyHardLossPct = if ($null -ne $capitalContract -and $null -ne $capitalContract.paper) { [double]$capitalContract.paper.family_hard_daily_loss_pct } else { 0.0 }
+$fleetPaperLock = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_lock"
+$fleetPaperLockReason = Get-MapString -Map $sessionCoordinator -Key "fleet_paper_lock_reason" -Default "NONE"
+$fleetDailyLossPct = Get-MapDouble -Map $sessionCoordinator -Key "fleet_daily_loss_pct"
+$runtimeProfile = Get-MapString -Map $sessionCoordinator -Key "runtime_profile" -Default "UNKNOWN"
+
 $activeFleetVerdicts = Read-JsonSafe -Path $ActiveFleetVerdictsPath
 $fleetMap = @{}
 if ($null -ne $activeFleetVerdicts) {
@@ -191,18 +317,44 @@ foreach ($instrument in @($dailyReport.instrumenty)) {
         continue
     }
 
+    $meta = if ($symbolMetaMap.ContainsKey($alias)) { $symbolMetaMap[$alias] } else { $null }
+    $sessionProfile = if ($null -ne $meta) { [string]$meta.session_profile } else { "" }
+    $familyPolicy = Get-FamilyPolicyState -FamilyStatesRootPath $FamilyStatesRoot -SessionProfile $sessionProfile
+    $familyPaperLock = [bool]$familyPolicy.paper_mode_active
+    $familyDailyLossPct = [double]$familyPolicy.family_daily_loss_pct
     $decisionPath = Join-Path (Join-Path $DecisionLogsRoot $alias) "decision_events.csv"
     $decisionSummary = Get-DecisionReasonSummary -DecisionCsvPath $decisionPath -Window $DecisionWindow
     $opens = [int]$instrument.otwarcia_dzis
     $closes = [int]$instrument.zamkniecia_dzis
     $trustState = [string]$instrument.trust_state
     $costPressure = [string]$instrument.cost_pressure
-    $directBlock = Resolve-DirectBlock -LatestReason ([string]$decisionSummary.latest_reason) -DominantReason ([string]$decisionSummary.dominant_reason) -Opens $opens -Closes $closes
-    $deeperWhy = Resolve-DeeperWhy -TrustState $trustState -CostPressure $costPressure -DirectBlock $directBlock
+    $directBlock = Resolve-DirectBlock `
+        -LatestReason ([string]$decisionSummary.latest_reason) `
+        -DominantReason ([string]$decisionSummary.dominant_reason) `
+        -Opens $opens `
+        -Closes $closes `
+        -FleetPaperLock $fleetPaperLock `
+        -FamilyPaperLock $familyPaperLock
+    $blockSensible = $false
+    if ($directBlock -eq "BLOKADA_KAPITALU_FLOTY" -and $paperHardDailyLossPct -gt 0) {
+        $blockSensible = ($fleetDailyLossPct -ge $paperHardDailyLossPct)
+    }
+    elseif ($directBlock -eq "BLOKADA_KAPITALU_RODZINY" -and $paperFamilyHardLossPct -gt 0) {
+        $blockSensible = ($familyDailyLossPct -ge $paperFamilyHardLossPct)
+    }
+    $deeperWhy = Resolve-DeeperWhy `
+        -TrustState $trustState `
+        -CostPressure $costPressure `
+        -DirectBlock $directBlock `
+        -FleetDailyLossPct $fleetDailyLossPct `
+        -FleetHardLossPct $paperHardDailyLossPct `
+        -FamilyDailyLossPct $familyDailyLossPct `
+        -FamilyHardLossPct $paperFamilyHardLossPct
     $fleet = if ($fleetMap.ContainsKey($alias)) { $fleetMap[$alias] } else { $null }
 
     $items.Add([pscustomobject]@{
         symbol_alias = $alias
+        session_profile = $sessionProfile
         swiezy = [bool]$instrument.swiezy
         status_pracy = [string]$instrument.status_pracy
         otwarcia_dzis = $opens
@@ -218,7 +370,16 @@ foreach ($instrument in @($dailyReport.instrumenty)) {
         latest_phase = [string]$decisionSummary.latest_phase
         direct_block = $directBlock
         deeper_why = $deeperWhy
-        recommendation = Resolve-Recommendation -DirectBlock $directBlock -TrustState $trustState -CostPressure $costPressure
+        blokada_kapitalu_floty = $fleetPaperLock
+        powod_blokady_floty = $fleetPaperLockReason
+        strata_floty_proc = [math]::Round($fleetDailyLossPct, 4)
+        prog_twardy_floty_proc = [math]::Round($paperHardDailyLossPct, 4)
+        blokada_kapitalu_rodziny = $familyPaperLock
+        powod_blokady_rodziny = [string]$familyPolicy.trust_reason
+        strata_rodziny_proc = [math]::Round($familyDailyLossPct, 4)
+        prog_twardy_rodziny_proc = [math]::Round($paperFamilyHardLossPct, 4)
+        blokada_sensowna = $blockSensible
+        recommendation = Resolve-Recommendation -DirectBlock $directBlock -TrustState $trustState -CostPressure $costPressure -BlockSensible $blockSensible
         business_status = if ($null -ne $fleet) { [string]$fleet.business_status } else { "" }
         onnx_status = if ($null -ne $fleet) { [string]$fleet.onnx_status } else { "" }
         onnx_jakosc = if ($null -ne $fleet) { [string]$fleet.onnx_jakosc } else { "" }
@@ -233,6 +394,13 @@ $summary = [ordered]@{
     fresh_symbols = @($itemsArray | Where-Object { $_.swiezy }).Count
     active_trade_count = @($itemsArray | Where-Object { $_.otwarcia_dzis -gt 0 }).Count
     fresh_but_idle_count = $idleFresh.Count
+    runtime_profile = $runtimeProfile
+    fleet_capital_lock_active = $fleetPaperLock
+    fleet_capital_lock_reason = $fleetPaperLockReason
+    fleet_daily_loss_pct = [math]::Round($fleetDailyLossPct, 4)
+    paper_hard_daily_loss_pct = [math]::Round($paperHardDailyLossPct, 4)
+    fleet_capital_lock_symbol_count = @($itemsArray | Where-Object { $_.direct_block -eq "BLOKADA_KAPITALU_FLOTY" }).Count
+    family_capital_lock_symbol_count = @($itemsArray | Where-Object { $_.direct_block -eq "BLOKADA_KAPITALU_RODZINY" }).Count
     fleet_freeze_count = @($itemsArray | Where-Object { $_.direct_block -eq "ZAMROZENIE_FLOTY" }).Count
     family_freeze_count = @($itemsArray | Where-Object { $_.direct_block -eq "ZAMROZENIE_RODZINY" }).Count
     low_sample_count = @($itemsArray | Where-Object { $_.direct_block -eq "MALA_PROBKA" }).Count
@@ -262,6 +430,13 @@ $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- fresh_symbols: {0}" -f $report.summary.fresh_symbols))
 $lines.Add(("- active_trade_count: {0}" -f $report.summary.active_trade_count))
 $lines.Add(("- fresh_but_idle_count: {0}" -f $report.summary.fresh_but_idle_count))
+$lines.Add(("- runtime_profile: {0}" -f $report.summary.runtime_profile))
+$lines.Add(("- fleet_capital_lock_active: {0}" -f ([string]$report.summary.fleet_capital_lock_active).ToLowerInvariant()))
+$lines.Add(("- fleet_capital_lock_reason: {0}" -f $report.summary.fleet_capital_lock_reason))
+$lines.Add(("- fleet_daily_loss_pct: {0}" -f $report.summary.fleet_daily_loss_pct))
+$lines.Add(("- paper_hard_daily_loss_pct: {0}" -f $report.summary.paper_hard_daily_loss_pct))
+$lines.Add(("- fleet_capital_lock_symbol_count: {0}" -f $report.summary.fleet_capital_lock_symbol_count))
+$lines.Add(("- family_capital_lock_symbol_count: {0}" -f $report.summary.family_capital_lock_symbol_count))
 $lines.Add(("- fleet_freeze_count: {0}" -f $report.summary.fleet_freeze_count))
 $lines.Add(("- family_freeze_count: {0}" -f $report.summary.family_freeze_count))
 $lines.Add(("- low_sample_count: {0}" -f $report.summary.low_sample_count))

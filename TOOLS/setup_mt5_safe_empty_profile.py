@@ -122,9 +122,14 @@ def _close_mt5_processes() -> None:
             "-NoProfile",
             "-Command",
             (
-                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue; "
+                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
+                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
                 "if($p){$p|%{$_.CloseMainWindow()|Out-Null}; Start-Sleep -Seconds 2; "
-                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue; if($p){$p|Stop-Process -Force}}"
+                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
+                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
+                "if($p){$p|Stop-Process -Force}}"
             ),
         ],
         check=False,

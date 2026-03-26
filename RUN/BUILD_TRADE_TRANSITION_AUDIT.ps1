@@ -73,6 +73,7 @@ $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
 $activePresetRoot = Join-Path $ProjectRoot "SERVER_PROFILE\PACKAGE\MQL5\Presets\ActiveLive"
 $migrationReportPath = Join-Path $ProjectRoot "EVIDENCE\migrate_oanda_mt5_vps_clean_latest.json"
+$paperLiveSyncPath = Join-Path $opsRoot "paper_live_sync_latest.json"
 $localProfileReportPath = Join-Path $ProjectRoot "EVIDENCE\mt5_microbots_profile_setup_report.json"
 $vpsProfileReportPath = Join-Path $opsRoot "mt5_microbots_profile_setup_for_vps_latest.json"
 $paperGapPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
@@ -89,6 +90,7 @@ if ($null -eq $registry) {
 }
 
 $migrationReport = Read-JsonSafe -Path $migrationReportPath
+$paperLiveSyncReport = Read-JsonSafe -Path $paperLiveSyncPath
 $localProfileReport = Read-JsonSafe -Path $localProfileReportPath
 $vpsProfileReport = Read-JsonSafe -Path $vpsProfileReportPath
 $paperGap = Read-JsonSafe -Path $paperGapPath
@@ -122,6 +124,10 @@ $safeCharts = @($profileCharts | Where-Object { $activeCharts -notcontains $_ })
 $hasDedicatedVpsProfileReport = ($null -ne $vpsProfileReport)
 $migrationOk = [bool](Get-OptionalValue -Object $migrationReport -Name "ok" -Default $false)
 $migrationStage = [string](Get-OptionalValue -Object $migrationReport -Name "stage" -Default "")
+$paperLiveSyncOk = [bool](Get-OptionalValue -Object $paperLiveSyncReport -Name "ok" -Default $false)
+$paperLiveSyncStatus = [string](Get-OptionalValue -Object $paperLiveSyncReport -Name "status" -Default "")
+$paperLiveSyncStatusNormalized = $paperLiveSyncStatus.Trim()
+$migrationConfirmed = ($migrationOk -or $paperLiveSyncOk)
 $serverPingEnabled = ([string](Get-OptionalValue -Object $pingContract -Name "enabled" -Default "0") -eq "1")
 $serverPingSource = [string](Get-OptionalValue -Object $pingContract -Name "source" -Default "")
 $trainerUsesRuntimeLatency = ($trainerText -match 'runtime_latency_us')
@@ -130,6 +136,13 @@ $trainerUsesServerLatency = ($trainerText -match 'server_local_latency_us_avg' -
 
 $paperSummary = Get-OptionalValue -Object $paperGap -Name "summary" -Default $null
 $activeTradeCount = [int](Get-OptionalValue -Object $paperSummary -Name "active_trade_count" -Default 0)
+$runtimeProfile = [string](Get-OptionalValue -Object $paperSummary -Name "runtime_profile" -Default "")
+$fleetCapitalLockActive = [bool](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_lock_active" -Default $false)
+$fleetCapitalLockReason = [string](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_lock_reason" -Default "")
+$fleetDailyLossPct = [double](Get-OptionalValue -Object $paperSummary -Name "fleet_daily_loss_pct" -Default 0.0)
+$paperHardDailyLossPct = [double](Get-OptionalValue -Object $paperSummary -Name "paper_hard_daily_loss_pct" -Default 0.0)
+$fleetCapitalLockSymbolCount = [int](Get-OptionalValue -Object $paperSummary -Name "fleet_capital_lock_symbol_count" -Default 0)
+$familyCapitalLockSymbolCount = [int](Get-OptionalValue -Object $paperSummary -Name "family_capital_lock_symbol_count" -Default 0)
 $fleetFreezeCount = [int](Get-OptionalValue -Object $paperSummary -Name "fleet_freeze_count" -Default 0)
 $familyFreezeCount = [int](Get-OptionalValue -Object $paperSummary -Name "family_freeze_count" -Default 0)
 $costBlockCount = [int](Get-OptionalValue -Object $paperSummary -Name "cost_block_count" -Default 0)
@@ -155,10 +168,15 @@ elseif ($profileCharts.Count -gt 0 -and $activeCharts.Count -lt $profileCharts.C
     $dlategoZe = "Profil uzyty dla serwera zawiera co najmniej jeden bezpieczny preset, ktory nie pozwala przejsc z obserwacji do handlu."
     $recommendation = "Budowac profil migracyjny tylko z presetow ActiveLive i walidowac to przed synchronizacja VPS."
 }
-elseif (-not $migrationOk -and -not [string]::IsNullOrWhiteSpace($migrationStage)) {
+elseif (-not $migrationConfirmed) {
     $verdict = "MIGRACJA_SERWERA_NIEPOTWIERDZONA"
-    $dlategoZe = "Ostatni raport migracji nie zakonczyl sie stanem poprawnym."
-    $recommendation = "Naprawic migracje serwera zanim beda analizowane blokady decyzyjne."
+    $dlategoZe = "Nie ma jeszcze swiezego, zgodnego dowodu udanej migracji serwera na aktywnych presetach."
+    $recommendation = "Naprawic automatyke migracji albo zapis swiezego raportu synchronizacji zanim beda analizowane blokady decyzyjne."
+}
+elseif ($fleetCapitalLockActive) {
+    $verdict = "AKTYWNA_BLOKADA_KAPITALU_FLOTY"
+    $dlategoZe = ("Koordynator kapitalu trzyma cala flote w trybie papierowym, bo dzienna strata paper wynosi {0:N2}% przy twardym limicie {1:N2}%." -f $fleetDailyLossPct, $paperHardDailyLossPct)
+    $recommendation = "Nie odmrazac recznie. Najpierw naprawiac przyczyny strat, bo to jest glowna blokada przejscia z obserwacji do handlu."
 }
 elseif ($activeTradeCount -le 0 -and ($fleetFreezeCount + $familyFreezeCount + $costBlockCount + $lowSampleCount + $foregroundDirtyCount) -gt 0) {
     $verdict = "BLOKADY_DECYZYJNE_DOMINUJA"
@@ -181,12 +199,22 @@ $summary = [ordered]@{
     profile_safe_chart_count = @($safeCharts).Count
     migration_ok = $migrationOk
     migration_stage = $migrationStage
+    paper_live_sync_ok = $paperLiveSyncOk
+    paper_live_sync_status = $paperLiveSyncStatus
+    migration_confirmed = $migrationConfirmed
     server_execution_ping_contract_enabled = $serverPingEnabled
     server_execution_ping_contract_source = $serverPingSource
     global_model_uses_runtime_latency = $trainerUsesRuntimeLatency
     global_model_uses_server_ping = $trainerUsesServerPing
     global_model_uses_server_latency = $trainerUsesServerLatency
     paper_active_trade_count = $activeTradeCount
+    paper_runtime_profile = $runtimeProfile
+    paper_fleet_capital_lock_active = $fleetCapitalLockActive
+    paper_fleet_capital_lock_reason = $fleetCapitalLockReason
+    paper_fleet_daily_loss_pct = $fleetDailyLossPct
+    paper_hard_daily_loss_pct = $paperHardDailyLossPct
+    paper_fleet_capital_lock_symbol_count = $fleetCapitalLockSymbolCount
+    paper_family_capital_lock_symbol_count = $familyCapitalLockSymbolCount
     paper_fleet_freeze_count = $fleetFreezeCount
     paper_family_freeze_count = $familyFreezeCount
     paper_cost_block_count = $costBlockCount
@@ -219,10 +247,17 @@ $lines.Add(("- recommendation: {0}" -f $report.recommendation))
 $lines.Add(("- profile_active_chart_count: {0}" -f $summary.profile_active_chart_count))
 $lines.Add(("- profile_safe_chart_count: {0}" -f $summary.profile_safe_chart_count))
 $lines.Add(("- migration_ok: {0}" -f ([string]$summary.migration_ok).ToLowerInvariant()))
+$lines.Add(("- paper_live_sync_ok: {0}" -f ([string]$summary.paper_live_sync_ok).ToLowerInvariant()))
+$lines.Add(("- migration_confirmed: {0}" -f ([string]$summary.migration_confirmed).ToLowerInvariant()))
 $lines.Add(("- server_execution_ping_contract_enabled: {0}" -f ([string]$summary.server_execution_ping_contract_enabled).ToLowerInvariant()))
 $lines.Add(("- global_model_uses_runtime_latency: {0}" -f ([string]$summary.global_model_uses_runtime_latency).ToLowerInvariant()))
 $lines.Add(("- global_model_uses_server_ping: {0}" -f ([string]$summary.global_model_uses_server_ping).ToLowerInvariant()))
 $lines.Add(("- global_model_uses_server_latency: {0}" -f ([string]$summary.global_model_uses_server_latency).ToLowerInvariant()))
+$lines.Add(("- paper_runtime_profile: {0}" -f $summary.paper_runtime_profile))
+$lines.Add(("- paper_fleet_capital_lock_active: {0}" -f ([string]$summary.paper_fleet_capital_lock_active).ToLowerInvariant()))
+$lines.Add(("- paper_fleet_capital_lock_reason: {0}" -f $summary.paper_fleet_capital_lock_reason))
+$lines.Add(("- paper_fleet_daily_loss_pct: {0}" -f $summary.paper_fleet_daily_loss_pct))
+$lines.Add(("- paper_hard_daily_loss_pct: {0}" -f $summary.paper_hard_daily_loss_pct))
 $lines.Add("")
 $lines.Add("## Braki aktywnych presetow")
 $lines.Add("")

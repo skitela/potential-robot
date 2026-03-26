@@ -41,14 +41,38 @@ def _find_main_window(process_id: int):
     raise RuntimeError(f"No UI window found for process {process_id}")
 
 
-def _find_descendant(window, *, control_type: str, text_prefix: Optional[str] = None, text_exact: Optional[str] = None):
+def _find_descendant(
+    window,
+    *,
+    control_type: Optional[str] = None,
+    text_prefix: Optional[str] = None,
+    text_exact: Optional[str] = None,
+):
     for control in window.descendants():
-        if control.element_info.control_type != control_type:
+        if control_type is not None and control.element_info.control_type != control_type:
             continue
         text = control.window_text() or ""
         if text_exact is not None and text == text_exact:
             return control
         if text_prefix is not None and text.startswith(text_prefix):
+            return control
+    return None
+
+
+def _find_scope_control(window, text_prefix: str):
+    preferred_types = ("ListItem", "Text", "Hyperlink", "MenuItem", "DataItem")
+    for control_type in preferred_types:
+        control = _find_descendant(window, control_type=control_type, text_prefix=text_prefix)
+        if control is not None:
+            return control
+
+    normalized_prefix = text_prefix.strip().rstrip(":").lower()
+    for control in window.descendants():
+        text = (control.window_text() or "").strip()
+        if not text:
+            continue
+        normalized_text = text.rstrip(":").lower()
+        if normalized_text.startswith(normalized_prefix):
             return control
     return None
 
@@ -130,7 +154,7 @@ def _open_vps_panel(window) -> None:
 
 def _select_scope(window, scope_key: str) -> str:
     config = SCOPE_MAP[scope_key]
-    item = _find_descendant(window, control_type="ListItem", text_prefix=config["ui_text"])
+    item = _find_scope_control(window, config["ui_text"])
     if item is None:
         raise RuntimeError(f"Migration scope item not found: {config['ui_text']}")
     item.click_input()

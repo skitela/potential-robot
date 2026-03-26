@@ -32,6 +32,33 @@ function Get-OandaTerminalProcess {
     return $windowed | Select-Object -First 1
 }
 
+function Wait-OandaTerminalProcess {
+    param(
+        [string]$ExpectedProfile,
+        [int]$TimeoutSec = 45
+    )
+
+    $deadline = (Get-Date).AddSeconds([Math]::Max(5, $TimeoutSec))
+    do {
+        $process = Get-OandaTerminalProcess -ExpectedProfile $ExpectedProfile
+        if ($null -ne $process) {
+            return $process
+        }
+
+        $fallback = Get-CimInstance Win32_Process -Filter "Name='terminal64.exe'" |
+            Where-Object { $_.ExecutablePath -eq $Mt5Exe } |
+            Sort-Object ProcessId -Descending |
+            Select-Object -First 1
+        if ($null -ne $fallback) {
+            return $fallback
+        }
+
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+
+    return $null
+}
+
 $projectRootResolved = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $evidenceOpsDir = Join-Path $projectRootResolved "EVIDENCE\OPS"
 New-Item -ItemType Directory -Force -Path $evidenceOpsDir | Out-Null
@@ -75,9 +102,7 @@ try {
     & (Join-Path $projectRootResolved "RUN\OPEN_OANDA_MT5_WITH_VPS_CLEAR_PROFILE.ps1") `
         -Mt5Exe $Mt5Exe `
         -TerminalDataDir $TerminalDataDir | Out-Null
-    Start-Sleep -Seconds 10
-
-    $clearProcess = Get-OandaTerminalProcess -ExpectedProfile "MAKRO_I_MIKRO_BOT_VPS_CLEAR"
+    $clearProcess = Wait-OandaTerminalProcess -ExpectedProfile "MAKRO_I_MIKRO_BOT_VPS_CLEAR" -TimeoutSec 45
     if ($null -eq $clearProcess) {
         throw "Nie znaleziono procesu OANDA po uruchomieniu profilu VPS_CLEAR."
     }
@@ -104,9 +129,7 @@ try {
         -UseActiveLivePresets `
         -Mt5Exe $Mt5Exe `
         -TerminalDataDir $TerminalDataDir | Out-Null
-    Start-Sleep -Seconds 10
-
-    $mainProcess = Get-OandaTerminalProcess -ExpectedProfile "MAKRO_I_MIKRO_BOT_AUTO"
+    $mainProcess = Wait-OandaTerminalProcess -ExpectedProfile "MAKRO_I_MIKRO_BOT_AUTO" -TimeoutSec 45
     if ($null -eq $mainProcess) {
         throw "Nie znaleziono procesu OANDA po uruchomieniu profilu MAKRO_I_MIKRO_BOT_AUTO."
     }
