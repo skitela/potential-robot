@@ -12,6 +12,7 @@ $priorityScript = Join-Path $ProjectRoot "RUN\BUILD_TUNING_PRIORITY_REPORT.ps1"
 $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $onnxMicroReviewScript = Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1"
+$learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
 $activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERDICTS_REPORT.ps1"
 $winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
 $learningHealthRegistryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
@@ -64,6 +65,7 @@ foreach ($path in @(
     $qdmProfileScript,
     $mlHintsScript,
     $onnxMicroReviewScript,
+    $learningSourceAuditScript,
     $activeFleetVerdictsScript,
     $winnerDeploymentScript,
     $learningHealthRegistryScript,
@@ -574,6 +576,14 @@ function Write-SupervisorStatus {
         }
     }
 
+    $learningSourceAuditPath = Join-Path $statusDir "learning_source_audit_latest.json"
+    $learningSourceAudit = $null
+    $learningSourceAuditHead = @()
+    if (Test-Path -LiteralPath $learningSourceAuditPath) {
+        $learningSourceAudit = Get-Content -LiteralPath $learningSourceAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $learningSourceAuditHead = @($learningSourceAudit.top_critical | Select-Object -First 5)
+    }
+
     $localTrainingPlanPath = Join-Path $statusDir "instrument_local_training_plan_latest.json"
     $localTrainingPlan = $null
     $localTrainingPlanHead = @()
@@ -636,6 +646,8 @@ function Write-SupervisorStatus {
         top_instrument_shadow_datasets = $shadowDatasetsHead
         instrument_training_readiness = $trainingReadiness
         top_instrument_training_readiness = $trainingReadinessHead
+        learning_source_audit = $learningSourceAudit
+        top_learning_source_audit = $learningSourceAuditHead
         instrument_local_training_plan = $localTrainingPlan
         top_instrument_local_training_plan = $localTrainingPlanHead
         instrument_local_training_lane = $localTrainingLane
@@ -913,6 +925,11 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "onnx_micro_review" -Operation {
         & $onnxMicroReviewScript | Out-Null
         "rebuilt"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "learning_source_audit" -Operation {
+        $report = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "global_gap=$($report.summary.globalny_model_qdm_visibility_gap_count); candidate_gap=$($report.summary.candidate_gap_count); blocked=$($report.summary.blocked_count); target60_missed=$($report.summary.target_60p_missed_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "learning_path_hygiene" -Operation {

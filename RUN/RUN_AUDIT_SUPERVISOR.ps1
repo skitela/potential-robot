@@ -294,6 +294,7 @@ function Invoke-AuditCycle {
     $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
+    $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
     $instrumentLocalTrainingPlanPath = Join-Path $opsRoot "instrument_local_training_plan_latest.json"
     $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
     $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
@@ -338,6 +339,13 @@ function Invoke-AuditCycle {
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = "C:\TRADING_DATA\RESEARCH"
+            }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1")
@@ -549,6 +557,7 @@ function Invoke-AuditCycle {
     $instrumentDataReadiness = Read-JsonSafe -Path $instrumentDataReadinessPath
     $instrumentShadowDatasets = Read-JsonSafe -Path $instrumentShadowDatasetsPath
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
+    $learningSourceAudit = Read-JsonSafe -Path $learningSourceAuditPath
     $instrumentLocalTrainingPlan = Read-JsonSafe -Path $instrumentLocalTrainingPlanPath
     $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
     $instrumentLocalTrainingAudit = Read-JsonSafe -Path $instrumentLocalTrainingAuditPath
@@ -1125,6 +1134,64 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_DANYCH_I_TRENINGU_PER_INSTRUMENT" -Gate "RAPORTUJ" -Severity (Get-HighestSeverity -Findings $instrumentReadinessEvidence) -Reason "Gotowosc danych i treningu per instrument jest pod kontrola." -Evidence $instrumentReadinessEvidence)) | Out-Null
     }
 
+    $learningSourceEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $learningSourceAudit) {
+        $sourceSummary = Get-OptionalValue -Object $learningSourceAudit -Name "summary" -Default $null
+        $globalVisibilityGap = [int](Get-OptionalValue -Object $sourceSummary -Name "globalny_model_qdm_visibility_gap_count" -Default 0)
+        $candidateGapCount = [int](Get-OptionalValue -Object $sourceSummary -Name "candidate_gap_count" -Default 0)
+        $runtimeWithoutOutcomeCount = [int](Get-OptionalValue -Object $sourceSummary -Name "runtime_without_outcome_count" -Default 0)
+        $blockedCount = [int](Get-OptionalValue -Object $sourceSummary -Name "blocked_count" -Default 0)
+        $targetMissedCount = [int](Get-OptionalValue -Object $sourceSummary -Name "target_60p_missed_count" -Default 0)
+
+        if ($globalVisibilityGap -gt 0) {
+            $learningSourceEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "global_qdm_visibility_gap"
+                message = "Globalny model nadal nie widzi pelnego QDM dla calej floty."
+                context = @{ globalny_model_qdm_visibility_gap_count = $globalVisibilityGap }
+            }) | Out-Null
+        }
+        if ($candidateGapCount -gt 0) {
+            $learningSourceEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "candidate_gap"
+                message = "Czesc symboli ma dane i runtime, ale nadal nie produkuje kandydatow."
+                context = @{ candidate_gap_count = $candidateGapCount }
+            }) | Out-Null
+        }
+        if ($runtimeWithoutOutcomeCount -gt 0) {
+            $learningSourceEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "runtime_without_outcome"
+                message = "Czesc runtime ONNX nadal nie ma domknietego wyniku rynku."
+                context = @{ runtime_without_outcome_count = $runtimeWithoutOutcomeCount }
+            }) | Out-Null
+        }
+        if ($blockedCount -gt 0) {
+            $learningSourceEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "learning_source_blocked"
+                message = "Zrodla uczenia globalne i lokalne nadal sa zablokowane dla czesci floty."
+                context = @{ blocked_count = $blockedCount }
+            }) | Out-Null
+        }
+        if ($targetMissedCount -gt 0) {
+            $learningSourceEvidence.Add([pscustomobject]@{
+                severity = "info"
+                component = "positive_target_missed"
+                message = "Wiekszosc malych modeli nie spelnia jeszcze celu 60 procent dodatnich wierszy."
+                context = @{ target_60p_missed_count = $targetMissedCount }
+            }) | Out-Null
+        }
+    }
+
+    if ($learningSourceEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "ZRODLA_UCZENIA_GLOBALNE_I_LOKALNE" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $learningSourceEvidence) -Reason "Tor uczenia musi stale kontrolowac zaleznosc od nauczyciela globalnego i gotowosc lokalnych modeli." -Evidence $learningSourceEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "ZRODLA_UCZENIA_GLOBALNE_I_LOKALNE" -Gate "RAPORTUJ" -Severity "info" -Reason "Przeplyw wiedzy miedzy modelem globalnym i lokalnymi modelami jest pod kontrola.")) | Out-Null
+    }
+
     $paperLearningEvidence = New-Object System.Collections.Generic.List[object]
     if ($null -ne $learningPaperRuntime) {
         $paperSummary = Get-OptionalValue -Object $learningPaperRuntime -Name "summary" -Default $null
@@ -1312,6 +1379,7 @@ function Invoke-AuditCycle {
         instrument_data_readiness = $instrumentDataReadinessPath
         instrument_shadow_datasets = $instrumentShadowDatasetsPath
         instrument_training_readiness = $instrumentTrainingReadinessPath
+        learning_source_audit = $learningSourceAuditPath
         instrument_local_training_plan = $instrumentLocalTrainingPlanPath
         instrument_local_training_lane = $instrumentLocalTrainingLanePath
         instrument_local_training_audit = $instrumentLocalTrainingAuditPath

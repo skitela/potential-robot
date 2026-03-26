@@ -26,6 +26,10 @@ long   g_mb_onnx_obs_teacher_handle = INVALID_HANDLE;
 string g_mb_onnx_obs_symbol = "";
 string g_mb_onnx_obs_log_path = "";
 string g_mb_onnx_obs_state_path = "";
+string g_mb_onnx_obs_requested_symbol = "";
+string g_mb_onnx_obs_requested_log_path = "";
+string g_mb_onnx_obs_requested_state_path = "";
+bool   g_mb_onnx_obs_requested_enabled = false;
 string g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
 string g_mb_onnx_obs_last_signature = "";
 datetime g_mb_onnx_obs_last_init_attempt = 0;
@@ -83,7 +87,6 @@ void MbOnnxObservationResetRuntime()
    g_mb_onnx_obs_symbol = "";
    g_mb_onnx_obs_log_path = "";
    g_mb_onnx_obs_state_path = "";
-   g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
    g_mb_onnx_obs_last_signature = "";
    g_mb_onnx_obs_last_init_attempt = 0;
    g_mb_onnx_obs_last_shadow_idle_ts = 0;
@@ -615,17 +618,33 @@ bool MbOnnxObservationInit(
    const string state_rel_path
 )
   {
-   string requested_symbol = symbol;
+   string requested_symbol = MbCanonicalSymbol(symbol);
+   if(StringLen(requested_symbol) <= 0)
+      requested_symbol = g_mb_onnx_obs_requested_symbol;
+
    bool requested_enabled = enabled;
+   if(!requested_enabled && g_mb_onnx_obs_requested_enabled && StringLen(requested_symbol) > 0)
+      requested_enabled = g_mb_onnx_obs_requested_enabled;
+
    string requested_log_path = log_rel_path;
+   if(StringLen(requested_log_path) <= 0)
+      requested_log_path = g_mb_onnx_obs_requested_log_path;
+
    string requested_state_path = state_rel_path;
+   if(StringLen(requested_state_path) <= 0)
+      requested_state_path = g_mb_onnx_obs_requested_state_path;
 
    MbOnnxObservationResetRuntime();
    g_mb_onnx_obs_last_init_attempt = TimeCurrent();
+   g_mb_onnx_obs_requested_symbol = requested_symbol;
+   g_mb_onnx_obs_requested_enabled = requested_enabled;
+   g_mb_onnx_obs_requested_log_path = requested_log_path;
+   g_mb_onnx_obs_requested_state_path = requested_state_path;
    g_mb_onnx_obs_enabled = requested_enabled;
-   g_mb_onnx_obs_symbol = MbCanonicalSymbol(requested_symbol);
+   g_mb_onnx_obs_symbol = requested_symbol;
    g_mb_onnx_obs_log_path = requested_log_path;
    g_mb_onnx_obs_state_path = requested_state_path;
+   g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
    MbOnnxObservationEnsureCsvHeader(g_mb_onnx_obs_log_path);
 
    if(!requested_enabled)
@@ -723,14 +742,14 @@ void MbOnnxObservationRetryInitIfNeeded()
 
    PrintFormat(
       "MB_ONNX_RETRY_INIT symbol=%s previous_reason=%s",
-      g_mb_onnx_obs_symbol,
+      g_mb_onnx_obs_requested_symbol,
       g_mb_onnx_obs_init_reason
    );
 
-   string retry_symbol = g_mb_onnx_obs_symbol;
-   bool retry_enabled = g_mb_onnx_obs_enabled;
-   string retry_log_path = g_mb_onnx_obs_log_path;
-   string retry_state_path = g_mb_onnx_obs_state_path;
+   string retry_symbol = g_mb_onnx_obs_requested_symbol;
+   bool retry_enabled = g_mb_onnx_obs_requested_enabled;
+   string retry_log_path = g_mb_onnx_obs_requested_log_path;
+   string retry_state_path = g_mb_onnx_obs_requested_state_path;
 
    MbOnnxObservationInit(
       retry_symbol,
@@ -743,6 +762,11 @@ void MbOnnxObservationRetryInitIfNeeded()
 void MbOnnxObservationShutdown()
   {
    MbOnnxObservationResetRuntime();
+   g_mb_onnx_obs_requested_symbol = "";
+   g_mb_onnx_obs_requested_log_path = "";
+   g_mb_onnx_obs_requested_state_path = "";
+   g_mb_onnx_obs_requested_enabled = false;
+   g_mb_onnx_obs_init_reason = "ONNX_NOT_INITIALIZED";
   }
 
 bool MbOnnxObservationEvaluateWithChannel(
