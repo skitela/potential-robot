@@ -13,6 +13,7 @@ $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $onnxMicroReviewScript = Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
+$tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
 $qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
 $globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
@@ -69,6 +70,7 @@ foreach ($path in @(
     $mlHintsScript,
     $onnxMicroReviewScript,
     $learningSourceAuditScript,
+    $tradeTransitionAuditScript,
     $qdmVisibilityRefreshScript,
     $globalQdmRetrainScript,
     $paperLiveActionGapAuditScript,
@@ -590,6 +592,12 @@ function Write-SupervisorStatus {
         $learningSourceAuditHead = @($learningSourceAudit.top_critical | Select-Object -First 5)
     }
 
+    $tradeTransitionAuditPath = Join-Path $statusDir "trade_transition_audit_latest.json"
+    $tradeTransitionAudit = $null
+    if (Test-Path -LiteralPath $tradeTransitionAuditPath) {
+        $tradeTransitionAudit = Get-Content -LiteralPath $tradeTransitionAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
     $qdmVisibilityRefreshPath = Join-Path $statusDir "qdm_visibility_refresh_profile_latest.json"
     $qdmVisibilityRefresh = $null
     $qdmVisibilityRefreshHead = @()
@@ -681,6 +689,7 @@ function Write-SupervisorStatus {
         top_instrument_training_readiness = $trainingReadinessHead
         learning_source_audit = $learningSourceAudit
         top_learning_source_audit = $learningSourceAuditHead
+        trade_transition_audit = $tradeTransitionAudit
         qdm_visibility_refresh = $qdmVisibilityRefresh
         top_qdm_visibility_refresh = $qdmVisibilityRefreshHead
         global_qdm_retrain = $globalQdmRetrain
@@ -1021,7 +1030,12 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "learning_source_audit" -Operation {
         $report = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
-        "global_gap=$($report.summary.globalny_model_qdm_visibility_gap_count); candidate_gap=$($report.summary.candidate_gap_count); blocked=$($report.summary.blocked_count); target60_missed=$($report.summary.target_60p_missed_count)"
+        "global_gap=$($report.summary.globalny_model_qdm_visibility_gap_count); candidate_gap=$($report.summary.candidate_gap_count); blocked=$($report.summary.blocked_count); target60_missed=$($report.summary.target_60p_missed_count); server_ping=$($report.summary.globalny_model_uzywa_pingu_serwera); server_latency=$($report.summary.globalny_model_uzywa_latencji_serwera)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "trade_transition_audit" -Operation {
+        $report = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "verdict=$($report.verdict); active_presets=$($report.summary.profile_active_chart_count); safe_presets=$($report.summary.profile_safe_chart_count); server_ping=$($report.summary.global_model_uses_server_ping); server_latency=$($report.summary.global_model_uses_server_latency); active_trade=$($report.summary.paper_active_trade_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "qdm_visibility_refresh" -Operation {

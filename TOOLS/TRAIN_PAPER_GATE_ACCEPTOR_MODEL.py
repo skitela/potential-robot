@@ -34,6 +34,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-path", default=r"C:\TRADING_DATA\RESEARCH\microbot_research.duckdb")
     parser.add_argument("--candidate-parquet-path", default=r"C:\TRADING_DATA\RESEARCH\datasets\candidate_signals_latest.parquet")
     parser.add_argument("--qdm-parquet-path", default=r"C:\TRADING_DATA\RESEARCH\datasets\qdm_minute_bars_latest.parquet")
+    parser.add_argument("--onnx-parquet-path", default=r"C:\TRADING_DATA\RESEARCH\datasets\onnx_observations_latest.parquet")
+    parser.add_argument("--runtime-state-parquet-path", default=r"C:\TRADING_DATA\RESEARCH\datasets\runtime_state_latest.parquet")
+    parser.add_argument(
+        "--execution-ping-contract-path",
+        default=r"C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state\_global\execution_ping_contract.csv",
+    )
     parser.add_argument("--output-root", default=r"C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor")
     parser.add_argument("--holdout-ratio", type=float, default=0.2)
     parser.add_argument("--sample-limit", type=int, default=0, help="Optional cap for training rows; 0 keeps all rows.")
@@ -67,6 +73,11 @@ FEATURE_NUMERIC_FLOAT = [
     "candle_score",
     "renko_score",
     "spread_points",
+    "runtime_latency_us",
+    "server_operational_ping_ms",
+    "server_terminal_ping_ms",
+    "server_local_latency_us_avg",
+    "server_local_latency_us_max",
     "qdm_spread_mean",
     "qdm_spread_max",
     "qdm_mid_range_1m",
@@ -76,6 +87,9 @@ FEATURE_NUMERIC_FLOAT = [
 FEATURE_NUMERIC_INT = [
     "renko_run_length",
     "renko_reversal_flag",
+    "runtime_data_present",
+    "server_runtime_state_present",
+    "server_ping_contract_enabled",
     "qdm_tick_count",
     "qdm_data_present",
 ]
@@ -88,10 +102,45 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def read_execution_ping_contract(path: Path) -> dict[str, Any]:
+    contract: dict[str, Any] = {
+        "enabled": False,
+        "paper_operational_ping_ms": 0.0,
+        "live_operational_ping_ms": 0.0,
+        "source": "",
+    }
+    if not path.exists():
+        return contract
+
+    try:
+        for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+            line = raw_line.strip()
+            if not line or "\t" not in line:
+                continue
+            key, value = line.split("\t", 1)
+            normalized_key = key.strip()
+            normalized_value = value.strip()
+            if normalized_key == "enabled":
+                contract["enabled"] = normalized_value == "1"
+            elif normalized_key in ("paper_operational_ping_ms", "live_operational_ping_ms"):
+                try:
+                    contract[normalized_key] = float(normalized_value)
+                except ValueError:
+                    contract[normalized_key] = 0.0
+            elif normalized_key == "source":
+                contract["source"] = normalized_value
+    except OSError:
+        return contract
+
+    return contract
+
+
 def load_dataset(
     db_path: Path,
     candidate_parquet_path: Path,
     qdm_parquet_path: Path,
+    onnx_parquet_path: Path,
+    runtime_state_parquet_path: Path,
     sample_limit: int,
     symbol_filter: str,
 ) -> tuple[pd.DataFrame, str]:
@@ -116,8 +165,11 @@ def load_dataset(
             c.renko_run_length,
             c.renko_reversal_flag,
             c.spread_points,
+            {onnx_select},
             {qdm_select}
         FROM {candidate_source} c
+        {onnx_join}
+        {runtime_join}
         {qdm_join}
         WHERE c.stage = 'EVALUATED'
           AND c.accepted IS NOT NULL
@@ -131,7 +183,35 @@ def load_dataset(
         try:
             con = duckdb.connect(database=":memory:")
             qdm_available = qdm_parquet_path.exists()
+            onnx_available = onnx_parquet_path.exists()
+            runtime_state_available = runtime_state_parquet_path.exists()
             source_label = "PARQUET"
+            onnx_join = (
+                """
+                    LEFT JOIN (
+                        SELECT
+                            TRY_CAST(ts AS BIGINT) AS ts,
+                            UPPER(TRIM(CAST(symbol AS VARCHAR))) AS symbol_alias,
+                            COALESCE(NULLIF(TRIM(CAST(setup_type AS VARCHAR)), ''), 'UNKNOWN') AS setup_type,
+                            COALESCE(NULLIF(TRIM(CAST(market_regime AS VARCHAR)), ''), 'UNKNOWN') AS market_regime,
+                            COALESCE(NULLIF(TRIM(CAST(spread_regime AS VARCHAR)), ''), 'UNKNOWN') AS spread_regime,
+                            COALESCE(NULLIF(TRIM(CAST(confidence_bucket AS VARCHAR)), ''), 'UNKNOWN') AS confidence_bucket,
+                            AVG(COALESCE(TRY_CAST(latency_us AS DOUBLE), 0.0))::DOUBLE AS runtime_latency_us,
+                            MAX(CASE WHEN TRY_CAST(latency_us AS DOUBLE) IS NULL THEN 0 ELSE 1 END)::BIGINT AS runtime_data_present
+                        FROM read_parquet(?)
+                        WHERE COALESCE(NULLIF(UPPER(TRIM(CAST(stage AS VARCHAR))), ''), 'UNKNOWN') = 'EVALUATED'
+                        GROUP BY 1,2,3,4,5,6
+                    ) o
+                      ON o.symbol_alias = c.symbol
+                     AND o.ts = CAST(c.ts AS BIGINT)
+                     AND o.setup_type = COALESCE(NULLIF(TRIM(CAST(c.setup_type AS VARCHAR)), ''), 'UNKNOWN')
+                     AND o.market_regime = COALESCE(NULLIF(TRIM(CAST(c.market_regime AS VARCHAR)), ''), 'UNKNOWN')
+                     AND o.spread_regime = COALESCE(NULLIF(TRIM(CAST(c.spread_regime AS VARCHAR)), ''), 'UNKNOWN')
+                     AND o.confidence_bucket = COALESCE(NULLIF(TRIM(CAST(c.confidence_bucket AS VARCHAR)), ''), 'UNKNOWN')
+                """
+                if onnx_available
+                else ""
+            )
             qdm_join = (
                 """
                     LEFT JOIN read_parquet(?) q
@@ -141,33 +221,83 @@ def load_dataset(
                 if qdm_available
                 else ""
             )
+            runtime_state_join = (
+                """
+                    LEFT JOIN (
+                        SELECT
+                            UPPER(TRIM(COALESCE(CAST(_symbol_dir AS VARCHAR), CAST(symbol AS VARCHAR)))) AS symbol_alias,
+                            AVG(COALESCE(TRY_CAST(terminal_ping_ms AS DOUBLE), 0.0))::DOUBLE AS server_terminal_ping_ms,
+                            AVG(COALESCE(TRY_CAST(local_latency_us_avg AS DOUBLE), 0.0))::DOUBLE AS server_local_latency_us_avg,
+                            MAX(COALESCE(TRY_CAST(local_latency_us_max AS DOUBLE), 0.0))::DOUBLE AS server_local_latency_us_max,
+                            1::BIGINT AS server_runtime_state_present
+                        FROM read_parquet(?)
+                        GROUP BY 1
+                    ) r
+                      ON r.symbol_alias = c.symbol
+                """
+                if runtime_state_available
+                else ""
+            )
+            runtime_state_select = (
+                """
+                    COALESCE(r.server_terminal_ping_ms, 0.0)::DOUBLE AS server_terminal_ping_ms,
+                    COALESCE(r.server_local_latency_us_avg, 0.0)::DOUBLE AS server_local_latency_us_avg,
+                    COALESCE(r.server_local_latency_us_max, 0.0)::DOUBLE AS server_local_latency_us_max,
+                    COALESCE(r.server_runtime_state_present, 0)::BIGINT AS server_runtime_state_present,
+                """
+                if runtime_state_available
+                else """
+                    0.0::DOUBLE AS server_terminal_ping_ms,
+                    0.0::DOUBLE AS server_local_latency_us_avg,
+                    0.0::DOUBLE AS server_local_latency_us_max,
+                    0::BIGINT AS server_runtime_state_present,
+                """
+            )
+            qdm_feature_select = (
+                """
+                    COALESCE(q.tick_count, 0)::BIGINT AS qdm_tick_count,
+                    COALESCE(q.spread_mean, 0.0)::DOUBLE AS qdm_spread_mean,
+                    COALESCE(q.spread_max, 0.0)::DOUBLE AS qdm_spread_max,
+                    COALESCE(q.mid_range_1m, 0.0)::DOUBLE AS qdm_mid_range_1m,
+                    COALESCE(q.mid_return_1m, 0.0)::DOUBLE AS qdm_mid_return_1m,
+                    CASE WHEN q.bar_minute IS NULL THEN 0 ELSE 1 END::BIGINT AS qdm_data_present
+                """
+                if qdm_available
+                else """
+                    0::BIGINT AS qdm_tick_count,
+                    0.0::DOUBLE AS qdm_spread_mean,
+                    0.0::DOUBLE AS qdm_spread_max,
+                    0.0::DOUBLE AS qdm_mid_range_1m,
+                    0.0::DOUBLE AS qdm_mid_return_1m,
+                    0::BIGINT AS qdm_data_present
+                """
+            )
             query = base_query.format(
                 candidate_source="read_parquet(?)",
-                qdm_select=(
+                onnx_select=(
                     """
-                        COALESCE(q.tick_count, 0)::BIGINT AS qdm_tick_count,
-                        COALESCE(q.spread_mean, 0.0)::DOUBLE AS qdm_spread_mean,
-                        COALESCE(q.spread_max, 0.0)::DOUBLE AS qdm_spread_max,
-                        COALESCE(q.mid_range_1m, 0.0)::DOUBLE AS qdm_mid_range_1m,
-                        COALESCE(q.mid_return_1m, 0.0)::DOUBLE AS qdm_mid_return_1m,
-                        CASE WHEN q.bar_minute IS NULL THEN 0 ELSE 1 END::BIGINT AS qdm_data_present
+                        COALESCE(o.runtime_latency_us, 0.0)::DOUBLE AS runtime_latency_us,
+                        COALESCE(o.runtime_data_present, 0)::BIGINT AS runtime_data_present,
                     """
-                    if qdm_available
+                    if onnx_available
                     else """
-                        0::BIGINT AS qdm_tick_count,
-                        0.0::DOUBLE AS qdm_spread_mean,
-                        0.0::DOUBLE AS qdm_spread_max,
-                        0.0::DOUBLE AS qdm_mid_range_1m,
-                        0.0::DOUBLE AS qdm_mid_return_1m,
-                        0::BIGINT AS qdm_data_present
+                        0.0::DOUBLE AS runtime_latency_us,
+                        0::BIGINT AS runtime_data_present,
                     """
                 ),
+                onnx_join=onnx_join,
+                qdm_select=(runtime_state_select + qdm_feature_select),
+                runtime_join=runtime_state_join,
                 qdm_join=qdm_join,
                 symbol_clause=("AND c.symbol = ?" if symbol_filter else ""),
             )
             if sample_limit > 0:
                 query += f" LIMIT {int(sample_limit)}"
             params: list[str] = [str(candidate_parquet_path)]
+            if onnx_available:
+                params.append(str(onnx_parquet_path))
+            if runtime_state_available:
+                params.append(str(runtime_state_parquet_path))
             if qdm_available:
                 params.append(str(qdm_parquet_path))
             if symbol_filter:
@@ -183,6 +313,16 @@ def load_dataset(
 
     with duckdb.connect(str(db_path), read_only=True) as con:
         source_label = "DUCKDB"
+        onnx_available = bool(
+            con.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_name = 'onnx_observations'
+                LIMIT 1
+                """
+            ).fetchone()
+        )
         qdm_available = bool(
             con.execute(
                 """
@@ -193,37 +333,175 @@ def load_dataset(
                 """
             ).fetchone()
         )
+        runtime_state_available = bool(
+            con.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_name = 'runtime_state'
+                LIMIT 1
+                """
+            ).fetchone()
+        )
+        runtime_state_select = (
+            """
+                COALESCE(r.server_terminal_ping_ms, 0.0)::DOUBLE AS server_terminal_ping_ms,
+                COALESCE(r.server_local_latency_us_avg, 0.0)::DOUBLE AS server_local_latency_us_avg,
+                COALESCE(r.server_local_latency_us_max, 0.0)::DOUBLE AS server_local_latency_us_max,
+                COALESCE(r.server_runtime_state_present, 0)::BIGINT AS server_runtime_state_present,
+            """
+            if runtime_state_available
+            else """
+                0.0::DOUBLE AS server_terminal_ping_ms,
+                0.0::DOUBLE AS server_local_latency_us_avg,
+                0.0::DOUBLE AS server_local_latency_us_max,
+                0::BIGINT AS server_runtime_state_present,
+            """
+        )
+        qdm_feature_select = (
+            """
+                COALESCE(q.tick_count, 0)::BIGINT AS qdm_tick_count,
+                COALESCE(q.spread_mean, 0.0)::DOUBLE AS qdm_spread_mean,
+                COALESCE(q.spread_max, 0.0)::DOUBLE AS qdm_spread_max,
+                COALESCE(q.mid_range_1m, 0.0)::DOUBLE AS qdm_mid_range_1m,
+                COALESCE(q.mid_return_1m, 0.0)::DOUBLE AS qdm_mid_return_1m,
+                CASE WHEN q.bar_minute IS NULL THEN 0 ELSE 1 END::BIGINT AS qdm_data_present
+            """
+            if qdm_available
+            else """
+                0::BIGINT AS qdm_tick_count,
+                0.0::DOUBLE AS qdm_spread_mean,
+                0.0::DOUBLE AS qdm_spread_max,
+                0.0::DOUBLE AS qdm_mid_range_1m,
+                0.0::DOUBLE AS qdm_mid_return_1m,
+                0::BIGINT AS qdm_data_present
+            """
+        )
 
         if qdm_available:
             query = base_query.format(
                 candidate_source="candidate_signals",
-                qdm_select="""
-                    COALESCE(q.tick_count, 0)::BIGINT AS qdm_tick_count,
-                    COALESCE(q.spread_mean, 0.0)::DOUBLE AS qdm_spread_mean,
-                    COALESCE(q.spread_max, 0.0)::DOUBLE AS qdm_spread_max,
-                    COALESCE(q.mid_range_1m, 0.0)::DOUBLE AS qdm_mid_range_1m,
-                    COALESCE(q.mid_return_1m, 0.0)::DOUBLE AS qdm_mid_return_1m,
-                    CASE WHEN q.bar_minute IS NULL THEN 0 ELSE 1 END::BIGINT AS qdm_data_present
-                """,
+                onnx_select=(
+                    """
+                        COALESCE(o.runtime_latency_us, 0.0)::DOUBLE AS runtime_latency_us,
+                        COALESCE(o.runtime_data_present, 0)::BIGINT AS runtime_data_present,
+                    """
+                    if onnx_available
+                    else """
+                        0.0::DOUBLE AS runtime_latency_us,
+                        0::BIGINT AS runtime_data_present,
+                    """
+                ),
+                onnx_join=(
+                    """
+                        LEFT JOIN (
+                            SELECT
+                                TRY_CAST(ts AS BIGINT) AS ts,
+                                UPPER(TRIM(CAST(symbol AS VARCHAR))) AS symbol_alias,
+                                COALESCE(NULLIF(TRIM(CAST(setup_type AS VARCHAR)), ''), 'UNKNOWN') AS setup_type,
+                                COALESCE(NULLIF(TRIM(CAST(market_regime AS VARCHAR)), ''), 'UNKNOWN') AS market_regime,
+                                COALESCE(NULLIF(TRIM(CAST(spread_regime AS VARCHAR)), ''), 'UNKNOWN') AS spread_regime,
+                                COALESCE(NULLIF(TRIM(CAST(confidence_bucket AS VARCHAR)), ''), 'UNKNOWN') AS confidence_bucket,
+                                AVG(COALESCE(TRY_CAST(latency_us AS DOUBLE), 0.0))::DOUBLE AS runtime_latency_us,
+                                MAX(CASE WHEN TRY_CAST(latency_us AS DOUBLE) IS NULL THEN 0 ELSE 1 END)::BIGINT AS runtime_data_present
+                            FROM onnx_observations
+                            WHERE COALESCE(NULLIF(UPPER(TRIM(CAST(stage AS VARCHAR))), ''), 'UNKNOWN') = 'EVALUATED'
+                            GROUP BY 1,2,3,4,5,6
+                        ) o
+                          ON o.symbol_alias = c.symbol
+                         AND o.ts = CAST(c.ts AS BIGINT)
+                         AND o.setup_type = COALESCE(NULLIF(TRIM(CAST(c.setup_type AS VARCHAR)), ''), 'UNKNOWN')
+                         AND o.market_regime = COALESCE(NULLIF(TRIM(CAST(c.market_regime AS VARCHAR)), ''), 'UNKNOWN')
+                         AND o.spread_regime = COALESCE(NULLIF(TRIM(CAST(c.spread_regime AS VARCHAR)), ''), 'UNKNOWN')
+                         AND o.confidence_bucket = COALESCE(NULLIF(TRIM(CAST(c.confidence_bucket AS VARCHAR)), ''), 'UNKNOWN')
+                    """
+                    if onnx_available
+                    else ""
+                ),
+                qdm_select=(runtime_state_select + qdm_feature_select),
                 qdm_join="""
                     LEFT JOIN qdm_minute_bars q
                       ON q.symbol_alias = c.symbol
                      AND q.bar_minute = date_trunc('minute', epoch_ms(CAST(c.ts AS BIGINT) * 1000))
                 """,
+                runtime_join=(
+                    """
+                        LEFT JOIN (
+                            SELECT
+                                UPPER(TRIM(COALESCE(CAST(_symbol_dir AS VARCHAR), CAST(symbol AS VARCHAR)))) AS symbol_alias,
+                                AVG(COALESCE(TRY_CAST(terminal_ping_ms AS DOUBLE), 0.0))::DOUBLE AS server_terminal_ping_ms,
+                                AVG(COALESCE(TRY_CAST(local_latency_us_avg AS DOUBLE), 0.0))::DOUBLE AS server_local_latency_us_avg,
+                                MAX(COALESCE(TRY_CAST(local_latency_us_max AS DOUBLE), 0.0))::DOUBLE AS server_local_latency_us_max,
+                                1::BIGINT AS server_runtime_state_present
+                            FROM runtime_state
+                            GROUP BY 1
+                        ) r
+                          ON r.symbol_alias = c.symbol
+                    """
+                    if runtime_state_available
+                    else ""
+                ),
                 symbol_clause=("AND c.symbol = ?" if symbol_filter else ""),
             )
         else:
             query = base_query.format(
                 candidate_source="candidate_signals",
-                qdm_select="""
-                    0::BIGINT AS qdm_tick_count,
-                    0.0::DOUBLE AS qdm_spread_mean,
-                    0.0::DOUBLE AS qdm_spread_max,
-                    0.0::DOUBLE AS qdm_mid_range_1m,
-                    0.0::DOUBLE AS qdm_mid_return_1m,
-                    0::BIGINT AS qdm_data_present
-                """,
+                onnx_select=(
+                    """
+                        COALESCE(o.runtime_latency_us, 0.0)::DOUBLE AS runtime_latency_us,
+                        COALESCE(o.runtime_data_present, 0)::BIGINT AS runtime_data_present,
+                    """
+                    if onnx_available
+                    else """
+                        0.0::DOUBLE AS runtime_latency_us,
+                        0::BIGINT AS runtime_data_present,
+                    """
+                ),
+                onnx_join=(
+                    """
+                        LEFT JOIN (
+                            SELECT
+                                TRY_CAST(ts AS BIGINT) AS ts,
+                                UPPER(TRIM(CAST(symbol AS VARCHAR))) AS symbol_alias,
+                                COALESCE(NULLIF(TRIM(CAST(setup_type AS VARCHAR)), ''), 'UNKNOWN') AS setup_type,
+                                COALESCE(NULLIF(TRIM(CAST(market_regime AS VARCHAR)), ''), 'UNKNOWN') AS market_regime,
+                                COALESCE(NULLIF(TRIM(CAST(spread_regime AS VARCHAR)), ''), 'UNKNOWN') AS spread_regime,
+                                COALESCE(NULLIF(TRIM(CAST(confidence_bucket AS VARCHAR)), ''), 'UNKNOWN') AS confidence_bucket,
+                                AVG(COALESCE(TRY_CAST(latency_us AS DOUBLE), 0.0))::DOUBLE AS runtime_latency_us,
+                                MAX(CASE WHEN TRY_CAST(latency_us AS DOUBLE) IS NULL THEN 0 ELSE 1 END)::BIGINT AS runtime_data_present
+                            FROM onnx_observations
+                            WHERE COALESCE(NULLIF(UPPER(TRIM(CAST(stage AS VARCHAR))), ''), 'UNKNOWN') = 'EVALUATED'
+                            GROUP BY 1,2,3,4,5,6
+                        ) o
+                          ON o.symbol_alias = c.symbol
+                         AND o.ts = CAST(c.ts AS BIGINT)
+                         AND o.setup_type = COALESCE(NULLIF(TRIM(CAST(c.setup_type AS VARCHAR)), ''), 'UNKNOWN')
+                         AND o.market_regime = COALESCE(NULLIF(TRIM(CAST(c.market_regime AS VARCHAR)), ''), 'UNKNOWN')
+                         AND o.spread_regime = COALESCE(NULLIF(TRIM(CAST(c.spread_regime AS VARCHAR)), ''), 'UNKNOWN')
+                         AND o.confidence_bucket = COALESCE(NULLIF(TRIM(CAST(c.confidence_bucket AS VARCHAR)), ''), 'UNKNOWN')
+                    """
+                    if onnx_available
+                    else ""
+                ),
+                qdm_select=(runtime_state_select + qdm_feature_select),
                 qdm_join="",
+                runtime_join=(
+                    """
+                        LEFT JOIN (
+                            SELECT
+                                UPPER(TRIM(COALESCE(CAST(_symbol_dir AS VARCHAR), CAST(symbol AS VARCHAR)))) AS symbol_alias,
+                                AVG(COALESCE(TRY_CAST(terminal_ping_ms AS DOUBLE), 0.0))::DOUBLE AS server_terminal_ping_ms,
+                                AVG(COALESCE(TRY_CAST(local_latency_us_avg AS DOUBLE), 0.0))::DOUBLE AS server_local_latency_us_avg,
+                                MAX(COALESCE(TRY_CAST(local_latency_us_max AS DOUBLE), 0.0))::DOUBLE AS server_local_latency_us_max,
+                                1::BIGINT AS server_runtime_state_present
+                            FROM runtime_state
+                            GROUP BY 1
+                        ) r
+                          ON r.symbol_alias = c.symbol
+                    """
+                    if runtime_state_available
+                    else ""
+                ),
                 symbol_clause=("AND c.symbol = ?" if symbol_filter else ""),
             )
 
@@ -631,6 +909,9 @@ def main() -> int:
     db_path = Path(args.db_path)
     candidate_parquet_path = Path(args.candidate_parquet_path)
     qdm_parquet_path = Path(args.qdm_parquet_path)
+    onnx_parquet_path = Path(args.onnx_parquet_path)
+    runtime_state_parquet_path = Path(args.runtime_state_parquet_path)
+    execution_ping_contract_path = Path(args.execution_ping_contract_path)
     output_root = ensure_dir(Path(args.output_root))
     symbol_filter = args.symbol_filter.strip().upper()
     teacher_model_path = Path(args.teacher_model_path) if args.teacher_model_path.strip() else None
@@ -642,9 +923,19 @@ def main() -> int:
         db_path=db_path,
         candidate_parquet_path=candidate_parquet_path,
         qdm_parquet_path=qdm_parquet_path,
+        onnx_parquet_path=onnx_parquet_path,
+        runtime_state_parquet_path=runtime_state_parquet_path,
         sample_limit=args.sample_limit,
         symbol_filter=symbol_filter,
     )
+    execution_ping_contract = read_execution_ping_contract(execution_ping_contract_path)
+    server_operational_ping_ms = float(
+        execution_ping_contract.get("paper_operational_ping_ms")
+        or execution_ping_contract.get("live_operational_ping_ms")
+        or 0.0
+    )
+    dataset["server_operational_ping_ms"] = np.float32(server_operational_ping_ms)
+    dataset["server_ping_contract_enabled"] = np.int64(1 if execution_ping_contract.get("enabled") else 0)
     dataset = normalize_frame(dataset)
     if dataset.empty:
         raise RuntimeError(f"No training rows found for scope={symbol_filter or 'GLOBAL'}")
@@ -708,6 +999,9 @@ def main() -> int:
             "db_path": str(db_path),
             "candidate_parquet_path": str(candidate_parquet_path),
             "qdm_parquet_path": str(qdm_parquet_path),
+            "onnx_parquet_path": str(onnx_parquet_path),
+            "runtime_state_parquet_path": str(runtime_state_parquet_path),
+            "execution_ping_contract_path": str(execution_ping_contract_path),
             "source_kind": source_kind,
             "symbol_filter": symbol_filter,
             "scope": ("SYMBOL" if symbol_filter else "GLOBAL"),
@@ -720,6 +1014,7 @@ def main() -> int:
             "ts_min": int(dataset["ts"].min()),
             "ts_max": int(dataset["ts"].max()),
             "qdm_coverage": build_qdm_coverage(dataset),
+            "server_execution_ping_contract": execution_ping_contract,
         },
         "features": {
             "categorical": categorical_features,

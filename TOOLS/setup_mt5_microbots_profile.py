@@ -284,12 +284,16 @@ def main() -> int:
     ap.add_argument("--mt5-exe", default=str(DEFAULT_MT5_EXE))
     ap.add_argument("--terminal-data-dir", default=str(DEFAULT_TERMINAL_DATA_DIR))
     ap.add_argument("--chart-plan", default=str(project_root / "DOCS" / "06_MT5_CHART_ATTACHMENT_PLAN.json"))
+    ap.add_argument("--preset-root", default=str(project_root / "MQL5" / "Presets"))
+    ap.add_argument("--use-active-presets", action="store_true")
     ap.add_argument("--launch", action="store_true")
     args = ap.parse_args()
 
     data_dir = Path(args.terminal_data_dir)
     chart_plan_path = Path(args.chart_plan)
     mt5_exe = Path(args.mt5_exe)
+    preset_root = Path(args.preset_root)
+    active_preset_root = preset_root / "ActiveLive"
 
     items = json.loads(chart_plan_path.read_text(encoding="utf-8-sig"))
     template = _pick_source_chart(data_dir)
@@ -310,7 +314,18 @@ def main() -> int:
     id_seed = max(int(time.time_ns() % 9_000_000_000_000_000_000), 1)
     written: List[Dict[str, Any]] = []
     for idx, item in enumerate(items, start=1):
-        preset_path = project_root / "MQL5" / "Presets" / str(item["preset"])
+        preset_name = str(item["preset"])
+        preset_mode = "safe"
+        if args.use_active_presets:
+            active_preset_name = f"{Path(preset_name).stem}_ACTIVE.set"
+            preset_path = active_preset_root / active_preset_name
+            preset_mode = "active_live"
+            if not preset_path.exists():
+                raise SystemExit(f"Brak aktywnego presetu serwerowego: {preset_path}")
+        else:
+            preset_path = preset_root / preset_name
+        if not preset_path.exists():
+            raise SystemExit(f"Brak presetu: {preset_path}")
         preset_lines = _read_preset_lines(preset_path)
         chart_text = _build_chart_text(template_text, item, preset_lines, str(id_seed + idx))
         out_path = charts_dir / f"chart{idx:02d}.chr"
@@ -321,7 +336,9 @@ def main() -> int:
                 "symbol": item["symbol"],
                 "broker_symbol": item.get("broker_symbol", item["symbol"]),
                 "expert": item["expert"],
-                "preset": item["preset"],
+                "preset": preset_name,
+                "preset_mode": preset_mode,
+                "resolved_preset_path": str(preset_path),
                 "symbol_terminal": _resolve_symbol(str(item.get("broker_symbol") or item["symbol"])),
             }
         )
@@ -341,6 +358,8 @@ def main() -> int:
         "profile_name": args.profile_name,
         "charts_dir": str(charts_dir),
         "template": str(template),
+        "preset_root": str(preset_root),
+        "use_active_presets": bool(args.use_active_presets),
         "launched": bool(launch_report.get("launched", False)),
         "launch_report": launch_report,
         "charts": written,

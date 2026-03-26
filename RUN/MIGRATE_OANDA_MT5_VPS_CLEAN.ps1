@@ -101,6 +101,7 @@ try {
         -ApplySafeAutoHeal | Out-Null
     & (Join-Path $projectRootResolved "RUN\OPEN_OANDA_MT5_WITH_MICROBOTS.ps1") `
         -AllowBlockedAuditGate `
+        -UseActiveLivePresets `
         -Mt5Exe $Mt5Exe `
         -TerminalDataDir $TerminalDataDir | Out-Null
     Start-Sleep -Seconds 10

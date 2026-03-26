@@ -71,6 +71,27 @@ function Get-PositiveRatio {
     return [math]::Round(($PositiveRows / [double]$TotalRows), 4)
 }
 
+function Read-KeyValueTable {
+    param([string]$Path)
+
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $map
+    }
+
+    foreach ($line in @(Get-Content -LiteralPath $Path -Encoding UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch "`t") {
+            continue
+        }
+        $parts = $line -split "`t", 2
+        if ($parts.Count -eq 2) {
+            $map[$parts[0]] = $parts[1]
+        }
+    }
+
+    return $map
+}
+
 function Resolve-SourceMode {
     param(
         [string]$OnnxStatus,
@@ -181,6 +202,8 @@ $learningHealthPath = Join-Path $opsRoot "learning_health_registry_latest.json"
 $onnxMicroReviewPath = Join-Path $opsRoot "onnx_micro_review_latest.json"
 $onnxFeedbackPath = Join-Path $opsRoot "onnx_feedback_loop_latest.json"
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
+$trainerScriptPath = Join-Path $ProjectRoot "TOOLS\TRAIN_PAPER_GATE_ACCEPTOR_MODEL.py"
+$executionPingContractPath = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state\_global\execution_ping_contract.csv"
 
 $globalMetrics = Read-JsonSafe -Path $globalMetricsPath
 $dataReadiness = Read-JsonSafe -Path $dataReadinessPath
@@ -189,6 +212,8 @@ $learningHealth = Read-JsonSafe -Path $learningHealthPath
 $onnxMicroReview = Read-JsonSafe -Path $onnxMicroReviewPath
 $onnxFeedback = Read-JsonSafe -Path $onnxFeedbackPath
 $registry = Read-JsonSafe -Path $registryPath
+$trainerText = if (Test-Path -LiteralPath $trainerScriptPath) { Get-Content -LiteralPath $trainerScriptPath -Raw -Encoding UTF8 } else { "" }
+$executionPingContract = Read-KeyValueTable -Path $executionPingContractPath
 
 if ($null -eq $dataReadiness -or $null -eq $trainingReadiness -or $null -eq $learningHealth -or $null -eq $onnxMicroReview) {
     throw "Brakuje jednego z kluczowych raportow do audytu zrodel uczenia."
@@ -351,6 +376,11 @@ $summary = [ordered]@{
     runtime_active_symbols = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $onnxFeedback -Name "summary" -Default $null) -Name "liczba_symboli_aktywnych_60m" -Default 0)
     runtime_total_observations = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $onnxFeedback -Name "summary" -Default $null) -Name "liczba_obserwacji_onnx" -Default 0)
     dodatni_udzial_globalnego_modelu = $(if ($null -eq $globalPositiveRate) { $null } else { [math]::Round([double]$globalPositiveRate, 4) })
+    kontrakt_pingu_serwera_wlaczony = ([string](Get-OptionalValue -Object $executionPingContract -Name "enabled" -Default "0") -eq "1")
+    zrodlo_pingu_serwera = [string](Get-OptionalValue -Object $executionPingContract -Name "source" -Default "")
+    globalny_model_uzywa_latencji_runtime = ($trainerText -match 'runtime_latency_us')
+    globalny_model_uzywa_pingu_serwera = ($trainerText -match 'server_operational_ping_ms' -or $trainerText -match 'execution_ping_contract')
+    globalny_model_uzywa_latencji_serwera = ($trainerText -match 'server_local_latency_us_avg' -or $trainerText -match 'server_local_latency_us_max')
 }
 
 $topCritical = @(
@@ -401,6 +431,11 @@ $lines.Add(("- runtime_without_outcome_count: {0}" -f $summary.runtime_without_o
 $lines.Add(("- blocked_count: {0}" -f $summary.blocked_count))
 $lines.Add(("- target_60p_met_count: {0}" -f $summary.target_60p_met_count))
 $lines.Add(("- target_60p_missed_count: {0}" -f $summary.target_60p_missed_count))
+$lines.Add(("- kontrakt_pingu_serwera_wlaczony: {0}" -f ([string]$summary.kontrakt_pingu_serwera_wlaczony).ToLowerInvariant()))
+$lines.Add(("- zrodlo_pingu_serwera: {0}" -f $(if ([string]::IsNullOrWhiteSpace($summary.zrodlo_pingu_serwera)) { "brak" } else { $summary.zrodlo_pingu_serwera })))
+$lines.Add(("- globalny_model_uzywa_latencji_runtime: {0}" -f ([string]$summary.globalny_model_uzywa_latencji_runtime).ToLowerInvariant()))
+$lines.Add(("- globalny_model_uzywa_pingu_serwera: {0}" -f ([string]$summary.globalny_model_uzywa_pingu_serwera).ToLowerInvariant()))
+$lines.Add(("- globalny_model_uzywa_latencji_serwera: {0}" -f ([string]$summary.globalny_model_uzywa_latencji_serwera).ToLowerInvariant()))
 $lines.Add("")
 foreach ($item in @($items)) {
     $lines.Add(("## {0}" -f $item.symbol_alias))

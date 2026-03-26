@@ -295,6 +295,7 @@ function Invoke-AuditCycle {
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
     $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
+    $tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.json"
     $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
     $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
     $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
@@ -349,6 +350,10 @@ function Invoke-AuditCycle {
                 ProjectRoot = $ProjectRoot
                 ResearchRoot = "C:\TRADING_DATA\RESEARCH"
             }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1")
@@ -580,6 +585,7 @@ function Invoke-AuditCycle {
     $instrumentShadowDatasets = Read-JsonSafe -Path $instrumentShadowDatasetsPath
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
     $learningSourceAudit = Read-JsonSafe -Path $learningSourceAuditPath
+    $tradeTransitionAudit = Read-JsonSafe -Path $tradeTransitionAuditPath
     $qdmVisibilityRefresh = Read-JsonSafe -Path $qdmVisibilityRefreshPath
     $globalQdmRetrain = Read-JsonSafe -Path $globalQdmRetrainPath
     $paperLiveActionGapAudit = Read-JsonSafe -Path $paperLiveActionGapAuditPath
@@ -1212,6 +1218,48 @@ function Invoke-AuditCycle {
 
     if ($learningSourceEvidence.Count -gt 0) {
         $domainStatuses.Add((New-DomainStatus -Domain "ZRODLA_UCZENIA_GLOBALNE_I_LOKALNE" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $learningSourceEvidence) -Reason "Tor uczenia musi stale kontrolowac zaleznosc od nauczyciela globalnego i gotowosc lokalnych modeli." -Evidence $learningSourceEvidence)) | Out-Null
+    }
+
+    $tradeTransitionEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $tradeTransitionAudit) {
+        $transitionSummary = Get-OptionalValue -Object $tradeTransitionAudit -Name "summary" -Default $null
+        $safePresetCount = [int](Get-OptionalValue -Object $transitionSummary -Name "profile_safe_chart_count" -Default 0)
+        $activePresetCount = [int](Get-OptionalValue -Object $transitionSummary -Name "profile_active_chart_count" -Default 0)
+        $usesServerPing = [bool](Get-OptionalValue -Object $transitionSummary -Name "global_model_uses_server_ping" -Default $false)
+        $usesServerLatency = [bool](Get-OptionalValue -Object $transitionSummary -Name "global_model_uses_server_latency" -Default $false)
+        $transitionVerdict = [string](Get-OptionalValue -Object $tradeTransitionAudit -Name "verdict" -Default "")
+
+        if ($safePresetCount -gt 0) {
+            $tradeTransitionEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "safe_preset_on_vps_profile"
+                message = "Profil przejscia do handlu nadal zawiera bezpieczne presety zamiast aktywnych presetow dla serwera."
+                context = @{ profile_safe_chart_count = $safePresetCount; profile_active_chart_count = $activePresetCount; verdict = $transitionVerdict }
+            }) | Out-Null
+        }
+        if (-not $usesServerPing) {
+            $tradeTransitionEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "missing_server_ping_in_training"
+                message = "Globalny trening nadal nie korzysta z operacyjnego pingu serwera."
+                context = @{ global_model_uses_server_ping = $usesServerPing }
+            }) | Out-Null
+        }
+        if (-not $usesServerLatency) {
+            $tradeTransitionEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "missing_server_latency_in_training"
+                message = "Globalny trening nadal nie korzysta z latencji wykonania pochodzacej z serwera."
+                context = @{ global_model_uses_server_latency = $usesServerLatency }
+            }) | Out-Null
+        }
+    }
+
+    if ($tradeTransitionEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "PRZEJSCIE_OBSERWACJA_HANDEL" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $tradeTransitionEvidence) -Reason "Przejscie od obserwacji i uczenia do dzialania handlowego musi byc stale pilnowane przez profil VPS i trening oparty o serwer." -Evidence $tradeTransitionEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "PRZEJSCIE_OBSERWACJA_HANDEL" -Gate "RAPORTUJ" -Severity "info" -Reason "Profil VPS i trening uwzgledniaja przejscie do handlu bez swiezej czerwonej flagi.")) | Out-Null
     }
 
     $qdmRootCauseEvidence = New-Object System.Collections.Generic.List[object]

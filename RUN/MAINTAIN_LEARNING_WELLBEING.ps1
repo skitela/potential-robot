@@ -143,6 +143,7 @@ $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DA
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
+$tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $shadowRuntimeBootstrapScript = Join-Path $ProjectRoot "RUN\ENSURE_SHADOW_RUNTIME_BOOTSTRAP.ps1"
 $instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
@@ -153,6 +154,7 @@ $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training
 $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
 $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
+$tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.json"
 $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
 $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
 $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
@@ -160,7 +162,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $paperLiveActionGapAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -187,6 +189,7 @@ $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $Proje
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
+$tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $shadowRuntimeBootstrap = (& $shadowRuntimeBootstrapScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -Apply:$Apply | ConvertFrom-Json)
 if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootstrap.summary.applied_count -gt 0) {
@@ -194,6 +197,7 @@ if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootst
     $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
+    $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
     $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 }
 $instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
@@ -366,6 +370,11 @@ $shadowDatasetReadyCount = if ($null -ne $instrumentShadowDatasets) {
 } else { 0 }
 $learningSourceGapCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.globalny_model_qdm_visibility_gap_count } else { 0 }
 $learningSourceBlockedCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.blocked_count } else { 0 }
+$tradeTransitionActiveChartCount = if ($null -ne $tradeTransitionAudit) { [int]$tradeTransitionAudit.summary.profile_active_chart_count } else { 0 }
+$tradeTransitionSafeChartCount = if ($null -ne $tradeTransitionAudit) { [int]$tradeTransitionAudit.summary.profile_safe_chart_count } else { 0 }
+$tradeTransitionUsesServerPing = if ($null -ne $tradeTransitionAudit) { [bool]$tradeTransitionAudit.summary.global_model_uses_server_ping } else { $false }
+$tradeTransitionUsesServerLatency = if ($null -ne $tradeTransitionAudit) { [bool]$tradeTransitionAudit.summary.global_model_uses_server_latency } else { $false }
+$tradeTransitionVerdict = if ($null -ne $tradeTransitionAudit) { [string]$tradeTransitionAudit.verdict } else { "" }
 $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
 $qdmRetrainRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.retrain_required_count } else { 0 }
 $globalQdmRetrainState = if ($null -ne $globalQdmRetrain) { [string]$globalQdmRetrain.verdict } else { "" }
@@ -424,6 +433,7 @@ $report = [ordered]@{
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
     learning_source_audit = $learningSourceAudit
+    trade_transition_audit = $tradeTransitionAudit
     paper_live_action_gap_audit = $paperLiveActionGapAudit
     shadow_runtime_bootstrap = $shadowRuntimeBootstrap
     instrument_local_training_plan = $instrumentLocalTrainingPlan
@@ -463,6 +473,11 @@ $report = [ordered]@{
         shadow_dataset_ready_count = $shadowDatasetReadyCount
         learning_source_gap_count = $learningSourceGapCount
         learning_source_blocked_count = $learningSourceBlockedCount
+        trade_transition_verdict = $tradeTransitionVerdict
+        trade_transition_active_chart_count = $tradeTransitionActiveChartCount
+        trade_transition_safe_chart_count = $tradeTransitionSafeChartCount
+        trade_transition_global_model_uses_server_ping = $tradeTransitionUsesServerPing
+        trade_transition_global_model_uses_server_latency = $tradeTransitionUsesServerLatency
         qdm_refresh_required_count = $qdmRefreshRequiredCount
         qdm_retrain_required_count = $qdmRetrainRequiredCount
         global_qdm_retrain_state = $globalQdmRetrainState
@@ -513,6 +528,11 @@ $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
 $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_source_gap_count))
 $lines.Add(("- learning_source_blocked_count: {0}" -f $report.summary.learning_source_blocked_count))
+$lines.Add(("- trade_transition_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.trade_transition_verdict)) { "BRAK" } else { $report.summary.trade_transition_verdict })))
+$lines.Add(("- trade_transition_active_chart_count: {0}" -f $report.summary.trade_transition_active_chart_count))
+$lines.Add(("- trade_transition_safe_chart_count: {0}" -f $report.summary.trade_transition_safe_chart_count))
+$lines.Add(("- trade_transition_global_model_uses_server_ping: {0}" -f ([string]$report.summary.trade_transition_global_model_uses_server_ping).ToLowerInvariant()))
+$lines.Add(("- trade_transition_global_model_uses_server_latency: {0}" -f ([string]$report.summary.trade_transition_global_model_uses_server_latency).ToLowerInvariant()))
 $lines.Add(("- qdm_refresh_required_count: {0}" -f $report.summary.qdm_refresh_required_count))
 $lines.Add(("- qdm_retrain_required_count: {0}" -f $report.summary.qdm_retrain_required_count))
 $lines.Add(("- global_qdm_retrain_state: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.global_qdm_retrain_state)) { "none" } else { $report.summary.global_qdm_retrain_state })))
