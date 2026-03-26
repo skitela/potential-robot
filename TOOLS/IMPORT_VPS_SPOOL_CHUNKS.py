@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -36,11 +37,39 @@ def read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def atomic_copy(source: Path, destination: Path) -> None:
+def is_retryable_file_lock(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError) and getattr(exc, "winerror", None) in {5, 32}:
+        return True
+    return False
+
+
+def atomic_copy(source: Path, destination: Path, retries: int = 6, base_sleep_seconds: float = 0.5) -> None:
     ensure_dir(destination.parent)
     temp_path = destination.with_suffix(destination.suffix + ".tmp")
-    shutil.copy2(source, temp_path)
-    temp_path.replace(destination)
+    last_exc: BaseException | None = None
+
+    for attempt in range(retries):
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+            shutil.copy2(source, temp_path)
+            temp_path.replace(destination)
+            return
+        except BaseException as exc:
+            last_exc = exc
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except OSError:
+                pass
+            if not is_retryable_file_lock(exc) or attempt >= retries - 1:
+                raise
+            time.sleep(base_sleep_seconds * (attempt + 1))
+
+    if last_exc is not None:
+        raise last_exc
 
 
 def write_report(report: dict[str, Any], output_json: Path, latest_md: Path) -> None:
@@ -56,6 +85,7 @@ def write_report(report: dict[str, Any], output_json: Path, latest_md: Path) -> 
         f"- ready_files: {report['ready_file_count']}",
         f"- copied_chunks: {report['copied_chunk_count']}",
         f"- reused_chunks: {report['reused_chunk_count']}",
+        f"- busy_chunks: {report['busy_chunk_count']}",
         f"- missing_data: {report['missing_data_count']}",
         f"- missing_manifest: {report['missing_manifest_count']}",
     ]
@@ -89,11 +119,13 @@ def main() -> int:
         "ready_file_count": 0,
         "copied_chunk_count": 0,
         "reused_chunk_count": 0,
+        "busy_chunk_count": 0,
         "missing_data_count": 0,
         "missing_manifest_count": 0,
         "streams": {},
         "chunks_copied": [],
         "chunks_reused": [],
+        "chunks_busy": [],
         "chunks_missing_data": [],
         "chunks_missing_manifest": [],
     }
@@ -154,8 +186,15 @@ def main() -> int:
             report["chunks_reused"].append(chunk_key)
             continue
 
-        atomic_copy(data_path, inbox_data_path)
-        atomic_copy(manifest_path, inbox_manifest_path)
+        try:
+            atomic_copy(data_path, inbox_data_path)
+            atomic_copy(manifest_path, inbox_manifest_path)
+        except BaseException as exc:
+            if is_retryable_file_lock(exc):
+                report["busy_chunk_count"] += 1
+                report["chunks_busy"].append(chunk_key)
+                continue
+            raise
         ensure_dir(inbox_ready_path.parent)
         inbox_ready_path.write_text("", encoding="ascii")
 

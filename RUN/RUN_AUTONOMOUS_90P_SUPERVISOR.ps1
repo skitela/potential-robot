@@ -14,6 +14,7 @@ $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $onnxMicroReviewScript = Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
 $qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
+$globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERDICTS_REPORT.ps1"
 $winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
@@ -69,6 +70,7 @@ foreach ($path in @(
     $onnxMicroReviewScript,
     $learningSourceAuditScript,
     $qdmVisibilityRefreshScript,
+    $globalQdmRetrainScript,
     $paperLiveActionGapAuditScript,
     $activeFleetVerdictsScript,
     $winnerDeploymentScript,
@@ -599,6 +601,14 @@ function Write-SupervisorStatus {
         }
     }
 
+    $globalQdmRetrainPath = Join-Path $statusDir "global_qdm_retrain_audit_latest.json"
+    $globalQdmRetrain = $null
+    $globalQdmRetrainHead = @()
+    if (Test-Path -LiteralPath $globalQdmRetrainPath) {
+        $globalQdmRetrain = Get-Content -LiteralPath $globalQdmRetrainPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $globalQdmRetrainHead = @($globalQdmRetrain.top_retrain_required | Select-Object -First 5)
+    }
+
     $paperLiveActionGapPath = Join-Path $statusDir "paper_live_action_gap_audit_latest.json"
     $paperLiveActionGap = $null
     $paperLiveActionGapHead = @()
@@ -673,6 +683,8 @@ function Write-SupervisorStatus {
         top_learning_source_audit = $learningSourceAuditHead
         qdm_visibility_refresh = $qdmVisibilityRefresh
         top_qdm_visibility_refresh = $qdmVisibilityRefreshHead
+        global_qdm_retrain = $globalQdmRetrain
+        top_global_qdm_retrain = $globalQdmRetrainHead
         paper_live_action_gap_audit = $paperLiveActionGap
         top_paper_live_action_gap = $paperLiveActionGapHead
         instrument_local_training_plan = $localTrainingPlan
@@ -810,6 +822,24 @@ function Write-SupervisorStatus {
     }
     else {
         $lines.Add("- qdm visibility refresh report not available")
+    }
+    $lines.Add("")
+    $lines.Add("## Global QDM Retrain")
+    $lines.Add("")
+    if ($null -ne $globalQdmRetrain) {
+        $lines.Add(("- verdict: {0}" -f $globalQdmRetrain.verdict))
+        $lines.Add(("- start_allowed: {0}" -f ([string]$globalQdmRetrain.summary.start_allowed).ToLowerInvariant()))
+        $lines.Add(("- refresh_required_count: {0}" -f $globalQdmRetrain.summary.refresh_required_count))
+        $lines.Add(("- retrain_required_count: {0}" -f $globalQdmRetrain.summary.retrain_required_count))
+        foreach ($item in $globalQdmRetrainHead) {
+            $lines.Add(("- {0}: cause={1}, why={2}" -f
+                $item.symbol_alias,
+                $item.main_root_cause,
+                $item.dlatego_ze))
+        }
+    }
+    else {
+        $lines.Add("- global qdm retrain report not available")
     }
     $lines.Add("")
     $lines.Add("## Paper Live Action Gap")
@@ -997,6 +1027,11 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "qdm_visibility_refresh" -Operation {
         $report = (& $qdmVisibilityRefreshScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "refresh_required=$($report.summary.refresh_required_count); retrain_required=$($report.summary.retrain_required_count); current_visible=$($report.summary.current_contract_qdm_visible_symbols_count); trained_visible=$($report.summary.trained_global_qdm_visible_symbols_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "global_qdm_retrain" -Operation {
+        $report = (& $globalQdmRetrainScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
+        "state=$($report.verdict); start_allowed=$($report.summary.start_allowed); refresh_required=$($report.summary.refresh_required_count); retrain_required=$($report.summary.retrain_required_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "paper_live_action_gap_audit" -Operation {

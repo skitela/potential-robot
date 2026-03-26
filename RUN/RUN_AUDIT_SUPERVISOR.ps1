@@ -296,6 +296,7 @@ function Invoke-AuditCycle {
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
     $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
     $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
+    $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
     $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
     $instrumentLocalTrainingPlanPath = Join-Path $opsRoot "instrument_local_training_plan_latest.json"
     $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
@@ -354,6 +355,14 @@ function Invoke-AuditCycle {
             params = @{
                 ProjectRoot = $ProjectRoot
                 ResearchRoot = "C:\TRADING_DATA\RESEARCH"
+            }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_AUDIT.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = "C:\TRADING_DATA\RESEARCH"
+                Apply = [bool]$ApplySafeAutoHeal
             }
         },
         @{
@@ -572,6 +581,7 @@ function Invoke-AuditCycle {
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
     $learningSourceAudit = Read-JsonSafe -Path $learningSourceAuditPath
     $qdmVisibilityRefresh = Read-JsonSafe -Path $qdmVisibilityRefreshPath
+    $globalQdmRetrain = Read-JsonSafe -Path $globalQdmRetrainPath
     $paperLiveActionGapAudit = Read-JsonSafe -Path $paperLiveActionGapAuditPath
     $instrumentLocalTrainingPlan = Read-JsonSafe -Path $instrumentLocalTrainingPlanPath
     $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
@@ -1241,6 +1251,42 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "PRZYCZYNY_WIDOCZNOSCI_QDM" -Gate "RAPORTUJ" -Severity "info" -Reason "Audyt widocznosci QDM nie pokazuje swiezej luki w kontrakcie ani w treningu globalnym.")) | Out-Null
     }
 
+    $globalRetrainEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $globalQdmRetrain) {
+        $retrainState = [string](Get-OptionalValue -Object $globalQdmRetrain -Name "verdict" -Default "")
+        $retrainSummary = Get-OptionalValue -Object $globalQdmRetrain -Name "summary" -Default $null
+        $retrainRequiredCount = [int](Get-OptionalValue -Object $retrainSummary -Name "retrain_required_count" -Default 0)
+        $refreshRequiredCount = [int](Get-OptionalValue -Object $retrainSummary -Name "refresh_required_count" -Default 0)
+        $retrainRunning = [bool](Get-OptionalValue -Object $retrainSummary -Name "retrain_running" -Default $false)
+        $startAllowed = [bool](Get-OptionalValue -Object $retrainSummary -Name "start_allowed" -Default $false)
+        $retrainAction = [string](Get-OptionalValue -Object $retrainSummary -Name "retrain_action" -Default "")
+
+        if ($retrainRequiredCount -gt 0 -or $retrainRunning -or $startAllowed) {
+            $severity = if ($startAllowed) { "high" } elseif ($retrainState -eq "RETRAIN_ZABLOKOWANY_QDM") { "medium" } else { "info" }
+            $globalRetrainEvidence.Add([pscustomobject]@{
+                severity = $severity
+                component = "global_qdm_retrain"
+                message = "Globalny model wymaga sterowania retrainingiem po naprawie widocznosci QDM."
+                context = @{
+                    retrain_state = $retrainState
+                    retrain_required_count = $retrainRequiredCount
+                    refresh_required_count = $refreshRequiredCount
+                    retrain_running = $retrainRunning
+                    start_allowed = $startAllowed
+                    retrain_action = $retrainAction
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($globalRetrainEvidence.Count -gt 0) {
+        $gate = if (@($globalRetrainEvidence | Where-Object { $_.context.start_allowed -eq $true }).Count -gt 0) { "NAPRAW_W_CYKLU" } else { "RAPORTUJ" }
+        $domainStatuses.Add((New-DomainStatus -Domain "GLOBALNY_RETRAIN_QDM" -Gate $gate -Severity (Get-HighestSeverity -Findings $globalRetrainEvidence) -Reason "Po naprawie kontraktu QDM system musi wiedziec, kiedy juz wolno bezpiecznie przetrenowac model globalny." -Evidence $globalRetrainEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "GLOBALNY_RETRAIN_QDM" -Gate "RAPORTUJ" -Severity "info" -Reason "Sterowanie retrainingiem globalnego modelu nie pokazuje swiezej luki.")) | Out-Null
+    }
+
     $paperActionEvidence = New-Object System.Collections.Generic.List[object]
     if ($null -ne $paperLiveActionGapAudit) {
         $paperSummary = Get-OptionalValue -Object $paperLiveActionGapAudit -Name "summary" -Default $null
@@ -1271,9 +1317,6 @@ function Invoke-AuditCycle {
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_LUKA_AKCJI" -Gate "RAPORTUJ" -Severity "info" -Reason "Paper-live nie pokazuje swiezej luki miedzy zyciem symbolu a brakiem akcji.")) | Out-Null
-    }
-    else {
-        $domainStatuses.Add((New-DomainStatus -Domain "ZRODLA_UCZENIA_GLOBALNE_I_LOKALNE" -Gate "RAPORTUJ" -Severity "info" -Reason "Przeplyw wiedzy miedzy modelem globalnym i lokalnymi modelami jest pod kontrola.")) | Out-Null
     }
 
     $paperLearningEvidence = New-Object System.Collections.Generic.List[object]

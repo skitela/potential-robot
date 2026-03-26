@@ -125,6 +125,7 @@ $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYER
 $vpsSpoolWellbeingScript = Join-Path $ProjectRoot "RUN\BUILD_VPS_SPOOL_WELLBEING_AUDIT.ps1"
 $qdmMissingProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1"
 $qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
+$globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_AUDIT.ps1"
 $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
@@ -140,12 +141,13 @@ $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_trainin
 $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
 $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
+$globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
 $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
 $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_latest.json"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $paperLiveActionGapAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $paperLiveActionGapAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -195,6 +197,7 @@ $qdmRecoveryRecoveredSymbols = if ($null -ne $qdmMissingSyncStatus -and $qdmMiss
     @($qdmMissingSyncStatus.recovered_symbols | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
 } else { @() }
 $qdmRecoveryResearchRefreshed = if ($null -ne $qdmMissingSyncStatus) { [bool]$qdmMissingSyncStatus.research_refreshed } else { $false }
+$globalQdmRetrain = $null
 
 if ($Apply -and $null -ne $qdmMissingProfile) {
     $qdmMissingCount = [int]$qdmMissingProfile.qdm_missing_count
@@ -206,6 +209,8 @@ if ($Apply -and $null -ne $qdmMissingProfile) {
         $qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath
     }
 }
+
+$globalQdmRetrain = (& $globalQdmRetrainScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -Apply:$Apply | ConvertFrom-Json)
 
 $opsRules = @(
     [pscustomobject]@{ name = "local_operator_snapshot"; regex = '^local_operator_snapshot_\d{8}_\d{6}\.(json|md)$'; keep_count = $OpsSnapshotKeepCount; age_days = 2 },
@@ -349,6 +354,9 @@ $learningSourceGapCount = if ($null -ne $learningSourceAudit) { [int]$learningSo
 $learningSourceBlockedCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.blocked_count } else { 0 }
 $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
 $qdmRetrainRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.retrain_required_count } else { 0 }
+$globalQdmRetrainState = if ($null -ne $globalQdmRetrain) { [string]$globalQdmRetrain.verdict } else { "" }
+$globalQdmRetrainAction = if ($null -ne $globalQdmRetrain) { [string]$globalQdmRetrain.summary.retrain_action } else { "" }
+$globalQdmRetrainStartAllowed = if ($null -ne $globalQdmRetrain) { [bool]$globalQdmRetrain.summary.start_allowed } else { $false }
 $paperLiveIdleCount = if ($null -ne $paperLiveActionGapAudit) { [int]$paperLiveActionGapAudit.summary.fresh_but_idle_count } else { 0 }
 $paperLiveActiveTradeCount = if ($null -ne $paperLiveActionGapAudit) { [int]$paperLiveActionGapAudit.summary.active_trade_count } else { 0 }
 $shadowRuntimeBootstrapAppliedCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.applied_count } else { 0 }
@@ -397,6 +405,7 @@ $report = [ordered]@{
     vps_spool_bridge = $vpsSpoolBridge
     qdm_missing_supported_sync = $qdmMissingSyncStatus
     qdm_visibility_refresh = $qdmVisibilityRefresh
+    global_qdm_retrain = $globalQdmRetrain
     instrument_data_readiness = $instrumentDataReadiness
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
@@ -442,6 +451,9 @@ $report = [ordered]@{
         learning_source_blocked_count = $learningSourceBlockedCount
         qdm_refresh_required_count = $qdmRefreshRequiredCount
         qdm_retrain_required_count = $qdmRetrainRequiredCount
+        global_qdm_retrain_state = $globalQdmRetrainState
+        global_qdm_retrain_start_allowed = $globalQdmRetrainStartAllowed
+        global_qdm_retrain_action = $globalQdmRetrainAction
         paper_live_idle_count = $paperLiveIdleCount
         paper_live_active_trade_count = $paperLiveActiveTradeCount
         shadow_runtime_bootstrap_applied_count = $shadowRuntimeBootstrapAppliedCount
@@ -489,6 +501,8 @@ $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_sourc
 $lines.Add(("- learning_source_blocked_count: {0}" -f $report.summary.learning_source_blocked_count))
 $lines.Add(("- qdm_refresh_required_count: {0}" -f $report.summary.qdm_refresh_required_count))
 $lines.Add(("- qdm_retrain_required_count: {0}" -f $report.summary.qdm_retrain_required_count))
+$lines.Add(("- global_qdm_retrain_state: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.global_qdm_retrain_state)) { "none" } else { $report.summary.global_qdm_retrain_state })))
+$lines.Add(("- global_qdm_retrain_start_allowed: {0}" -f ([string]$report.summary.global_qdm_retrain_start_allowed).ToLowerInvariant()))
 $lines.Add(("- paper_live_idle_count: {0}" -f $report.summary.paper_live_idle_count))
 $lines.Add(("- paper_live_active_trade_count: {0}" -f $report.summary.paper_live_active_trade_count))
 $lines.Add(("- shadow_runtime_bootstrap_applied_count: {0}" -f $report.summary.shadow_runtime_bootstrap_applied_count))
@@ -512,6 +526,7 @@ $lines.Add(("- ops_retention.deleted_count: {0}" -f $report.ops_retention.delete
 $lines.Add(("- runtime_archive_prune.deleted_count: {0}" -f $report.runtime_archive_prune.deleted_count))
 $lines.Add(("- runtime_archive_prune.empty_dirs_removed: {0}" -f $report.runtime_archive_prune.empty_dirs_removed))
 $lines.Add(("- qdm_repair_action: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.qdm_repair_action)) { "none" } else { $report.summary.qdm_repair_action })))
+$lines.Add(("- global_qdm_retrain_action: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.global_qdm_retrain_action)) { "none" } else { $report.summary.global_qdm_retrain_action })))
 $lines.Add(("- qdm_recovery_research_refreshed: {0}" -f ([string]$report.summary.qdm_recovery_research_refreshed).ToLowerInvariant()))
 $lines.Add(("- vps_spool_bridge.pending_sync_count: {0}" -f $report.summary.vps_bridge_pending_sync_count))
 $lines.Add(("- vps_spool_bridge.repair_actions_count: {0}" -f $report.summary.vps_bridge_repair_actions_count))
