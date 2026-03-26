@@ -215,6 +215,7 @@ try {
         "*mt5_tester_status_watcher_wrapper_*",
         "*mt5_risk_popup_guard_wrapper_*",
         "*refresh_and_train_ml_wrapper_*",
+        "*qdm_missing_supported_sync_wrapper_*",
         "*weakest_mt5_batch_wrapper_*",
         "*mt5_retest_queue_wrapper_*",
         "*microbot_retest_after_idle_wrapper_*",

@@ -960,18 +960,46 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
     inventory = pd.DataFrame()
 
     csv_files = sorted(qdm_export_root.glob("MB_*.csv"))
+
+    def build_cache_entry_from_parquet(con: duckdb.DuckDBPyConnection, parquet_path: Path) -> dict | None:
+        stem = parquet_path.stem
+        if not stem.endswith("_minute"):
+            return None
+        export_name = stem.removesuffix("_minute")
+        alias = QDM_EXPORT_ALIAS_MAP.get(export_name, export_name)
+        row_count = int(con.execute("SELECT COUNT(*) FROM read_parquet(?)", [str(parquet_path)]).fetchone()[0])
+        bar_minute_min, bar_minute_max = con.execute(
+            "SELECT MIN(bar_minute), MAX(bar_minute) FROM read_parquet(?)",
+            [str(parquet_path)],
+        ).fetchone()
+        parquet_stat = parquet_path.stat()
+        csv_path = qdm_export_root / f"{export_name}.csv"
+        csv_exists = csv_path.exists()
+        csv_stat = csv_path.stat() if csv_exists else None
+        return {
+            "export_name": export_name,
+            "symbol_alias": alias,
+            "source_csv_path": str(csv_path),
+            "source_size": int(csv_stat.st_size) if csv_stat else 0,
+            "source_mtime_ns": int(csv_stat.st_mtime_ns) if csv_stat else 0,
+            "minute_parquet_path": str(parquet_path),
+            "minute_rows": row_count,
+            "minute_parquet_size": int(parquet_stat.st_size),
+            "bar_minute_min": bar_minute_min.isoformat() if bar_minute_min else None,
+            "bar_minute_max": bar_minute_max.isoformat() if bar_minute_max else None,
+            "cache_reused": True,
+        }
+
     if not csv_files:
         cached_entries = []
         cached_parquet_paths = []
-        for export_name, entry in previous_files.items():
-            parquet_path_raw = entry.get("minute_parquet_path")
-            if not parquet_path_raw:
-                continue
-            parquet_path = Path(parquet_path_raw)
-            if not parquet_path.exists():
-                continue
-            cached_entries.append(entry)
-            cached_parquet_paths.append(str(parquet_path))
+        with duckdb.connect() as con:
+            for parquet_path in sorted(cache_root.glob("MB_*_minute.parquet")):
+                entry = build_cache_entry_from_parquet(con, parquet_path)
+                if not entry:
+                    continue
+                cached_entries.append(entry)
+                cached_parquet_paths.append(str(parquet_path))
 
         if not cached_parquet_paths:
             pd.DataFrame().to_parquet(combined_parquet_path, index=False)
@@ -1088,6 +1116,20 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
             }
             file_entries.append(entry)
             cached_parquet_paths.append(str(cache_path))
+
+        known_export_names = {entry["export_name"] for entry in file_entries}
+        for parquet_path in sorted(cache_root.glob("MB_*_minute.parquet")):
+            stem = parquet_path.stem
+            if not stem.endswith("_minute"):
+                continue
+            export_name = stem.removesuffix("_minute")
+            if export_name in known_export_names:
+                continue
+            entry = build_cache_entry_from_parquet(con, parquet_path)
+            if not entry:
+                continue
+            file_entries.append(entry)
+            cached_parquet_paths.append(str(parquet_path))
 
         inventory = pd.DataFrame(file_entries)
 

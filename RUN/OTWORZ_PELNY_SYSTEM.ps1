@@ -24,6 +24,7 @@ $archiverScript = Join-Path $ProjectRoot "RUN\START_LOCAL_OPERATOR_ARCHIVER_BACK
 $watcherScript = Join-Path $ProjectRoot "RUN\START_MT5_TESTER_STATUS_WATCHER_BACKGROUND.ps1"
 $riskGuardScript = Join-Path $ProjectRoot "RUN\START_MT5_RISK_POPUP_GUARD_BACKGROUND.ps1"
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
+$qdmMissingSyncScript = Join-Path $ProjectRoot "RUN\START_QDM_MISSING_SUPPORTED_SYNC_BACKGROUND.ps1"
 $weakestScript = Join-Path $ProjectRoot "RUN\START_WEAKEST_MT5_BATCH_BACKGROUND.ps1"
 $nearProfitScript = Join-Path $ProjectRoot "RUN\START_NEAR_PROFIT_OPTIMIZATION_AFTER_IDLE_BACKGROUND.ps1"
 $openMt5Script = Join-Path $ProjectRoot "RUN\OPEN_OANDA_MT5_WITH_MICROBOTS.ps1"
@@ -39,6 +40,7 @@ foreach ($path in @(
     $watcherScript,
     $riskGuardScript,
     $mlScript,
+    $qdmMissingSyncScript,
     $weakestScript,
     $nearProfitScript,
     $openMt5Script
@@ -124,6 +126,10 @@ try {
 
     Invoke-Step -Step "start_ml_pipeline" -Operation {
         & $mlScript -ProjectRoot $ProjectRoot -PerfProfile $MlPerfProfile
+    }
+
+    Invoke-Step -Step "start_qdm_missing_sync" -Operation {
+        & $qdmMissingSyncScript -ProjectRoot $ProjectRoot
     }
 
     Invoke-Step -Step "start_weakest_batch" -Operation {

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import duckdb
 
@@ -47,17 +49,32 @@ def build_filtered_parquet(
         return 0
 
     ensure_dir(output_path.parent)
-    con.execute(
-        f"""
-        copy (
-            select *
-            from read_parquet('{sql_quote(source_path)}')
-            where upper(trim(symbol_alias)) = ?
-        )
-        to '{sql_quote(output_path)}' (format parquet)
-        """,
-        [alias],
+    temp_output_path = output_path.parent / (
+        f".tmp_{output_path.stem}_{os.getpid()}_{uuid4().hex}.parquet"
     )
+    try:
+        con.execute(
+            f"""
+            copy (
+                select *
+                from read_parquet('{sql_quote(source_path)}')
+                where upper(trim(symbol_alias)) = ?
+            )
+            to '{sql_quote(temp_output_path)}' (format parquet)
+            """,
+            [alias],
+        )
+
+        try:
+            temp_output_path.replace(output_path)
+        except OSError:
+            temp_output_path.unlink(missing_ok=True)
+            if output_path.exists():
+                return rows_total
+            raise
+    finally:
+        temp_output_path.unlink(missing_ok=True)
+
     return rows_total
 
 

@@ -9,6 +9,7 @@ param(
     [string]$OnnxSymbolRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_symbol_registry_latest.json",
     [string]$PaperLiveFeedbackPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\paper_live_feedback_latest.json",
     [string]$LearningStackAuditPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\learning_stack_audit_latest.json",
+    [string]$LocalTrainingGuardrailsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_local_training_guardrails_latest.json",
     [string]$QdmWeakestProfilePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_weakest_profile_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
@@ -328,6 +329,7 @@ $onnxMicroReview = Read-JsonFile -Path $OnnxMicroReviewPath
 $onnxSymbolRegistry = Read-JsonFile -Path $OnnxSymbolRegistryPath
 $paperLiveFeedback = Read-JsonFile -Path $PaperLiveFeedbackPath
 $learningStackAudit = Read-JsonFile -Path $LearningStackAuditPath
+$localTrainingGuardrails = Read-JsonFile -Path $LocalTrainingGuardrailsPath
 $qdmWeakestProfile = Read-JsonFile -Path $QdmWeakestProfilePath
 
 $profitMap = New-MapByKeys -Items @($profitTracking.all) -CandidateKeys @("symbol_alias")
@@ -337,6 +339,7 @@ $onnxFeedbackMap = New-MapByKeys -Items @($onnxFeedback.items) -CandidateKeys @(
 $onnxMicroReviewMap = New-MapByKeys -Items @($onnxMicroReview.items) -CandidateKeys @("symbol_alias")
 $onnxRegistryMap = New-MapByKeys -Items @($onnxSymbolRegistry.items) -CandidateKeys @("symbol")
 $qdmWeakestMap = New-MapByKeys -Items @($qdmWeakestProfile.included) -CandidateKeys @("symbol_alias")
+$guardrailMap = New-MapByKeys -Items @($localTrainingGuardrails.items) -CandidateKeys @("symbol_alias")
 
 $paperItems = New-Object System.Collections.Generic.List[object]
 foreach ($item in @($paperLiveFeedback.top_active)) {
@@ -371,6 +374,7 @@ foreach ($symbolEntry in @($registry.symbols)) {
     $onnxRegistryEntry = if ($onnxRegistryMap.ContainsKey($key)) { $onnxRegistryMap[$key] } else { $null }
     $paperEntry = if ($paperMap.ContainsKey($key)) { $paperMap[$key] } else { $null }
     $qdmWeakestEntry = if ($qdmWeakestMap.ContainsKey($key)) { $qdmWeakestMap[$key] } else { $null }
+    $guardrailEntry = if ($guardrailMap.ContainsKey($key)) { $guardrailMap[$key] } else { $null }
 
     $businessStatus = Get-OptionalString -Object $verdictEntry -Name "business_status" -Default (Get-OptionalString -Object $profitEntry -Name "status" -Default "UNKNOWN")
     $fleetVerdict = Get-OptionalString -Object $verdictEntry -Name "werdykt_koncowy" -Default ""
@@ -418,6 +422,24 @@ foreach ($symbolEntry in @($registry.symbols)) {
     $workMode = Get-WorkMode -HealthState $healthState -BusinessStatus $businessStatus -PaperNet $paperNet -RuntimeRows $runtimeRows
     $healthPriority = Get-HealthPriority -HealthState $healthState -WorkMode $workMode
     $recommendation = Get-HealthRecommendation -HealthState $healthState -OnnxQuality $onnxQuality -RuntimeRows $runtimeRows -OutcomeRows $outcomeRows -QdmCoverageVisible $qdmCoverageVisible
+    $guardrailState = Get-OptionalString -Object $guardrailEntry -Name "guardrail_state" -Default ""
+    $guardrailReason = Get-OptionalString -Object $guardrailEntry -Name "diagnosis" -Default ""
+
+    if ($guardrailState -eq "FORCED_GLOBAL_FALLBACK") {
+        $healthState = "FALLBACK_GLOBALNY"
+        $workMode = "FALLBACK_DO_NAUCZYCIELA"
+        $healthPriority = Get-HealthPriority -HealthState $healthState -WorkMode $workMode
+        if (-not [string]::IsNullOrWhiteSpace($guardrailReason)) {
+            $recommendation = "$recommendation; guardrail lokalnego toru wymusza fallback: $guardrailReason"
+        }
+    }
+    elseif ($guardrailState -eq "PROBATION_ONLY" -and $healthState -in @("UCZY_SIE_ZDROWO", "GOTOWY_DO_MIEKKIEJ_BRAMKI", "GOTOWY_DO_OBSERWACJI")) {
+        $workMode = "OBSERWUJ"
+        $healthPriority = Get-HealthPriority -HealthState $healthState -WorkMode $workMode
+        if (-not [string]::IsNullOrWhiteSpace($guardrailReason)) {
+            $recommendation = "$recommendation; guardrail lokalnego toru zostawia symbol tylko w probacji: $guardrailReason"
+        }
+    }
 
     $items.Add([pscustomobject]@{
         symbol_alias = $alias
@@ -432,6 +454,8 @@ foreach ($symbolEntry in @($registry.symbols)) {
         onnx_status = $onnxStatus
         onnx_quality = $onnxQuality
         onnx_audit = $onnxAudit
+        local_training_guardrail_state = $guardrailState
+        local_training_guardrail_reason = $guardrailReason
         qdm_custom_ready = $qdmReady
         qdm_pilot_rows = [int]$qdmPilotRows
         qdm_rank = if ($null -ne $qdmWeakestEntry) { [int]$qdmWeakestEntry.rank } else { 999 }

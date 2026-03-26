@@ -6,6 +6,7 @@ param(
     [string]$QdmRoot = "C:\TRADING_TOOLS\QuantDataManager",
     [string]$ExportRoot = "C:\TRADING_DATA\QDM_EXPORT\MT5",
     [string]$QdmInventoryCsvPath = "C:\TRADING_DATA\RESEARCH\datasets\qdm_tick_inventory_latest.csv",
+    [string]$QdmCacheRoot = "C:\TRADING_DATA\RESEARCH\qdm_cache\minute_bars",
     [string]$BlockedSymbolsPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_missing_only_blocked.json",
     [long]$MinimumHistoryBytes = 10485760,
     [long]$MinimumExportBytes = 1024
@@ -122,7 +123,10 @@ function Get-ExportInfo {
 }
 
 function Get-QdmInventoryMaps {
-    param([string]$InventoryCsvPath)
+    param(
+        [string]$InventoryCsvPath,
+        [string]$CacheRoot
+    )
 
     $result = @{
         by_export = @{}
@@ -169,6 +173,35 @@ function Get-QdmInventoryMaps {
         }
     }
 
+    if (Test-Path -LiteralPath $CacheRoot) {
+        foreach ($cacheFile in @(Get-ChildItem -LiteralPath $CacheRoot -Filter "MB_*_minute.parquet" -File -ErrorAction SilentlyContinue)) {
+            $stem = [System.IO.Path]::GetFileNameWithoutExtension($cacheFile.Name)
+            if (-not $stem.EndsWith("_minute")) {
+                continue
+            }
+
+            $exportNameRaw = $stem.Substring(0, $stem.Length - "_minute".Length)
+            $exportName = Normalize-QdmKey $exportNameRaw
+            if ([string]::IsNullOrWhiteSpace($exportName)) {
+                continue
+            }
+
+            if ($result.by_export.ContainsKey($exportName)) {
+                continue
+            }
+
+            $entry = [pscustomobject]@{
+                export_name = $exportNameRaw
+                symbol_alias = $null
+                minute_rows = 1
+                minute_parquet_path = $cacheFile.FullName
+                cache_ready = $true
+            }
+
+            $result.by_export[$exportName] = $entry
+        }
+    }
+
     return $result
 }
 
@@ -179,7 +212,7 @@ if (-not (Test-Path -LiteralPath $RegistryPath)) {
 $historyRoot = Join-Path $QdmRoot "user\data\History"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out-Null
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
-$inventoryMaps = Get-QdmInventoryMaps -InventoryCsvPath $QdmInventoryCsvPath
+$inventoryMaps = Get-QdmInventoryMaps -InventoryCsvPath $QdmInventoryCsvPath -CacheRoot $QdmCacheRoot
 
 $registry = Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $blockedDefinitions = @()

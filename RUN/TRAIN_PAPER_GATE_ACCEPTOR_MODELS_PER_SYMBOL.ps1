@@ -7,6 +7,11 @@ param(
     [string]$TeacherModelPath = "C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor\paper_gate_acceptor_latest.joblib",
     [string]$OutputRoot = "C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor_by_symbol",
     [string]$EvidenceDir = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
+    [string]$TrainingReadinessPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_training_readiness_latest.json",
+    [string]$ExistingRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_symbol_registry_latest.json",
+    [string[]]$AllowedTrainingStates = @(),
+    [string[]]$SymbolAllowList = @(),
+    [int]$MaxSymbols = 0,
     [int]$MinRows = 30000,
     [int]$MinPositiveRows = 1000,
     [int]$MinNegativeRows = 1000,
@@ -36,6 +41,77 @@ function Get-SafeObjectValue {
     return $property.Value
 }
 
+function Read-JsonSafe {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Normalize-Symbol {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    return $Value.Trim().ToUpperInvariant()
+}
+
+function New-MapBySymbol {
+    param(
+        [object[]]$Items,
+        [string[]]$Keys = @("symbol", "symbol_alias")
+    )
+
+    $map = @{}
+    foreach ($item in @($Items)) {
+        if ($null -eq $item) {
+            continue
+        }
+
+        foreach ($keyName in $Keys) {
+            $property = $item.PSObject.Properties[$keyName]
+            if ($null -eq $property) {
+                continue
+            }
+
+            $symbol = Normalize-Symbol -Value ([string]$property.Value)
+            if ([string]::IsNullOrWhiteSpace($symbol)) {
+                continue
+            }
+
+            if (-not $map.ContainsKey($symbol)) {
+                $map[$symbol] = $item
+            }
+        }
+    }
+
+    return $map
+}
+
+function Get-TrainingStateRank {
+    param([string]$State)
+
+    switch ($State) {
+        "LOCAL_TRAINING_READY" { return 0 }
+        "LOCAL_TRAINING_LIMITED" { return 1 }
+        "TRAINING_SHADOW_READY" { return 2 }
+        "CONTRACT_PENDING" { return 3 }
+        "EXPORT_PENDING" { return 4 }
+        "FALLBACK_ONLY" { return 5 }
+        default { return 6 }
+    }
+}
+
 if (-not (Test-Path -LiteralPath $RegistryPath)) {
     throw "Registry not found: $RegistryPath"
 }
@@ -51,10 +127,74 @@ New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 
 $registry = Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $symbols = @($registry.symbols | Where-Object { [string](Get-SafeObjectValue -Object $_ -PropertyName 'status' -Default '') -eq 'compiled_verified' })
+$trainingReadiness = Read-JsonSafe -Path $TrainingReadinessPath
+$trainingReadinessMap = if ($null -ne $trainingReadiness) { New-MapBySymbol -Items @($trainingReadiness.items) } else { @{} }
+$existingRegistry = Read-JsonSafe -Path $ExistingRegistryPath
+$existingRegistryMap = if ($null -ne $existingRegistry) { New-MapBySymbol -Items @($existingRegistry.items) } else { @{} }
+
+$symbolAllowMap = @{}
+foreach ($symbol in @($SymbolAllowList)) {
+    $normalized = Normalize-Symbol -Value ([string]$symbol)
+    if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+        $symbolAllowMap[$normalized] = $true
+    }
+}
+
+$allowedStateMap = @{}
+foreach ($state in @($AllowedTrainingStates)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$state)) {
+        $allowedStateMap[[string]$state] = $true
+    }
+}
+
+$selectedEntries = New-Object System.Collections.Generic.List[object]
+foreach ($entry in $symbols) {
+    $symbol = Normalize-Symbol -Value ([string]$entry.symbol)
+    if ($symbolAllowMap.Count -gt 0 -and -not $symbolAllowMap.ContainsKey($symbol)) {
+        continue
+    }
+
+    if ($allowedStateMap.Count -gt 0) {
+        if (-not $trainingReadinessMap.ContainsKey($symbol)) {
+            continue
+        }
+
+        $trainingState = [string](Get-SafeObjectValue -Object $trainingReadinessMap[$symbol] -PropertyName 'training_readiness_state' -Default '')
+        if (-not $allowedStateMap.ContainsKey($trainingState)) {
+            continue
+        }
+    }
+
+    $selectedEntries.Add($entry) | Out-Null
+}
+
+$selectedEntries = @(
+    $selectedEntries.ToArray() |
+        Sort-Object `
+            @{ Expression = {
+                $symbol = Normalize-Symbol -Value ([string]$_.symbol)
+                if ($trainingReadinessMap.ContainsKey($symbol)) {
+                    return Get-TrainingStateRank -State ([string](Get-SafeObjectValue -Object $trainingReadinessMap[$symbol] -PropertyName 'training_readiness_state' -Default ''))
+                }
+                return 99
+            }; Ascending = $true }, `
+            symbol
+)
+
+if ($MaxSymbols -gt 0) {
+    $selectedEntries = @($selectedEntries | Select-Object -First $MaxSymbols)
+}
+
+$selectedSymbolMap = @{}
+foreach ($entry in @($selectedEntries)) {
+    $selectedSymbolMap[(Normalize-Symbol -Value ([string]$entry.symbol))] = $true
+}
 
 $items = New-Object System.Collections.Generic.List[object]
+$trainedNow = New-Object System.Collections.Generic.List[string]
+$fallbackNow = New-Object System.Collections.Generic.List[string]
 
-foreach ($entry in $symbols) {
+foreach ($entry in @($selectedEntries)) {
     $symbol = [string]$entry.symbol
     $sessionProfile = [string]$entry.session_profile
     $symbolOutputRoot = Join-Path $OutputRoot $symbol
@@ -97,7 +237,8 @@ foreach ($entry in $symbols) {
                 data_source = [string](Get-SafeObjectValue -Object $metrics.dataset -PropertyName 'source_kind' -Default '')
                 onnx_path = $onnxPath
                 metrics_path = $metricsPath
-            })
+            }) | Out-Null
+            $trainedNow.Add($symbol) | Out-Null
             continue
         }
 
@@ -122,14 +263,58 @@ foreach ($entry in $symbols) {
         data_source = ""
         onnx_path = $null
         metrics_path = $null
-    })
+    }) | Out-Null
+    $fallbackNow.Add($symbol) | Out-Null
 }
 
-$readyItems = @($items | Where-Object { $_.status -eq 'MODEL_PER_SYMBOL_READY' })
-$fallbackItems = @($items | Where-Object { $_.status -ne 'MODEL_PER_SYMBOL_READY' })
+foreach ($entry in $symbols) {
+    $symbol = Normalize-Symbol -Value ([string]$entry.symbol)
+    if ($selectedSymbolMap.ContainsKey($symbol)) {
+        continue
+    }
+
+    if ($existingRegistryMap.ContainsKey($symbol)) {
+        $items.Add($existingRegistryMap[$symbol]) | Out-Null
+        continue
+    }
+
+    $trainingState = if ($trainingReadinessMap.ContainsKey($symbol)) {
+        [string](Get-SafeObjectValue -Object $trainingReadinessMap[$symbol] -PropertyName 'training_readiness_state' -Default '')
+    }
+    else {
+        ""
+    }
+
+    $reason = if (-not [string]::IsNullOrWhiteSpace($trainingState)) {
+        "not_selected_for_current_cycle:$trainingState"
+    }
+    else {
+        "not_selected_for_current_cycle"
+    }
+
+    $items.Add([pscustomobject]@{
+        symbol = [string]$entry.symbol
+        session_profile = [string]$entry.session_profile
+        status = "GLOBAL_FALLBACK"
+        fallback_scope = "GLOBAL_MODEL"
+        reason = $reason
+        rows_total = 0
+        positive_rows = 0
+        negative_rows = 0
+        roc_auc = 0.0
+        balanced_accuracy = 0.0
+        teacher_enabled = $false
+        data_source = ""
+        onnx_path = $null
+        metrics_path = $null
+    }) | Out-Null
+}
+
+$itemArray = @($items.ToArray() | Sort-Object symbol)
+$readyItems = @($itemArray | Where-Object { $_.status -eq 'MODEL_PER_SYMBOL_READY' })
+$fallbackItems = @($itemArray | Where-Object { $_.status -ne 'MODEL_PER_SYMBOL_READY' })
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$itemArray = $items.ToArray()
-$totalSymbols = $items.Count
+$totalSymbols = $itemArray.Count
 
 $report = @{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -137,9 +322,17 @@ $report = @{
     total_symbols = $totalSymbols
     ready_count = $readyItems.Count
     fallback_count = $fallbackItems.Count
+    selected_count = @($selectedEntries).Count
+    selected_symbols = @($selectedEntries | ForEach-Object { [string]$_.symbol })
+    trained_now_count = $trainedNow.Count
+    trained_now_symbols = @($trainedNow.ToArray())
+    fallback_now_count = $fallbackNow.Count
+    fallback_now_symbols = @($fallbackNow.ToArray())
+    allowed_training_states = @($allowedStateMap.Keys | Sort-Object)
     min_rows = $MinRows
     min_positive_rows = $MinPositiveRows
     min_negative_rows = $MinNegativeRows
+    selection_mode = if ($selectedSymbolMap.Count -gt 0 -or $allowedStateMap.Count -gt 0 -or $MaxSymbols -gt 0) { "LIMITED_GUARDED" } else { "FULL_FLEET" }
     items = $itemArray
 }
 
@@ -158,9 +351,16 @@ $lines.Add(("- wygenerowano: {0}" -f $report.generated_at_local))
 $lines.Add(("- liczba instrumentow: {0}" -f $report.total_symbols))
 $lines.Add(("- gotowe modele per instrument: {0}" -f $report.ready_count))
 $lines.Add(("- fallback do modelu globalnego: {0}" -f $report.fallback_count))
+$lines.Add(("- selection_mode: {0}" -f $report.selection_mode))
+$lines.Add(("- selected_count: {0}" -f $report.selected_count))
+$lines.Add(("- trained_now_count: {0}" -f $report.trained_now_count))
+$lines.Add(("- fallback_now_count: {0}" -f $report.fallback_now_count))
+if (@($report.allowed_training_states).Count -gt 0) {
+    $lines.Add(("- allowed_training_states: {0}" -f (@($report.allowed_training_states) -join ", ")))
+}
 $lines.Add("")
 
-foreach ($item in $items) {
+foreach ($item in $itemArray) {
     $lines.Add(("## {0}" -f $item.symbol))
     $lines.Add("")
     $lines.Add(("- status: {0}" -f $item.status))

@@ -294,6 +294,10 @@ function Invoke-AuditCycle {
     $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
+    $instrumentLocalTrainingPlanPath = Join-Path $opsRoot "instrument_local_training_plan_latest.json"
+    $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
+    $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
+    $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
 
     $buildScripts = @(
         @{
@@ -334,6 +338,14 @@ function Invoke-AuditCycle {
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot; ApplySafeRollback = [bool]$ApplySafeAutoHeal }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1")
@@ -537,6 +549,10 @@ function Invoke-AuditCycle {
     $instrumentDataReadiness = Read-JsonSafe -Path $instrumentDataReadinessPath
     $instrumentShadowDatasets = Read-JsonSafe -Path $instrumentShadowDatasetsPath
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
+    $instrumentLocalTrainingPlan = Read-JsonSafe -Path $instrumentLocalTrainingPlanPath
+    $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
+    $instrumentLocalTrainingAudit = Read-JsonSafe -Path $instrumentLocalTrainingAuditPath
+    $instrumentLocalTrainingGuardrails = Read-JsonSafe -Path $instrumentLocalTrainingGuardrailsPath
     $learningPaperRuntime = Read-JsonSafe -Path $learningPaperRuntimePath
     $learningDataContract = Read-JsonSafe -Path $learningDataContractPath
     $onnxFeedback = Read-JsonSafe -Path $onnxFeedbackPath
@@ -1013,6 +1029,95 @@ function Invoke-AuditCycle {
         }
     }
 
+    if ($null -ne $instrumentLocalTrainingPlan) {
+        $planSummary = Get-OptionalValue -Object $instrumentLocalTrainingPlan -Name "summary" -Default $null
+        $startGroupCount = [int](Get-OptionalValue -Object $planSummary -Name "start_group_count" -Default 0)
+        $readyCandidates = [int](Get-OptionalValue -Object $planSummary -Name "ready_candidates_count" -Default 0)
+
+        if ($readyCandidates -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = "info"
+                component = "instrument_local_training_plan"
+                message = "Istnieje juz mala grupa startowa do bezpiecznego lokalnego treningu per instrument."
+                context = @{
+                    next_action = [string](Get-OptionalValue -Object $instrumentLocalTrainingPlan -Name "next_action" -Default "")
+                    start_group_count = $startGroupCount
+                    ready_candidates_count = $readyCandidates
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($null -ne $instrumentLocalTrainingLane) {
+        $laneSummary = Get-OptionalValue -Object $instrumentLocalTrainingLane -Name "summary" -Default $null
+        $instrumentReadinessEvidence.Add([pscustomobject]@{
+            severity = "info"
+            component = "instrument_local_training_lane"
+            message = "Lokalny tor treningowy per instrument jest objety nadzorem i raportowaniem."
+            context = @{
+                state = [string](Get-OptionalValue -Object $instrumentLocalTrainingLane -Name "state" -Default "")
+                start_group_count = [int](Get-OptionalValue -Object $laneSummary -Name "start_group_count" -Default 0)
+                trained_symbols_count = [int](Get-OptionalValue -Object $laneSummary -Name "trained_symbols_count" -Default 0)
+            }
+        }) | Out-Null
+    }
+
+    if ($null -ne $instrumentLocalTrainingAudit) {
+        $auditSummary = Get-OptionalValue -Object $instrumentLocalTrainingAudit -Name "summary" -Default $null
+        $rollbackCount = [int](Get-OptionalValue -Object $auditSummary -Name "rollback_count" -Default 0)
+        $probationCount = [int](Get-OptionalValue -Object $auditSummary -Name "probation_count" -Default 0)
+        $repairCount = [int](Get-OptionalValue -Object $auditSummary -Name "repair_applied_count" -Default 0)
+
+        $instrumentReadinessEvidence.Add([pscustomobject]@{
+            severity = if ($rollbackCount -gt 0) { "medium" } elseif ($probationCount -gt 0) { "low" } else { "info" }
+            component = "instrument_local_training_audit"
+            message = "Lokalny tor treningowy per instrument jest audytowany po iteracji i ma guardraile."
+            context = @{
+                verdict = [string](Get-OptionalValue -Object $instrumentLocalTrainingAudit -Name "verdict" -Default "")
+                rollback_count = $rollbackCount
+                probation_count = $probationCount
+                repair_applied_count = $repairCount
+            }
+        }) | Out-Null
+    }
+
+    if ($null -ne $instrumentLocalTrainingGuardrails) {
+        $guardrailSummary = Get-OptionalValue -Object $instrumentLocalTrainingGuardrails -Name "summary" -Default $null
+        $forcedCount = [int](Get-OptionalValue -Object $guardrailSummary -Name "forced_global_fallback_count" -Default 0)
+        $probationCount = [int](Get-OptionalValue -Object $guardrailSummary -Name "probation_count" -Default 0)
+        if (($forcedCount + $probationCount) -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = if ($forcedCount -gt 0) { "medium" } else { "low" }
+                component = "instrument_local_training_guardrails"
+                message = "Guardraile lokalnego toru ograniczaja lub cofaja symbole, gdy przestaja spelniac minimum."
+                context = @{
+                    forced_global_fallback_count = $forcedCount
+                    probation_count = $probationCount
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($null -ne $learningWellbeing) {
+        $wellbeingSummary = Get-OptionalValue -Object $learningWellbeing -Name "summary" -Default $null
+        $qdmBatchSymbols = @((Get-OptionalValue -Object $wellbeingSummary -Name "qdm_recovery_batch_symbols" -Default @()) | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $qdmRecoveredSymbols = @((Get-OptionalValue -Object $wellbeingSummary -Name "qdm_recovery_recovered_symbols" -Default @()) | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $qdmResearchRefreshed = [bool](Get-OptionalValue -Object $wellbeingSummary -Name "qdm_recovery_research_refreshed" -Default $false)
+
+        if ($qdmBatchSymbols.Count -gt 0) {
+            $instrumentReadinessEvidence.Add([pscustomobject]@{
+                severity = "info"
+                component = "instrument_qdm_recovery_batch"
+                message = "Odzysk QDM jest prowadzony partiami i pod nadzorem."
+                context = @{
+                    batch_symbols = $qdmBatchSymbols
+                    recovered_symbols = $qdmRecoveredSymbols
+                    research_refreshed = $qdmResearchRefreshed
+                }
+            }) | Out-Null
+        }
+    }
+
     if (@($instrumentReadinessEvidence | Where-Object { $_.component -in @("instrument_data_export_pending", "instrument_data_contract_pending") }).Count -gt 0) {
         $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_DANYCH_I_TRENINGU_PER_INSTRUMENT" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $instrumentReadinessEvidence) -Reason "Przejscie do uczenia per instrument wymaga stalego odzysku danych i kontroli gotowosci." -Evidence $instrumentReadinessEvidence)) | Out-Null
     }
@@ -1207,6 +1312,10 @@ function Invoke-AuditCycle {
         instrument_data_readiness = $instrumentDataReadinessPath
         instrument_shadow_datasets = $instrumentShadowDatasetsPath
         instrument_training_readiness = $instrumentTrainingReadinessPath
+        instrument_local_training_plan = $instrumentLocalTrainingPlanPath
+        instrument_local_training_lane = $instrumentLocalTrainingLanePath
+        instrument_local_training_audit = $instrumentLocalTrainingAuditPath
+        instrument_local_training_guardrails = $instrumentLocalTrainingGuardrailsPath
         learning_paper_runtime_plan = $learningPaperRuntimePath
         learning_data_contract_audit = $learningDataContractPath
         onnx_feedback = $onnxFeedbackPath

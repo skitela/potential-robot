@@ -127,12 +127,17 @@ $qdmMissingProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PR
 $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
+$instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
+$instrumentLocalTrainingAuditScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1"
 $qdmMissingSyncStarterScript = Join-Path $ProjectRoot "RUN\START_QDM_MISSING_SUPPORTED_SYNC_BACKGROUND.ps1"
 $qdmMissingSyncStatusPath = Join-Path $opsRoot "qdm_missing_supported_sync_latest.json"
+$instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
+$instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
+$instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -157,9 +162,20 @@ $vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parame
 $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
+$instrumentLocalTrainingAudit = (& $instrumentLocalTrainingAuditScript -ProjectRoot $ProjectRoot -ApplySafeRollback:$Apply | ConvertFrom-Json)
+$instrumentLocalTrainingGuardrails = Read-JsonSafe -Path $instrumentLocalTrainingGuardrailsPath
 $qdmMissingProfile = Read-JsonSafe -Path (Join-Path $opsRoot "qdm_missing_only_profile_latest.json")
 $qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath
 $qdmRepairAction = ""
+$qdmRecoveryBatchSymbols = if ($null -ne $qdmMissingSyncStatus -and $qdmMissingSyncStatus.PSObject.Properties['batch_symbols']) {
+    @($qdmMissingSyncStatus.batch_symbols | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
+} else { @() }
+$qdmRecoveryRecoveredSymbols = if ($null -ne $qdmMissingSyncStatus -and $qdmMissingSyncStatus.PSObject.Properties['recovered_symbols']) {
+    @($qdmMissingSyncStatus.recovered_symbols | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
+} else { @() }
+$qdmRecoveryResearchRefreshed = if ($null -ne $qdmMissingSyncStatus) { [bool]$qdmMissingSyncStatus.research_refreshed } else { $false }
 
 if ($Apply -and $null -ne $qdmMissingProfile) {
     $qdmMissingCount = [int]$qdmMissingProfile.qdm_missing_count
@@ -311,6 +327,13 @@ $shadowDatasetReadyCount = if ($null -ne $instrumentShadowDatasets) {
 } else { 0 }
 $localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
 $localTrainingLimitedCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_limited_count } else { 0 }
+$localTrainingStartGroupCount = if ($null -ne $instrumentLocalTrainingPlan) { [int]$instrumentLocalTrainingPlan.summary.start_group_count } else { 0 }
+$localTrainingLaneState = if ($null -ne $instrumentLocalTrainingLane) { [string]$instrumentLocalTrainingLane.state } else { "" }
+$localTrainingAuditRollbackCount = if ($null -ne $instrumentLocalTrainingAudit) { [int]$instrumentLocalTrainingAudit.summary.rollback_count } else { 0 }
+$localTrainingAuditProbationCount = if ($null -ne $instrumentLocalTrainingAudit) { [int]$instrumentLocalTrainingAudit.summary.probation_count } else { 0 }
+$localTrainingAuditRepairCount = if ($null -ne $instrumentLocalTrainingAudit) { [int]$instrumentLocalTrainingAudit.summary.repair_applied_count } else { 0 }
+$localTrainingGuardrailForcedCount = if ($null -ne $instrumentLocalTrainingGuardrails) { [int]$instrumentLocalTrainingGuardrails.summary.forced_global_fallback_count } else { 0 }
+$localTrainingGuardrailProbationCount = if ($null -ne $instrumentLocalTrainingGuardrails) { [int]$instrumentLocalTrainingGuardrails.summary.probation_count } else { 0 }
 $verdict = if (
     ($pathHygiene -ne $null -and [string]$pathHygiene.verdict -eq "CZYSTO") -and
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
@@ -318,7 +341,8 @@ $verdict = if (
     $contractPendingCount -eq 0 -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
-    $runtimeArchiveSkippedReason -eq ""
+    $runtimeArchiveSkippedReason -eq "" -and
+    ($localTrainingAuditRollbackCount -eq 0 -or $localTrainingAuditRepairCount -ge $localTrainingAuditRollbackCount)
 ) {
     if ($totalFreedGb -gt 0 -or $opsDeleted.Count -gt 0 -or $runtimeDeleted.Count -gt 0 -or $runtimeEmptyDirsRemoved -gt 0) {
         "DOBROSTAN_UTWARDZONY"
@@ -347,6 +371,10 @@ $report = [ordered]@{
     instrument_data_readiness = $instrumentDataReadiness
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
+    instrument_local_training_plan = $instrumentLocalTrainingPlan
+    instrument_local_training_lane = $instrumentLocalTrainingLane
+    instrument_local_training_audit = $instrumentLocalTrainingAudit
+    instrument_local_training_guardrails = $instrumentLocalTrainingGuardrails
     artifact_layers = [ordered]@{
         freed_gb_total = [double]$artifactCleanup.freed_gb_total
         qdm_export_deleted_count = @($artifactCleanup.qdm_export_deleted).Count
@@ -380,10 +408,20 @@ $report = [ordered]@{
         shadow_dataset_ready_count = $shadowDatasetReadyCount
         local_training_ready_count = $localTrainingReadyCount
         local_training_limited_count = $localTrainingLimitedCount
+        local_training_start_group_count = $localTrainingStartGroupCount
+        local_training_lane_state = $localTrainingLaneState
+        local_training_audit_rollback_count = $localTrainingAuditRollbackCount
+        local_training_audit_probation_count = $localTrainingAuditProbationCount
+        local_training_audit_repair_count = $localTrainingAuditRepairCount
+        local_training_guardrail_forced_count = $localTrainingGuardrailForcedCount
+        local_training_guardrail_probation_count = $localTrainingGuardrailProbationCount
         vps_bridge_pending_sync_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.pending_sync_count } else { 0 }
         vps_bridge_repair_actions_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.repair_actions_count } else { 0 }
         vps_bridge_export_lag_total = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.export_spool_lag_total } else { 0 }
         qdm_repair_action = $qdmRepairAction
+        qdm_recovery_batch_symbols = $qdmRecoveryBatchSymbols
+        qdm_recovery_recovered_symbols = $qdmRecoveryRecoveredSymbols
+        qdm_recovery_research_refreshed = $qdmRecoveryResearchRefreshed
     }
     verdict = $verdict
 }
@@ -409,6 +447,15 @@ $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
 $lines.Add(("- local_training_ready_count: {0}" -f $report.summary.local_training_ready_count))
 $lines.Add(("- local_training_limited_count: {0}" -f $report.summary.local_training_limited_count))
+$lines.Add(("- local_training_start_group_count: {0}" -f $report.summary.local_training_start_group_count))
+$lines.Add(("- local_training_lane_state: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.local_training_lane_state)) { "none" } else { $report.summary.local_training_lane_state })))
+$lines.Add(("- local_training_audit_rollback_count: {0}" -f $report.summary.local_training_audit_rollback_count))
+$lines.Add(("- local_training_audit_probation_count: {0}" -f $report.summary.local_training_audit_probation_count))
+$lines.Add(("- local_training_audit_repair_count: {0}" -f $report.summary.local_training_audit_repair_count))
+$lines.Add(("- local_training_guardrail_forced_count: {0}" -f $report.summary.local_training_guardrail_forced_count))
+$lines.Add(("- local_training_guardrail_probation_count: {0}" -f $report.summary.local_training_guardrail_probation_count))
+$lines.Add(("- qdm_recovery_batch_symbols: {0}" -f $(if (@($report.summary.qdm_recovery_batch_symbols).Count -gt 0) { (@($report.summary.qdm_recovery_batch_symbols) -join ", ") } else { "none" })))
+$lines.Add(("- qdm_recovery_recovered_symbols: {0}" -f $(if (@($report.summary.qdm_recovery_recovered_symbols).Count -gt 0) { (@($report.summary.qdm_recovery_recovered_symbols) -join ", ") } else { "none" })))
 $lines.Add("")
 $lines.Add("## Akcje")
 $lines.Add("")
@@ -417,6 +464,7 @@ $lines.Add(("- ops_retention.deleted_count: {0}" -f $report.ops_retention.delete
 $lines.Add(("- runtime_archive_prune.deleted_count: {0}" -f $report.runtime_archive_prune.deleted_count))
 $lines.Add(("- runtime_archive_prune.empty_dirs_removed: {0}" -f $report.runtime_archive_prune.empty_dirs_removed))
 $lines.Add(("- qdm_repair_action: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.qdm_repair_action)) { "none" } else { $report.summary.qdm_repair_action })))
+$lines.Add(("- qdm_recovery_research_refreshed: {0}" -f ([string]$report.summary.qdm_recovery_research_refreshed).ToLowerInvariant()))
 $lines.Add(("- vps_spool_bridge.pending_sync_count: {0}" -f $report.summary.vps_bridge_pending_sync_count))
 $lines.Add(("- vps_spool_bridge.repair_actions_count: {0}" -f $report.summary.vps_bridge_repair_actions_count))
 $lines.Add(("- vps_spool_bridge.export_spool_lag_total: {0}" -f $report.summary.vps_bridge_export_lag_total))

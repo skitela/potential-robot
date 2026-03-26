@@ -4,6 +4,7 @@ param(
     [string]$ShadowDatasetsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_shadow_datasets_latest.json",
     [string]$TechnicalReadinessPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_technical_readiness_latest.json",
     [string]$LearningHealthPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\learning_health_registry_latest.json",
+    [string]$LocalTrainingGuardrailsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_local_training_guardrails_latest.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
 
@@ -132,6 +133,7 @@ $dataReadiness = Read-JsonSafe -Path $DataReadinessPath
 $shadowDatasets = Read-JsonSafe -Path $ShadowDatasetsPath
 $technicalReadiness = Read-JsonSafe -Path $TechnicalReadinessPath
 $learningHealth = Read-JsonSafe -Path $LearningHealthPath
+$localTrainingGuardrails = Read-JsonSafe -Path $LocalTrainingGuardrailsPath
 
 if ($null -eq $dataReadiness) {
     throw "Missing data readiness report: $DataReadinessPath"
@@ -140,6 +142,7 @@ if ($null -eq $dataReadiness) {
 $technicalMap = New-MapByAlias -Items @($technicalReadiness.entries)
 $healthMap = New-MapByAlias -Items @($learningHealth.items)
 $shadowMap = New-MapByAlias -Items @($shadowDatasets.items)
+$guardrailMap = New-MapByAlias -Items @($localTrainingGuardrails.items)
 
 $items = New-Object System.Collections.Generic.List[object]
 
@@ -154,6 +157,21 @@ foreach ($dataEntry in @($dataReadiness.items)) {
     $teacherDependency = Get-TeacherDependencyLevel -HealthState $(if ($null -ne $healthEntry) { [string]$healthEntry.learning_health_state } else { "" }) -DataState ([string]$dataEntry.data_readiness_state)
     $eligibility = Get-LocalTrainingEligibility -ReadinessState $trainingReadiness
     $nextSafeAction = Get-NextSafeAction -ReadinessState $trainingReadiness -TeacherDependency $teacherDependency -HealthState $(if ($null -ne $healthEntry) { [string]$healthEntry.learning_health_state } else { "" })
+    $guardrailEntry = if ($guardrailMap.ContainsKey($key)) { $guardrailMap[$key] } else { $null }
+    $guardrailState = if ($null -ne $guardrailEntry) { [string]$guardrailEntry.guardrail_state } else { "" }
+    $guardrailReason = if ($null -ne $guardrailEntry) { [string]$guardrailEntry.diagnosis } else { "" }
+
+    if ($guardrailState -eq "FORCED_GLOBAL_FALLBACK") {
+        $trainingReadiness = "FALLBACK_ONLY"
+        $teacherDependency = "MAXIMAL"
+        $eligibility = "NO"
+        $nextSafeAction = "Cofnac symbol do nauczyciela globalnego i nie dopuszczac go do lokalnego toru, dopoki audyt nie przestanie czerwienic metryk."
+    }
+    elseif ($guardrailState -eq "PROBATION_ONLY" -and $trainingReadiness -eq "LOCAL_TRAINING_READY") {
+        $trainingReadiness = "LOCAL_TRAINING_LIMITED"
+        $eligibility = "LIMITED"
+        $nextSafeAction = "Zostawic symbol tylko w limitowanym torze lokalnym i nie awansowac go dalej, dopoki probacja nie zniknie."
+    }
 
     $items.Add([pscustomobject]@{
         symbol_alias = $alias
@@ -164,6 +182,8 @@ foreach ($dataEntry in @($dataReadiness.items)) {
         teacher_dependency_level = $teacherDependency
         local_training_eligibility = $eligibility
         training_readiness_state = $trainingReadiness
+        guardrail_state = $guardrailState
+        guardrail_reason = $guardrailReason
         shadow_dataset_state = if ($null -ne $shadowEntry) { [string]$shadowEntry.shadow_dataset_state } else { "" }
         shadow_dataset_present = ($null -ne $shadowEntry -and [string]$shadowEntry.shadow_dataset_state -in @("SHADOW_READY", "SHADOW_RUNTIME_READY", "SHADOW_OUTCOME_READY"))
         qdm_contract_rows = [int]$dataEntry.qdm_contract_rows
@@ -199,6 +219,8 @@ $summary = [ordered]@{
     training_shadow_ready_count = @($itemsArray | Where-Object { $_.training_readiness_state -eq "TRAINING_SHADOW_READY" }).Count
     local_training_limited_count = @($itemsArray | Where-Object { $_.training_readiness_state -eq "LOCAL_TRAINING_LIMITED" }).Count
     local_training_ready_count = @($itemsArray | Where-Object { $_.training_readiness_state -eq "LOCAL_TRAINING_READY" }).Count
+    guardrail_forced_fallback_count = @($itemsArray | Where-Object { $_.guardrail_state -eq "FORCED_GLOBAL_FALLBACK" }).Count
+    guardrail_probation_count = @($itemsArray | Where-Object { $_.guardrail_state -eq "PROBATION_ONLY" }).Count
 }
 
 $report = [ordered]@{

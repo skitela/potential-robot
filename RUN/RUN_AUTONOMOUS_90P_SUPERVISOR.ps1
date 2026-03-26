@@ -37,6 +37,9 @@ $technicalReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TECHNIC
 $dataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $shadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $trainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
+$localTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
+$localTrainingLaneScript = Join-Path $ProjectRoot "RUN\RUN_LIMITED_LOCAL_TRAINING_LANE.ps1"
+$localTrainingAuditScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1"
 $trustButVerifyScript = Join-Path $ProjectRoot "RUN\BUILD_TRUST_BUT_VERIFY_AUDIT.ps1"
 $snapshotScript = Join-Path $ProjectRoot "RUN\SAVE_LOCAL_OPERATOR_SNAPSHOT.ps1"
 $fullStackAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1"
@@ -86,6 +89,9 @@ foreach ($path in @(
     $dataReadinessScript,
     $shadowDatasetsScript,
     $trainingReadinessScript,
+    $localTrainingPlanScript,
+    $localTrainingLaneScript,
+    $localTrainingAuditScript,
     $trustButVerifyScript,
     $snapshotScript,
     $fullStackAuditScript,
@@ -568,6 +574,28 @@ function Write-SupervisorStatus {
         }
     }
 
+    $localTrainingPlanPath = Join-Path $statusDir "instrument_local_training_plan_latest.json"
+    $localTrainingPlan = $null
+    $localTrainingPlanHead = @()
+    if (Test-Path -LiteralPath $localTrainingPlanPath) {
+        $localTrainingPlan = Get-Content -LiteralPath $localTrainingPlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $localTrainingPlanHead = @($localTrainingPlan.start_group | Select-Object -First 5)
+        if (@($localTrainingPlanHead).Count -eq 0) {
+            $localTrainingPlanHead = @($localTrainingPlan.limited_watchlist | Select-Object -First 5)
+        }
+    }
+
+    $localTrainingLanePath = Join-Path $statusDir "instrument_local_training_lane_latest.json"
+    $localTrainingLane = $null
+    $localTrainingAuditPath = Join-Path $statusDir "instrument_local_training_audit_latest.json"
+    $localTrainingAudit = $null
+    if (Test-Path -LiteralPath $localTrainingLanePath) {
+        $localTrainingLane = Get-Content -LiteralPath $localTrainingLanePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    if (Test-Path -LiteralPath $localTrainingAuditPath) {
+        $localTrainingAudit = Get-Content -LiteralPath $localTrainingAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
     $trustButVerifyPath = Join-Path $statusDir "trust_but_verify_latest.json"
     $trustButVerify = $null
     if (Test-Path -LiteralPath $trustButVerifyPath) {
@@ -608,6 +636,10 @@ function Write-SupervisorStatus {
         top_instrument_shadow_datasets = $shadowDatasetsHead
         instrument_training_readiness = $trainingReadiness
         top_instrument_training_readiness = $trainingReadinessHead
+        instrument_local_training_plan = $localTrainingPlan
+        top_instrument_local_training_plan = $localTrainingPlanHead
+        instrument_local_training_lane = $localTrainingLane
+        instrument_local_training_audit = $localTrainingAudit
         trust_but_verify = $trustButVerify
         mt5_retest_queue = $mt5Queue
     }
@@ -710,6 +742,18 @@ function Write-SupervisorStatus {
     }
     else {
         $lines.Add("- instrument training readiness report not available")
+    }
+    $lines.Add("")
+    $lines.Add("## Instrument Local Training Audit")
+    $lines.Add("")
+    if ($null -ne $localTrainingAudit) {
+        $lines.Add(("- verdict: {0}" -f $localTrainingAudit.verdict))
+        $lines.Add(("- rollback_count: {0}" -f $localTrainingAudit.summary.rollback_count))
+        $lines.Add(("- probation_count: {0}" -f $localTrainingAudit.summary.probation_count))
+        $lines.Add(("- repair_applied_count: {0}" -f $localTrainingAudit.summary.repair_applied_count))
+    }
+    else {
+        $lines.Add("- instrument local training audit report not available")
     }
     $lines.Add("")
     $lines.Add("## Learning Health")
@@ -960,6 +1004,21 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "instrument_training_readiness" -Operation {
         $report = (& $trainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "shadow_ready=$($report.summary.training_shadow_ready_count); limited=$($report.summary.local_training_limited_count); ready=$($report.summary.local_training_ready_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_plan" -Operation {
+        $report = (& $localTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "next=$($report.next_action); start_group=$($report.summary.start_group_count); ready_candidates=$($report.summary.ready_candidates_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_lane" -Operation {
+        $report = (& $localTrainingLaneScript -ProjectRoot $ProjectRoot -PerfProfile $LearningPerfProfile | ConvertFrom-Json)
+        "state=$($report.state); trained=$($report.summary.trained_symbols_count); start_group=$($report.summary.start_group_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_audit" -Operation {
+        $report = (& $localTrainingAuditScript -ProjectRoot $ProjectRoot -ApplySafeRollback | ConvertFrom-Json)
+        "verdict=$($report.verdict); rollback=$($report.summary.rollback_count); probation=$($report.summary.probation_count); repairs=$($report.summary.repair_applied_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "active_fleet_verdicts" -Operation {
