@@ -17,6 +17,7 @@ $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION
 $qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
 $globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
+$paperLossSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1"
 $activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERDICTS_REPORT.ps1"
 $winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
 $learningHealthRegistryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
@@ -74,6 +75,7 @@ foreach ($path in @(
     $qdmVisibilityRefreshScript,
     $globalQdmRetrainScript,
     $paperLiveActionGapAuditScript,
+    $paperLossSourceAuditScript,
     $activeFleetVerdictsScript,
     $winnerDeploymentScript,
     $learningHealthRegistryScript,
@@ -625,6 +627,14 @@ function Write-SupervisorStatus {
         $paperLiveActionGapHead = @($paperLiveActionGap.top_idle_symbols | Select-Object -First 5)
     }
 
+    $paperLossSourceAuditPath = Join-Path $statusDir "paper_loss_source_audit_latest.json"
+    $paperLossSourceAudit = $null
+    $paperLossSourceAuditHead = @()
+    if (Test-Path -LiteralPath $paperLossSourceAuditPath) {
+        $paperLossSourceAudit = Get-Content -LiteralPath $paperLossSourceAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $paperLossSourceAuditHead = @($paperLossSourceAudit.top_negative_symbols | Select-Object -First 5)
+    }
+
     $localTrainingPlanPath = Join-Path $statusDir "instrument_local_training_plan_latest.json"
     $localTrainingPlan = $null
     $localTrainingPlanHead = @()
@@ -696,6 +706,8 @@ function Write-SupervisorStatus {
         top_global_qdm_retrain = $globalQdmRetrainHead
         paper_live_action_gap_audit = $paperLiveActionGap
         top_paper_live_action_gap = $paperLiveActionGapHead
+        paper_loss_source_audit = $paperLossSourceAudit
+        top_paper_loss_source_audit = $paperLossSourceAuditHead
         instrument_local_training_plan = $localTrainingPlan
         top_instrument_local_training_plan = $localTrainingPlanHead
         instrument_local_training_lane = $localTrainingLane
@@ -867,6 +879,25 @@ function Write-SupervisorStatus {
     }
     else {
         $lines.Add("- paper live action gap report not available")
+    }
+    $lines.Add("")
+    $lines.Add("## Paper Loss Source")
+    $lines.Add("")
+    if ($null -ne $paperLossSourceAudit) {
+        $lines.Add(("- active_negative_symbols_count: {0}" -f $paperLossSourceAudit.summary.active_negative_symbols_count))
+        $lines.Add(("- cost_driven_count: {0}" -f $paperLossSourceAudit.summary.cost_driven_count))
+        $lines.Add(("- quality_driven_count: {0}" -f $paperLossSourceAudit.summary.quality_driven_count))
+        $lines.Add(("- timeout_driven_count: {0}" -f $paperLossSourceAudit.summary.timeout_driven_count))
+        foreach ($item in $paperLossSourceAuditHead) {
+            $lines.Add(("- {0}: source={1}, net={2}, why={3}" -f
+                $item.symbol_alias,
+                $item.glowne_zrodlo_straty,
+                $item.netto_dzis,
+                $item.dlatego_ze))
+        }
+    }
+    else {
+        $lines.Add("- paper loss source report not available")
     }
     $lines.Add("")
     $lines.Add("## Learning Health")
@@ -1051,6 +1082,12 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "paper_live_action_gap_audit" -Operation {
         $report = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "idle=$($report.summary.fresh_but_idle_count); active=$($report.summary.active_trade_count); fleet_freeze=$($report.summary.fleet_freeze_count); cost_block=$($report.summary.cost_block_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "paper_loss_source_audit" -Operation {
+        $report = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        $topSymbol = if (@($report.top_negative_symbols).Count -gt 0) { [string]$report.top_negative_symbols[0].symbol_alias } else { "none" }
+        "negative=$($report.summary.active_negative_symbols_count); cost=$($report.summary.cost_driven_count); quality=$($report.summary.quality_driven_count); timeout=$($report.summary.timeout_driven_count); top=$topSymbol"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "learning_path_hygiene" -Operation {

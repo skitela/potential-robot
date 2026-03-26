@@ -299,6 +299,7 @@ function Invoke-AuditCycle {
     $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
     $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
     $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
+    $paperLossSourceAuditPath = Join-Path $opsRoot "paper_loss_source_audit_latest.json"
     $instrumentLocalTrainingPlanPath = Join-Path $opsRoot "instrument_local_training_plan_latest.json"
     $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
     $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
@@ -372,6 +373,10 @@ function Invoke-AuditCycle {
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1")
+            params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
         },
         @{
@@ -589,6 +594,7 @@ function Invoke-AuditCycle {
     $qdmVisibilityRefresh = Read-JsonSafe -Path $qdmVisibilityRefreshPath
     $globalQdmRetrain = Read-JsonSafe -Path $globalQdmRetrainPath
     $paperLiveActionGapAudit = Read-JsonSafe -Path $paperLiveActionGapAuditPath
+    $paperLossSourceAudit = Read-JsonSafe -Path $paperLossSourceAuditPath
     $instrumentLocalTrainingPlan = Read-JsonSafe -Path $instrumentLocalTrainingPlanPath
     $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
     $instrumentLocalTrainingAudit = Read-JsonSafe -Path $instrumentLocalTrainingAuditPath
@@ -1367,6 +1373,59 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_LUKA_AKCJI" -Gate "RAPORTUJ" -Severity "info" -Reason "Paper-live nie pokazuje swiezej luki miedzy zyciem symbolu a brakiem akcji.")) | Out-Null
     }
 
+    $paperLossEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $paperLossSourceAudit) {
+        $paperLossSummary = Get-OptionalValue -Object $paperLossSourceAudit -Name "summary" -Default $null
+        $activeNegativeCount = [int](Get-OptionalValue -Object $paperLossSummary -Name "active_negative_symbols_count" -Default 0)
+        $activeNegativeNetTotal = [double](Get-OptionalValue -Object $paperLossSummary -Name "active_negative_net_total" -Default 0.0)
+        $costDrivenCount = [int](Get-OptionalValue -Object $paperLossSummary -Name "cost_driven_count" -Default 0)
+        $qualityDrivenCount = [int](Get-OptionalValue -Object $paperLossSummary -Name "quality_driven_count" -Default 0)
+        $timeoutDrivenCount = [int](Get-OptionalValue -Object $paperLossSummary -Name "timeout_driven_count" -Default 0)
+
+        if ($activeNegativeCount -gt 0) {
+            $paperLossEvidence.Add([pscustomobject]@{
+                severity = if ($activeNegativeCount -ge 2 -and $activeNegativeNetTotal -lt -10.0) { "high" } else { "medium" }
+                component = "paper_live_active_negative_symbols"
+                message = "Aktywne symbole paper-live generuja juz rozpoznana, dzienna strate i trzeba rozbijac ja na przyczyny."
+                context = @{
+                    active_negative_symbols_count = $activeNegativeCount
+                    active_negative_net_total = $activeNegativeNetTotal
+                }
+            }) | Out-Null
+        }
+        if ($costDrivenCount -gt 0) {
+            $paperLossEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "paper_loss_cost_driven"
+                message = "Czesc straty paper-live wynika glownie z kosztu wejscia wobec ruchu rynku."
+                context = @{ cost_driven_count = $costDrivenCount }
+            }) | Out-Null
+        }
+        if ($qualityDrivenCount -gt 0) {
+            $paperLossEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "paper_loss_quality_driven"
+                message = "Czesc straty paper-live wynika glownie z jakosci rynku, foregroundu i selekcji wejsc."
+                context = @{ quality_driven_count = $qualityDrivenCount }
+            }) | Out-Null
+        }
+        if ($timeoutDrivenCount -gt 0) {
+            $paperLossEvidence.Add([pscustomobject]@{
+                severity = "low"
+                component = "paper_loss_timeout_driven"
+                message = "Czesc straty paper-live wynika glownie z wyjsc czasowych."
+                context = @{ timeout_driven_count = $timeoutDrivenCount }
+            }) | Out-Null
+        }
+    }
+
+    if ($paperLossEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_ZRODLA_STRAT" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $paperLossEvidence) -Reason "System musi wiedziec, czy szkoda bierze sie z kosztu, jakosci selekcji czy logiki wyjsc, zamiast reagowac jednolitym kagancem." -Evidence $paperLossEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "PAPER_LIVE_ZRODLA_STRAT" -Gate "RAPORTUJ" -Severity "info" -Reason "Audyt zrodel strat paper-live nie pokazuje aktywnej szkody do rozbijania.")) | Out-Null
+    }
+
     $paperLearningEvidence = New-Object System.Collections.Generic.List[object]
     if ($null -ne $learningPaperRuntime) {
         $paperSummary = Get-OptionalValue -Object $learningPaperRuntime -Name "summary" -Default $null
@@ -1555,6 +1614,7 @@ function Invoke-AuditCycle {
         instrument_shadow_datasets = $instrumentShadowDatasetsPath
         instrument_training_readiness = $instrumentTrainingReadinessPath
         learning_source_audit = $learningSourceAuditPath
+        paper_loss_source_audit = $paperLossSourceAuditPath
         instrument_local_training_plan = $instrumentLocalTrainingPlanPath
         instrument_local_training_lane = $instrumentLocalTrainingLanePath
         instrument_local_training_audit = $instrumentLocalTrainingAuditPath

@@ -145,6 +145,7 @@ $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMEN
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
 $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
+$paperLossSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1"
 $shadowRuntimeBootstrapScript = Join-Path $ProjectRoot "RUN\ENSURE_SHADOW_RUNTIME_BOOTSTRAP.ps1"
 $instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
 $instrumentLocalTrainingAuditScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1"
@@ -158,11 +159,12 @@ $tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.js
 $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
 $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
 $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
+$paperLossSourceAuditPath = Join-Path $opsRoot "paper_loss_source_audit_latest.json"
 $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_latest.json"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -191,6 +193,7 @@ $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoo
 $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
 $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 $shadowRuntimeBootstrap = (& $shadowRuntimeBootstrapScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -Apply:$Apply | ConvertFrom-Json)
 if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootstrap.summary.applied_count -gt 0) {
     $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
@@ -199,6 +202,7 @@ if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootst
     $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
     $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
     $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+    $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 }
 $instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
@@ -382,6 +386,10 @@ $globalQdmRetrainAction = if ($null -ne $globalQdmRetrain) { [string]$globalQdmR
 $globalQdmRetrainStartAllowed = if ($null -ne $globalQdmRetrain) { [bool]$globalQdmRetrain.summary.start_allowed } else { $false }
 $paperLiveIdleCount = if ($null -ne $paperLiveActionGapAudit) { [int]$paperLiveActionGapAudit.summary.fresh_but_idle_count } else { 0 }
 $paperLiveActiveTradeCount = if ($null -ne $paperLiveActionGapAudit) { [int]$paperLiveActionGapAudit.summary.active_trade_count } else { 0 }
+$paperLossActiveNegativeCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.active_negative_symbols_count } else { 0 }
+$paperLossCostDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.cost_driven_count } else { 0 }
+$paperLossQualityDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.quality_driven_count } else { 0 }
+$paperLossTimeoutDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.timeout_driven_count } else { 0 }
 $shadowRuntimeBootstrapAppliedCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.applied_count } else { 0 }
 $shadowRuntimeBootstrapPendingCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.pending_count } else { 0 }
 $localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
@@ -435,6 +443,7 @@ $report = [ordered]@{
     learning_source_audit = $learningSourceAudit
     trade_transition_audit = $tradeTransitionAudit
     paper_live_action_gap_audit = $paperLiveActionGapAudit
+    paper_loss_source_audit = $paperLossSourceAudit
     shadow_runtime_bootstrap = $shadowRuntimeBootstrap
     instrument_local_training_plan = $instrumentLocalTrainingPlan
     instrument_local_training_lane = $instrumentLocalTrainingLane
@@ -485,6 +494,10 @@ $report = [ordered]@{
         global_qdm_retrain_action = $globalQdmRetrainAction
         paper_live_idle_count = $paperLiveIdleCount
         paper_live_active_trade_count = $paperLiveActiveTradeCount
+        paper_loss_active_negative_symbols_count = $paperLossActiveNegativeCount
+        paper_loss_cost_driven_count = $paperLossCostDrivenCount
+        paper_loss_quality_driven_count = $paperLossQualityDrivenCount
+        paper_loss_timeout_driven_count = $paperLossTimeoutDrivenCount
         shadow_runtime_bootstrap_applied_count = $shadowRuntimeBootstrapAppliedCount
         shadow_runtime_bootstrap_pending_count = $shadowRuntimeBootstrapPendingCount
         local_training_ready_count = $localTrainingReadyCount
@@ -539,6 +552,10 @@ $lines.Add(("- global_qdm_retrain_state: {0}" -f $(if ([string]::IsNullOrWhiteSp
 $lines.Add(("- global_qdm_retrain_start_allowed: {0}" -f ([string]$report.summary.global_qdm_retrain_start_allowed).ToLowerInvariant()))
 $lines.Add(("- paper_live_idle_count: {0}" -f $report.summary.paper_live_idle_count))
 $lines.Add(("- paper_live_active_trade_count: {0}" -f $report.summary.paper_live_active_trade_count))
+$lines.Add(("- paper_loss_active_negative_symbols_count: {0}" -f $report.summary.paper_loss_active_negative_symbols_count))
+$lines.Add(("- paper_loss_cost_driven_count: {0}" -f $report.summary.paper_loss_cost_driven_count))
+$lines.Add(("- paper_loss_quality_driven_count: {0}" -f $report.summary.paper_loss_quality_driven_count))
+$lines.Add(("- paper_loss_timeout_driven_count: {0}" -f $report.summary.paper_loss_timeout_driven_count))
 $lines.Add(("- shadow_runtime_bootstrap_applied_count: {0}" -f $report.summary.shadow_runtime_bootstrap_applied_count))
 $lines.Add(("- shadow_runtime_bootstrap_pending_count: {0}" -f $report.summary.shadow_runtime_bootstrap_pending_count))
 $lines.Add(("- local_training_ready_count: {0}" -f $report.summary.local_training_ready_count))
@@ -569,6 +586,23 @@ if (-not [string]::IsNullOrWhiteSpace($report.runtime_archive_prune.skipped_reas
     $lines.Add(("- runtime_archive_prune.skipped_reason: {0}" -f $report.runtime_archive_prune.skipped_reason))
 }
 $lines.Add("")
+
+if ($null -ne $report.paper_loss_source_audit) {
+    $lines.Add("## Zrodla Strat Paper")
+    $lines.Add("")
+    $lines.Add(("- active_negative_symbols_count: {0}" -f $report.paper_loss_source_audit.summary.active_negative_symbols_count))
+    $lines.Add(("- cost_driven_count: {0}" -f $report.paper_loss_source_audit.summary.cost_driven_count))
+    $lines.Add(("- quality_driven_count: {0}" -f $report.paper_loss_source_audit.summary.quality_driven_count))
+    $lines.Add(("- timeout_driven_count: {0}" -f $report.paper_loss_source_audit.summary.timeout_driven_count))
+    foreach ($item in @($report.paper_loss_source_audit.top_negative_symbols | Select-Object -First 5)) {
+        $lines.Add(("- {0}: source={1}, net={2}, why={3}" -f
+            $item.symbol_alias,
+            $item.glowne_zrodlo_straty,
+            $item.netto_dzis,
+            $item.dlatego_ze))
+    }
+    $lines.Add("")
+}
 
 if ($report.ops_retention.deleted.Count -gt 0) {
     $lines.Add("## OPS Deleted")
