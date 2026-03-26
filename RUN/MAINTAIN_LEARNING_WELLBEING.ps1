@@ -127,6 +127,7 @@ $qdmMissingProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PR
 $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
+$shadowRuntimeBootstrapScript = Join-Path $ProjectRoot "RUN\ENSURE_SHADOW_RUNTIME_BOOTSTRAP.ps1"
 $instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
 $instrumentLocalTrainingAuditScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1"
 $qdmMissingSyncStarterScript = Join-Path $ProjectRoot "RUN\START_QDM_MISSING_SUPPORTED_SYNC_BACKGROUND.ps1"
@@ -134,10 +135,11 @@ $qdmMissingSyncStatusPath = Join-Path $opsRoot "qdm_missing_supported_sync_lates
 $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
 $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
 $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
+$shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_latest.json"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -162,6 +164,12 @@ $vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parame
 $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$shadowRuntimeBootstrap = (& $shadowRuntimeBootstrapScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -Apply:$Apply | ConvertFrom-Json)
+if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootstrap.summary.applied_count -gt 0) {
+    $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+    $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+    $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+}
 $instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
 $instrumentLocalTrainingAudit = (& $instrumentLocalTrainingAuditScript -ProjectRoot $ProjectRoot -ApplySafeRollback:$Apply | ConvertFrom-Json)
@@ -325,6 +333,8 @@ $shadowDatasetReadyCount = if ($null -ne $instrumentShadowDatasets) {
     [int]$instrumentShadowDatasets.summary.shadow_dataset_runtime_ready_count +
     [int]$instrumentShadowDatasets.summary.shadow_dataset_outcome_ready_count
 } else { 0 }
+$shadowRuntimeBootstrapAppliedCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.applied_count } else { 0 }
+$shadowRuntimeBootstrapPendingCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.pending_count } else { 0 }
 $localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
 $localTrainingLimitedCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_limited_count } else { 0 }
 $localTrainingStartGroupCount = if ($null -ne $instrumentLocalTrainingPlan) { [int]$instrumentLocalTrainingPlan.summary.start_group_count } else { 0 }
@@ -371,6 +381,7 @@ $report = [ordered]@{
     instrument_data_readiness = $instrumentDataReadiness
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
+    shadow_runtime_bootstrap = $shadowRuntimeBootstrap
     instrument_local_training_plan = $instrumentLocalTrainingPlan
     instrument_local_training_lane = $instrumentLocalTrainingLane
     instrument_local_training_audit = $instrumentLocalTrainingAudit
@@ -406,6 +417,8 @@ $report = [ordered]@{
         qdm_export_pending_count = $exportPendingCount
         qdm_contract_pending_count = $contractPendingCount
         shadow_dataset_ready_count = $shadowDatasetReadyCount
+        shadow_runtime_bootstrap_applied_count = $shadowRuntimeBootstrapAppliedCount
+        shadow_runtime_bootstrap_pending_count = $shadowRuntimeBootstrapPendingCount
         local_training_ready_count = $localTrainingReadyCount
         local_training_limited_count = $localTrainingLimitedCount
         local_training_start_group_count = $localTrainingStartGroupCount
@@ -445,6 +458,8 @@ $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridg
 $lines.Add(("- qdm_export_pending_count: {0}" -f $report.summary.qdm_export_pending_count))
 $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_pending_count))
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
+$lines.Add(("- shadow_runtime_bootstrap_applied_count: {0}" -f $report.summary.shadow_runtime_bootstrap_applied_count))
+$lines.Add(("- shadow_runtime_bootstrap_pending_count: {0}" -f $report.summary.shadow_runtime_bootstrap_pending_count))
 $lines.Add(("- local_training_ready_count: {0}" -f $report.summary.local_training_ready_count))
 $lines.Add(("- local_training_limited_count: {0}" -f $report.summary.local_training_limited_count))
 $lines.Add(("- local_training_start_group_count: {0}" -f $report.summary.local_training_start_group_count))
