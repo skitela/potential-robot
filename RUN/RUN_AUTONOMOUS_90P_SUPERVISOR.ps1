@@ -1100,12 +1100,12 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "qdm_visibility_refresh" -Operation {
         $report = (& $qdmVisibilityRefreshScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
-        "refresh_required=$($report.summary.refresh_required_count); retrain_required=$($report.summary.retrain_required_count); current_visible=$($report.summary.current_contract_qdm_visible_symbols_count); trained_visible=$($report.summary.trained_global_qdm_visible_symbols_count)"
+        "refresh_required=$($report.summary.refresh_required_count); bridge_required=$($report.summary.server_tail_bridge_required_count); retrain_required=$($report.summary.retrain_required_count); current_visible=$($report.summary.current_contract_qdm_visible_symbols_count); trained_visible=$($report.summary.trained_global_qdm_visible_symbols_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "global_qdm_retrain" -Operation {
         $report = (& $globalQdmRetrainScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
-        "state=$($report.verdict); start_allowed=$($report.summary.start_allowed); refresh_required=$($report.summary.refresh_required_count); retrain_required=$($report.summary.retrain_required_count)"
+        "state=$($report.verdict); start_allowed=$($report.summary.start_allowed); refresh_required=$($report.summary.refresh_required_count); bridge_required=$($report.summary.server_tail_bridge_required_count); retrain_required=$($report.summary.retrain_required_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "paper_live_action_gap_audit" -Operation {

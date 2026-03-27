@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--common-root", default=r"C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT")
     parser.add_argument("--output-root", default=r"C:\TRADING_DATA\RESEARCH")
     parser.add_argument("--qdm-export-root", default=r"C:\TRADING_DATA\QDM_EXPORT\MT5")
+    parser.add_argument("--broker-tail-root", default="")
     parser.add_argument("--contract-only", action="store_true")
     return parser.parse_args()
 
@@ -946,7 +947,7 @@ def build_cached_log_table(
     }
 
 
-def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dict, pd.DataFrame]:
+def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path, broker_tail_root: Path | None = None) -> tuple[dict, pd.DataFrame]:
     datasets_dir = ensure_dir(output_root / "datasets")
     reports_dir = ensure_dir(output_root / "reports")
     cache_root = ensure_dir(output_root / "qdm_cache" / "minute_bars")
@@ -960,6 +961,12 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
     inventory = pd.DataFrame()
 
     csv_files = sorted(qdm_export_root.glob("MB_*.csv"))
+    broker_tail_root = broker_tail_root if broker_tail_root and broker_tail_root.exists() else None
+    broker_tail_files = (
+        {path.stem.removesuffix("_BROKER_TAIL"): path for path in sorted(broker_tail_root.glob("MB_*_BROKER_TAIL.csv"))}
+        if broker_tail_root
+        else {}
+    )
 
     def build_cache_entry_from_parquet(con: duckdb.DuckDBPyConnection, parquet_path: Path) -> dict | None:
         stem = parquet_path.stem
@@ -993,11 +1000,153 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
     if not csv_files:
         cached_entries = []
         cached_parquet_paths = []
+        cached_base_parquets = {
+            path.stem.removesuffix("_minute"): path
+            for path in sorted(cache_root.glob("MB_*_minute.parquet"))
+            if path.stem.endswith("_minute")
+        }
         with duckdb.connect() as con:
-            for parquet_path in sorted(cache_root.glob("MB_*_minute.parquet")):
+            export_names = sorted(set(cached_base_parquets.keys()) | set(broker_tail_files.keys()))
+            for export_name in export_names:
+                parquet_path = cached_base_parquets.get(export_name)
+                broker_tail_path = broker_tail_files.get(export_name)
+                broker_tail_stat = broker_tail_path.stat() if broker_tail_path and broker_tail_path.exists() else None
+
+                if broker_tail_stat:
+                    cache_path = parquet_path if parquet_path else (cache_root / f"{export_name}_minute.parquet")
+                    prev_entry = previous_files.get(export_name, {})
+                    tail_size_matches = int(prev_entry.get("source_tail_size", 0) or 0) == int(broker_tail_stat.st_size)
+                    tail_mtime_matches = int(prev_entry.get("source_tail_mtime_ns", 0) or 0) == int(broker_tail_stat.st_mtime_ns)
+                    cached_ok = cache_path.exists() and tail_size_matches and tail_mtime_matches
+
+                    if not cached_ok:
+                        base_select_sql = (
+                            f"""
+                            SELECT
+                                export_name,
+                                symbol_alias,
+                                bar_minute,
+                                tick_count,
+                                bid_open,
+                                bid_high,
+                                bid_low,
+                                bid_close,
+                                ask_open,
+                                ask_high,
+                                ask_low,
+                                ask_close,
+                                mid_open,
+                                mid_high,
+                                mid_low,
+                                mid_close,
+                                spread_mean,
+                                spread_max,
+                                mid_range_1m,
+                                mid_return_1m,
+                                CAST(NULL AS VARCHAR) AS broker_symbol,
+                                'qdm_export'::VARCHAR AS source_kind,
+                                0::BIGINT AS source_priority
+                            FROM read_parquet('{sql_quote(str(parquet_path))}')
+                            """
+                            if parquet_path and parquet_path.exists()
+                            else ""
+                        )
+
+                        tail_select_sql = f"""
+                            SELECT
+                                export_name,
+                                symbol_alias,
+                                TRY_CAST(bar_minute AS TIMESTAMP) AS bar_minute,
+                                COALESCE(TRY_CAST(tick_count AS BIGINT), 0)::BIGINT AS tick_count,
+                                COALESCE(TRY_CAST(bid_open AS DOUBLE), 0.0)::DOUBLE AS bid_open,
+                                COALESCE(TRY_CAST(bid_high AS DOUBLE), 0.0)::DOUBLE AS bid_high,
+                                COALESCE(TRY_CAST(bid_low AS DOUBLE), 0.0)::DOUBLE AS bid_low,
+                                COALESCE(TRY_CAST(bid_close AS DOUBLE), 0.0)::DOUBLE AS bid_close,
+                                COALESCE(TRY_CAST(ask_open AS DOUBLE), 0.0)::DOUBLE AS ask_open,
+                                COALESCE(TRY_CAST(ask_high AS DOUBLE), 0.0)::DOUBLE AS ask_high,
+                                COALESCE(TRY_CAST(ask_low AS DOUBLE), 0.0)::DOUBLE AS ask_low,
+                                COALESCE(TRY_CAST(ask_close AS DOUBLE), 0.0)::DOUBLE AS ask_close,
+                                COALESCE(TRY_CAST(mid_open AS DOUBLE), 0.0)::DOUBLE AS mid_open,
+                                COALESCE(TRY_CAST(mid_high AS DOUBLE), 0.0)::DOUBLE AS mid_high,
+                                COALESCE(TRY_CAST(mid_low AS DOUBLE), 0.0)::DOUBLE AS mid_low,
+                                COALESCE(TRY_CAST(mid_close AS DOUBLE), 0.0)::DOUBLE AS mid_close,
+                                COALESCE(TRY_CAST(spread_mean AS DOUBLE), 0.0)::DOUBLE AS spread_mean,
+                                COALESCE(TRY_CAST(spread_max AS DOUBLE), 0.0)::DOUBLE AS spread_max,
+                                COALESCE(TRY_CAST(mid_range_1m AS DOUBLE), 0.0)::DOUBLE AS mid_range_1m,
+                                COALESCE(TRY_CAST(mid_return_1m AS DOUBLE), 0.0)::DOUBLE AS mid_return_1m,
+                                COALESCE(NULLIF(TRIM(CAST(broker_symbol AS VARCHAR)), ''), NULL)::VARCHAR AS broker_symbol,
+                                COALESCE(NULLIF(TRIM(CAST(source_kind AS VARCHAR)), ''), 'broker_tail')::VARCHAR AS source_kind,
+                                1::BIGINT AS source_priority
+                            FROM read_csv(
+                                '{sql_quote(str(broker_tail_path))}',
+                                columns = {{
+                                    'export_name': 'VARCHAR',
+                                    'symbol_alias': 'VARCHAR',
+                                    'broker_symbol': 'VARCHAR',
+                                    'bar_minute': 'TIMESTAMP',
+                                    'tick_count': 'BIGINT',
+                                    'bid_open': 'DOUBLE',
+                                    'bid_high': 'DOUBLE',
+                                    'bid_low': 'DOUBLE',
+                                    'bid_close': 'DOUBLE',
+                                    'ask_open': 'DOUBLE',
+                                    'ask_high': 'DOUBLE',
+                                    'ask_low': 'DOUBLE',
+                                    'ask_close': 'DOUBLE',
+                                    'mid_open': 'DOUBLE',
+                                    'mid_high': 'DOUBLE',
+                                    'mid_low': 'DOUBLE',
+                                    'mid_close': 'DOUBLE',
+                                    'spread_mean': 'DOUBLE',
+                                    'spread_max': 'DOUBLE',
+                                    'mid_range_1m': 'DOUBLE',
+                                    'mid_return_1m': 'DOUBLE',
+                                    'source_kind': 'VARCHAR'
+                                }},
+                                header = true,
+                                timestampformat = '%Y.%m.%d %H:%M'
+                            )
+                        """
+                        unioned_sql = tail_select_sql if not base_select_sql else (base_select_sql + "\nUNION ALL\n" + tail_select_sql)
+                        con.execute(
+                            f"""
+                            COPY (
+                                WITH unioned AS (
+                                    {unioned_sql}
+                                ),
+                                ranked AS (
+                                    SELECT
+                                        *,
+                                        row_number() OVER (
+                                            PARTITION BY symbol_alias, bar_minute
+                                            ORDER BY source_priority DESC, bar_minute DESC
+                                        ) AS _row_num
+                                    FROM unioned
+                                )
+                                SELECT * EXCLUDE (source_priority, _row_num)
+                                FROM ranked
+                                WHERE _row_num = 1
+                            ) TO '{sql_quote(str(cache_path))}' (FORMAT PARQUET, COMPRESSION ZSTD)
+                            """
+                        )
+                    parquet_path = cache_path
+
+                if parquet_path is None or not parquet_path.exists():
+                    continue
+
                 entry = build_cache_entry_from_parquet(con, parquet_path)
                 if not entry:
                     continue
+                if broker_tail_stat:
+                    entry["source_tail_csv_path"] = str(broker_tail_path)
+                    entry["source_tail_size"] = int(broker_tail_stat.st_size)
+                    entry["source_tail_mtime_ns"] = int(broker_tail_stat.st_mtime_ns)
+                    entry["source_tail_present"] = True
+                else:
+                    entry["source_tail_csv_path"] = None
+                    entry["source_tail_size"] = 0
+                    entry["source_tail_mtime_ns"] = 0
+                    entry["source_tail_present"] = False
                 cached_entries.append(entry)
                 cached_parquet_paths.append(str(parquet_path))
 
@@ -1029,8 +1178,16 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
             "csv_path": None,
             "parquet_path": str(combined_parquet_path),
             "file_count": len(cached_entries),
+            "broker_tail_file_count": int(sum(1 for entry in cached_entries if entry.get("source_tail_present"))),
             "cache_manifest_path": str(cache_manifest_path),
         }
+        cache_manifest = {
+            "generated_at": pd.Timestamp.now("UTC").isoformat(),
+            "qdm_export_root": str(qdm_export_root),
+            "broker_tail_root": str(broker_tail_root) if broker_tail_root else None,
+            "files": {entry["export_name"]: entry for entry in cached_entries},
+        }
+        cache_manifest_path.write_text(json.dumps(cache_manifest, indent=2, ensure_ascii=True), encoding="utf-8")
         return metadata, inventory
 
     with duckdb.connect() as con:
@@ -1039,14 +1196,86 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
             alias = QDM_EXPORT_ALIAS_MAP.get(stem, stem)
             source_stat = csv_path.stat()
             cache_path = cache_root / f"{stem}_minute.parquet"
+            broker_tail_path = broker_tail_files.get(stem)
+            broker_tail_stat = broker_tail_path.stat() if broker_tail_path and broker_tail_path.exists() else None
             prev_entry = previous_files.get(stem, {})
+            tail_size_matches = (
+                int(prev_entry.get("source_tail_size", 0) or 0) == int(broker_tail_stat.st_size)
+                if broker_tail_stat
+                else int(prev_entry.get("source_tail_size", 0) or 0) == 0
+            )
+            tail_mtime_matches = (
+                int(prev_entry.get("source_tail_mtime_ns", 0) or 0) == int(broker_tail_stat.st_mtime_ns)
+                if broker_tail_stat
+                else int(prev_entry.get("source_tail_mtime_ns", 0) or 0) == 0
+            )
             cached_ok = (
                 cache_path.exists()
                 and prev_entry.get("source_size") == int(source_stat.st_size)
                 and prev_entry.get("source_mtime_ns") == int(source_stat.st_mtime_ns)
+                and tail_size_matches
+                and tail_mtime_matches
             )
 
             if not cached_ok:
+                tail_union = ""
+                if broker_tail_stat:
+                    tail_union = f"""
+                        UNION ALL
+                        SELECT
+                            export_name,
+                            symbol_alias,
+                            TRY_CAST(bar_minute AS TIMESTAMP) AS bar_minute,
+                            COALESCE(TRY_CAST(tick_count AS BIGINT), 0)::BIGINT AS tick_count,
+                            COALESCE(TRY_CAST(bid_open AS DOUBLE), 0.0)::DOUBLE AS bid_open,
+                            COALESCE(TRY_CAST(bid_high AS DOUBLE), 0.0)::DOUBLE AS bid_high,
+                            COALESCE(TRY_CAST(bid_low AS DOUBLE), 0.0)::DOUBLE AS bid_low,
+                            COALESCE(TRY_CAST(bid_close AS DOUBLE), 0.0)::DOUBLE AS bid_close,
+                            COALESCE(TRY_CAST(ask_open AS DOUBLE), 0.0)::DOUBLE AS ask_open,
+                            COALESCE(TRY_CAST(ask_high AS DOUBLE), 0.0)::DOUBLE AS ask_high,
+                            COALESCE(TRY_CAST(ask_low AS DOUBLE), 0.0)::DOUBLE AS ask_low,
+                            COALESCE(TRY_CAST(ask_close AS DOUBLE), 0.0)::DOUBLE AS ask_close,
+                            COALESCE(TRY_CAST(mid_open AS DOUBLE), 0.0)::DOUBLE AS mid_open,
+                            COALESCE(TRY_CAST(mid_high AS DOUBLE), 0.0)::DOUBLE AS mid_high,
+                            COALESCE(TRY_CAST(mid_low AS DOUBLE), 0.0)::DOUBLE AS mid_low,
+                            COALESCE(TRY_CAST(mid_close AS DOUBLE), 0.0)::DOUBLE AS mid_close,
+                            COALESCE(TRY_CAST(spread_mean AS DOUBLE), 0.0)::DOUBLE AS spread_mean,
+                            COALESCE(TRY_CAST(spread_max AS DOUBLE), 0.0)::DOUBLE AS spread_max,
+                            COALESCE(TRY_CAST(mid_range_1m AS DOUBLE), 0.0)::DOUBLE AS mid_range_1m,
+                            COALESCE(TRY_CAST(mid_return_1m AS DOUBLE), 0.0)::DOUBLE AS mid_return_1m,
+                            COALESCE(NULLIF(TRIM(CAST(broker_symbol AS VARCHAR)), ''), NULL)::VARCHAR AS broker_symbol,
+                            COALESCE(NULLIF(TRIM(CAST(source_kind AS VARCHAR)), ''), 'broker_tail')::VARCHAR AS source_kind,
+                            1::BIGINT AS source_priority
+                        FROM read_csv(
+                            '{sql_quote(str(broker_tail_path))}',
+                            columns = {{
+                                'export_name': 'VARCHAR',
+                                'symbol_alias': 'VARCHAR',
+                                'broker_symbol': 'VARCHAR',
+                                'bar_minute': 'TIMESTAMP',
+                                'tick_count': 'BIGINT',
+                                'bid_open': 'DOUBLE',
+                                'bid_high': 'DOUBLE',
+                                'bid_low': 'DOUBLE',
+                                'bid_close': 'DOUBLE',
+                                'ask_open': 'DOUBLE',
+                                'ask_high': 'DOUBLE',
+                                'ask_low': 'DOUBLE',
+                                'ask_close': 'DOUBLE',
+                                'mid_open': 'DOUBLE',
+                                'mid_high': 'DOUBLE',
+                                'mid_low': 'DOUBLE',
+                                'mid_close': 'DOUBLE',
+                                'spread_mean': 'DOUBLE',
+                                'spread_max': 'DOUBLE',
+                                'mid_range_1m': 'DOUBLE',
+                                'mid_return_1m': 'DOUBLE',
+                                'source_kind': 'VARCHAR'
+                            }},
+                            header = true,
+                            timestampformat = '%Y.%m.%d %H:%M'
+                        )
+                    """
                 query = f"""
                     COPY (
                         WITH ticks AS (
@@ -1064,33 +1293,54 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
                                 header = false,
                                 timestampformat = '%Y.%m.%d %H:%M:%S.%f'
                             )
+                        ),
+                        base_rows AS (
+                            SELECT
+                                '{stem}' AS export_name,
+                                '{alias}' AS symbol_alias,
+                                date_trunc('minute', tick_ts) AS bar_minute,
+                                count(*)::BIGINT AS tick_count,
+                                first(bid ORDER BY tick_ts) AS bid_open,
+                                max(bid) AS bid_high,
+                                min(bid) AS bid_low,
+                                last(bid ORDER BY tick_ts) AS bid_close,
+                                first(ask ORDER BY tick_ts) AS ask_open,
+                                max(ask) AS ask_high,
+                                min(ask) AS ask_low,
+                                last(ask ORDER BY tick_ts) AS ask_close,
+                                first((bid + ask) / 2.0 ORDER BY tick_ts) AS mid_open,
+                                max((bid + ask) / 2.0) AS mid_high,
+                                min((bid + ask) / 2.0) AS mid_low,
+                                last((bid + ask) / 2.0 ORDER BY tick_ts) AS mid_close,
+                                avg(ask - bid) AS spread_mean,
+                                max(ask - bid) AS spread_max,
+                                (max((bid + ask) / 2.0) - min((bid + ask) / 2.0)) AS mid_range_1m,
+                                (
+                                    last((bid + ask) / 2.0 ORDER BY tick_ts) -
+                                    first((bid + ask) / 2.0 ORDER BY tick_ts)
+                                ) / nullif(first((bid + ask) / 2.0 ORDER BY tick_ts), 0.0) AS mid_return_1m,
+                                CAST(NULL AS VARCHAR) AS broker_symbol,
+                                'qdm_export'::VARCHAR AS source_kind,
+                                0::BIGINT AS source_priority
+                            FROM ticks
+                            GROUP BY 1, 2, 3
+                        ),
+                        unioned AS (
+                            SELECT * FROM base_rows
+                            {tail_union}
+                        ),
+                        ranked AS (
+                            SELECT
+                                *,
+                                row_number() OVER (
+                                    PARTITION BY symbol_alias, bar_minute
+                                    ORDER BY source_priority DESC, bar_minute DESC
+                                ) AS _row_num
+                            FROM unioned
                         )
-                        SELECT
-                            '{stem}' AS export_name,
-                            '{alias}' AS symbol_alias,
-                            date_trunc('minute', tick_ts) AS bar_minute,
-                            count(*)::BIGINT AS tick_count,
-                            first(bid ORDER BY tick_ts) AS bid_open,
-                            max(bid) AS bid_high,
-                            min(bid) AS bid_low,
-                            last(bid ORDER BY tick_ts) AS bid_close,
-                            first(ask ORDER BY tick_ts) AS ask_open,
-                            max(ask) AS ask_high,
-                            min(ask) AS ask_low,
-                            last(ask ORDER BY tick_ts) AS ask_close,
-                            first((bid + ask) / 2.0 ORDER BY tick_ts) AS mid_open,
-                            max((bid + ask) / 2.0) AS mid_high,
-                            min((bid + ask) / 2.0) AS mid_low,
-                            last((bid + ask) / 2.0 ORDER BY tick_ts) AS mid_close,
-                            avg(ask - bid) AS spread_mean,
-                            max(ask - bid) AS spread_max,
-                            (max((bid + ask) / 2.0) - min((bid + ask) / 2.0)) AS mid_range_1m,
-                            (
-                                last((bid + ask) / 2.0 ORDER BY tick_ts) -
-                                first((bid + ask) / 2.0 ORDER BY tick_ts)
-                            ) / nullif(first((bid + ask) / 2.0 ORDER BY tick_ts), 0.0) AS mid_return_1m
-                        FROM ticks
-                        GROUP BY 1, 2, 3
+                        SELECT * EXCLUDE (source_priority, _row_num)
+                        FROM ranked
+                        WHERE _row_num = 1
                     ) TO '{sql_quote(str(cache_path))}' (FORMAT PARQUET, COMPRESSION ZSTD)
                 """
                 con.execute(query)
@@ -1107,6 +1357,10 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
                 "source_csv_path": str(csv_path),
                 "source_size": int(source_stat.st_size),
                 "source_mtime_ns": int(source_stat.st_mtime_ns),
+                "source_tail_csv_path": str(broker_tail_path) if broker_tail_stat else None,
+                "source_tail_size": int(broker_tail_stat.st_size) if broker_tail_stat else 0,
+                "source_tail_mtime_ns": int(broker_tail_stat.st_mtime_ns) if broker_tail_stat else 0,
+                "source_tail_present": bool(broker_tail_stat),
                 "minute_parquet_path": str(cache_path),
                 "minute_rows": row_count,
                 "minute_parquet_size": int(cache_stat.st_size),
@@ -1150,6 +1404,7 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
     cache_manifest = {
         "generated_at": pd.Timestamp.now("UTC").isoformat(),
         "qdm_export_root": str(qdm_export_root),
+        "broker_tail_root": str(broker_tail_root) if broker_tail_root else None,
         "files": {entry["export_name"]: entry for entry in file_entries},
     }
     cache_manifest_path.write_text(json.dumps(cache_manifest, indent=2, ensure_ascii=True), encoding="utf-8")
@@ -1159,6 +1414,7 @@ def build_qdm_minute_bars(qdm_export_root: Path, output_root: Path) -> tuple[dic
         "csv_path": None,
         "parquet_path": str(combined_parquet_path),
         "file_count": len(file_entries),
+        "broker_tail_file_count": int(sum(1 for entry in file_entries if entry.get("source_tail_present"))),
         "cache_manifest_path": str(cache_manifest_path),
     }
     return metadata, inventory
@@ -1214,6 +1470,7 @@ def main() -> int:
     related_common_roots = discover_related_common_roots(common_root)
     output_root = Path(args.output_root)
     qdm_export_root = Path(args.qdm_export_root)
+    broker_tail_root = Path(args.broker_tail_root) if args.broker_tail_root else (common_root / "broker_tail")
     datasets_dir = ensure_dir(output_root / "datasets")
     ensure_dir(output_root / "notebooks")
     ensure_dir(output_root / "reports")
@@ -1306,7 +1563,7 @@ def main() -> int:
     tester_knowledge = collect_tester_jsons(project_root, "_knowledge.json")
     manifest["datasets"]["tester_knowledge"] = export_frame(tester_knowledge, "tester_knowledge_latest", datasets_dir)
 
-    qdm_minute_meta, qdm_inventory = build_qdm_minute_bars(qdm_export_root, output_root)
+    qdm_minute_meta, qdm_inventory = build_qdm_minute_bars(qdm_export_root, output_root, broker_tail_root)
     manifest["datasets"]["qdm_tick_inventory"] = export_frame(qdm_inventory, "qdm_tick_inventory_latest", datasets_dir)
     manifest["datasets"]["qdm_minute_bars"] = qdm_minute_meta
 

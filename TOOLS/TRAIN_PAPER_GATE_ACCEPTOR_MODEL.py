@@ -144,6 +144,17 @@ def load_dataset(
     sample_limit: int,
     symbol_filter: str,
 ) -> tuple[pd.DataFrame, str]:
+    def select_fragment(block: str) -> str:
+        text = (block or "").strip()
+        if not text:
+            return ""
+        if text.endswith(","):
+            text = text[:-1].rstrip()
+        cleaned_lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not cleaned_lines:
+            return ""
+        return ",\n            " + "\n            ".join(cleaned_lines)
+
     base_query = """
         SELECT
             c.ts,
@@ -164,9 +175,7 @@ def load_dataset(
             c.renko_score,
             c.renko_run_length,
             c.renko_reversal_flag,
-            c.spread_points,
-            {onnx_select},
-            {qdm_select}
+            c.spread_points{onnx_select}{qdm_select}
         FROM {candidate_source} c
         {onnx_join}
         {runtime_join}
@@ -274,7 +283,7 @@ def load_dataset(
             )
             query = base_query.format(
                 candidate_source="read_parquet(?)",
-                onnx_select=(
+                onnx_select=select_fragment(
                     """
                         COALESCE(o.runtime_latency_us, 0.0)::DOUBLE AS runtime_latency_us,
                         COALESCE(o.runtime_data_present, 0)::BIGINT AS runtime_data_present,
@@ -286,7 +295,7 @@ def load_dataset(
                     """
                 ),
                 onnx_join=onnx_join,
-                qdm_select=(runtime_state_select + qdm_feature_select),
+                qdm_select=select_fragment(runtime_state_select + "\n" + qdm_feature_select),
                 runtime_join=runtime_state_join,
                 qdm_join=qdm_join,
                 symbol_clause=("AND c.symbol = ?" if symbol_filter else ""),
@@ -381,7 +390,7 @@ def load_dataset(
         if qdm_available:
             query = base_query.format(
                 candidate_source="candidate_signals",
-                onnx_select=(
+                onnx_select=select_fragment(
                     """
                         COALESCE(o.runtime_latency_us, 0.0)::DOUBLE AS runtime_latency_us,
                         COALESCE(o.runtime_data_present, 0)::BIGINT AS runtime_data_present,
@@ -418,7 +427,7 @@ def load_dataset(
                     if onnx_available
                     else ""
                 ),
-                qdm_select=(runtime_state_select + qdm_feature_select),
+                qdm_select=select_fragment(runtime_state_select + "\n" + qdm_feature_select),
                 qdm_join="""
                     LEFT JOIN qdm_minute_bars q
                       ON q.symbol_alias = c.symbol
@@ -446,7 +455,7 @@ def load_dataset(
         else:
             query = base_query.format(
                 candidate_source="candidate_signals",
-                onnx_select=(
+                onnx_select=select_fragment(
                     """
                         COALESCE(o.runtime_latency_us, 0.0)::DOUBLE AS runtime_latency_us,
                         COALESCE(o.runtime_data_present, 0)::BIGINT AS runtime_data_present,
@@ -483,7 +492,7 @@ def load_dataset(
                     if onnx_available
                     else ""
                 ),
-                qdm_select=(runtime_state_select + qdm_feature_select),
+                qdm_select=select_fragment(runtime_state_select + "\n" + qdm_feature_select),
                 qdm_join="",
                 runtime_join=(
                     """
@@ -1120,6 +1129,12 @@ def main() -> int:
 
     metrics_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
     report_path.write_text(markdown_report(metadata), encoding="utf-8")
+
+    if not symbol_filter:
+        metrics_latest_alias = output_root / "paper_gate_acceptor_metrics_latest.json"
+        report_latest_alias = output_root / "paper_gate_acceptor_report_latest.md"
+        metrics_latest_alias.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
+        report_latest_alias.write_text(markdown_report(metadata), encoding="utf-8")
 
     print(json.dumps(metadata, indent=2, ensure_ascii=True))
     return 0

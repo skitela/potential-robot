@@ -1322,6 +1322,7 @@ function Invoke-AuditCycle {
     if ($null -ne $qdmVisibilityRefresh) {
         $refreshSummary = Get-OptionalValue -Object $qdmVisibilityRefresh -Name "summary" -Default $null
         $refreshRequiredCount = [int](Get-OptionalValue -Object $refreshSummary -Name "refresh_required_count" -Default 0)
+        $serverTailBridgeRequiredCount = [int](Get-OptionalValue -Object $refreshSummary -Name "server_tail_bridge_required_count" -Default 0)
         $retrainRequiredCount = [int](Get-OptionalValue -Object $refreshSummary -Name "retrain_required_count" -Default 0)
         $currentVisibleCount = [int](Get-OptionalValue -Object $refreshSummary -Name "current_contract_qdm_visible_symbols_count" -Default 0)
         $trainedVisibleCount = [int](Get-OptionalValue -Object $refreshSummary -Name "trained_global_qdm_visible_symbols_count" -Default 0)
@@ -1332,6 +1333,14 @@ function Invoke-AuditCycle {
                 component = "qdm_refresh_required"
                 message = "Czesc symboli ma kandydaty, ale ich QDM jest starsze niz okno kandydatow i wymaga odswiezenia eksportu."
                 context = @{ refresh_required_count = $refreshRequiredCount }
+            }) | Out-Null
+        }
+        if ($serverTailBridgeRequiredCount -gt 0) {
+            $qdmRootCauseEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "server_tail_bridge_required"
+                message = "Czesc symboli ma juz prawie pelne QDM, ale nadal brakuje biezacego ogona dnia z serwera lub brokera."
+                context = @{ server_tail_bridge_required_count = $serverTailBridgeRequiredCount }
             }) | Out-Null
         }
         if ($retrainRequiredCount -gt 0) {
@@ -1361,12 +1370,13 @@ function Invoke-AuditCycle {
         $retrainSummary = Get-OptionalValue -Object $globalQdmRetrain -Name "summary" -Default $null
         $retrainRequiredCount = [int](Get-OptionalValue -Object $retrainSummary -Name "retrain_required_count" -Default 0)
         $refreshRequiredCount = [int](Get-OptionalValue -Object $retrainSummary -Name "refresh_required_count" -Default 0)
+        $serverTailBridgeRequiredCount = [int](Get-OptionalValue -Object $retrainSummary -Name "server_tail_bridge_required_count" -Default 0)
         $retrainRunning = [bool](Get-OptionalValue -Object $retrainSummary -Name "retrain_running" -Default $false)
         $startAllowed = [bool](Get-OptionalValue -Object $retrainSummary -Name "start_allowed" -Default $false)
         $retrainAction = [string](Get-OptionalValue -Object $retrainSummary -Name "retrain_action" -Default "")
 
         if ($retrainRequiredCount -gt 0 -or $retrainRunning -or $startAllowed) {
-            $severity = if ($startAllowed) { "high" } elseif ($retrainState -eq "RETRAIN_ZABLOKOWANY_QDM") { "medium" } else { "info" }
+            $severity = if ($startAllowed) { "high" } elseif ($retrainState -in @("RETRAIN_ZABLOKOWANY_QDM", "RETRAIN_ZABLOKOWANY_OGONEM_SERWERA")) { "medium" } else { "info" }
             $globalRetrainEvidence.Add([pscustomobject]@{
                 severity = $severity
                 component = "global_qdm_retrain"
@@ -1375,6 +1385,7 @@ function Invoke-AuditCycle {
                     retrain_state = $retrainState
                     retrain_required_count = $retrainRequiredCount
                     refresh_required_count = $refreshRequiredCount
+                    server_tail_bridge_required_count = $serverTailBridgeRequiredCount
                     retrain_running = $retrainRunning
                     start_allowed = $startAllowed
                     retrain_action = $retrainAction

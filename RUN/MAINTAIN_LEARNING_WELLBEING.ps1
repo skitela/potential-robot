@@ -227,6 +227,7 @@ $globalQdmRetrain = $null
 if ($Apply -and $null -ne $qdmMissingProfile) {
     $qdmMissingCount = [int]$qdmMissingProfile.qdm_missing_count
     $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
+    $qdmServerTailBridgeRequiredCount = if ($null -ne $qdmVisibilityRefresh -and $null -ne $qdmVisibilityRefresh.summary.PSObject.Properties['server_tail_bridge_required_count']) { [int]$qdmVisibilityRefresh.summary.server_tail_bridge_required_count } else { 0 }
     $syncState = if ($null -ne $qdmMissingSyncStatus) { [string]$qdmMissingSyncStatus.state } else { "" }
     $syncWrapperActive = (Get-WrapperCount -Pattern "*qdm_missing_supported_sync_wrapper_*") -gt 0
     if (($qdmMissingCount -gt 0 -or $qdmRefreshRequiredCount -gt 0) -and -not $syncWrapperActive -and $syncState -notin @("running", "export_in_progress", "queue_waiting_next_batch")) {
@@ -388,6 +389,7 @@ $tradeTransitionUsesServerPing = if ($null -ne $tradeTransitionAudit) { [bool]$t
 $tradeTransitionUsesServerLatency = if ($null -ne $tradeTransitionAudit) { [bool]$tradeTransitionAudit.summary.global_model_uses_server_latency } else { $false }
 $tradeTransitionVerdict = if ($null -ne $tradeTransitionAudit) { [string]$tradeTransitionAudit.verdict } else { "" }
 $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
+$qdmServerTailBridgeRequiredCount = if ($null -ne $qdmVisibilityRefresh -and $null -ne $qdmVisibilityRefresh.summary.PSObject.Properties['server_tail_bridge_required_count']) { [int]$qdmVisibilityRefresh.summary.server_tail_bridge_required_count } else { 0 }
 $qdmRetrainRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.retrain_required_count } else { 0 }
 $globalQdmRetrainState = if ($null -ne $globalQdmRetrain) { [string]$globalQdmRetrain.verdict } else { "" }
 $globalQdmRetrainAction = if ($null -ne $globalQdmRetrain) { [string]$globalQdmRetrain.summary.retrain_action } else { "" }
@@ -414,6 +416,8 @@ $verdict = if (
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
     ($null -ne $vpsSpoolBridge -and [string]$vpsSpoolBridge.verdict -in @("MOST_STABILNY", "MOST_UTWARDZONY")) -and
     $contractPendingCount -eq 0 -and
+    $qdmRefreshRequiredCount -eq 0 -and
+    $qdmServerTailBridgeRequiredCount -eq 0 -and
     -not $mlScalpingCritical -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
@@ -501,6 +505,7 @@ $report = [ordered]@{
         trade_transition_global_model_uses_server_ping = $tradeTransitionUsesServerPing
         trade_transition_global_model_uses_server_latency = $tradeTransitionUsesServerLatency
         qdm_refresh_required_count = $qdmRefreshRequiredCount
+        qdm_server_tail_bridge_required_count = $qdmServerTailBridgeRequiredCount
         qdm_retrain_required_count = $qdmRetrainRequiredCount
         global_qdm_retrain_state = $globalQdmRetrainState
         global_qdm_retrain_start_allowed = $globalQdmRetrainStartAllowed
@@ -563,6 +568,7 @@ $lines.Add(("- trade_transition_safe_chart_count: {0}" -f $report.summary.trade_
 $lines.Add(("- trade_transition_global_model_uses_server_ping: {0}" -f ([string]$report.summary.trade_transition_global_model_uses_server_ping).ToLowerInvariant()))
 $lines.Add(("- trade_transition_global_model_uses_server_latency: {0}" -f ([string]$report.summary.trade_transition_global_model_uses_server_latency).ToLowerInvariant()))
 $lines.Add(("- qdm_refresh_required_count: {0}" -f $report.summary.qdm_refresh_required_count))
+$lines.Add(("- qdm_server_tail_bridge_required_count: {0}" -f $report.summary.qdm_server_tail_bridge_required_count))
 $lines.Add(("- qdm_retrain_required_count: {0}" -f $report.summary.qdm_retrain_required_count))
 $lines.Add(("- global_qdm_retrain_state: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.global_qdm_retrain_state)) { "none" } else { $report.summary.global_qdm_retrain_state })))
 $lines.Add(("- global_qdm_retrain_start_allowed: {0}" -f ([string]$report.summary.global_qdm_retrain_start_allowed).ToLowerInvariant()))

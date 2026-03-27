@@ -72,6 +72,7 @@ $metricsAgeSeconds = Get-FileAgeSeconds -Path $metricsPath
 $metricsStaleSeconds = [Math]::Max(60, [int]$MetricsStaleMinutes * 60)
 
 $refreshRequiredCount = if ($null -ne $qdmVisibility) { [int]$qdmVisibility.summary.refresh_required_count } else { 0 }
+$serverTailBridgeRequiredCount = if ($null -ne $qdmVisibility -and $null -ne $qdmVisibility.summary.PSObject.Properties['server_tail_bridge_required_count']) { [int]$qdmVisibility.summary.server_tail_bridge_required_count } else { 0 }
 $retrainRequiredCount = if ($null -ne $qdmVisibility) { [int]$qdmVisibility.summary.retrain_required_count } else { 0 }
 $currentVisibleCount = if ($null -ne $qdmVisibility) { [int]$qdmVisibility.summary.current_contract_qdm_visible_symbols_count } else { 0 }
 $trainedVisibleCount = if ($null -ne $qdmVisibility) { [int]$qdmVisibility.summary.trained_global_qdm_visible_symbols_count } else { 0 }
@@ -97,6 +98,11 @@ if ($retrainRequiredCount -gt 0) {
         $reason = "Najpierw trzeba domknac odswiezanie QDM dla symboli, ktore nadal nie dochodza do okna kandydatow."
         $recommendation = "Kontynuowac odswiezanie QDM; nie trenowac globalnego modelu na polowie naprawionego kontraktu."
     }
+    elseif ($serverTailBridgeRequiredCount -gt 0) {
+        $verdict = "RETRAIN_ZABLOKOWANY_OGONEM_SERWERA"
+        $reason = "Zwykly refresh QDM jest juz domkniety, ale brakuje jeszcze biezacego ogona dnia z serwera lub brokera dla czesci symboli."
+        $recommendation = "Najpierw zbudowac most biezacego ogona serwerowego; dopiero potem trenowac globalny model."
+    }
     elseif ($mlPipelineRunning) {
         $verdict = "RETRAIN_ZABLOKOWANY_PRZEZ_ML"
         $reason = "Juz trwa glowny pipeline ML i nie nalezy dublowac ciezkiego treningu globalnego."
@@ -121,6 +127,7 @@ if ($Apply -and $startAllowed) {
 }
 
 $topRetrain = if ($null -ne $qdmVisibility) { @($qdmVisibility.retrain_required | Select-Object -First 5) } else { @() }
+$allRetrainItems = if ($null -ne $qdmVisibility) { @($qdmVisibility.retrain_required) } else { @() }
 $report = [ordered]@{
     schema_version = "1.0"
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -135,6 +142,7 @@ $report = [ordered]@{
         current_contract_qdm_visible_symbols_count = $currentVisibleCount
         trained_global_qdm_visible_symbols_count = $trainedVisibleCount
         refresh_required_count = $refreshRequiredCount
+        server_tail_bridge_required_count = $serverTailBridgeRequiredCount
         retrain_required_count = $retrainRequiredCount
         metrics_last_write_local = if ($null -ne $metricsItem) { $metricsItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
         metrics_age_seconds = if ($metricsAgeSeconds -eq [int]::MaxValue) { $null } else { $metricsAgeSeconds }
@@ -146,8 +154,8 @@ $report = [ordered]@{
         start_allowed = $startAllowed
         retrain_action = $retrainAction
     }
-    top_retrain_required = $topRetrain
-    items = if ($null -ne $qdmVisibility) { @($qdmVisibility.retrain_required) } else { @() }
+    top_retrain_required = [object[]]@($topRetrain)
+    items = [object[]]@($allRetrainItems)
 }
 
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
@@ -162,6 +170,7 @@ $lines.Add(("- recommendation: {0}" -f $report.recommendation))
 $lines.Add(("- current_visible: {0}" -f $report.summary.current_contract_qdm_visible_symbols_count))
 $lines.Add(("- trained_visible: {0}" -f $report.summary.trained_global_qdm_visible_symbols_count))
 $lines.Add(("- refresh_required_count: {0}" -f $report.summary.refresh_required_count))
+$lines.Add(("- server_tail_bridge_required_count: {0}" -f $report.summary.server_tail_bridge_required_count))
 $lines.Add(("- retrain_required_count: {0}" -f $report.summary.retrain_required_count))
 $lines.Add(("- metrics_stale: {0}" -f ([string]$report.summary.metrics_stale).ToLowerInvariant()))
 $lines.Add(("- qdm_sync_running: {0}" -f ([string]$report.summary.qdm_sync_running).ToLowerInvariant()))
@@ -172,7 +181,7 @@ $lines.Add(("- retrain_action: {0}" -f $(if ([string]::IsNullOrWhiteSpace($repor
 $lines.Add("")
 $lines.Add("## Top Retrain Required")
 $lines.Add("")
-if ($topRetrain.Count -eq 0) {
+if (@($topRetrain).Count -eq 0) {
     $lines.Add("- none")
 }
 else {

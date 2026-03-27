@@ -160,19 +160,9 @@ foreach ($row in $rows) {
 
     $historyCandidates = @(Get-QdmHistoryCandidates -HistoryRoot $historyRoot -Symbol $symbol -Datatype $datatype)
     $usableHistoryCandidates = @(Get-QdmUsableHistoryCandidates -Candidates $historyCandidates)
-    if (-not $ForceUpdate -and $usableHistoryCandidates.Count -gt 0) {
-        $bestHistory = $usableHistoryCandidates[0]
-        $hoursSinceRefresh = ((Get-Date) - $bestHistory.LastWriteTime).TotalHours
-        Write-Host ("Skipping historical update: {0} (history already present on disk: {1}, size {2:N1} MB, age {3:N1}h; use -ForceUpdate to refresh)" -f
-            $symbol,
-            $bestHistory.Name,
-            ($bestHistory.Length / 1MB),
-            $hoursSinceRefresh)
-        continue
-    }
+    $latestHistory = if ($usableHistoryCandidates.Count -gt 0) { $usableHistoryCandidates[0] } elseif ($historyCandidates.Count -gt 0) { $historyCandidates[0] } else { $null }
 
-    if (-not $ForceUpdate -and $historyCandidates.Count -gt 0) {
-        $latestHistory = $historyCandidates[0]
+    if (-not $ForceUpdate -and $null -ne $latestHistory) {
         $hoursSinceRefresh = ((Get-Date) - $latestHistory.LastWriteTime).TotalHours
         if ($hoursSinceRefresh -lt $MinRefreshHours) {
             Write-Host ("Skipping historical update: {0} (recent history file {1}, age {2:N1}h, threshold {3}h)" -f
@@ -182,6 +172,13 @@ foreach ($row in $rows) {
                 $MinRefreshHours)
             continue
         }
+
+        Write-Host ("Refreshing historical update: {0} (existing history {1}, size {2:N1} MB, age {3:N1}h exceeds threshold {4}h)" -f
+            $symbol,
+            $latestHistory.Name,
+            ($latestHistory.Length / 1MB),
+            $hoursSinceRefresh,
+            $MinRefreshHours)
     }
 
     # QDM CLI currently pulls broad source history on update for these symbols,

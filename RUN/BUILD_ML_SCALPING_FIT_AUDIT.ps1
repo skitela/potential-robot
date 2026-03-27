@@ -76,6 +76,7 @@ $rocAuc = if ($null -ne $metrics) { [double]$metrics.metrics.roc_auc } else { 0.
 $trainedVisibleSymbols = if ($null -ne $metrics) { @($metrics.dataset.qdm_coverage.symbols_with_qdm) } else { @() }
 $currentVisibleCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.current_contract_qdm_visible_symbols_count } else { 0 }
 $refreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
+$serverTailBridgeRequiredCount = if ($null -ne $qdmVisibilityRefresh -and $null -ne $qdmVisibilityRefresh.summary.PSObject.Properties['server_tail_bridge_required_count']) { [int]$qdmVisibilityRefresh.summary.server_tail_bridge_required_count } else { 0 }
 $retrainRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.retrain_required_count } else { 0 }
 $candidateGapCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.candidate_gap_count } else { 0 }
 $runtimeWithoutOutcomeCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.runtime_without_outcome_count } else { 0 }
@@ -112,6 +113,9 @@ if ($qdmCoverageRatio -lt 0.5) {
 if ($refreshRequiredCount -gt 0) {
     $limitations.Add("Czesc instrumentow ma dane kupione starsze niz okno aktualnych kandydatow, wiec model globalny widzi tylko fragment prawdy rynkowej.") | Out-Null
 }
+if ($serverTailBridgeRequiredCount -gt 0) {
+    $limitations.Add("Czesc instrumentow ma juz prawie pelny ogon danych, ale wciaz brakuje biezacego ogona dnia z serwera lub brokera, wiec laptop nie jest jeszcze lustrzanym obrazem srodowiska wykonawczego.") | Out-Null
+}
 if ($candidateGapCount -gt 0) {
     $limitations.Add("Czesc instrumentow nadal nie produkuje kandydatow mimo gotowych danych historycznych.") | Out-Null
 }
@@ -126,8 +130,18 @@ if (-not $precheckModelsCommission -or -not $precheckModelsSlippage) {
 }
 
 $recommendations.Add("Zostawic obecny model jako szybki model bramkujacy i nauczyciela bazowego dla calej floty.") | Out-Null
-$recommendations.Add("Najpierw domknac swiezy ogon danych kupionych dla GOLD, SILVER i US500, bo bez tego retrening globalny bylby polowiczny.") | Out-Null
-$recommendations.Add("Po domknieciu danych przetrenowac model globalny ponownie dla symboli, ktore kontrakt juz widzi, ale model jeszcze nie.") | Out-Null
+if ($refreshRequiredCount -gt 0 -or $serverTailBridgeRequiredCount -gt 0) {
+    $recommendations.Add("Najpierw domknac brakujace lub niepelne okna danych kupionych, bo bez tego retrening globalny bylby polowiczny.") | Out-Null
+}
+if ($retrainRequiredCount -gt 0) {
+    $recommendations.Add("Po domknieciu danych przetrenowac model globalny ponownie dla symboli, ktore kontrakt juz widzi, ale model jeszcze nie.") | Out-Null
+}
+if ($candidateGapCount -gt 0) {
+    $recommendations.Add("Rozebrac strategie i progi dla symboli bez kandydatow, bo same dane historyczne nie przechodza tam jeszcze do nauki decyzyjnej.") | Out-Null
+}
+if ($runtimeWithoutOutcomeCount -gt 0) {
+    $recommendations.Add("Domknac sprzezenie zwrotne outcome dla malych modeli, zeby lokalna nauka przestala byc tylko obserwacja.") | Out-Null
+}
 $recommendations.Add("Dodac rachunkowy wynik netto brokera w PLN jako docelowy sygnal nauki, zamiast opierac sie tylko na etykiecie accepted.") | Out-Null
 $recommendations.Add("Dopiero po domknieciu kosztow brokera i sprzezenia zwrotnego outcome rozwazac drugi, bogatszy model rankingowy jako warstwe druga.") | Out-Null
 
@@ -162,7 +176,7 @@ $dlategoZe = switch ($verdict) {
         "Model bazowy jest zgodny z wymaganiami szybkiego skalpingu i ma juz domkniete najwazniejsze zaleznosci treningowe."
     }
     "DOBRY_MODEL_BAZOWY_ALE_NIE_DOCELOWY" {
-        "Obecny model dobrze nadaje sie jako szybka bramka dla milionow wierszy i eksportu ONNX, ale nadal nie widzi calego kupionego zestawu danych ani nie uczy sie jeszcze na pelnym wyniku netto brokera."
+        "Obecny model dobrze nadaje sie jako szybka bramka dla milionow wierszy i eksportu ONNX, ale nadal nie uczy sie jeszcze na pelnym wyniku netto brokera i nie ma domknietego outcome dla wiekszosci lokalnych modeli."
     }
     default {
         "Obecny model nie ma jeszcze kompletu cech potrzebnych do wiarygodnego treningu pod realne warunki skalpingowe."
@@ -188,6 +202,7 @@ $report = [ordered]@{
         current_contract_qdm_visible_symbols_count = $currentVisibleCount
         trained_global_qdm_visible_symbols_count = $trainedVisibleSymbols.Count
         refresh_required_count = $refreshRequiredCount
+        server_tail_bridge_required_count = $serverTailBridgeRequiredCount
         retrain_required_count = $retrainRequiredCount
         candidate_gap_count = $candidateGapCount
         runtime_without_outcome_count = $runtimeWithoutOutcomeCount

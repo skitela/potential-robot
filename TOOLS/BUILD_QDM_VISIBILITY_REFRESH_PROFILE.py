@@ -29,6 +29,12 @@ def iso_local(value) -> str | None:
     return str(value)
 
 
+def hours_between(later, earlier) -> float | None:
+    if later is None or earlier is None:
+        return None
+    return (later - earlier).total_seconds() / 3600.0
+
+
 def file_mtime_local(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -202,7 +208,7 @@ def build_trained_coverage_map(metrics: dict | None) -> tuple[dict[str, float], 
     return coverage_map, visible_symbols, row_ratio
 
 
-def classify(spec: dict, candidate: dict, qdm: dict, current_cov: dict, trained_cov: float) -> tuple[str, bool, bool, str]:
+def classify(spec: dict, candidate: dict, qdm: dict, current_cov: dict, trained_cov: float) -> tuple[str, bool, bool, bool, str]:
     candidate_rows = int(candidate.get("candidate_rows", 0))
     qdm_rows = int(qdm.get("qdm_rows", 0))
     current_ratio = float(current_cov.get("coverage_ratio", 0.0))
@@ -215,37 +221,48 @@ def classify(spec: dict, candidate: dict, qdm: dict, current_cov: dict, trained_
 
     refresh_required = False
     retrain_required = False
+    bridge_required = False
 
     if blocked_reason:
-        return "BLOKADA_QDM", refresh_required, retrain_required, "symbol jest jawnie zablokowany w odzysku QDM"
+        return "BLOKADA_QDM", refresh_required, retrain_required, bridge_required, "symbol jest jawnie zablokowany w odzysku QDM"
 
     if candidate_rows <= 0:
-        return "BRAK_KANDYDATOW", refresh_required, retrain_required, "symbol nie produkuje jeszcze kandydatow do globalnego treningu"
+        return "BRAK_KANDYDATOW", refresh_required, retrain_required, bridge_required, "symbol nie produkuje jeszcze kandydatow do globalnego treningu"
 
     if current_ratio >= 0.95:
         if trained_cov < 0.95:
             retrain_required = True
-            return "GLOBALNY_TRENING_NIEAKTUALNY", refresh_required, retrain_required, "kontrakt widzi QDM, ale ostatni globalny trening lub jego metryki sa nieaktualne"
-        return "QDM_WIDOCZNE", refresh_required, retrain_required, "QDM jest widoczne w aktualnym kontrakcie i nie widac luki joinu"
+            return "GLOBALNY_TRENING_NIEAKTUALNY", refresh_required, retrain_required, bridge_required, "kontrakt widzi QDM, ale ostatni globalny trening lub jego metryki sa nieaktualne"
+        return "QDM_WIDOCZNE", refresh_required, retrain_required, bridge_required, "QDM jest widoczne w aktualnym kontrakcie i nie widac luki joinu"
 
     if qdm_rows <= 0:
         if history_ready and not export_present:
             refresh_required = True
-            return "BRAK_AKTYWNEGO_EKSPORTU_MT5", refresh_required, retrain_required, "historia raw jest gotowa, ale nie ma aktywnego eksportu MT5 dla QDM"
+            return "BRAK_AKTYWNEGO_EKSPORTU_MT5", refresh_required, retrain_required, bridge_required, "historia raw jest gotowa, ale nie ma aktywnego eksportu MT5 dla QDM"
         if history_ready:
             refresh_required = True
-            return "PUSTY_KONTRAKT_QDM", refresh_required, retrain_required, "eksport lub cache istnieje, ale kontrakt QDM jest pusty dla tego symbolu"
-        return "BRAK_QDM", refresh_required, retrain_required, "brakuje gotowego toru QDM dla symbolu"
+            return "PUSTY_KONTRAKT_QDM", refresh_required, retrain_required, bridge_required, "eksport lub cache istnieje, ale kontrakt QDM jest pusty dla tego symbolu"
+        return "BRAK_QDM", refresh_required, retrain_required, bridge_required, "brakuje gotowego toru QDM dla symbolu"
 
     if candidate_bar_min and qdm_bar_max and qdm_bar_max < candidate_bar_min:
         refresh_required = history_ready
-        return "CACHE_QDM_STARSZY_NIZ_OKNO_KANDYDATOW", refresh_required, retrain_required, "QDM konczy sie przed pierwszym kandydatem i nie moze zasilic globalnego treningu"
+        return "CACHE_QDM_STARSZY_NIZ_OKNO_KANDYDATOW", refresh_required, retrain_required, bridge_required, "QDM konczy sie przed pierwszym kandydatem i nie moze zasilic globalnego treningu"
 
     if candidate_bar_max and qdm_bar_max and qdm_bar_max < candidate_bar_max:
+        gap_hours = hours_between(candidate_bar_max, qdm_bar_max) or 0.0
+        if current_ratio >= 0.8 and gap_hours <= 24.0 and qdm_bar_max.date() < candidate_bar_max.date():
+            bridge_required = True
+            return (
+                "BRAK_BIEZACEGO_OGONA_SERWEROWEGO",
+                refresh_required,
+                retrain_required,
+                bridge_required,
+                "QDM dochodzi do konca poprzedniego dnia i pokrywa wiekszosc kandydatow, ale nie ma jeszcze biezacego ogona z serwera lub brokera.",
+            )
         refresh_required = history_ready
-        return "QDM_NIE_SIEGA_DO_KONCA_OKNA_KANDYDATOW", refresh_required, retrain_required, "QDM nie dochodzi do konca okna kandydatow i daje zerowe lub zbyt niskie pokrycie"
+        return "QDM_NIE_SIEGA_DO_KONCA_OKNA_KANDYDATOW", refresh_required, retrain_required, bridge_required, "QDM nie dochodzi do konca okna kandydatow i daje zerowe lub zbyt niskie pokrycie"
 
-    return "ROZJAZD_ALIASU_LUB_CZASU", refresh_required, retrain_required, "QDM istnieje, ale laczenie nadal nie widzi zgodnosci czasu lub aliasu"
+    return "ROZJAZD_ALIASU_LUB_CZASU", refresh_required, retrain_required, bridge_required, "QDM istnieje, ale laczenie nadal nie widzi zgodnosci czasu lub aliasu"
 
 
 def recommendation_for(root_cause: str) -> str:
@@ -255,6 +272,7 @@ def recommendation_for(root_cause: str) -> str:
         "PUSTY_KONTRAKT_QDM": "przebudowac kontrakt QDM i sprawdzic cache oraz eksport",
         "CACHE_QDM_STARSZY_NIZ_OKNO_KANDYDATOW": "odswiezyc eksport QDM, bo cache jest starszy niz kandydaty",
         "QDM_NIE_SIEGA_DO_KONCA_OKNA_KANDYDATOW": "odswiezyc eksport QDM do swiezszego okna",
+        "BRAK_BIEZACEGO_OGONA_SERWEROWEGO": "dociagnac biezacy ogon dnia z serwera lub brokera; zwykly refresh QDM nie domknie tej luki",
         "ROZJAZD_ALIASU_LUB_CZASU": "sprawdzic alias symbolu i sposob zaokraglania czasu do minuty",
         "GLOBALNY_TRENING_NIEAKTUALNY": "przetrenowac globalny model lub odswiezyc jego metryki po naprawie kontraktu",
         "QDM_WIDOCZNE": "utrzymac pod nadzorem; symbol ma juz poprawny sygnal QDM",
@@ -289,6 +307,7 @@ def main() -> None:
 
     items: list[dict] = []
     refresh_rows: list[dict] = []
+    bridge_required_items: list[dict] = []
 
     for alias in order:
         spec = specs.get(alias, {})
@@ -297,7 +316,7 @@ def main() -> None:
         current_cov = current_coverage.get(alias, {})
         trained_cov = float(trained_coverage_map.get(alias, 0.0) or 0.0)
 
-        root_cause, refresh_required, retrain_required, why = classify(spec, candidate, qdm, current_cov, trained_cov)
+        root_cause, refresh_required, retrain_required, bridge_required, why = classify(spec, candidate, qdm, current_cov, trained_cov)
         item = {
             "symbol_alias": alias,
             "qdm_symbol": spec.get("qdm_symbol"),
@@ -316,11 +335,14 @@ def main() -> None:
             "trained_global_qdm_coverage_ratio": round(trained_cov, 4),
             "refresh_required": refresh_required,
             "retrain_required": retrain_required,
+            "server_tail_bridge_required": bridge_required,
             "main_root_cause": root_cause,
             "dlatego_ze": why,
             "recommendation": recommendation_for(root_cause),
         }
         items.append(item)
+        if bridge_required:
+            bridge_required_items.append(item)
 
         if refresh_required and spec.get("mt5_export_name") and spec.get("datasource") and spec.get("datatype"):
             refresh_rows.append(
@@ -346,6 +368,7 @@ def main() -> None:
     ]
     retrain_required_symbols = [item["symbol_alias"] for item in items if item["retrain_required"]]
     refresh_required_symbols = [item["symbol_alias"] for item in items if item["refresh_required"]]
+    bridge_required_symbols = [item["symbol_alias"] for item in items if item["server_tail_bridge_required"]]
     metrics_last_write_local = file_mtime_local(global_metrics_path)
 
     report = {
@@ -358,6 +381,7 @@ def main() -> None:
             "current_contract_qdm_visible_symbols_count": len(current_visible_symbols),
             "trained_global_qdm_visible_symbols_count": len(trained_visible_symbols),
             "refresh_required_count": len(refresh_required_symbols),
+            "server_tail_bridge_required_count": len(bridge_required_symbols),
             "retrain_required_count": len(retrain_required_symbols),
             "no_candidate_count": sum(1 for item in items if item["main_root_cause"] == "BRAK_KANDYDATOW"),
             "manual_investigation_count": sum(1 for item in items if item["main_root_cause"] == "ROZJAZD_ALIASU_LUB_CZASU"),
@@ -367,6 +391,7 @@ def main() -> None:
         "current_contract_qdm_visible_symbols": current_visible_symbols,
         "trained_global_qdm_visible_symbols": trained_visible_symbols,
         "refresh_required": [item for item in items if item["refresh_required"]],
+        "server_tail_bridge_required": bridge_required_items,
         "retrain_required": [item for item in items if item["retrain_required"]],
         "top_manual_investigation": [item for item in items if item["main_root_cause"] == "ROZJAZD_ALIASU_LUB_CZASU"][:8],
         "items": items,
@@ -394,6 +419,7 @@ def main() -> None:
         f"- current_contract_qdm_visible_symbols_count: {report['summary']['current_contract_qdm_visible_symbols_count']}",
         f"- trained_global_qdm_visible_symbols_count: {report['summary']['trained_global_qdm_visible_symbols_count']}",
         f"- refresh_required_count: {report['summary']['refresh_required_count']}",
+        f"- server_tail_bridge_required_count: {report['summary']['server_tail_bridge_required_count']}",
         f"- retrain_required_count: {report['summary']['retrain_required_count']}",
         f"- metrics_last_write_local: {metrics_last_write_local}",
         "",
@@ -406,6 +432,14 @@ def main() -> None:
         for item in report["refresh_required"]:
             lines.append(
                 f"- {item['symbol_alias']}: cause={item['main_root_cause']}, candidate_max={item['candidate_bar_max']}, qdm_max={item['qdm_bar_max']}, export_present={item['export_present']}, coverage={item['current_contract_qdm_coverage_ratio']}"
+            )
+    lines.extend(["", "## Server Tail Bridge Required", ""])
+    if not report["server_tail_bridge_required"]:
+        lines.append("- none")
+    else:
+        for item in report["server_tail_bridge_required"]:
+            lines.append(
+                f"- {item['symbol_alias']}: cause={item['main_root_cause']}, candidate_max={item['candidate_bar_max']}, qdm_max={item['qdm_bar_max']}, coverage={item['current_contract_qdm_coverage_ratio']}"
             )
     lines.extend(["", "## Retrain Required", ""])
     if not report["retrain_required"]:
