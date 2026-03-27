@@ -12,6 +12,9 @@ $ErrorActionPreference = "Stop"
 
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 New-Item -ItemType Directory -Force -Path $opsRoot | Out-Null
+$researchRoot = "C:\TRADING_DATA\RESEARCH"
+$researchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
+$commonStateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files"
 
 function Read-JsonSafe {
     param([string]$Path)
@@ -301,6 +304,7 @@ function Invoke-AuditCycle {
     $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
     $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
     $paperLossSourceAuditPath = Join-Path $opsRoot "paper_loss_source_audit_latest.json"
+    $mlOverlayAuditPath = Join-Path $opsRoot "ml_overlay_supervision_latest.json"
     $instrumentLocalTrainingPlanPath = Join-Path $opsRoot "instrument_local_training_plan_latest.json"
     $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
     $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
@@ -386,6 +390,15 @@ function Invoke-AuditCycle {
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_ML_OVERLAY_AUDIT.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = $researchRoot
+                ResearchPython = $researchPython
+                CommonStateRoot = $commonStateRoot
+            }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1")
@@ -604,6 +617,7 @@ function Invoke-AuditCycle {
     $globalQdmRetrain = Read-JsonSafe -Path $globalQdmRetrainPath
     $paperLiveActionGapAudit = Read-JsonSafe -Path $paperLiveActionGapAuditPath
     $paperLossSourceAudit = Read-JsonSafe -Path $paperLossSourceAuditPath
+    $mlOverlayAudit = Read-JsonSafe -Path $mlOverlayAuditPath
     $instrumentLocalTrainingPlan = Read-JsonSafe -Path $instrumentLocalTrainingPlanPath
     $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
     $instrumentLocalTrainingAudit = Read-JsonSafe -Path $instrumentLocalTrainingAuditPath
@@ -733,6 +747,59 @@ function Invoke-AuditCycle {
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_SCIEZKI_UCZENIA" -Gate "RAPORTUJ" -Severity "info" -Reason "Manifest research i logi sciezki uczenia sa pod kontrola.")) | Out-Null
+    }
+
+    $mlOverlayEvidence = New-Object System.Collections.Generic.List[object]
+    foreach ($result in ([object[]]$refreshResults.ToArray() | Where-Object {
+        -not $_.ok -and [string]$_.script -like "*BUILD_ML_OVERLAY_AUDIT*"
+    })) {
+        $mlOverlayEvidence.Add($result) | Out-Null
+    }
+    if ($null -ne $mlOverlayAudit) {
+        $mlOverlaySummary = Get-OptionalValue -Object $mlOverlayAudit -Name "summary" -Default $null
+        $rolloutBlocked = [bool](Get-OptionalValue -Object $mlOverlaySummary -Name "rollout_blocked" -Default $false)
+        $warnings = @(Get-OptionalValue -Object $mlOverlaySummary -Name "warnings" -Default @())
+        $errors = @(Get-OptionalValue -Object $mlOverlaySummary -Name "errors" -Default @())
+
+        if ($rolloutBlocked) {
+            $mlOverlayEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "ml_overlay_rollout"
+                message = "Overlay ML blokuje rollout lub pakiet MT5 z powodu niespojnych artefaktow."
+                context = @{ errors = $errors }
+            }) | Out-Null
+        }
+        foreach ($warning in $warnings) {
+            $mlOverlayEvidence.Add([pscustomobject]@{
+                severity = "low"
+                component = "ml_overlay_warning"
+                message = "Overlay ML zwraca ostrzezenie do dalszej obserwacji."
+                context = @{ warning = $warning }
+            }) | Out-Null
+        }
+        foreach ($error in $errors) {
+            $mlOverlayEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "ml_overlay_error"
+                message = "Overlay ML zglosil blad krytyczny dla promocji lub pakietu MT5."
+                context = @{ error = $error }
+            }) | Out-Null
+        }
+    }
+    if ($mlOverlayEvidence.Count -gt 0) {
+        $hasBlockingMlOverlay = @($mlOverlayEvidence | Where-Object { $_.severity -in @("high", "critical") }).Count -gt 0
+        $gate = if ($hasBlockingMlOverlay) { "BLOKUJ_ROLLOUT" } else { "NAPRAW_W_CYKLU" }
+        $severity = if ($hasBlockingMlOverlay) { "high" } else { "low" }
+        $reason = if ($hasBlockingMlOverlay) {
+            "Overlay ML nie jest jeszcze gotowy do bezpiecznej promocji modelu i pakietu MT5."
+        }
+        else {
+            "Overlay ML jest aktywny, ale nadal ma ostrzezenia do nadzoru."
+        }
+        $domainStatuses.Add((New-DomainStatus -Domain "OVERLAY_ML_I_PAKIET_MT5" -Gate $gate -Severity $severity -Reason $reason -Evidence $mlOverlayEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "OVERLAY_ML_I_PAKIET_MT5" -Gate "RAPORTUJ" -Severity "info" -Reason "Overlay ML, pakiet MT5 i kontrakty runtime nie pokazują świeżych czerwonych flag.")) | Out-Null
     }
 
     $learningDataContractEvidence = New-Object System.Collections.Generic.List[object]
@@ -1676,6 +1743,7 @@ function Invoke-AuditCycle {
         instrument_training_readiness = $instrumentTrainingReadinessPath
         learning_source_audit = $learningSourceAuditPath
         ml_scalping_fit_audit = $mlScalpingFitAuditPath
+        ml_overlay_audit = $mlOverlayAuditPath
         paper_loss_source_audit = $paperLossSourceAuditPath
         instrument_local_training_plan = $instrumentLocalTrainingPlanPath
         instrument_local_training_lane = $instrumentLocalTrainingLanePath

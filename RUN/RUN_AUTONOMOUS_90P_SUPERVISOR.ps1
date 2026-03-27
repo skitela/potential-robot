@@ -58,7 +58,12 @@ $nearProfitBatchScript = Join-Path $ProjectRoot "RUN\START_NEAR_PROFIT_OPTIMIZAT
 $qdmWeakestScript = Join-Path $ProjectRoot "RUN\START_QDM_WEAKEST_SYNC_BACKGROUND.ps1"
 $mlScript = Join-Path $ProjectRoot "RUN\START_REFRESH_AND_TRAIN_MICROBOT_ML_BACKGROUND.ps1"
 $perfScript = Join-Path $ProjectRoot "RUN\APPLY_WORKSTATION_PERF_TUNING.ps1"
+$mlOverlayAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_OVERLAY_AUDIT.ps1"
+$mlOverlayRuntimeSyncScript = Join-Path $ProjectRoot "RUN\SYNC_MT5_ML_RUNTIME_STATE.ps1"
 $statusDir = Join-Path $ProjectRoot "EVIDENCE\OPS"
+$researchRoot = "C:\TRADING_DATA\RESEARCH"
+$researchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
+$commonStateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files"
 $researchContractManifestPath = "C:\TRADING_DATA\RESEARCH\reports\research_contract_manifest_latest.json"
 $mt5StatusPath = Join-Path $statusDir "mt5_tester_status_latest.json"
 $mt5QueuePath = Join-Path $statusDir "mt5_retest_queue_latest.json"
@@ -116,7 +121,9 @@ foreach ($path in @(
     $nearProfitBatchScript,
     $qdmWeakestScript,
     $mlScript,
-    $perfScript
+    $perfScript,
+    $mlOverlayAuditScript,
+    $mlOverlayRuntimeSyncScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
@@ -1224,6 +1231,16 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_audit" -Operation {
         $report = (& $localTrainingAuditScript -ProjectRoot $ProjectRoot -ApplySafeRollback | ConvertFrom-Json)
         "verdict=$($report.verdict); rollback=$($report.summary.rollback_count); probation=$($report.summary.probation_count); repairs=$($report.summary.repair_applied_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "ml_overlay_runtime_sync" -Operation {
+        & $mlOverlayRuntimeSyncScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | Out-Null
+        "synced"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "ml_overlay_audit" -Operation {
+        $report = (& $mlOverlayAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
+        "rollout_blocked=$($report.summary.rollout_blocked); warnings=$(@($report.summary.warnings).Count); errors=$(@($report.summary.errors).Count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "active_fleet_verdicts" -Operation {

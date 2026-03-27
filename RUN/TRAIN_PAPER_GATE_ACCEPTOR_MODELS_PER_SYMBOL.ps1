@@ -7,15 +7,17 @@ param(
     [switch]$ExportOnnx
 )
 
-$tailBridgeScript = Join-Path $ProjectRoot "RUN\BUILD_SERVER_PARITY_TAIL_BRIDGE.ps1"
-$ledgerScript = Join-Path $ProjectRoot "RUN\BUILD_BROKER_NET_LEDGER.ps1"
+$mlOverlayCommonScript = Join-Path $ProjectRoot "RUN\ML_OVERLAY_COMMON.ps1"
 $trainScript = Join-Path $ProjectRoot "TOOLS\TRAIN_PAPER_GATE_ACCEPTOR_MODEL.py"
 
-& $tailBridgeScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $ResearchPython -CommonStateRoot $CommonStateRoot | Out-Null
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+foreach ($path in @($mlOverlayCommonScript, $trainScript)) {
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "MISSING_REQUIRED_FILE: $path"
+    }
+}
 
-& $ledgerScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $ResearchPython -CommonStateRoot $CommonStateRoot | Out-Null
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+. $mlOverlayCommonScript
+Invoke-MlOverlayPreTrain -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $ResearchPython -CommonStateRoot $CommonStateRoot -AllowFreshSkip | Out-Null
 
 $args = @($trainScript, "--project-root", $ProjectRoot, "--research-root", $ResearchRoot, "--mode", "symbols")
 if ($CommonStateRoot -ne "") {
@@ -31,3 +33,10 @@ if ($ExportOnnx) {
 
 & $ResearchPython @args
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+if ($ExportOnnx) {
+    Invoke-MlOverlayPostTrain -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $ResearchPython -CommonStateRoot $CommonStateRoot -ExportOnPromotionOnly | Out-Null
+}
+else {
+    Invoke-MlOverlayAudit -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $ResearchPython -CommonStateRoot $CommonStateRoot | Out-Null
+}

@@ -131,6 +131,8 @@ function Get-WrapperCount {
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $logsRoot = Join-Path $CommonRoot "logs"
 $reportsRoot = Join-Path $ResearchRoot "reports"
+$researchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
+$commonStateRoot = Split-Path -Path $CommonRoot -Parent
 $manifestPath = Join-Path $reportsRoot "research_export_manifest_latest.json"
 $pathHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
 $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
@@ -147,6 +149,7 @@ $mlScalpingFitAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_SCALPING_FIT_AU
 $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $paperLossSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1"
+$mlOverlayAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_OVERLAY_AUDIT.ps1"
 $shadowRuntimeBootstrapScript = Join-Path $ProjectRoot "RUN\ENSURE_SHADOW_RUNTIME_BOOTSTRAP.ps1"
 $instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
 $instrumentLocalTrainingAuditScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1"
@@ -158,6 +161,7 @@ $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_tr
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
 $mlScalpingFitAuditPath = Join-Path $opsRoot "ml_scalping_fit_audit_latest.json"
 $tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.json"
+$mlOverlayAuditPath = Join-Path $opsRoot "ml_overlay_supervision_latest.json"
 $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
 $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
 $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
@@ -166,7 +170,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -197,6 +201,19 @@ $mlScalpingFitAudit = (& $mlScalpingFitAuditScript -ProjectRoot $ProjectRoot -Re
 $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
+try {
+    $mlOverlayAudit = (& $mlOverlayAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
+}
+catch {
+    Write-Warning ("ML overlay audit failed inside wellbeing: " + $_.Exception.Message)
+    $mlOverlayAudit = [pscustomobject]@{
+        summary = [pscustomobject]@{
+            rollout_blocked = $true
+            warnings = @()
+            errors = @("ML_OVERLAY_AUDIT_FAILED")
+        }
+    }
+}
 $shadowRuntimeBootstrap = (& $shadowRuntimeBootstrapScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -Apply:$Apply | ConvertFrom-Json)
 if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootstrap.summary.applied_count -gt 0) {
     $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
@@ -388,6 +405,9 @@ $tradeTransitionSafeChartCount = if ($null -ne $tradeTransitionAudit) { [int]$tr
 $tradeTransitionUsesServerPing = if ($null -ne $tradeTransitionAudit) { [bool]$tradeTransitionAudit.summary.global_model_uses_server_ping } else { $false }
 $tradeTransitionUsesServerLatency = if ($null -ne $tradeTransitionAudit) { [bool]$tradeTransitionAudit.summary.global_model_uses_server_latency } else { $false }
 $tradeTransitionVerdict = if ($null -ne $tradeTransitionAudit) { [string]$tradeTransitionAudit.verdict } else { "" }
+$mlOverlayRolloutBlocked = if ($null -ne $mlOverlayAudit) { [bool]$mlOverlayAudit.summary.rollout_blocked } else { $false }
+$mlOverlayWarningCount = if ($null -ne $mlOverlayAudit) { @($mlOverlayAudit.summary.warnings).Count } else { 0 }
+$mlOverlayErrorCount = if ($null -ne $mlOverlayAudit) { @($mlOverlayAudit.summary.errors).Count } else { 0 }
 $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
 $qdmServerTailBridgeRequiredCount = if ($null -ne $qdmVisibilityRefresh -and $null -ne $qdmVisibilityRefresh.summary.PSObject.Properties['server_tail_bridge_required_count']) { [int]$qdmVisibilityRefresh.summary.server_tail_bridge_required_count } else { 0 }
 $qdmRetrainRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.retrain_required_count } else { 0 }
@@ -418,6 +438,7 @@ $verdict = if (
     $contractPendingCount -eq 0 -and
     $qdmRefreshRequiredCount -eq 0 -and
     $qdmServerTailBridgeRequiredCount -eq 0 -and
+    -not $mlOverlayRolloutBlocked -and
     -not $mlScalpingCritical -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
@@ -456,6 +477,7 @@ $report = [ordered]@{
     learning_source_audit = $learningSourceAudit
     ml_scalping_fit_audit = $mlScalpingFitAudit
     trade_transition_audit = $tradeTransitionAudit
+    ml_overlay_audit = $mlOverlayAudit
     paper_live_action_gap_audit = $paperLiveActionGapAudit
     paper_loss_source_audit = $paperLossSourceAudit
     shadow_runtime_bootstrap = $shadowRuntimeBootstrap
@@ -504,6 +526,9 @@ $report = [ordered]@{
         trade_transition_safe_chart_count = $tradeTransitionSafeChartCount
         trade_transition_global_model_uses_server_ping = $tradeTransitionUsesServerPing
         trade_transition_global_model_uses_server_latency = $tradeTransitionUsesServerLatency
+        ml_overlay_rollout_blocked = $mlOverlayRolloutBlocked
+        ml_overlay_warning_count = $mlOverlayWarningCount
+        ml_overlay_error_count = $mlOverlayErrorCount
         qdm_refresh_required_count = $qdmRefreshRequiredCount
         qdm_server_tail_bridge_required_count = $qdmServerTailBridgeRequiredCount
         qdm_retrain_required_count = $qdmRetrainRequiredCount
@@ -558,6 +583,9 @@ $lines.Add(("- qdm_export_pending_count: {0}" -f $report.summary.qdm_export_pend
 $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_pending_count))
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
 $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_source_gap_count))
+$lines.Add(("- ml_overlay_rollout_blocked: {0}" -f $report.summary.ml_overlay_rollout_blocked))
+$lines.Add(("- ml_overlay_warning_count: {0}" -f $report.summary.ml_overlay_warning_count))
+$lines.Add(("- ml_overlay_error_count: {0}" -f $report.summary.ml_overlay_error_count))
 $lines.Add(("- learning_source_blocked_count: {0}" -f $report.summary.learning_source_blocked_count))
 $lines.Add(("- ml_scalping_fit_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.ml_scalping_fit_verdict)) { "BRAK" } else { $report.summary.ml_scalping_fit_verdict })))
 $lines.Add(("- ml_scalping_broker_net_pln_ready: {0}" -f ([string]$report.summary.ml_scalping_broker_net_pln_ready).ToLowerInvariant()))

@@ -43,6 +43,7 @@ input double InpTesterTimeStopScale = 1.00;
 #include "..\\..\\Include\\Core\\MbTuningLocalAgent.mqh"
 #include "..\\..\\Include\\Core\\MbTuningHierarchyBridge.mqh"
 #include "..\\..\\Include\\Core\\MbOnnxPilotObservation.mqh"
+#include "..\\..\\Include\\Core\\MbMlRuntimeBridge.mqh"
 #include "..\\..\\Include\\Profiles\\Profile_NZDUSD.mqh"
 #include "..\\..\\Include\\Strategies\\Strategy_NZDUSD.mqh"
 
@@ -51,6 +52,8 @@ input uint InpTimerSec = 5;
 input bool InpEnableLiveEntries = false;
 input bool InpPaperCollectMode = true;
 input bool InpEnableOnnxObservation = true;
+input bool InpEnableMlRuntimeBridge = true;
+input bool InpEnableStudentDecisionGate = false;
 input string InpTradeComment = "MB_NZDUSD";
 input bool InpEnableStrategyTesterSandbox = true;
 input string InpStrategyTesterSandboxTag = "NZDUSD_AGENT";
@@ -81,6 +84,7 @@ string g_tuning_action_log_path = "";
 string g_tuning_deckhand_log_path = "";
 string g_onnx_observation_log_path = "";
 string g_onnx_observation_state_path = "";
+MbMlRuntimeBridgeState g_ml_bridge;
 
 bool ShouldRunNZDUSDTuningCycle(const datetime now)
   {
@@ -366,6 +370,13 @@ int OnInit()
       (onnx_ready ? "true" : "false"),
       g_profile.symbol
    );
+   MbMlRuntimeBridgeInit(
+      g_ml_bridge,
+      g_profile.symbol,
+      InpEnableMlRuntimeBridge,
+      InpEnableStudentDecisionGate
+   );
+   MbMlRuntimeBridgeFlushSnapshot(g_ml_bridge,g_profile,g_market,g_latency);
    if(g_kill_switch.halt)
       g_state.halt = true;
 
@@ -385,6 +396,7 @@ void OnDeinit(const int reason)
    MbLatencyProfileFlush(g_latency,g_latency_log_path);
    MbSavePaperPosition(g_profile.symbol,g_paper_position);
    MbOnnxObservationShutdown();
+   MbMlRuntimeBridgeShutdown(g_ml_bridge);
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
    MbSaveTuningLocalPolicy(g_profile.symbol,g_nzdusd_local_tuning_policy);
    MbSaveEffectiveTuningLocalPolicy(g_profile.symbol,g_nzdusd_effective_tuning_policy);
@@ -411,6 +423,7 @@ void OnTimer()
    MbFlushInformationalPolicy(g_profile,g_state,g_market,g_nzdusd_local_tuning_policy,"BOOTSTRAP",(g_kill_switch.halt ? g_kill_switch.reason_code : g_runtime_control.reason_code));
    MbFlushBrokerProfile(g_profile,g_state,g_market);
    MbFlushExecutionSummary(g_profile,g_state,g_market,g_nzdusd_local_tuning_policy,g_latency,(g_kill_switch.halt ? g_kill_switch.reason_code : g_runtime_control.reason_code));
+   MbMlRuntimeBridgeFlushSnapshot(g_ml_bridge,g_profile,g_market,g_latency);
    MbDecisionJournalFlush();
    MbCandidateSignalJournalFlush();
    MbExecutionTelemetryFlush();
@@ -547,6 +560,7 @@ void OnTick()
             paper_pnl,
             paper_close_reason
          );
+         MbMlRuntimeBridgeAppendPaperLedger(g_ml_bridge,now,g_profile.symbol,closed_paper,g_market,paper_pnl,paper_close_reason);
          AppendNZDUSDDecisionEvent(
             now,
             "PAPER_CLOSE",
@@ -759,6 +773,8 @@ void OnTick()
       risk_plan.lots
    );
    MbNormalizeRiskContractBlockAfterSizing(signal,risk_plan.allowed,risk_plan.reason_code,risk_plan.lots);
+   if(signal.valid)
+      MbMlRuntimeBridgeApplyStudentGate(g_ml_bridge,now,g_profile,g_market,g_latency,g_state,signal,onnx_result,risk_plan.lots);
    if(signal.valid && !risk_plan.allowed)
      {
       AppendNZDUSDCandidateEvent(now,"SIZE_BLOCK",false,risk_plan.reason_code,signal,0.0);
@@ -981,6 +997,7 @@ void OnTradeTransaction(
      {
       if(MbProcessClosedDealFeedback(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state))
          MbAppendHistoricalLearningObservation(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,"LIVE_DEAL_CLOSE");
+      MbMlRuntimeBridgeAppendLiveDealLedger(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal);
      }
   }
 
