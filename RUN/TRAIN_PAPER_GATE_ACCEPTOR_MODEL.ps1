@@ -1,79 +1,34 @@
 param(
+    [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
+    [string]$ResearchRoot = "C:\TRADING_DATA\RESEARCH",
     [string]$ResearchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe",
-    [string]$ScriptPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\TRAIN_PAPER_GATE_ACCEPTOR_MODEL.py",
-    [string]$DbPath = "C:\TRADING_DATA\RESEARCH\microbot_research.duckdb",
-    [string]$CandidateParquetPath = "C:\TRADING_DATA\RESEARCH\datasets\candidate_signals_latest.parquet",
-    [string]$QdmParquetPath = "C:\TRADING_DATA\RESEARCH\datasets\qdm_minute_bars_latest.parquet",
-    [string]$OutputRoot = "C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor",
-    [string]$SymbolFilter = "",
-    [string]$ArtifactStem = "paper_gate_acceptor_latest",
-    [string]$TeacherModelPath = "",
-    [switch]$ExportRuntimeNumeric,
-    [string]$RuntimeOutputRoot = "",
-    [string]$RuntimeArtifactStem = "",
-    [int]$MinRows = 10000,
-    [int]$MinPositiveRows = 500,
-    [int]$MinNegativeRows = 500,
-    [ValidateSet("ConcurrentLab", "OfflineMax", "Light")]
-    [string]$PerfProfile = "ConcurrentLab"
+    [string]$CommonStateRoot = "",
+    [switch]$WithLocalStudents,
+    [switch]$ExportOnnx
 )
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$tailBridgeScript = Join-Path $ProjectRoot "RUN\BUILD_SERVER_PARITY_TAIL_BRIDGE.ps1"
+$ledgerScript = Join-Path $ProjectRoot "RUN\BUILD_BROKER_NET_LEDGER.ps1"
+$trainScript = Join-Path $ProjectRoot "TOOLS\TRAIN_PAPER_GATE_ACCEPTOR_MODEL.py"
 
-if (-not (Test-Path -LiteralPath $ResearchPython)) {
-    throw "Research python not found: $ResearchPython"
-}
-if (-not (Test-Path -LiteralPath $ScriptPath)) {
-    throw "Training script not found: $ScriptPath"
-}
+& $tailBridgeScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $ResearchPython -CommonStateRoot $CommonStateRoot | Out-Null
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+& $ledgerScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $ResearchPython -CommonStateRoot $CommonStateRoot | Out-Null
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-& "C:\MAKRO_I_MIKRO_BOT\RUN\SET_MICROBOT_RESEARCH_PERF_ENV.ps1" -Profile $PerfProfile | Out-Host
-
-$arguments = @(
-    $ScriptPath,
-    "--db-path", $DbPath,
-    "--candidate-parquet-path", $CandidateParquetPath,
-    "--qdm-parquet-path", $QdmParquetPath,
-    "--output-root", $OutputRoot,
-    "--artifact-stem", $ArtifactStem,
-    "--min-rows", $MinRows,
-    "--min-positive-rows", $MinPositiveRows,
-    "--min-negative-rows", $MinNegativeRows
-)
-
-if (-not [string]::IsNullOrWhiteSpace($SymbolFilter)) {
-    $arguments += @("--symbol-filter", $SymbolFilter.Trim().ToUpperInvariant())
+$args = @($trainScript, "--project-root", $ProjectRoot, "--research-root", $ResearchRoot, "--mode")
+if ($WithLocalStudents) {
+    $args += "full"
+} else {
+    $args += "global"
 }
-if (-not [string]::IsNullOrWhiteSpace($TeacherModelPath)) {
-    $arguments += @("--teacher-model-path", $TeacherModelPath)
+if ($CommonStateRoot -ne "") {
+    $args += @("--common-state-root", $CommonStateRoot)
 }
-if ($ExportRuntimeNumeric) {
-    $arguments += "--export-runtime-numeric"
-}
-if (-not [string]::IsNullOrWhiteSpace($RuntimeOutputRoot)) {
-    $arguments += @("--runtime-output-root", $RuntimeOutputRoot)
-}
-if (-not [string]::IsNullOrWhiteSpace($RuntimeArtifactStem)) {
-    $arguments += @("--runtime-artifact-stem", $RuntimeArtifactStem)
+if ($ExportOnnx) {
+    $args += "--export-onnx"
 }
 
-try {
-    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
-}
-catch {
-    $previousNativeErrorPreference = $null
-}
-
-try {
-    $PSNativeCommandUseErrorActionPreference = $false
-    & $ResearchPython @arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Paper gate trainer failed with exit code $LASTEXITCODE"
-    }
-}
-finally {
-    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-}
+& $ResearchPython @args
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
