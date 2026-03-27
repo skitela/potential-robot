@@ -9,8 +9,26 @@ $ErrorActionPreference = "Stop"
 function Invoke-Git {
     param([string[]]$Arguments)
 
-    $output = & git -c core.safecrlf=false -C $ProjectRoot @Arguments 2>$null
-    return @($output)
+    $quotedArgs = foreach ($argument in @($Arguments)) {
+        if ([string]::IsNullOrWhiteSpace($argument)) {
+            continue
+        }
+
+        if ($argument -match '\s') {
+            '"' + ($argument -replace '"', '\"') + '"'
+        }
+        else {
+            $argument
+        }
+    }
+
+    $command = 'git -c core.safecrlf=false -C "' + $ProjectRoot + '" ' + ($quotedArgs -join ' ') + ' 2>nul'
+    $output = & cmd.exe /d /c $command
+    return @(
+        $output | Where-Object {
+            $_ -and ($_ -notmatch 'could not open directory .+\.pytest_cache')
+        }
+    )
 }
 
 function Test-TimestampOnlyDiff {

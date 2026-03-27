@@ -412,11 +412,20 @@ if ($null -ne $fullStack) {
 $loop = "higiena_i_smieci"
 
 $gitStatusLines = @()
-try {
-    $gitStatusLines = @(
-        & git -c core.safecrlf=false -C $ProjectRoot status --short 2>$null |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+function Invoke-GitStatusSafe {
+    param([string]$RepoRoot)
+
+    $command = 'git -c core.safecrlf=false -C "' + $RepoRoot + '" status --short 2>nul'
+    return @(
+        & cmd.exe /d /c $command |
+            Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and
+                ($_ -notmatch 'could not open directory .+\.pytest_cache')
+            }
     )
+}
+try {
+    $gitStatusLines = @(Invoke-GitStatusSafe -RepoRoot $ProjectRoot)
 }
 catch {
     $gitStatusLines = @()

@@ -37,30 +37,95 @@ function To-Bool {
     return [bool]$Value
 }
 
+function Get-OptionalValue {
+    param(
+        [object]$Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $Default
+    }
+
+    try {
+        $property = $Object.PSObject.Properties[$Name]
+        if ($null -eq $property) {
+            return $Default
+        }
+        return $property.Value
+    }
+    catch {
+        return $Default
+    }
+}
+
+function Get-OptionalNumber {
+    param(
+        [object]$Object,
+        [string[]]$Names,
+        [double]$Default = 0.0
+    )
+
+    foreach ($name in @($Names)) {
+        $value = Get-OptionalValue -Object $Object -Name $name -Default $null
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+            return [double]$value
+        }
+    }
+
+    return $Default
+}
+
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $metricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json"
+$reportPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_report_latest.md"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
 $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
-$trainingScriptPath = Join-Path $ProjectRoot "TOOLS\TRAIN_PAPER_GATE_ACCEPTOR_MODEL.py"
+$trainingScriptPath = Join-Path $ProjectRoot "TOOLS\mb_ml_core\trainer.py"
+$modelDefinitionPath = Join-Path $ProjectRoot "TOOLS\mb_ml_core\models.py"
+$exportScriptPath = Join-Path $ProjectRoot "TOOLS\mb_ml_core\export.py"
 $paperTradingPath = Join-Path $ProjectRoot "MQL5\Include\Core\MbPaperTrading.mqh"
 $executionPrecheckPath = Join-Path $ProjectRoot "MQL5\Include\Core\MbExecutionPrecheck.mqh"
 $researchPythonPath = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
+$globalOnnxPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_latest.onnx"
 $jsonPath = Join-Path $opsRoot "ml_scalping_fit_audit_latest.json"
 
 $metrics = Read-JsonSafe -Path $metricsPath
 $learningSourceAudit = Read-JsonSafe -Path $learningSourceAuditPath
 $qdmVisibilityRefresh = Read-JsonSafe -Path $qdmVisibilityRefreshPath
 $trainingScriptText = Read-TextSafe -Path $trainingScriptPath
+$modelDefinitionText = Read-TextSafe -Path $modelDefinitionPath
+$exportScriptText = Read-TextSafe -Path $exportScriptPath
+$reportText = Read-TextSafe -Path $reportPath
 $paperTradingText = Read-TextSafe -Path $paperTradingPath
 $executionPrecheckText = Read-TextSafe -Path $executionPrecheckPath
 
-$modelFamily = if ($trainingScriptText -match "\bSGDClassifier\b") { "SGDClassifier" } else { "UNKNOWN" }
-$usesAcceptedTarget = $trainingScriptText -match 'accepted'
-$usesServerPing = $trainingScriptText -match 'server_operational_ping_ms'
-$usesServerLatency = $trainingScriptText -match 'server_local_latency_us_avg' -and $trainingScriptText -match 'server_local_latency_us_max'
-$usesRuntimeLatency = $trainingScriptText -match 'runtime_latency_us'
-$supportsOnnxExport = $trainingScriptText -match 'convert_sklearn' -and $trainingScriptText -match 'export_onnx_model'
-$supportsSparseCategorical = $trainingScriptText -match 'OneHotEncoder' -and $trainingScriptText -match 'StandardScaler'
+$summary = Get-OptionalValue -Object $metrics -Name "summary" -Default $null
+$metricValues = Get-OptionalValue -Object $metrics -Name "metrics" -Default $null
+$featureContract = Get-OptionalValue -Object $metrics -Name "feature_contract" -Default $null
+if ($null -eq $featureContract -and $null -ne $summary) {
+    $featureContract = Get-OptionalValue -Object $summary -Name "feature_contract" -Default $null
+}
+$teacherFeatures = @(
+    Get-OptionalValue -Object $metrics -Name "teacher_features" -Default @()
+)
+$numericFeatures = @(
+    Get-OptionalValue -Object $featureContract -Name "numeric_features" -Default @()
+)
+$categoricalFeatures = @(
+    Get-OptionalValue -Object $featureContract -Name "categorical_features" -Default @()
+)
+$allFeatures = @($teacherFeatures + $numericFeatures + $categoricalFeatures)
+
+$modelFamily = if ($trainingScriptText -match '"family"\s*:\s*"SGDClassifier"' -or $trainingScriptText -match "\bSGDClassifier\b") { "SGDClassifier" } else { "UNKNOWN" }
+$usesBrokerNetTarget = ($trainingScriptText -match 'training_target"\s*:\s*"net_pln_broker"') -or ($trainingScriptText -match '"net_pln_broker"') -or ($reportText -match 'target = net_pln')
+$usesAcceptedTarget = -not $usesBrokerNetTarget
+$usesServerPing = @($allFeatures) -contains 'server_operational_ping_ms'
+$usesServerLatency = (@($allFeatures) -contains 'server_local_latency_us_avg') -and (@($allFeatures) -contains 'server_local_latency_us_max')
+$usesRuntimeLatency = @($allFeatures) -contains 'runtime_latency_us'
+$supportsOnnxExport = (Test-Path -LiteralPath $globalOnnxPath) -or ($exportScriptText -match 'skl2onnx') -or ($exportScriptText -match 'to_onnx')
+$supportsSparseCategorical = ($modelDefinitionText -match 'OneHotEncoder') -and ($modelDefinitionText -match 'StandardScaler')
 $researchEnvReady = Test-Path -LiteralPath $researchPythonPath
 $paperTracksSpread = $paperTradingText -match 'opened_spread_points'
 $paperTracksCommission = $paperTradingText -match 'commission'
@@ -69,17 +134,29 @@ $paperTracksBrokerNetPnl = $paperTradingText -match 'netto' -or $paperTradingTex
 $precheckModelsSlippage = $executionPrecheckText -match 'modeled_slippage_points'
 $precheckModelsCommission = $executionPrecheckText -match 'modeled_commission_points'
 
-$datasetRows = if ($null -ne $metrics) { [int64]$metrics.dataset.total_rows } else { 0 }
-$qdmCoverageRatio = if ($null -ne $metrics) { [double]$metrics.dataset.qdm_coverage.row_coverage_ratio } else { 0.0 }
-$balancedAccuracy = if ($null -ne $metrics) { [double]$metrics.metrics.balanced_accuracy } else { 0.0 }
-$rocAuc = if ($null -ne $metrics) { [double]$metrics.metrics.roc_auc } else { 0.0 }
-$trainedVisibleSymbols = if ($null -ne $metrics) { @($metrics.dataset.qdm_coverage.symbols_with_qdm) } else { @() }
-$currentVisibleCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.current_contract_qdm_visible_symbols_count } else { 0 }
-$refreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
-$serverTailBridgeRequiredCount = if ($null -ne $qdmVisibilityRefresh -and $null -ne $qdmVisibilityRefresh.summary.PSObject.Properties['server_tail_bridge_required_count']) { [int]$qdmVisibilityRefresh.summary.server_tail_bridge_required_count } else { 0 }
-$retrainRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.retrain_required_count } else { 0 }
-$candidateGapCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.candidate_gap_count } else { 0 }
-$runtimeWithoutOutcomeCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.runtime_without_outcome_count } else { 0 }
+$datasetRows = [int64](Get-OptionalNumber -Object (Get-OptionalValue -Object $metrics -Name "dataset" -Default $summary) -Names @("total_rows", "rows") -Default 0)
+$expectedSymbols = @(
+    Get-OptionalValue -Object $summary -Name "expected_symbols" -Default @()
+)
+$trainedVisibleSymbols = @(
+    Get-OptionalValue -Object $summary -Name "symbols" -Default @()
+)
+$qdmCoverageRatio = if ($expectedSymbols.Count -gt 0) {
+    [double]$trainedVisibleSymbols.Count / [double]$expectedSymbols.Count
+}
+else {
+    Get-OptionalNumber -Object (Get-OptionalValue -Object $metrics -Name "dataset" -Default $null) -Names @("qdm_coverage.row_coverage_ratio", "row_coverage_ratio") -Default 0.0
+}
+$balancedAccuracy = Get-OptionalNumber -Object $metricValues -Names @("balanced_accuracy", "balanced_accuracy_median") -Default 0.0
+$rocAuc = Get-OptionalNumber -Object $metricValues -Names @("roc_auc", "roc_auc_median") -Default 0.0
+$qdmSummary = Get-OptionalValue -Object $qdmVisibilityRefresh -Name "summary" -Default $null
+$learningSourceSummary = Get-OptionalValue -Object $learningSourceAudit -Name "summary" -Default $null
+$currentVisibleCount = [int](Get-OptionalNumber -Object $qdmSummary -Names @("current_contract_qdm_visible_symbols_count") -Default 0)
+$refreshRequiredCount = [int](Get-OptionalNumber -Object $qdmSummary -Names @("refresh_required_count") -Default 0)
+$serverTailBridgeRequiredCount = [int](Get-OptionalNumber -Object $qdmSummary -Names @("server_tail_bridge_required_count") -Default 0)
+$retrainRequiredCount = [int](Get-OptionalNumber -Object $qdmSummary -Names @("retrain_required_count") -Default 0)
+$candidateGapCount = [int](Get-OptionalNumber -Object $learningSourceSummary -Names @("candidate_gap_count") -Default 0)
+$runtimeWithoutOutcomeCount = [int](Get-OptionalNumber -Object $learningSourceSummary -Names @("runtime_without_outcome_count") -Default 0)
 
 $strengths = New-Object System.Collections.Generic.List[string]
 $limitations = New-Object System.Collections.Generic.List[string]
@@ -101,8 +178,8 @@ if ($balancedAccuracy -gt 0.8 -and $rocAuc -gt 0.9) {
     $strengths.Add("Biezace metryki holdout pokazuja, ze model bazowy dobrze rozroznia sygnaly dodatnie i ujemne.") | Out-Null
 }
 
-if (-not $usesAcceptedTarget) {
-    $limitations.Add("Model nie ma jawnego targetu akceptacji decyzji i wymaga sprawdzenia etykiet.") | Out-Null
+if ($usesBrokerNetTarget) {
+    $strengths.Add("Model trenuje juz na rachunkowym wyniku netto brokera zamiast na uproszczonym targetcie accepted.") | Out-Null
 }
 else {
     $limitations.Add("Model trenuje glownie target akceptacji decyzji, a nie jeszcze pelny wynik netto rachunku po brokerze.") | Out-Null
@@ -194,7 +271,7 @@ $report = [ordered]@{
     summary = [ordered]@{
         model_family = $modelFamily
         model_role = "SZYBKI_MODEL_BRAMKUJACY"
-        training_target = if ($usesAcceptedTarget) { "accepted" } else { "unknown" }
+        training_target = if ($usesBrokerNetTarget) { "net_pln_broker" } elseif ($usesAcceptedTarget) { "accepted" } else { "unknown" }
         dataset_rows = $datasetRows
         balanced_accuracy = $balancedAccuracy
         roc_auc = $rocAuc

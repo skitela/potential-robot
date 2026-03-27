@@ -63,6 +63,29 @@ function Read-JsonFile {
     }
 }
 
+function Get-OptionalValue {
+    param(
+        [object]$Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $Default
+    }
+
+    try {
+        $property = $Object.PSObject.Properties[$Name]
+        if ($null -eq $property) {
+            return $Default
+        }
+        return $property.Value
+    }
+    catch {
+        return $Default
+    }
+}
+
 function Get-Stem {
     param([string]$Name)
     return [System.IO.Path]::GetFileNameWithoutExtension($Name)
@@ -141,15 +164,36 @@ $qdmRowsWithCoverage = 0
 $qdmSymbols = @()
 $qdmFeaturesUsed = @()
 if ($null -ne $metrics) {
-    if ($metrics.dataset.PSObject.Properties.Name -contains "qdm_coverage") {
-        $qdmCoverageRatio = [double]$metrics.dataset.qdm_coverage.row_coverage_ratio
-        $qdmRowsWithCoverage = [int]$metrics.dataset.qdm_coverage.rows_with_qdm
-        $qdmSymbols = @($metrics.dataset.qdm_coverage.symbols_with_qdm)
+    $summary = Get-OptionalValue -Object $metrics -Name "summary" -Default $null
+    $expectedSymbols = @(
+        Get-OptionalValue -Object $summary -Name "expected_symbols" -Default @()
+    )
+    $qdmSymbols = @(
+        Get-OptionalValue -Object $summary -Name "symbols" -Default @()
+    )
+    $qdmRowsWithCoverage = [int](Get-OptionalValue -Object $summary -Name "rows" -Default 0)
+    if ($expectedSymbols.Count -gt 0) {
+        $qdmCoverageRatio = [double]$qdmSymbols.Count / [double]$expectedSymbols.Count
     }
     $featureNames = @()
     if ($metrics.PSObject.Properties.Name -contains "top_features") {
         $featureNames += @($metrics.top_features.positive | ForEach-Object { [string]$_.feature })
         $featureNames += @($metrics.top_features.negative | ForEach-Object { [string]$_.feature })
+    }
+    $featureNames += @(
+        Get-OptionalValue -Object $metrics -Name "teacher_features" -Default @()
+    )
+    $featureContract = Get-OptionalValue -Object $metrics -Name "feature_contract" -Default $null
+    if ($null -eq $featureContract -and $null -ne $summary) {
+        $featureContract = Get-OptionalValue -Object $summary -Name "feature_contract" -Default $null
+    }
+    if ($null -ne $featureContract) {
+        $featureNames += @(
+            Get-OptionalValue -Object $featureContract -Name "numeric_features" -Default @()
+        )
+        $featureNames += @(
+            Get-OptionalValue -Object $featureContract -Name "categorical_features" -Default @()
+        )
     }
     $qdmFeaturesUsed = @($featureNames | Where-Object { $_ -like "*qdm_*" } | Select-Object -Unique)
 }

@@ -9,6 +9,60 @@ $secondaryMt5LogDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\D0E820
 $mt5TesterStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_tester_status_latest.json"
 $mt5RetestQueuePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_retest_queue_latest.json"
 
+function Get-OptionalValue {
+    param(
+        [object]$Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $Default
+    }
+
+    try {
+        $property = $Object.PSObject.Properties[$Name]
+        if ($null -eq $property) {
+            return $Default
+        }
+
+        return $property.Value
+    }
+    catch {
+        return $Default
+    }
+}
+
+function Get-OptionalNumber {
+    param(
+        [object]$Object,
+        [string[]]$Names,
+        $Default = $null
+    )
+
+    foreach ($name in @($Names)) {
+        $value = Get-OptionalValue -Object $Object -Name $name -Default $null
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+            return [double]$value
+        }
+    }
+
+    return $Default
+}
+
+function Format-OptionalNumber {
+    param(
+        $Value,
+        [string]$Format = "N4"
+    )
+
+    if ($null -eq $Value) {
+        return "n/a"
+    }
+
+    return ([double]$Value).ToString($Format)
+}
+
 function Resolve-SecondaryMt5LogPath {
     param([string]$LogDir)
 
@@ -112,11 +166,14 @@ $metricsPath = "C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor\paper_gate_a
 if (Test-Path -LiteralPath $metricsPath) {
     $metrics = Get-Content -LiteralPath $metricsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $metricValues = if ($metrics.PSObject.Properties.Name -contains 'metrics') { $metrics.metrics } else { $metrics }
+    $accuracy = Get-OptionalNumber -Object $metricValues -Names @('accuracy') -Default $null
+    $balancedAccuracy = Get-OptionalNumber -Object $metricValues -Names @('balanced_accuracy', 'balanced_accuracy_median') -Default $null
+    $rocAuc = Get-OptionalNumber -Object $metricValues -Names @('roc_auc', 'roc_auc_median') -Default $null
     $lines.Add("Latest ML metrics:")
     $lines.Add(("- accuracy={0} balanced_accuracy={1} roc_auc={2}" -f
-        ([math]::Round([double]$metricValues.accuracy, 4)),
-        ([math]::Round([double]$metricValues.balanced_accuracy, 4)),
-        ([math]::Round([double]$metricValues.roc_auc, 4))))
+        (Format-OptionalNumber -Value $accuracy -Format "N4"),
+        (Format-OptionalNumber -Value $balancedAccuracy -Format "N4"),
+        (Format-OptionalNumber -Value $rocAuc -Format "N4")))
     $lines.Add("")
 }
 

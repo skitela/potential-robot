@@ -1209,10 +1209,10 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_shadow_datasets" -Operation {
         $report = (& $shadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
-        $summary = if ($null -ne $report -and $null -ne $report.summary) { $report.summary } else { [pscustomobject]@{} }
-        $shadowReady = if ($summary.PSObject.Properties.Name -contains "shadow_dataset_ready_count") { $summary.shadow_dataset_ready_count } else { 0 }
-        $shadowRuntime = if ($summary.PSObject.Properties.Name -contains "shadow_dataset_runtime_ready_count") { $summary.shadow_dataset_runtime_ready_count } else { 0 }
-        $shadowOutcome = if ($summary.PSObject.Properties.Name -contains "shadow_dataset_outcome_ready_count") { $summary.shadow_dataset_outcome_ready_count } else { 0 }
+        $summary = if (Test-ObjectHasProperty -Object $report -Name "summary") { $report.summary } else { $null }
+        $shadowReady = if (Test-ObjectHasProperty -Object $summary -Name "shadow_dataset_ready_count") { [int]$summary.shadow_dataset_ready_count } else { 0 }
+        $shadowRuntime = if (Test-ObjectHasProperty -Object $summary -Name "shadow_dataset_runtime_ready_count") { [int]$summary.shadow_dataset_runtime_ready_count } else { 0 }
+        $shadowOutcome = if (Test-ObjectHasProperty -Object $summary -Name "shadow_dataset_outcome_ready_count") { [int]$summary.shadow_dataset_outcome_ready_count } else { 0 }
         "shadow_ready=$shadowReady; shadow_runtime=$shadowRuntime; shadow_outcome=$shadowOutcome"
     } | Out-Null
 

@@ -69,6 +69,55 @@ function Get-StateValue {
     return $property.Value
 }
 
+function Get-OptionalValue {
+    param(
+        [object]$Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $Default
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $Default
+    }
+
+    return $property.Value
+}
+
+function Get-MetricValue {
+    param(
+        [object]$Metrics,
+        [string[]]$Names,
+        [double]$Default = 0.0
+    )
+
+    foreach ($name in @($Names)) {
+        $value = Get-OptionalValue -Object $Metrics -Name $name -Default $null
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+            return [double]$value
+        }
+    }
+
+    return $Default
+}
+
+function Format-NumberOrNa {
+    param(
+        $Value,
+        [string]$Format = "N4"
+    )
+
+    if ($null -eq $Value) {
+        return "n/a"
+    }
+
+    return ([double]$Value).ToString($Format)
+}
+
 function Add-HintIfTriggered {
     param(
         [System.Collections.Generic.List[string]]$Hints,
@@ -95,9 +144,17 @@ if (-not (Test-Path -LiteralPath $MlMetricsPath)) {
 $priority = Get-Content -LiteralPath $PriorityPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $mlMetrics = Get-Content -LiteralPath $MlMetricsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
+$topFeaturesRoot = Get-OptionalValue -Object $mlMetrics -Name "top_features" -Default $null
+$modelMetrics = [pscustomobject]@{
+    accuracy = Get-MetricValue -Metrics (Get-OptionalValue -Object $mlMetrics -Name "metrics" -Default $mlMetrics) -Names @("accuracy") -Default 0.0
+    balanced_accuracy = Get-MetricValue -Metrics (Get-OptionalValue -Object $mlMetrics -Name "metrics" -Default $mlMetrics) -Names @("balanced_accuracy", "balanced_accuracy_median") -Default 0.0
+    roc_auc = Get-MetricValue -Metrics (Get-OptionalValue -Object $mlMetrics -Name "metrics" -Default $mlMetrics) -Names @("roc_auc", "roc_auc_median") -Default 0.0
+}
+
 $featureMap = @{}
 foreach ($side in @("positive", "negative")) {
-    foreach ($item in @($mlMetrics.top_features.$side)) {
+    $sideItems = if ($null -ne $topFeaturesRoot) { @(Get-OptionalValue -Object $topFeaturesRoot -Name $side -Default @()) } else { @() }
+    foreach ($item in @($sideItems)) {
         $featureMap[[string]$item.feature] = [double]$item.coefficient
     }
 }
@@ -176,7 +233,12 @@ foreach ($entry in @($priority.ranked_instruments | Select-Object -First $TopCou
     }
 
     if ($hints.Count -eq 0) {
-        $hints.Add("ML: no strong signal for current state, keep watching tester and runtime")
+        if ($featureMap.Count -eq 0) {
+            $hints.Add("ML: brak jeszcze jawnych wag cech w nowych metrykach; obserwuj runtime, tester i wynik netto")
+        }
+        else {
+            $hints.Add("ML: no strong signal for current state, keep watching tester and runtime")
+        }
     }
 
     $items.Add([pscustomobject]@{
@@ -191,7 +253,7 @@ foreach ($entry in @($priority.ranked_instruments | Select-Object -First $TopCou
 $report = [ordered]@{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
-    model_metrics = $mlMetrics.metrics
+    model_metrics = $modelMetrics
     items = $items
 }
 
@@ -208,9 +270,9 @@ $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("# ML Tuning Hints Latest")
 $lines.Add("")
 $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
-$lines.Add(("- accuracy: {0:N4}" -f ([double]$report.model_metrics.accuracy)))
-$lines.Add(("- balanced_accuracy: {0:N4}" -f ([double]$report.model_metrics.balanced_accuracy)))
-$lines.Add(("- roc_auc: {0:N4}" -f ([double]$report.model_metrics.roc_auc)))
+$lines.Add(("- accuracy: {0}" -f (Format-NumberOrNa -Value ([double]$report.model_metrics.accuracy) -Format "N4")))
+$lines.Add(("- balanced_accuracy: {0}" -f (Format-NumberOrNa -Value ([double]$report.model_metrics.balanced_accuracy) -Format "N4")))
+$lines.Add(("- roc_auc: {0}" -f (Format-NumberOrNa -Value ([double]$report.model_metrics.roc_auc) -Format "N4")))
 $lines.Add("")
 foreach ($item in $items) {
     $lines.Add(("## #{0} {1}" -f $item.rank, $item.symbol_alias))

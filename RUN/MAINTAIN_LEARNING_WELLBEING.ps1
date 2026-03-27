@@ -115,6 +115,45 @@ function Invoke-JsonScript {
     return (& $ScriptPath @Parameters)
 }
 
+function Get-OptionalValue {
+    param(
+        [object]$Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $Default
+    }
+
+    try {
+        $property = $Object.PSObject.Properties[$Name]
+        if ($null -eq $property) {
+            return $Default
+        }
+
+        return $property.Value
+    }
+    catch {
+        return $Default
+    }
+}
+
+function Get-OptionalNumber {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [double]$Default = 0
+    )
+
+    $value = Get-OptionalValue -Object $Object -Name $Name -Default $null
+    if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) {
+        return $Default
+    }
+
+    return [double]$value
+}
+
 function Get-WrapperCount {
     param([string]$Pattern)
 
@@ -389,10 +428,11 @@ $dataReadinessSummary = if ($null -ne $instrumentDataReadiness) { $instrumentDat
 $trainingReadinessSummary = if ($null -ne $instrumentTrainingReadiness) { $instrumentTrainingReadiness.summary } else { $null }
 $exportPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.export_pending_count } else { 0 }
 $contractPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.contract_pending_count } else { 0 }
-$shadowDatasetReadyCount = if ($null -ne $instrumentShadowDatasets) {
-    [int]$instrumentShadowDatasets.summary.shadow_dataset_ready_count +
-    [int]$instrumentShadowDatasets.summary.shadow_dataset_runtime_ready_count +
-    [int]$instrumentShadowDatasets.summary.shadow_dataset_outcome_ready_count
+$instrumentShadowSummary = Get-OptionalValue -Object $instrumentShadowDatasets -Name "summary" -Default $null
+$shadowDatasetReadyCount = if ($null -ne $instrumentShadowSummary) {
+    [int](Get-OptionalNumber -Object $instrumentShadowSummary -Name "shadow_dataset_ready_count" -Default 0) +
+    [int](Get-OptionalNumber -Object $instrumentShadowSummary -Name "shadow_dataset_runtime_ready_count" -Default 0) +
+    [int](Get-OptionalNumber -Object $instrumentShadowSummary -Name "shadow_dataset_outcome_ready_count" -Default 0)
 } else { 0 }
 $learningSourceGapCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.globalny_model_qdm_visibility_gap_count } else { 0 }
 $learningSourceBlockedCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.blocked_count } else { 0 }
