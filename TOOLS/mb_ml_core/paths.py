@@ -69,6 +69,14 @@ class CompatPaths:
         return self.project_root / "EVIDENCE" / "OPS"
 
     @property
+    def evidence_onnx_symbol_registry_latest(self) -> Path:
+        return self.evidence_ops_dir / "onnx_symbol_registry_latest.json"
+
+    @property
+    def evidence_ml_overlay_summary_latest(self) -> Path:
+        return self.evidence_ops_dir / "ml_overlay_training_summary_latest.json"
+
+    @property
     def datasets_dir(self) -> Path:
         return self.research_root / "datasets"
 

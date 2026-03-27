@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import brier_score_loss
+from sklearn.metrics import balanced_accuracy_score, brier_score_loss, roc_auc_score
 
 
 @dataclass(slots=True)
@@ -19,6 +19,8 @@ class FoldReport:
     win_rate: float
     precision_at_10pct: float
     brier: float | None
+    roc_auc: float | None
+    balanced_accuracy: float | None
 
 
 def safe_profit_factor(series: pd.Series) -> float:
@@ -94,6 +96,15 @@ def fold_report(
         brier = float(brier_score_loss(y_true_gate, gate_probability))
     except Exception:
         brier = None
+    try:
+        roc_auc = float(roc_auc_score(y_true_gate, gate_probability))
+    except Exception:
+        roc_auc = None
+    try:
+        gate_pred = (np.asarray(gate_probability, dtype=float) >= 0.5).astype(int)
+        balanced_accuracy = float(balanced_accuracy_score(y_true_gate, gate_pred))
+    except Exception:
+        balanced_accuracy = None
 
     return FoldReport(
         fold_id=fold_id,
@@ -106,6 +117,8 @@ def fold_report(
         win_rate=win_rate,
         precision_at_10pct=p10,
         brier=brier,
+        roc_auc=roc_auc,
+        balanced_accuracy=balanced_accuracy,
     )
 
 
@@ -118,6 +131,8 @@ def aggregate_fold_reports(reports: list[FoldReport]) -> dict[str, float]:
     wr = [r.win_rate for r in reports]
     p10 = [r.precision_at_10pct for r in reports]
     br = [r.brier for r in reports if r.brier is not None]
+    roc = [r.roc_auc for r in reports if r.roc_auc is not None]
+    bal = [r.balanced_accuracy for r in reports if r.balanced_accuracy is not None]
     sel = [r.selected_trades for r in reports]
 
     return {
@@ -130,6 +145,8 @@ def aggregate_fold_reports(reports: list[FoldReport]) -> dict[str, float]:
         "win_rate_median": float(np.median(wr)),
         "precision_at_10pct_median": float(np.median(p10)),
         "brier_median": float(np.median(br)) if br else float("nan"),
+        "roc_auc_median": float(np.median(roc)) if roc else float("nan"),
+        "balanced_accuracy_median": float(np.median(bal)) if bal else float("nan"),
     }
 
 

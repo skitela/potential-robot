@@ -9,6 +9,15 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    balanced_accuracy_score,
+    log_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 from .adapter import build_broker_net_ledger, build_master_training_frame, build_server_parity_tail_bridge
 from .evaluation import aggregate_fold_reports, build_decisions, fold_report, fold_reports_to_frame
@@ -42,6 +51,288 @@ class TrainingThresholds:
     max_server_ping_ms: float = 35.0
     regression_clip_pln: float = 300.0
     sample_weight_abs_cap_pln: float = 150.0
+
+
+INT_COMPAT_FEATURES = {
+    "renko_run_length",
+    "renko_reversal_flag",
+    "runtime_data_present",
+    "server_runtime_state_present",
+    "server_ping_contract_enabled",
+    "qdm_tick_count",
+    "qdm_data_present",
+    "hour",
+    "day_of_week",
+}
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _normalize_feature_name_for_compat(name: str) -> str:
+    out = str(name)
+    out = out.replace("symbol_alias_", "symbol_")
+    return out
+
+
+def _extract_top_features(bundle: FittedBundle, limit: int = 20) -> dict[str, list[dict[str, float | str]]]:
+    estimator = bundle.estimator
+    try:
+        pre = estimator.named_steps["pre"]
+        model = estimator.named_steps["model"]
+        raw_names = list(pre.get_feature_names_out())
+    except Exception:
+        return {"positive": [], "negative": []}
+
+    feature_names = [_normalize_feature_name_for_compat(name) for name in raw_names]
+    positives: list[dict[str, float | str]] = []
+    negatives: list[dict[str, float | str]] = []
+
+    if hasattr(model, "coef_"):
+        coefficients = np.asarray(model.coef_, dtype=float).reshape(-1)
+        ranked = sorted(zip(feature_names, coefficients), key=lambda item: abs(item[1]), reverse=True)
+        positives = [
+            {"feature": name, "coefficient": float(coef)}
+            for name, coef in ranked
+            if coef > 0
+        ][:limit]
+        negatives = [
+            {"feature": name, "coefficient": float(coef)}
+            for name, coef in ranked
+            if coef < 0
+        ][:limit]
+        return {"positive": positives, "negative": negatives}
+
+    if hasattr(model, "feature_importances_"):
+        importances = np.asarray(model.feature_importances_, dtype=float).reshape(-1)
+        ranked = sorted(zip(feature_names, importances), key=lambda item: item[1], reverse=True)
+        positives = [
+            {"feature": name, "coefficient": float(value)}
+            for name, value in ranked[:limit]
+        ]
+        return {"positive": positives, "negative": negatives}
+
+    return {"positive": [], "negative": []}
+
+
+def _classify_feature_contract(contract) -> tuple[list[str], list[str]]:
+    numeric_int = [feature for feature in contract.numeric_features if feature in INT_COMPAT_FEATURES]
+    numeric_float = [feature for feature in contract.numeric_features if feature not in INT_COMPAT_FEATURES]
+    return numeric_float, numeric_int
+
+
+def _build_global_metrics_compat(
+    *,
+    paths: CompatPaths,
+    master: pd.DataFrame,
+    feature_frame: pd.DataFrame,
+    summary: dict[str, Any],
+    contract,
+    gate_bundle: FittedBundle,
+    gate_probability: np.ndarray,
+    metrics: dict[str, Any],
+    promotion: dict[str, Any],
+    export_onnx: bool,
+    onnx_path: str,
+    onnx_error: str,
+    priors: dict[str, Any],
+) -> dict[str, Any]:
+    y_true = feature_frame["y_gate"].to_numpy(dtype=int)
+    y_pred = (np.asarray(gate_probability, dtype=float) >= 0.5).astype(int)
+
+    try:
+        roc_auc = float(roc_auc_score(y_true, gate_probability))
+    except Exception:
+        roc_auc = 0.0
+    try:
+        average_precision = float(average_precision_score(y_true, gate_probability))
+    except Exception:
+        average_precision = 0.0
+    try:
+        loss = float(log_loss(y_true, np.clip(np.asarray(gate_probability, dtype=float), 1e-6, 1 - 1e-6)))
+    except Exception:
+        loss = 0.0
+
+    qdm_present = pd.to_numeric(master.get("qdm_data_present", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+    rows_with_qdm = int((qdm_present > 0).sum()) if not master.empty else 0
+    symbol_coverage = []
+    if not master.empty and "symbol_alias" in master.columns:
+        grouped = master.assign(_qdm_present=(qdm_present > 0).astype(int)).groupby("symbol_alias", dropna=True)
+        for symbol, group in grouped:
+            total_rows = int(len(group))
+            with_qdm = int(group["_qdm_present"].sum())
+            symbol_coverage.append(
+                {
+                    "symbol": str(symbol),
+                    "rows_total": total_rows,
+                    "rows_with_qdm": with_qdm,
+                    "coverage_ratio": _safe_float(with_qdm / total_rows if total_rows else 0.0),
+                }
+            )
+        symbol_coverage = sorted(symbol_coverage, key=lambda item: item["rows_total"], reverse=True)
+
+    server_ping = _safe_float(feature_frame.get("server_operational_ping_ms", pd.Series(dtype=float)).replace(0, np.nan).median(), 0.0)
+    numeric_float, numeric_int = _classify_feature_contract(contract)
+    top_features = _extract_top_features(gate_bundle)
+    train_rows = int(max((report.train_rows for report in []), default=0))
+    test_rows = int(max((report.valid_rows for report in []), default=0))
+
+    if not master.empty and "ts" in master.columns:
+        ts_numeric = pd.to_datetime(master["ts"], utc=True, errors="coerce").astype("int64") // 10**9
+        ts_numeric = ts_numeric.replace({-9223372037: np.nan}).dropna()
+        ts_min = int(ts_numeric.min()) if not ts_numeric.empty else None
+        ts_max = int(ts_numeric.max()) if not ts_numeric.empty else None
+    else:
+        ts_min = None
+        ts_max = None
+
+    compat_metrics = {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "roc_auc": roc_auc,
+        "average_precision": average_precision,
+        "log_loss": loss,
+        "positive_rate_actual": _safe_float(np.mean(y_true), 0.0),
+        "positive_rate_predicted": _safe_float(np.mean(y_pred), 0.0),
+        "fold_count": _safe_float(metrics.get("fold_count"), 0.0),
+        "selected_trades_total": _safe_float(metrics.get("selected_trades_total"), 0.0),
+        "pnl_sum_total_pln": _safe_float(metrics.get("pnl_sum_total_pln"), 0.0),
+        "profit_factor_median": _safe_float(metrics.get("profit_factor_median"), 0.0),
+        "max_drawdown_worst_pln": _safe_float(metrics.get("max_drawdown_worst_pln"), 0.0),
+        "win_rate_median": _safe_float(metrics.get("win_rate_median"), 0.0),
+        "precision_at_10pct_median": _safe_float(metrics.get("precision_at_10pct_median"), 0.0),
+        "brier_median": _safe_float(metrics.get("brier_median"), 0.0),
+        "roc_auc_median": _safe_float(metrics.get("roc_auc_median"), roc_auc),
+        "balanced_accuracy_median": _safe_float(metrics.get("balanced_accuracy_median"), float(balanced_accuracy_score(y_true, y_pred))),
+    }
+
+    return {
+        "dataset": {
+            "db_path": str(paths.research_root / "microbot_research.duckdb"),
+            "candidate_parquet_path": str(paths.candidate_signals_norm_latest),
+            "qdm_parquet_path": str(paths.qdm_minute_bars_latest),
+            "onnx_parquet_path": str(paths.onnx_observations_norm_latest),
+            "runtime_state_parquet_path": str(paths.runtime_state_latest),
+            "execution_ping_contract_path": str(paths.execution_ping_contract_csv),
+            "source_kind": "PARQUET",
+            "symbol_filter": "",
+            "scope": "GLOBAL",
+            "total_rows": int(len(feature_frame)),
+            "train_rows": train_rows,
+            "test_rows": test_rows,
+            "positive_rate": _safe_float(np.mean(y_true), 0.0),
+            "positive_rows": int((y_true == 1).sum()),
+            "negative_rows": int((y_true == 0).sum()),
+            "ts_min": ts_min,
+            "ts_max": ts_max,
+            "qdm_coverage": {
+                "rows_with_qdm": rows_with_qdm,
+                "row_coverage_ratio": _safe_float(rows_with_qdm / len(master) if len(master) else 0.0),
+                "symbols_with_qdm": [item["symbol"] for item in symbol_coverage if item["rows_with_qdm"] > 0],
+                "symbol_coverage": symbol_coverage,
+            },
+            "server_execution_ping_contract": {
+                "enabled": True,
+                "paper_operational_ping_ms": server_ping,
+                "live_operational_ping_ms": server_ping,
+                "source": "hosting_vps_broker",
+            },
+        },
+        "features": {
+            "categorical": contract.categorical_features,
+            "numeric_float": numeric_float,
+            "numeric_int": numeric_int,
+            "teacher_feature_enabled": "teacher_global_score" in contract.all_features,
+        },
+        "model": {
+            "family": "SGDClassifier",
+            "role": "MODEL_GLOBALNY_BRAMKUJACY",
+            "training_target": "net_pln_broker",
+            "supports_sparse_categorical": True,
+            "supports_onnx_export": bool(export_onnx),
+        },
+        "metrics": compat_metrics,
+        "top_features": top_features,
+        "promotion": promotion,
+        "summary": summary,
+        "feature_contract": {
+            "all_features": contract.all_features,
+            "categorical_features": contract.categorical_features,
+        },
+        "artifacts": {
+            "paper_gate_acceptor_latest.joblib": str(paths.global_model_dir / "paper_gate_acceptor_latest.joblib"),
+            "paper_gate_acceptor_latest.onnx": onnx_path,
+            "paper_gate_acceptor_latest.onnx_error": onnx_error,
+            "global_edge_prior_latest": priors["edge_prior"],
+            "global_fill_prior_latest": priors["fill_prior"],
+            "global_slippage_prior_latest": priors["slippage_prior"],
+        },
+        "calibrator_present": True,
+        "notes": [
+            "Teacher score liczony out-of-fold na walk-forward splitach.",
+            "Cechy odcinają net_pln i koszty zrealizowane po fakcie.",
+            "Trening globalny używa istniejących kontraktów candidate/onnx/learning i joinów zgodności.",
+        ],
+    }
+
+
+def _build_symbol_registry_compat(paths: CompatPaths, results: dict[str, Any]) -> dict[str, Any]:
+    items = []
+    for symbol in load_active_symbols(paths):
+        payload = results.get(symbol, {})
+        training_mode = str(payload.get("training_mode", "FALLBACK_ONLY"))
+        promotion = payload.get("promotion", {}) or {}
+        metrics = payload.get("metrics", {}) or {}
+        artifacts = payload.get("artifacts", {}) or {}
+        gate_artifacts = artifacts.get("student_gate", {}) or {}
+        onnx_path = gate_artifacts.get("onnx") or ""
+        joblib_path = gate_artifacts.get("joblib") or ""
+        has_local_model = bool(onnx_path or joblib_path)
+        status = "MODEL_PER_SYMBOL_READY" if has_local_model and training_mode != "FALLBACK_ONLY" else "GLOBAL_FALLBACK"
+        rows_total = int(payload.get("labeled_rows", 0) or 0)
+        candidate_rows = int(payload.get("candidate_rows", 0) or 0)
+        positive_rows = int(round(rows_total * _safe_float(metrics.get("positive_rate_actual"), 0.0), 0))
+        negative_rows = max(0, rows_total - positive_rows)
+        items.append(
+            {
+                "symbol": symbol,
+                "symbol_alias": symbol,
+                "status": status,
+                "fallback_scope": "GLOBAL_MODEL" if status == "GLOBAL_FALLBACK" else "",
+                "reason": "; ".join([str(reason) for reason in promotion.get("reasons", [])]) if status == "GLOBAL_FALLBACK" else training_mode,
+                "rows_total": rows_total,
+                "candidate_rows": candidate_rows,
+                "positive_rows": positive_rows,
+                "negative_rows": negative_rows,
+                "roc_auc": _safe_float(metrics.get("roc_auc_median"), 0.0),
+                "balanced_accuracy": _safe_float(metrics.get("balanced_accuracy_median"), 0.0),
+                "teacher_enabled": status == "MODEL_PER_SYMBOL_READY",
+                "data_source": "BROKER_NET_LEDGER",
+                "onnx_path": onnx_path or None,
+                "joblib_path": joblib_path or None,
+                "metrics_path": str(paths.symbol_models_dir / symbol / "paper_gate_acceptor_metrics_latest.json") if (paths.symbol_models_dir / symbol / "paper_gate_acceptor_metrics_latest.json").exists() else None,
+                "training_mode": training_mode,
+                "promotion_approved": bool(promotion.get("approved", False)),
+            }
+        )
+    ready_count = sum(1 for item in items if item["status"] == "MODEL_PER_SYMBOL_READY")
+    return {
+        "generated_at_local": pd.Timestamp.now(tz="Europe/Warsaw").strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at_utc": pd.Timestamp.utcnow().isoformat(),
+        "total_symbols": len(items),
+        "ready_count": ready_count,
+        "fallback_count": len(items) - ready_count,
+        "trained_now_count": ready_count,
+        "items": items,
+    }
 
 
 def _fit_platt(raw_score: np.ndarray, y_true: np.ndarray) -> tuple[LogisticRegression | None, np.ndarray]:
