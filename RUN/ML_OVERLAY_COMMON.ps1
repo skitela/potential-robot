@@ -1,5 +1,14 @@
 Set-StrictMode -Version Latest
 
+function ConvertFrom-JsonCompat {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$JsonText
+    )
+
+    return $JsonText | ConvertFrom-Json
+}
+
 function Get-MlOverlayResolvedRoots {
     param(
         [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
@@ -45,7 +54,7 @@ function Invoke-MlOverlayPreTrain {
 
     if ($AllowFreshSkip -and (Test-Path $roots.AuditJsonPath)) {
         try {
-            $cached = Get-Content $roots.AuditJsonPath -Raw | ConvertFrom-Json -Depth 20
+            $cached = ConvertFrom-JsonCompat -JsonText (Get-Content $roots.AuditJsonPath -Raw)
             if ($cached.tail_bridge.ok -and $cached.broker_net_ledger.ok) {
                 return $cached
             }
@@ -129,7 +138,7 @@ function Invoke-MlOverlayAudit {
         $auditArgs += "--fail-on-rollout-block"
     }
 
-    & $roots.ResearchPython @auditArgs
+    & $roots.ResearchPython @auditArgs | Out-Null
     $exitCode = $LASTEXITCODE
 
     if (-not (Test-Path $roots.AuditJsonPath)) {
@@ -139,7 +148,7 @@ function Invoke-MlOverlayAudit {
         throw "ML_OVERLAY_AUDIT_FAILED"
     }
 
-    $payload = Get-Content $roots.AuditJsonPath -Raw | ConvertFrom-Json -Depth 20
+    $payload = ConvertFrom-JsonCompat -JsonText (Get-Content $roots.AuditJsonPath -Raw)
     if ($FailOnRolloutBlock -and $payload.summary.rollout_blocked) {
         throw "ML_OVERLAY_ROLLOUT_BLOCKED"
     }
@@ -169,7 +178,7 @@ function Get-MlOverlayMigrationArtifacts {
     }
 
     if (Test-Path $registryPath) {
-        $registry = Get-Content $registryPath -Raw | ConvertFrom-Json -Depth 10
+        $registry = ConvertFrom-JsonCompat -JsonText (Get-Content $registryPath -Raw)
         foreach ($entry in $registry.symbols) {
             $symbol = $entry.symbol
             $symbolModelDir = Join-Path $roots.ResearchRoot ("models\paper_gate_acceptor_by_symbol\" + $symbol)

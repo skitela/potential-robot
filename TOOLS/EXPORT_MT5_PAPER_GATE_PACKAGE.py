@@ -34,40 +34,92 @@ def _load_registry_payload(path: Path) -> dict:
 
 def _scan_symbol_entry(paths: CompatPaths, symbol: str) -> dict:
     model_dir = paths.symbol_models_dir / symbol
-    metrics_files = sorted(model_dir.glob("*_latest_metrics.json")) if model_dir.exists() else []
-    report_files = sorted(model_dir.glob("*_latest_report.md")) if model_dir.exists() else []
-    onnx_files = sorted(model_dir.glob("*.onnx")) if model_dir.exists() else []
-    joblib_files = sorted(model_dir.glob("*.joblib")) if model_dir.exists() else []
+    metrics_path_obj = model_dir / "paper_gate_acceptor_latest_metrics.json"
+    report_path_obj = model_dir / "paper_gate_acceptor_report_latest.md"
+    onnx_path_obj = model_dir / "paper_gate_acceptor_latest.onnx"
+    joblib_path_obj = model_dir / "paper_gate_acceptor_latest.joblib"
 
     metrics_payload: dict = {}
-    if metrics_files:
+    if metrics_path_obj.exists():
         try:
-            loaded = json.loads(metrics_files[-1].read_text(encoding="utf-8"))
+            loaded = json.loads(metrics_path_obj.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 metrics_payload = loaded
         except Exception:
             metrics_payload = {}
 
     artifacts = metrics_payload.get("artifacts", {}) if isinstance(metrics_payload.get("artifacts"), dict) else {}
-    onnx_path = str(artifacts.get("onnx_path") or (onnx_files[-1] if onnx_files else ""))
-    joblib_path = str(artifacts.get("joblib_path") or (joblib_files[-1] if joblib_files else ""))
-    metrics_path = str(artifacts.get("metrics_path") or (metrics_files[-1] if metrics_files else ""))
-    report_path = str(artifacts.get("report_path") or (report_files[-1] if report_files else ""))
+    onnx_path = str(artifacts.get("student_gate", {}).get("onnx") or (onnx_path_obj if onnx_path_obj.exists() else ""))
+    joblib_path = str(artifacts.get("student_gate", {}).get("joblib") or (joblib_path_obj if joblib_path_obj.exists() else ""))
+    metrics_path = str(metrics_path_obj if metrics_path_obj.exists() else "")
+    report_path = str(report_path_obj if report_path_obj.exists() else "")
 
     local_model_available = bool(onnx_path or joblib_path)
-    training_mode = "LOCAL_TRAINING_LIMITED" if local_model_available else "FALLBACK_ONLY"
+    training_mode = str(metrics_payload.get("training_mode", "LOCAL_TRAINING_LIMITED" if local_model_available else "FALLBACK_ONLY"))
 
     return {
         "symbol_alias": symbol,
         "model_dir": str(model_dir),
         "training_mode": training_mode,
         "local_model_available": local_model_available,
+        "metrics": metrics_payload.get("metrics", {}) if isinstance(metrics_payload.get("metrics"), dict) else {},
+        "promotion": metrics_payload.get("promotion", {}) if isinstance(metrics_payload.get("promotion"), dict) else {},
+        "labeled_rows": int(metrics_payload.get("labeled_rows", 0) or 0),
+        "candidate_rows": int(metrics_payload.get("candidate_rows", 0) or 0),
         "artifacts": {
             "joblib_path": joblib_path,
             "onnx_path": onnx_path,
             "metrics_path": metrics_path,
             "report_path": report_path,
         },
+    }
+
+
+def _build_registry_payload(symbol_payload: dict[str, dict]) -> dict:
+    items = []
+    for symbol, entry in symbol_payload.items():
+        metrics = entry.get("metrics", {}) if isinstance(entry.get("metrics"), dict) else {}
+        promotion = entry.get("promotion", {}) if isinstance(entry.get("promotion"), dict) else {}
+        training_mode = str(entry.get("training_mode", "FALLBACK_ONLY"))
+        local_model_available = bool(entry.get("local_model_available", False))
+        labeled_rows = int(entry.get("labeled_rows", 0) or 0)
+        positive_rate = float(metrics.get("positive_rate_actual", 0.0) or 0.0)
+        positive_rows = max(0, int(round(labeled_rows * positive_rate)))
+        negative_rows = max(0, labeled_rows - positive_rows)
+        status = "MODEL_PER_SYMBOL_READY" if local_model_available and training_mode != "FALLBACK_ONLY" else "GLOBAL_FALLBACK"
+        items.append(
+            {
+                "symbol": symbol,
+                "symbol_alias": symbol,
+                "status": status,
+                "fallback_scope": "GLOBAL_MODEL" if status == "GLOBAL_FALLBACK" else "",
+                "reason": "; ".join(str(x) for x in promotion.get("reasons", [])) if status == "GLOBAL_FALLBACK" else training_mode,
+                "rows_total": labeled_rows,
+                "candidate_rows": int(entry.get("candidate_rows", 0) or 0),
+                "positive_rows": positive_rows,
+                "negative_rows": negative_rows,
+                "roc_auc": float(metrics.get("roc_auc_median", metrics.get("roc_auc", 0.0)) or 0.0),
+                "balanced_accuracy": float(metrics.get("balanced_accuracy_median", metrics.get("balanced_accuracy", 0.0)) or 0.0),
+                "teacher_enabled": status == "MODEL_PER_SYMBOL_READY",
+                "data_source": "BROKER_NET_LEDGER",
+                "onnx_path": entry.get("artifacts", {}).get("onnx_path") or None,
+                "joblib_path": entry.get("artifacts", {}).get("joblib_path") or None,
+                "metrics_path": entry.get("artifacts", {}).get("metrics_path") or None,
+                "training_mode": training_mode,
+                "promotion_approved": bool(promotion.get("approved", False)),
+            }
+        )
+
+    ready_count = sum(1 for item in items if item["status"] == "MODEL_PER_SYMBOL_READY")
+    return {
+        "generated_at_local": __import__("datetime").datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at_utc": __import__("datetime").datetime.utcnow().isoformat(),
+        "total_symbols": len(items),
+        "ready_count": ready_count,
+        "fallback_count": len(items) - ready_count,
+        "trained_now_count": ready_count,
+        "items": items,
+        "symbols": {item["symbol"]: item for item in items},
     }
 
 
@@ -136,6 +188,10 @@ def main() -> int:
 
     out_path = ensure_dir(paths.models_dir) / "paper_gate_acceptor_mt5_package_latest.json"
     write_json(out_path, package)
+    registry_payload = _build_registry_payload(symbol_payload)
+    write_json(paths.onnx_symbol_registry_latest, registry_payload)
+    write_json(paths.onnx_symbol_registry_latest_alt, registry_payload)
+    write_json(paths.evidence_onnx_symbol_registry_latest, registry_payload)
     print(json.dumps({"output_path": str(out_path), "symbols": len(package["symbols"])}, indent=2, ensure_ascii=False))
     return 0
 

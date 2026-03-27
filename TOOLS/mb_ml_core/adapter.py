@@ -323,16 +323,17 @@ def _merge_qdm_features(frame: pd.DataFrame, qdm: pd.DataFrame) -> pd.DataFrame:
     out["candidate_minute_key"] = out["candidate_minute"].astype("int64")
 
     pieces = []
+    qdm_keep = ["bar_minute_key", "bar_minute", "symbol_alias", "tick_count", "spread_mean", "spread_max", "mid_range_1m", "mid_return_1m"]
     for symbol, grp in out.groupby("symbol_alias", sort=False, observed=True):
-        lgrp = grp.sort_values("candidate_minute").copy()
-        rgrp = qdm.loc[qdm["symbol_alias"] == symbol].sort_values("bar_minute").copy()
+        lgrp = grp.sort_values("candidate_minute_key", kind="mergesort").copy()
+        rgrp = qdm.loc[qdm["symbol_alias"] == symbol, qdm_keep].sort_values("bar_minute_key", kind="mergesort")
         if rgrp.empty:
             lgrp["qdm_data_present"] = 0
             pieces.append(lgrp)
             continue
         merged = pd.merge_asof(
             lgrp,
-            rgrp[["bar_minute_key", "bar_minute", "symbol_alias", "tick_count", "spread_mean", "spread_max", "mid_range_1m", "mid_return_1m"]],
+            rgrp,
             left_on="candidate_minute_key",
             right_on="bar_minute_key",
             by="symbol_alias",
@@ -411,11 +412,14 @@ def build_master_training_frame(paths: CompatPaths) -> tuple[pd.DataFrame, dict[
     candidates["ts"] = normalize_ts(candidates["ts"])
     candidate_symbols = sorted(candidates["symbol_alias"].dropna().unique().tolist())
 
-    merged = _merge_runtime_features(candidates, src.runtime)
+    merged = _merge_qdm_features(candidates, src.qdm)
+    merged = _merge_runtime_features(merged, src.runtime)
     merged = _merge_ping_features(merged, src.ping)
-    merged = _merge_qdm_features(merged, src.qdm)
     merged = _merge_outcomes(merged, src.learning, src.runtime_feedback)
-    merged = merged.merge(src.broker_economics, on="symbol_alias", how="left", suffixes=("", "_econ"))
+    if src.broker_economics is not None and not src.broker_economics.empty:
+        broker_lookup = src.broker_economics.drop_duplicates("symbol_alias", keep="last").set_index("symbol_alias")
+        for column in broker_lookup.columns:
+            merged[column] = merged["symbol_alias"].map(broker_lookup[column])
 
     if "side_normalized" not in merged.columns and "side" in merged.columns:
         merged["side_normalized"] = merged["side"]

@@ -1210,7 +1210,10 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "instrument_shadow_datasets" -Operation {
         $report = (& $shadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         $summary = if ($null -ne $report -and $null -ne $report.summary) { $report.summary } else { [pscustomobject]@{} }
-        "shadow_ready=$($summary.shadow_dataset_ready_count); shadow_runtime=$($summary.shadow_dataset_runtime_ready_count); shadow_outcome=$($summary.shadow_dataset_outcome_ready_count)"
+        $shadowReady = if ($summary.PSObject.Properties.Name -contains "shadow_dataset_ready_count") { $summary.shadow_dataset_ready_count } else { 0 }
+        $shadowRuntime = if ($summary.PSObject.Properties.Name -contains "shadow_dataset_runtime_ready_count") { $summary.shadow_dataset_runtime_ready_count } else { 0 }
+        $shadowOutcome = if ($summary.PSObject.Properties.Name -contains "shadow_dataset_outcome_ready_count") { $summary.shadow_dataset_outcome_ready_count } else { 0 }
+        "shadow_ready=$shadowReady; shadow_runtime=$shadowRuntime; shadow_outcome=$shadowOutcome"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_training_readiness" -Operation {

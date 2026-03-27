@@ -22,7 +22,12 @@ from sklearn.metrics import (
 from .adapter import build_broker_net_ledger, build_master_training_frame, build_server_parity_tail_bridge
 from .evaluation import aggregate_fold_reports, build_decisions, fold_report, fold_reports_to_frame
 from .export import export_model_to_onnx
-from .features import assert_no_target_leakage, build_feature_frame
+from .features import (
+    BASE_CATEGORICAL_FEATURES,
+    BASE_NUMERIC_FEATURES,
+    assert_no_target_leakage,
+    build_feature_frame,
+)
 from .labels import build_targets
 from .models import FittedBundle, fit_model, positive_proba, regression_pred
 from .paths import CompatPaths
@@ -346,6 +351,51 @@ def _fit_platt(raw_score: np.ndarray, y_true: np.ndarray) -> tuple[LogisticRegre
     return model, calibrated
 
 
+def _adjust_split_thresholds_for_frame(frame: pd.DataFrame, thresholds: TrainingThresholds) -> TrainingThresholds:
+    if frame.empty or "ts" not in frame.columns:
+        return thresholds
+
+    ts = pd.to_datetime(frame["ts"], utc=True, errors="coerce").dropna()
+    if ts.empty:
+        return thresholds
+
+    span_days = max(1, int(np.ceil((ts.max() - ts.min()).total_seconds() / 86400.0)))
+    requested_days = int(thresholds.global_train_days + thresholds.global_valid_days)
+    if span_days >= requested_days:
+        return thresholds
+
+    valid_days = min(int(thresholds.global_valid_days), max(1, span_days // 4))
+    train_days = min(int(thresholds.global_train_days), max(1, span_days - valid_days))
+    if train_days + valid_days > span_days:
+        if span_days <= 1:
+            train_days = 1
+            valid_days = 1
+        else:
+            valid_days = min(valid_days, max(1, span_days // 3))
+            train_days = max(1, span_days - valid_days)
+    step_days = max(1, min(int(thresholds.global_step_days), valid_days))
+
+    return TrainingThresholds(
+        global_train_days=train_days,
+        global_valid_days=valid_days,
+        global_step_days=step_days,
+        embargo_minutes=thresholds.embargo_minutes,
+        min_train_rows=thresholds.min_train_rows,
+        min_valid_rows=thresholds.min_valid_rows,
+        min_symbol_labeled_rows=thresholds.min_symbol_labeled_rows,
+        min_symbol_train_rows=thresholds.min_symbol_train_rows,
+        min_symbol_valid_rows=thresholds.min_symbol_valid_rows,
+        min_symbol_classes=thresholds.min_symbol_classes,
+        min_gate_probability=thresholds.min_gate_probability,
+        min_decision_score_pln=thresholds.min_decision_score_pln,
+        max_spread_points=thresholds.max_spread_points,
+        max_runtime_latency_us=thresholds.max_runtime_latency_us,
+        max_server_ping_ms=thresholds.max_server_ping_ms,
+        regression_clip_pln=thresholds.regression_clip_pln,
+        sample_weight_abs_cap_pln=thresholds.sample_weight_abs_cap_pln,
+    )
+
+
 def _build_oof_teacher_scores(
     frame: pd.DataFrame,
     feature_names: list[str],
@@ -354,15 +404,16 @@ def _build_oof_teacher_scores(
     model_family: str = "sgd_classifier",
 ) -> tuple[pd.Series, FittedBundle, LogisticRegression | None]:
     assert_no_target_leakage(feature_names)
+    split_thresholds = _adjust_split_thresholds_for_frame(frame, thresholds)
     splits = make_walk_forward_splits(
         frame,
         time_col="ts",
-        train_days=thresholds.global_train_days,
-        valid_days=thresholds.global_valid_days,
-        step_days=thresholds.global_step_days,
-        embargo_minutes=thresholds.embargo_minutes,
-        min_train_rows=thresholds.min_train_rows,
-        min_valid_rows=thresholds.min_valid_rows,
+        train_days=split_thresholds.global_train_days,
+        valid_days=split_thresholds.global_valid_days,
+        step_days=split_thresholds.global_step_days,
+        embargo_minutes=split_thresholds.embargo_minutes,
+        min_train_rows=split_thresholds.min_train_rows,
+        min_valid_rows=split_thresholds.min_valid_rows,
     )
     if not splits:
         raise RuntimeError("Nie udało się zbudować żadnego poprawnego walk-forward splitu.")
@@ -420,15 +471,16 @@ def _train_validation_cycle(
     fill_family: str = "logistic_regression",
     slippage_family: str = "lightgbm_regressor",
 ) -> tuple[list, dict]:
+    split_thresholds = _adjust_split_thresholds_for_frame(frame, thresholds)
     splits = make_walk_forward_splits(
         frame,
         time_col="ts",
-        train_days=thresholds.global_train_days,
-        valid_days=thresholds.global_valid_days,
-        step_days=thresholds.global_step_days,
-        embargo_minutes=thresholds.embargo_minutes,
-        min_train_rows=thresholds.min_train_rows,
-        min_valid_rows=thresholds.min_valid_rows,
+        train_days=split_thresholds.global_train_days,
+        valid_days=split_thresholds.global_valid_days,
+        step_days=split_thresholds.global_step_days,
+        embargo_minutes=split_thresholds.embargo_minutes,
+        min_train_rows=split_thresholds.min_train_rows,
+        min_valid_rows=split_thresholds.min_valid_rows,
     )
 
     reports = []
@@ -526,7 +578,17 @@ def _prepare_labeled_frame(paths: CompatPaths, thresholds: TrainingThresholds) -
     if master.empty:
         raise RuntimeError("Brak kandydatów w candidate_signals_norm_latest.parquet.")
 
-    labeled = master.loc[master["outcome_known"] == 1].copy()
+    required_labeled_columns = [
+        "ts",
+        "symbol_alias",
+        "outcome_known",
+        "net_pln",
+        "slippage_cost_pln",
+        "close_reason",
+    ] + BASE_NUMERIC_FEATURES + BASE_CATEGORICAL_FEATURES
+    available_labeled_columns = [column for column in dict.fromkeys(required_labeled_columns) if column in master.columns]
+    labeled_mask = pd.to_numeric(master.get("outcome_known", pd.Series(dtype=float)), errors="coerce").fillna(0).eq(1)
+    labeled = master.loc[labeled_mask, available_labeled_columns]
     if labeled.empty:
         raise RuntimeError("Brak domkniętych outcome. Trening na net_pln nie ma z czego powstać.")
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Sequence
 
 from mb_ml_core.paths import CompatPaths
@@ -107,8 +108,16 @@ def main() -> int:
         return 0
 
     if global_payload is None:
-        global_payload = train_global_model(paths, export_onnx=args.export_onnx, thresholds=thresholds)
-        payload["global"] = global_payload
+        global_metrics_path = Path(paths.global_model_dir) / "paper_gate_acceptor_latest_metrics.json"
+        global_model_path = Path(paths.global_model_dir) / "paper_gate_acceptor_latest.joblib"
+        if args.mode == "symbols" and global_metrics_path.exists() and global_model_path.exists():
+            global_payload = json.loads(global_metrics_path.read_text(encoding="utf-8"))
+            if isinstance(global_payload, dict):
+                global_payload["reused_existing_model"] = True
+            payload["global"] = global_payload
+        else:
+            global_payload = train_global_model(paths, export_onnx=args.export_onnx, thresholds=thresholds)
+            payload["global"] = global_payload
 
     all_symbols = train_all_symbol_models(paths, export_onnx=args.export_onnx, thresholds=thresholds)
     if args.symbols:
