@@ -3,6 +3,7 @@ param(
     [string]$QdmRoot = "C:\TRADING_TOOLS\QuantDataManager",
     [string]$ProfilePath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_focus_pack.csv",
     [string]$OutputRoot = "C:\TRADING_DATA\QDM_EXPORT\MT5",
+    [string]$StagingRoot = "C:\TRADING_DATA\QDM_EXPORT\MT5\_staging",
     [switch]$StopExistingQdm = $true
 )
 
@@ -69,6 +70,12 @@ if ($StopExistingQdm) {
 }
 
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $StagingRoot | Out-Null
+
+$runStamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$runStagingRoot = Join-Path $StagingRoot $runStamp
+New-Item -ItemType Directory -Force -Path $runStagingRoot | Out-Null
+$lockPath = Join-Path $StagingRoot "active_export.lock.json"
 
 $rows = Import-Csv -LiteralPath $ProfilePath | Where-Object { $_.enabled -eq "1" }
 $historyRoot = Join-Path $QdmRoot "user\data\History"
@@ -89,13 +96,29 @@ foreach ($row in $rows) {
         continue
     }
 
+    $tempStem = "{0}__TMP_{1}" -f $exportName, $runStamp
+    $tempFile = Join-Path $runStagingRoot ($tempStem + ".csv")
+    $finalFile = Join-Path $OutputRoot ($exportName + ".csv")
+
+    $lockPayload = [ordered]@{
+        schema_version = "1.0"
+        state = "EXPORTING"
+        generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+        symbol = $symbol
+        export_name = $exportName
+        history_path = $historyInfo.FullName
+        temp_file = $tempFile
+        final_file = $finalFile
+    }
+    $lockPayload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $lockPath -Encoding UTF8
+
     $arguments = @(
         "-data",
         "action=exportToMT5",
         "symbol=$symbol",
         "timeframe=TICK",
-        "outputdir=$OutputRoot",
-        "filename=$exportName"
+        "outputdir=$runStagingRoot",
+        "filename=$tempStem"
     )
 
     if (-not [string]::IsNullOrWhiteSpace($row.date_from)) {
@@ -106,5 +129,20 @@ foreach ($row in $rows) {
     }
 
     Write-Host "Exporting to MT5 format: $symbol -> $exportName using $($historyInfo.Name)"
-    & $qdmCli @arguments
+    try {
+        & $qdmCli @arguments
+        if (-not (Test-Path -LiteralPath $tempFile)) {
+            throw "Temporary export file missing after qdmcli run: $tempFile"
+        }
+
+        $tempInfo = Get-Item -LiteralPath $tempFile -ErrorAction Stop
+        if ($tempInfo.Length -le 0) {
+            throw "Temporary export file is empty: $tempFile"
+        }
+
+        Move-Item -LiteralPath $tempFile -Destination $finalFile -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    }
 }

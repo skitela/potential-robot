@@ -13,6 +13,7 @@ $qdmProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_WEAKEST_PROFILE.ps1"
 $mlHintsScript = Join-Path $ProjectRoot "RUN\BUILD_ML_TUNING_HINTS.ps1"
 $onnxMicroReviewScript = Join-Path $ProjectRoot "RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
+$mlScalpingFitAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_SCALPING_FIT_AUDIT.ps1"
 $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
 $qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
 $globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_AUDIT.ps1"
@@ -71,6 +72,7 @@ foreach ($path in @(
     $mlHintsScript,
     $onnxMicroReviewScript,
     $learningSourceAuditScript,
+    $mlScalpingFitAuditScript,
     $tradeTransitionAuditScript,
     $qdmVisibilityRefreshScript,
     $globalQdmRetrainScript,
@@ -594,6 +596,12 @@ function Write-SupervisorStatus {
         $learningSourceAuditHead = @($learningSourceAudit.top_critical | Select-Object -First 5)
     }
 
+    $mlScalpingFitAuditPath = Join-Path $statusDir "ml_scalping_fit_audit_latest.json"
+    $mlScalpingFitAudit = $null
+    if (Test-Path -LiteralPath $mlScalpingFitAuditPath) {
+        $mlScalpingFitAudit = Get-Content -LiteralPath $mlScalpingFitAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
     $tradeTransitionAuditPath = Join-Path $statusDir "trade_transition_audit_latest.json"
     $tradeTransitionAudit = $null
     if (Test-Path -LiteralPath $tradeTransitionAuditPath) {
@@ -699,6 +707,7 @@ function Write-SupervisorStatus {
         top_instrument_training_readiness = $trainingReadinessHead
         learning_source_audit = $learningSourceAudit
         top_learning_source_audit = $learningSourceAuditHead
+        ml_scalping_fit_audit = $mlScalpingFitAudit
         trade_transition_audit = $tradeTransitionAudit
         qdm_visibility_refresh = $qdmVisibilityRefresh
         top_qdm_visibility_refresh = $qdmVisibilityRefreshHead
@@ -843,6 +852,21 @@ function Write-SupervisorStatus {
     }
     else {
         $lines.Add("- qdm visibility refresh report not available")
+    }
+    $lines.Add("")
+    $lines.Add("## ML Scalping Fit")
+    $lines.Add("")
+    if ($null -ne $mlScalpingFitAudit) {
+        $lines.Add(("- verdict: {0}" -f $mlScalpingFitAudit.verdict))
+        $lines.Add(("- model_family: {0}" -f $mlScalpingFitAudit.summary.model_family))
+        $lines.Add(("- training_target: {0}" -f $mlScalpingFitAudit.summary.training_target))
+        $lines.Add(("- qdm_coverage_ratio: {0}" -f $mlScalpingFitAudit.summary.qdm_coverage_ratio))
+        $lines.Add(("- broker_net_pln_ready: {0}" -f ([string]$mlScalpingFitAudit.summary.broker_net_pln_ready).ToLowerInvariant()))
+        $lines.Add(("- uses_server_ping: {0}" -f ([string]$mlScalpingFitAudit.summary.uses_server_ping).ToLowerInvariant()))
+        $lines.Add(("- uses_server_latency: {0}" -f ([string]$mlScalpingFitAudit.summary.uses_server_latency).ToLowerInvariant()))
+    }
+    else {
+        $lines.Add("- ml scalping fit audit report not available")
     }
     $lines.Add("")
     $lines.Add("## Global QDM Retrain")
@@ -1062,6 +1086,11 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "learning_source_audit" -Operation {
         $report = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "global_gap=$($report.summary.globalny_model_qdm_visibility_gap_count); candidate_gap=$($report.summary.candidate_gap_count); blocked=$($report.summary.blocked_count); target60_missed=$($report.summary.target_60p_missed_count); server_ping=$($report.summary.globalny_model_uzywa_pingu_serwera); server_latency=$($report.summary.globalny_model_uzywa_latencji_serwera)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "ml_scalping_fit_audit" -Operation {
+        $report = (& $mlScalpingFitAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+        "verdict=$($report.verdict); family=$($report.summary.model_family); target=$($report.summary.training_target); qdm_coverage=$($report.summary.qdm_coverage_ratio); broker_net=$($report.summary.broker_net_pln_ready)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "trade_transition_audit" -Operation {

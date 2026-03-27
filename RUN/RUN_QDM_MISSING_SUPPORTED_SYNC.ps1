@@ -81,14 +81,46 @@ function Remove-StaleQdmCacheForExports {
     return @($removedPaths.ToArray())
 }
 
-function Get-ActiveQdmExport {
-    $process = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+function Get-ActiveQdmCliProcess {
+    return Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.Name -eq "qdmcli.exe" -and
             -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
             $_.CommandLine -like "*action=exportToMT5*"
         } |
         Select-Object -First 1
+}
+
+function Get-ActiveQdmExport {
+    $lockPath = "C:\TRADING_DATA\QDM_EXPORT\MT5\_staging\active_export.lock.json"
+    $activeProcess = Get-ActiveQdmCliProcess
+
+    if (Test-Path -LiteralPath $lockPath) {
+        try {
+            $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $tempFile = [string]$lock.temp_file
+            $finalFile = [string]$lock.final_file
+
+            if ($null -ne $activeProcess) {
+                return [pscustomobject]@{
+                    pid = [int]$activeProcess.ProcessId
+                    command_line = "staging_lock"
+                    symbol = [string]$lock.symbol
+                }
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($tempFile) -and (Test-Path -LiteralPath $tempFile)) {
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $finalFile) | Out-Null
+                Move-Item -LiteralPath $tempFile -Destination $finalFile -Force
+            }
+            Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $process = $activeProcess
 
     if ($null -eq $process) {
         return $null

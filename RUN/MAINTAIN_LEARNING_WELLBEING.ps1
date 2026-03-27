@@ -143,6 +143,7 @@ $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DA
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
+$mlScalpingFitAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_SCALPING_FIT_AUDIT.ps1"
 $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $paperLossSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1"
@@ -155,6 +156,7 @@ $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training
 $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
 $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
+$mlScalpingFitAuditPath = Join-Path $opsRoot "ml_scalping_fit_audit_latest.json"
 $tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.json"
 $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
 $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
@@ -164,7 +166,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -191,6 +193,7 @@ $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $Proje
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
+$mlScalpingFitAudit = (& $mlScalpingFitAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
 $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
@@ -200,6 +203,7 @@ if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootst
     $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
+    $mlScalpingFitAudit = (& $mlScalpingFitAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
     $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
     $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
@@ -374,6 +378,10 @@ $shadowDatasetReadyCount = if ($null -ne $instrumentShadowDatasets) {
 } else { 0 }
 $learningSourceGapCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.globalny_model_qdm_visibility_gap_count } else { 0 }
 $learningSourceBlockedCount = if ($null -ne $learningSourceAudit) { [int]$learningSourceAudit.summary.blocked_count } else { 0 }
+$mlScalpingFitVerdict = if ($null -ne $mlScalpingFitAudit) { [string]$mlScalpingFitAudit.verdict } else { "" }
+$mlScalpingBrokerNetReady = if ($null -ne $mlScalpingFitAudit) { [bool]$mlScalpingFitAudit.summary.broker_net_pln_ready } else { $false }
+$mlScalpingQdmCoverageRatio = if ($null -ne $mlScalpingFitAudit) { [double]$mlScalpingFitAudit.summary.qdm_coverage_ratio } else { 0.0 }
+$mlScalpingCritical = ($mlScalpingFitVerdict -eq "MODEL_WYMAGA_NAPRAWY_POD_SKALPING")
 $tradeTransitionActiveChartCount = if ($null -ne $tradeTransitionAudit) { [int]$tradeTransitionAudit.summary.profile_active_chart_count } else { 0 }
 $tradeTransitionSafeChartCount = if ($null -ne $tradeTransitionAudit) { [int]$tradeTransitionAudit.summary.profile_safe_chart_count } else { 0 }
 $tradeTransitionUsesServerPing = if ($null -ne $tradeTransitionAudit) { [bool]$tradeTransitionAudit.summary.global_model_uses_server_ping } else { $false }
@@ -406,6 +414,7 @@ $verdict = if (
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
     ($null -ne $vpsSpoolBridge -and [string]$vpsSpoolBridge.verdict -in @("MOST_STABILNY", "MOST_UTWARDZONY")) -and
     $contractPendingCount -eq 0 -and
+    -not $mlScalpingCritical -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
     $runtimeArchiveSkippedReason -eq "" -and
@@ -441,6 +450,7 @@ $report = [ordered]@{
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
     learning_source_audit = $learningSourceAudit
+    ml_scalping_fit_audit = $mlScalpingFitAudit
     trade_transition_audit = $tradeTransitionAudit
     paper_live_action_gap_audit = $paperLiveActionGapAudit
     paper_loss_source_audit = $paperLossSourceAudit
@@ -482,6 +492,9 @@ $report = [ordered]@{
         shadow_dataset_ready_count = $shadowDatasetReadyCount
         learning_source_gap_count = $learningSourceGapCount
         learning_source_blocked_count = $learningSourceBlockedCount
+        ml_scalping_fit_verdict = $mlScalpingFitVerdict
+        ml_scalping_broker_net_pln_ready = $mlScalpingBrokerNetReady
+        ml_scalping_qdm_coverage_ratio = $mlScalpingQdmCoverageRatio
         trade_transition_verdict = $tradeTransitionVerdict
         trade_transition_active_chart_count = $tradeTransitionActiveChartCount
         trade_transition_safe_chart_count = $tradeTransitionSafeChartCount
@@ -541,6 +554,9 @@ $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
 $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_source_gap_count))
 $lines.Add(("- learning_source_blocked_count: {0}" -f $report.summary.learning_source_blocked_count))
+$lines.Add(("- ml_scalping_fit_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.ml_scalping_fit_verdict)) { "BRAK" } else { $report.summary.ml_scalping_fit_verdict })))
+$lines.Add(("- ml_scalping_broker_net_pln_ready: {0}" -f ([string]$report.summary.ml_scalping_broker_net_pln_ready).ToLowerInvariant()))
+$lines.Add(("- ml_scalping_qdm_coverage_ratio: {0}" -f $report.summary.ml_scalping_qdm_coverage_ratio))
 $lines.Add(("- trade_transition_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.trade_transition_verdict)) { "BRAK" } else { $report.summary.trade_transition_verdict })))
 $lines.Add(("- trade_transition_active_chart_count: {0}" -f $report.summary.trade_transition_active_chart_count))
 $lines.Add(("- trade_transition_safe_chart_count: {0}" -f $report.summary.trade_transition_safe_chart_count))

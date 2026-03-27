@@ -295,6 +295,7 @@ function Invoke-AuditCycle {
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
     $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
+    $mlScalpingFitAuditPath = Join-Path $opsRoot "ml_scalping_fit_audit_latest.json"
     $tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.json"
     $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"
     $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
@@ -347,6 +348,13 @@ function Invoke-AuditCycle {
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = "C:\TRADING_DATA\RESEARCH"
+            }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_ML_SCALPING_FIT_AUDIT.ps1")
             params = @{
                 ProjectRoot = $ProjectRoot
                 ResearchRoot = "C:\TRADING_DATA\RESEARCH"
@@ -590,6 +598,7 @@ function Invoke-AuditCycle {
     $instrumentShadowDatasets = Read-JsonSafe -Path $instrumentShadowDatasetsPath
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
     $learningSourceAudit = Read-JsonSafe -Path $learningSourceAuditPath
+    $mlScalpingFitAudit = Read-JsonSafe -Path $mlScalpingFitAuditPath
     $tradeTransitionAudit = Read-JsonSafe -Path $tradeTransitionAuditPath
     $qdmVisibilityRefresh = Read-JsonSafe -Path $qdmVisibilityRefreshPath
     $globalQdmRetrain = Read-JsonSafe -Path $globalQdmRetrainPath
@@ -1226,6 +1235,47 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "ZRODLA_UCZENIA_GLOBALNE_I_LOKALNE" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $learningSourceEvidence) -Reason "Tor uczenia musi stale kontrolowac zaleznosc od nauczyciela globalnego i gotowosc lokalnych modeli." -Evidence $learningSourceEvidence)) | Out-Null
     }
 
+    $mlScalpingEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $mlScalpingFitAudit) {
+        $mlVerdict = [string](Get-OptionalValue -Object $mlScalpingFitAudit -Name "verdict" -Default "")
+        $mlSummary = Get-OptionalValue -Object $mlScalpingFitAudit -Name "summary" -Default $null
+        $brokerNetReady = [bool](Get-OptionalValue -Object $mlSummary -Name "broker_net_pln_ready" -Default $false)
+        $qdmCoverageRatio = [double](Get-OptionalValue -Object $mlSummary -Name "qdm_coverage_ratio" -Default 0.0)
+        $refreshRequiredCount = [int](Get-OptionalValue -Object $mlSummary -Name "refresh_required_count" -Default 0)
+
+        if ($mlVerdict -eq "MODEL_WYMAGA_NAPRAWY_POD_SKALPING") {
+            $mlScalpingEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "ml_scalping_model_not_ready"
+                message = "Bazowy model uczenia nie spelnia jeszcze minimalnych wymagan pod skalping w warunkach serwerowych."
+                context = @{ verdict = $mlVerdict }
+            }) | Out-Null
+        }
+        if (-not $brokerNetReady) {
+            $mlScalpingEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "ml_broker_net_pln_gap"
+                message = "Model nadal nie uczy sie na pelnym wyniku netto brokera w PLN."
+                context = @{ broker_net_pln_ready = $brokerNetReady }
+            }) | Out-Null
+        }
+        if ($qdmCoverageRatio -lt 0.5 -or $refreshRequiredCount -gt 0) {
+            $mlScalpingEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "ml_qdm_visibility_gap"
+                message = "Kupione dane nie zasilaja jeszcze modelu globalnego w zakresie potrzebnym do nauki pod realny rynek."
+                context = @{ qdm_coverage_ratio = $qdmCoverageRatio; refresh_required_count = $refreshRequiredCount }
+            }) | Out-Null
+        }
+    }
+
+    if ($mlScalpingEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "MODEL_ML_DLA_SKALPINGU" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $mlScalpingEvidence) -Reason "Model bazowy musi pozostawac zgodny z warunkami serwerowymi i ekonomia brokera." -Evidence $mlScalpingEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "MODEL_ML_DLA_SKALPINGU" -Gate "RAPORTUJ" -Severity "info" -Reason "Model bazowy jest zgodny z aktualnym kontraktem danych i nie ma swiezej czerwonej flagi.")) | Out-Null
+    }
+
     $tradeTransitionEvidence = New-Object System.Collections.Generic.List[object]
     if ($null -ne $tradeTransitionAudit) {
         $transitionSummary = Get-OptionalValue -Object $tradeTransitionAudit -Name "summary" -Default $null
@@ -1614,6 +1664,7 @@ function Invoke-AuditCycle {
         instrument_shadow_datasets = $instrumentShadowDatasetsPath
         instrument_training_readiness = $instrumentTrainingReadinessPath
         learning_source_audit = $learningSourceAuditPath
+        ml_scalping_fit_audit = $mlScalpingFitAuditPath
         paper_loss_source_audit = $paperLossSourceAuditPath
         instrument_local_training_plan = $instrumentLocalTrainingPlanPath
         instrument_local_training_lane = $instrumentLocalTrainingLanePath
