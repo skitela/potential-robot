@@ -123,28 +123,55 @@ def build_server_parity_tail_bridge(paths: CompatPaths) -> tuple[pd.DataFrame, d
     src = load_sources(paths)
     candidates = src.candidates.copy()
     qdm = src.qdm.copy()
+    base = pd.DataFrame({"symbol_alias": src.symbols})
 
-    if candidates.empty or qdm.empty:
-        out = pd.DataFrame(columns=["symbol_alias", "candidate_minute_min", "candidate_minute_max", "qdm_minute_max", "tail_state"])
-        ensure_dir(paths.server_parity_tail_bridge_latest.parent)
-        out.to_parquet(paths.server_parity_tail_bridge_latest, index=False)
-        return out, {"rows": 0, "missing_tail_count": 0, "output_path": str(paths.server_parity_tail_bridge_latest)}
+    if not candidates.empty and "ts" in candidates.columns:
+        candidates["candidate_minute"] = candidates["ts"].dt.floor("min")
+        cwin = (
+            candidates
+            .groupby("symbol_alias", observed=True)["candidate_minute"]
+            .agg(candidate_minute_min="min", candidate_minute_max="max")
+            .reset_index()
+        )
+    else:
+        cwin = pd.DataFrame(columns=["symbol_alias", "candidate_minute_min", "candidate_minute_max"])
 
-    candidates["candidate_minute"] = candidates["ts"].dt.floor("min")
-    qdm["bar_minute"] = normalize_ts(qdm["bar_minute"]).dt.floor("min")
+    if not qdm.empty and "bar_minute" in qdm.columns:
+        qdm["bar_minute"] = normalize_ts(qdm["bar_minute"]).dt.floor("min")
+        qwin = (
+            qdm
+            .groupby("symbol_alias", observed=True)["bar_minute"]
+            .max()
+            .rename("qdm_minute_max")
+            .reset_index()
+        )
+    else:
+        qwin = pd.DataFrame(columns=["symbol_alias", "qdm_minute_max"])
 
-    cwin = candidates.groupby("symbol_alias", observed=True)["candidate_minute"].agg(candidate_minute_min="min", candidate_minute_max="max").reset_index()
-    qwin = qdm.groupby("symbol_alias", observed=True)["bar_minute"].max().rename("qdm_minute_max").reset_index()
-
-    out = cwin.merge(qwin, on="symbol_alias", how="left")
+    out = base.merge(cwin, on="symbol_alias", how="left").merge(qwin, on="symbol_alias", how="left")
     out["tail_state"] = "OK"
     out.loc[out["qdm_minute_max"].isna(), "tail_state"] = "BRAK_QDM"
-    out.loc[out["qdm_minute_max"].notna() & (out["qdm_minute_max"] < out["candidate_minute_min"]), "tail_state"] = "BRAK_SWIEZEGO_OGONA"
+    out.loc[out["qdm_minute_max"].notna() & out["candidate_minute_min"].isna(), "tail_state"] = "BRAK_KANDYDATOW"
+    out.loc[
+        out["qdm_minute_max"].notna()
+        & out["candidate_minute_min"].notna()
+        & (out["qdm_minute_max"] < out["candidate_minute_min"]),
+        "tail_state",
+    ] = "BRAK_SWIEZEGO_OGONA"
     ensure_dir(paths.server_parity_tail_bridge_latest.parent)
     out.to_parquet(paths.server_parity_tail_bridge_latest, index=False)
+    missing_qdm_count = int((out["tail_state"] == "BRAK_QDM").sum())
+    stale_tail_count = int((out["tail_state"] == "BRAK_SWIEZEGO_OGONA").sum())
+    missing_candidate_count = int((out["tail_state"] == "BRAK_KANDYDATOW").sum())
     return out, {
         "rows": int(len(out)),
-        "missing_tail_count": int((out["tail_state"] == "BRAK_SWIEZEGO_OGONA").sum()),
+        "expected_symbols": src.symbols,
+        "symbols_present": out["symbol_alias"].tolist(),
+        "missing_tail_count": missing_qdm_count + stale_tail_count,
+        "missing_qdm_count": missing_qdm_count,
+        "stale_tail_count": stale_tail_count,
+        "missing_candidate_count": missing_candidate_count,
+        "symbols_without_candidates": out.loc[out["tail_state"] == "BRAK_KANDYDATOW", "symbol_alias"].tolist(),
         "output_path": str(paths.server_parity_tail_bridge_latest),
     }
 
@@ -369,10 +396,20 @@ def build_master_training_frame(paths: CompatPaths) -> tuple[pd.DataFrame, dict[
     src = load_sources(paths)
     candidates = src.candidates.copy()
     if candidates.empty:
-        return pd.DataFrame(), {"rows": 0, "symbols": [], "labeled_rows": 0}, src
+        return pd.DataFrame(), {
+            "rows": 0,
+            "symbols": [],
+            "expected_symbols": src.symbols,
+            "candidate_symbols": [],
+            "symbols_without_candidates": src.symbols,
+            "symbols_without_rows": src.symbols,
+            "symbols_without_labeled": src.symbols,
+            "labeled_rows": 0,
+        }, src
 
     candidates = candidates.loc[candidates["symbol_alias"].isin(src.symbols)].copy()
     candidates["ts"] = normalize_ts(candidates["ts"])
+    candidate_symbols = sorted(candidates["symbol_alias"].dropna().unique().tolist())
 
     merged = _merge_runtime_features(candidates, src.runtime)
     merged = _merge_ping_features(merged, src.ping)
@@ -503,9 +540,16 @@ def build_master_training_frame(paths: CompatPaths) -> tuple[pd.DataFrame, dict[
 
     merged.loc[merged["outcome_known"] == 0, ["gross_pln", "spread_cost_pln", "slippage_cost_pln", "commission_pln", "swap_pln", "extra_fee_pln", "net_pln", "edge_after_cost_pln", "edge_after_cost_bps"]] = np.nan
 
+    merged_symbols = sorted(merged["symbol_alias"].dropna().unique().tolist())
+    labeled_symbols = sorted(merged.loc[merged["outcome_known"] == 1, "symbol_alias"].dropna().unique().tolist())
     summary = {
         "rows": int(len(merged)),
-        "symbols": sorted(merged["symbol_alias"].dropna().unique().tolist()),
+        "symbols": merged_symbols,
+        "expected_symbols": src.symbols,
+        "candidate_symbols": candidate_symbols,
+        "symbols_without_candidates": sorted(set(src.symbols) - set(candidate_symbols)),
+        "symbols_without_rows": sorted(set(src.symbols) - set(merged_symbols)),
+        "symbols_without_labeled": sorted(set(src.symbols) - set(labeled_symbols)),
         "labeled_rows": int(merged["outcome_known"].sum()),
         "candidate_rows": int(len(candidates)),
         "runtime_rows": int(len(src.runtime)),
@@ -520,7 +564,15 @@ def build_broker_net_ledger(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str,
         out = pd.DataFrame()
         ensure_dir(paths.broker_net_ledger_latest.parent)
         out.to_parquet(paths.broker_net_ledger_latest, index=False)
-        return out, {"rows": 0, "labeled_rows": 0, "output_path": str(paths.broker_net_ledger_latest)}
+        return out, {
+            "rows": 0,
+            "labeled_rows": 0,
+            "expected_symbols": summary.get("expected_symbols", []),
+            "symbols": [],
+            "symbols_without_rows": summary.get("symbols_without_rows", []),
+            "symbols_without_candidates": summary.get("symbols_without_candidates", []),
+            "output_path": str(paths.broker_net_ledger_latest),
+        }
 
     ledger_cols = [
         "ts", "symbol_alias", "side", "side_normalized", "lots", "score", "confidence_score",
@@ -536,5 +588,8 @@ def build_broker_net_ledger(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str,
         "rows": int(len(ledger)),
         "labeled_rows": int((ledger.get("outcome_known", 0) == 1).sum()),
         "output_path": str(paths.broker_net_ledger_latest),
+        "expected_symbols": summary.get("expected_symbols", []),
         "symbols": summary["symbols"],
+        "symbols_without_rows": summary.get("symbols_without_rows", []),
+        "symbols_without_candidates": summary.get("symbols_without_candidates", []),
     }

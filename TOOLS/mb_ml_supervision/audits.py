@@ -82,7 +82,9 @@ def inspect_tail_bridge(paths: OverlayPaths, thresholds: AuditThresholds) -> dic
     rows = parquet_count(paths.tail_bridge_path) if exists else 0
     age_hours = file_age_hours(paths.tail_bridge_path)
     missing_tail_count = 0
+    missing_candidate_count = 0
     bad_states: list[str] = []
+    candidate_gap_states: list[str] = []
     if exists:
         schema_rows = parquet_query_rows(
             paths.tail_bridge_path,
@@ -101,16 +103,21 @@ def inspect_tail_bridge(paths: OverlayPaths, thresholds: AuditThresholds) -> dic
                 paths.tail_bridge_path,
                 f"""
                 select
-                  coalesce(sum(case when upper(cast({state_column} as varchar)) <> 'OK' then 1 else 0 end), 0) as bad_rows,
-                  string_agg(distinct cast({state_column} as varchar), ',') as states
+                  coalesce(sum(case when upper(cast({state_column} as varchar)) not in ('OK', 'BRAK_KANDYDATOW') then 1 else 0 end), 0) as bad_rows,
+                  coalesce(sum(case when upper(cast({state_column} as varchar)) = 'BRAK_KANDYDATOW' then 1 else 0 end), 0) as candidate_gap_rows,
+                  string_agg(distinct cast({state_column} as varchar), ',') as states,
+                  string_agg(distinct case when upper(cast({state_column} as varchar)) = 'BRAK_KANDYDATOW' then cast({state_column} as varchar) else null end, ',') as candidate_states
                 from read_parquet(?)
                 """,
                 [str(paths.tail_bridge_path)],
             )
             if result:
                 missing_tail_count = int(result[0].get("bad_rows") or 0)
+                missing_candidate_count = int(result[0].get("candidate_gap_rows") or 0)
                 states_str = str(result[0].get("states") or "")
-                bad_states = [item for item in states_str.split(",") if item and item != "OK"]
+                bad_states = [item for item in states_str.split(",") if item and item not in {"OK", "BRAK_KANDYDATOW"}]
+                candidate_states_str = str(result[0].get("candidate_states") or "")
+                candidate_gap_states = [item for item in candidate_states_str.split(",") if item]
         else:
             missing_tail_count = rows if rows > 0 else 0
             bad_states = ["BRAK_KOLUMNY_TAIL_STATE"]
@@ -121,7 +128,9 @@ def inspect_tail_bridge(paths: OverlayPaths, thresholds: AuditThresholds) -> dic
         "age_hours": age_hours,
         "modified_at_utc": file_modified_iso(paths.tail_bridge_path),
         "missing_tail_count": missing_tail_count,
+        "missing_candidate_count": missing_candidate_count,
         "bad_states": bad_states,
+        "candidate_gap_states": candidate_gap_states,
         "ok": bool(exists and rows > 0 and missing_tail_count == 0 and (age_hours is None or age_hours <= thresholds.tail_freshness_hours)),
     }
 
@@ -131,23 +140,43 @@ def inspect_broker_net_ledger(paths: OverlayPaths, thresholds: AuditThresholds) 
     rows = 0
     labeled_rows = 0
     sample_symbols: list[str] = []
+    active_registry = load_active_registry_symbols(paths)
+    active_symbols = sorted({str(item.get("symbol") or "").strip() for item in active_registry if str(item.get("symbol") or "").strip()})
     age_hours = file_age_hours(paths.broker_net_ledger_path)
+    read_mode = "missing"
+    read_error = None
     if exists:
-        result = parquet_query_rows(
-            paths.broker_net_ledger_path,
-            """
-            select
-              count(*) as rows,
-              coalesce(sum(case when net_pln is not null then 1 else 0 end), 0) as labeled_rows,
-              string_agg(distinct cast(symbol_alias as varchar), ',') as symbols
-            from read_parquet(?)
-            """,
-            [str(paths.broker_net_ledger_path)],
-        )
-        if result:
-            rows = int(result[0].get("rows") or 0)
-            labeled_rows = int(result[0].get("labeled_rows") or 0)
-            sample_symbols = [item for item in str(result[0].get("symbols") or "").split(",") if item]
+        try:
+            result = parquet_query_rows(
+                paths.broker_net_ledger_path,
+                """
+                select
+                  count(*) as rows,
+                  coalesce(sum(case when net_pln is not null then 1 else 0 end), 0) as labeled_rows,
+                  string_agg(distinct cast(symbol_alias as varchar), ',') as symbols
+                from read_parquet(?)
+                """,
+                [str(paths.broker_net_ledger_path)],
+            )
+            if result:
+                rows = int(result[0].get("rows") or 0)
+                labeled_rows = int(result[0].get("labeled_rows") or 0)
+                sample_symbols = [item for item in str(result[0].get("symbols") or "").split(",") if item]
+            read_mode = "duckdb"
+        except Exception as exc:
+            read_error = str(exc)
+            try:
+                import pandas as pd  # type: ignore
+
+                frame = pd.read_parquet(paths.broker_net_ledger_path, columns=["symbol_alias", "net_pln"])
+                rows = int(len(frame))
+                labeled_rows = int(frame["net_pln"].notna().sum()) if "net_pln" in frame.columns else 0
+                if "symbol_alias" in frame.columns:
+                    sample_symbols = sorted(frame["symbol_alias"].dropna().astype(str).unique().tolist())
+                read_mode = "pandas_fallback"
+            except Exception as fallback_exc:
+                read_mode = "error"
+                read_error = f"{read_error}; fallback={fallback_exc}"
     previous_audit = read_json(paths.overlay_audit_path, default={})
     previous_labeled_rows = None
     natural_drop_flag = False
@@ -170,7 +199,12 @@ def inspect_broker_net_ledger(paths: OverlayPaths, thresholds: AuditThresholds) 
         "natural_drop_flag": natural_drop_flag,
         "age_hours": age_hours,
         "modified_at_utc": file_modified_iso(paths.broker_net_ledger_path),
+        "read_mode": read_mode,
+        "read_error": read_error,
+        "expected_symbols": active_symbols,
         "symbols_present": sorted(sample_symbols),
+        "symbols_without_rows": sorted(set(active_symbols) - set(sample_symbols)),
+        "coverage_ratio": (float(len(set(sample_symbols)) / len(active_symbols)) if active_symbols else 1.0),
         "ok": bool(
             exists
             and rows > 0
