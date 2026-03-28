@@ -164,6 +164,10 @@ class OverlayPaths:
         return self.evidence_ops_dir / "local_model_readiness_latest.json"
 
     @property
+    def candidate_gap_audit_path(self) -> Path:
+        return self.evidence_ops_dir / "candidate_gap_audit_latest.json"
+
+    @property
     def outcome_closure_audit_path(self) -> Path:
         return self.evidence_ops_dir / "outcome_closure_latest.json"
 
@@ -210,6 +214,10 @@ class OverlayPaths:
     @property
     def execution_precheck_path(self) -> Path:
         return self.project_root / "MQL5" / "Include" / "Core" / "MbExecutionPrecheck.mqh"
+
+    @property
+    def ml_runtime_bridge_path(self) -> Path:
+        return self.project_root / "MQL5" / "Include" / "Core" / "MbMlRuntimeBridge.mqh"
 
     @property
     def possible_mql5_microbot_dirs(self) -> list[Path]:

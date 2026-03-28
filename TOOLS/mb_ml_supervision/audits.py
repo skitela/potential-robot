@@ -260,11 +260,15 @@ def build_outcome_closure_audit(paths: OverlayPaths) -> dict[str, Any]:
 
     paper_trading_text = paths.paper_trading_path.read_text(encoding="utf-8", errors="ignore") if paths.paper_trading_path.exists() else ""
     execution_precheck_text = paths.execution_precheck_path.read_text(encoding="utf-8", errors="ignore") if paths.execution_precheck_path.exists() else ""
+    ml_runtime_bridge_text = paths.ml_runtime_bridge_path.read_text(encoding="utf-8", errors="ignore") if paths.ml_runtime_bridge_path.exists() else ""
 
     paper_tracks_spread = "opened_spread_points" in paper_trading_text
-    paper_tracks_commission = "commission" in paper_trading_text
-    paper_tracks_swap = "swap" in paper_trading_text
-    paper_tracks_broker_net_pnl = any(token in paper_trading_text for token in ("netto", "net_pnl", "account_currency"))
+    paper_tracks_commission = ("commission" in paper_trading_text) or ("commission_pln" in ml_runtime_bridge_text)
+    paper_tracks_swap = ("swap" in paper_trading_text) or ("swap_pln" in ml_runtime_bridge_text)
+    paper_tracks_broker_net_pnl = (
+        any(token in paper_trading_text for token in ("netto", "net_pnl", "net_pln", "account_currency"))
+        or any(token in ml_runtime_bridge_text for token in ("net_pnl", "net_pln", "commission_pln", "swap_pln"))
+    )
     precheck_models_slippage = "modeled_slippage_points" in execution_precheck_text
     precheck_models_commission = "modeled_commission_points" in execution_precheck_text
 

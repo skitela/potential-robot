@@ -498,14 +498,14 @@ void MbMlRuntimeBridgeAppendPaperLedger(
    row.exit_price = closed_state.last_mark_price;
    row.spread_points_entry = closed_state.opened_spread_points;
    row.spread_points_exit = market.spread_points;
-   row.slippage_points = 0.0;
-   row.gross_pln = paper_pnl;
-   row.spread_cost_pln = 0.0;
-   row.slippage_cost_pln = 0.0;
-   row.commission_pln = 0.0;
-   row.swap_pln = 0.0;
-   row.extra_fee_pln = 0.0;
-   row.net_pln = paper_pnl;
+   row.slippage_points = closed_state.modeled_slippage_points;
+   row.gross_pln = (MathIsValidNumber(closed_state.gross_pln) ? closed_state.gross_pln : paper_pnl);
+   row.spread_cost_pln = (MathIsValidNumber(closed_state.spread_cost_pln) ? closed_state.spread_cost_pln : 0.0);
+   row.slippage_cost_pln = (MathIsValidNumber(closed_state.slippage_cost_pln) ? closed_state.slippage_cost_pln : 0.0);
+   row.commission_pln = (MathIsValidNumber(closed_state.commission_pln) ? closed_state.commission_pln : 0.0);
+   row.swap_pln = (MathIsValidNumber(closed_state.swap_pln) ? closed_state.swap_pln : 0.0);
+   row.extra_fee_pln = (MathIsValidNumber(closed_state.extra_fee_pln) ? closed_state.extra_fee_pln : 0.0);
+   row.net_pln = (MathIsValidNumber(closed_state.net_pln) ? closed_state.net_pln : (row.gross_pln - row.slippage_cost_pln - row.commission_pln - row.swap_pln - row.extra_fee_pln));
    MbMlRuntimeBridgeAppendLedgerRow(state,row);
   }
 

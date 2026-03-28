@@ -297,6 +297,7 @@ function Invoke-AuditCycle {
     $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
+    $candidateGapAuditPath = Join-Path $opsRoot "candidate_gap_audit_latest.json"
     $outcomeClosureAuditPath = Join-Path $opsRoot "outcome_closure_latest.json"
     $localModelReadinessPath = Join-Path $opsRoot "local_model_readiness_latest.json"
     $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
@@ -351,6 +352,14 @@ function Invoke-AuditCycle {
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_CANDIDATE_GAP_AUDIT.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = $researchRoot
+                ResearchPython = $researchPython
+            }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_OUTCOME_CLOSURE_AUDIT.ps1")
@@ -1893,6 +1902,7 @@ function Invoke-AuditCycle {
         instrument_data_readiness = $instrumentDataReadinessPath
         instrument_shadow_datasets = $instrumentShadowDatasetsPath
         instrument_training_readiness = $instrumentTrainingReadinessPath
+        candidate_gap_audit = $candidateGapAuditPath
         outcome_closure_audit = $outcomeClosureAuditPath
         local_model_readiness = $localModelReadinessPath
         learning_source_audit = $learningSourceAuditPath

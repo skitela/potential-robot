@@ -19,6 +19,7 @@ $qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_R
 $globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $paperLossSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1"
+$candidateGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_CANDIDATE_GAP_AUDIT.ps1"
 $activeFleetVerdictsScript = Join-Path $ProjectRoot "RUN\BUILD_ACTIVE_FLEET_VERDICTS_REPORT.ps1"
 $winnerDeploymentScript = Join-Path $ProjectRoot "RUN\BUILD_WINNER_DEPLOYMENT_REPORT.ps1"
 $learningHealthRegistryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
@@ -610,6 +611,17 @@ function Write-SupervisorStatus {
         }
     }
 
+    $candidateGapAuditPath = Join-Path $statusDir "candidate_gap_audit_latest.json"
+    $candidateGapAudit = $null
+    $candidateGapAuditHead = @()
+    if (Test-Path -LiteralPath $candidateGapAuditPath) {
+        $candidateGapAudit = Get-Content -LiteralPath $candidateGapAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $candidateGapAuditHead = @($candidateGapAudit.items | Where-Object { $_.candidate_rows -le 0 -or $_.post_strategy_rows -le 0 } | Select-Object -First 5)
+        if (@($candidateGapAuditHead).Count -eq 0) {
+            $candidateGapAuditHead = @($candidateGapAudit.items | Select-Object -First 5)
+        }
+    }
+
     $localModelReadinessPath = Join-Path $statusDir "local_model_readiness_latest.json"
     $localModelReadiness = $null
     $localModelReadinessHead = @()
@@ -738,6 +750,8 @@ function Write-SupervisorStatus {
         top_instrument_shadow_datasets = $shadowDatasetsHead
         instrument_training_readiness = $trainingReadiness
         top_instrument_training_readiness = $trainingReadinessHead
+        candidate_gap_audit = $candidateGapAudit
+        top_candidate_gap_audit = $candidateGapAuditHead
         outcome_closure_audit = $outcomeClosureAudit
         top_outcome_closure_audit = $outcomeClosureAuditHead
         local_model_readiness = $localModelReadiness
@@ -1254,6 +1268,11 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "outcome_closure_audit" -Operation {
         $report = (& $outcomeClosureAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
         "outcome_ready=$($report.summary.symbols_with_outcome_count); gaps=$($report.summary.outcome_gap_count); pending_paper_truth=$($report.summary.pending_paper_truth_count); broker_net=$($report.summary.broker_net_pln_ready)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "candidate_gap_audit" -Operation {
+        $report = (& $candidateGapAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython | ConvertFrom-Json)
+        "final_zero=$($report.summary.final_zero_count); strategy_zero=$($report.summary.strategy_zero_count); risk_zero=$($report.summary.risk_zero_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "local_model_readiness" -Operation {

@@ -183,6 +183,7 @@ $globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_A
 $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
+$candidateGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_CANDIDATE_GAP_AUDIT.ps1"
 $outcomeClosureAuditScript = Join-Path $ProjectRoot "RUN\BUILD_OUTCOME_CLOSURE_AUDIT.ps1"
 $localModelReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_LOCAL_MODEL_READINESS_AUDIT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
@@ -199,6 +200,7 @@ $qdmMissingSyncStatusPath = Join-Path $opsRoot "qdm_missing_supported_sync_lates
 $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
 $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
 $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
+$candidateGapAuditPath = Join-Path $opsRoot "candidate_gap_audit_latest.json"
 $outcomeClosureAuditPath = Join-Path $opsRoot "outcome_closure_latest.json"
 $localModelReadinessPath = Join-Path $opsRoot "local_model_readiness_latest.json"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
@@ -213,7 +215,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -239,6 +241,7 @@ $vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parame
 $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$candidateGapAudit = (& $candidateGapAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython | ConvertFrom-Json)
 $outcomeClosureAudit = (& $outcomeClosureAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
 $localModelReadiness = (& $localModelReadinessScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
 $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
@@ -470,6 +473,9 @@ $paperLossActiveNegativeCount = if ($null -ne $paperLossSourceAudit) { [int]$pap
 $paperLossCostDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.cost_driven_count } else { 0 }
 $paperLossQualityDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.quality_driven_count } else { 0 }
 $paperLossTimeoutDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.timeout_driven_count } else { 0 }
+$candidateGapFinalZeroCount = if ($null -ne $candidateGapAudit) { [int]$candidateGapAudit.summary.final_zero_count } else { 0 }
+$candidateGapStrategyZeroCount = if ($null -ne $candidateGapAudit) { [int]$candidateGapAudit.summary.strategy_zero_count } else { 0 }
+$candidateGapRiskZeroCount = if ($null -ne $candidateGapAudit) { [int]$candidateGapAudit.summary.risk_zero_count } else { 0 }
 $shadowRuntimeBootstrapAppliedCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.applied_count } else { 0 }
 $shadowRuntimeBootstrapPendingCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.pending_count } else { 0 }
 $outcomeClosureReadyCount = if ($null -ne $outcomeClosureSummary) { [int]$outcomeClosureSummary.symbols_with_outcome_count } else { 0 }
@@ -539,6 +545,7 @@ $report = [ordered]@{
     instrument_data_readiness = $instrumentDataReadiness
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
+    candidate_gap_audit = $candidateGapAudit
     outcome_closure_audit = $outcomeClosureAudit
     local_model_readiness = $localModelReadiness
     learning_source_audit = $learningSourceAudit
@@ -583,6 +590,9 @@ $report = [ordered]@{
         qdm_export_pending_count = $exportPendingCount
         qdm_contract_pending_count = $contractPendingCount
         shadow_dataset_ready_count = $shadowDatasetReadyCount
+        candidate_gap_final_zero_count = $candidateGapFinalZeroCount
+        candidate_gap_strategy_zero_count = $candidateGapStrategyZeroCount
+        candidate_gap_risk_zero_count = $candidateGapRiskZeroCount
         outcome_closure_ready_count = $outcomeClosureReadyCount
         outcome_closure_gap_count = $outcomeClosureGapCount
         outcome_closure_pending_paper_truth_count = $outcomeClosurePendingPaperTruthCount
@@ -660,6 +670,9 @@ $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridg
 $lines.Add(("- qdm_export_pending_count: {0}" -f $report.summary.qdm_export_pending_count))
 $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_pending_count))
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
+$lines.Add(("- candidate_gap_final_zero_count: {0}" -f $report.summary.candidate_gap_final_zero_count))
+$lines.Add(("- candidate_gap_strategy_zero_count: {0}" -f $report.summary.candidate_gap_strategy_zero_count))
+$lines.Add(("- candidate_gap_risk_zero_count: {0}" -f $report.summary.candidate_gap_risk_zero_count))
 $lines.Add(("- outcome_closure_ready_count: {0}" -f $report.summary.outcome_closure_ready_count))
 $lines.Add(("- outcome_closure_gap_count: {0}" -f $report.summary.outcome_closure_gap_count))
 $lines.Add(("- outcome_closure_pending_paper_truth_count: {0}" -f $report.summary.outcome_closure_pending_paper_truth_count))

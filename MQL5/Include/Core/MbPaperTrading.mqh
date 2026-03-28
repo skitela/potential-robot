@@ -32,6 +32,15 @@ struct MbPaperPositionState
    double renko_score;
    int renko_run_length;
    bool renko_reversal_flag;
+   double modeled_slippage_points;
+   double modeled_commission_points;
+   double gross_pln;
+   double spread_cost_pln;
+   double slippage_cost_pln;
+   double commission_pln;
+   double swap_pln;
+   double extra_fee_pln;
+   double net_pln;
   };
 
 void MbPaperPositionReset(MbPaperPositionState &state)
@@ -62,6 +71,15 @@ void MbPaperPositionReset(MbPaperPositionState &state)
    state.renko_score = 0.0;
    state.renko_run_length = 0;
    state.renko_reversal_flag = false;
+   state.modeled_slippage_points = 0.0;
+   state.modeled_commission_points = 0.0;
+   state.gross_pln = 0.0;
+   state.spread_cost_pln = 0.0;
+   state.slippage_cost_pln = 0.0;
+   state.commission_pln = 0.0;
+   state.swap_pln = 0.0;
+   state.extra_fee_pln = 0.0;
+   state.net_pln = 0.0;
   }
 
 bool MbSavePaperPosition(const string symbol,const MbPaperPositionState &state)
@@ -95,6 +113,15 @@ bool MbSavePaperPosition(const string symbol,const MbPaperPositionState &state)
    FileWrite(h,"renko_score",DoubleToString(state.renko_score,4));
    FileWrite(h,"renko_run_length",state.renko_run_length);
    FileWrite(h,"renko_reversal_flag",(state.renko_reversal_flag ? 1 : 0));
+   FileWrite(h,"modeled_slippage_points",DoubleToString(state.modeled_slippage_points,4));
+   FileWrite(h,"modeled_commission_points",DoubleToString(state.modeled_commission_points,4));
+   FileWrite(h,"gross_pln",DoubleToString(state.gross_pln,6));
+   FileWrite(h,"spread_cost_pln",DoubleToString(state.spread_cost_pln,6));
+   FileWrite(h,"slippage_cost_pln",DoubleToString(state.slippage_cost_pln,6));
+   FileWrite(h,"commission_pln",DoubleToString(state.commission_pln,6));
+   FileWrite(h,"swap_pln",DoubleToString(state.swap_pln,6));
+   FileWrite(h,"extra_fee_pln",DoubleToString(state.extra_fee_pln,6));
+   FileWrite(h,"net_pln",DoubleToString(state.net_pln,6));
    FileClose(h);
    return true;
   }
@@ -135,9 +162,48 @@ bool MbLoadPaperPosition(const string symbol,MbPaperPositionState &state)
       else if(key == "renko_score") state.renko_score = StringToDouble(value);
       else if(key == "renko_run_length") state.renko_run_length = (int)StringToInteger(value);
       else if(key == "renko_reversal_flag") state.renko_reversal_flag = (StringToInteger(value) != 0);
+      else if(key == "modeled_slippage_points") state.modeled_slippage_points = StringToDouble(value);
+      else if(key == "modeled_commission_points") state.modeled_commission_points = StringToDouble(value);
+      else if(key == "gross_pln") state.gross_pln = StringToDouble(value);
+      else if(key == "spread_cost_pln") state.spread_cost_pln = StringToDouble(value);
+      else if(key == "slippage_cost_pln") state.slippage_cost_pln = StringToDouble(value);
+      else if(key == "commission_pln") state.commission_pln = StringToDouble(value);
+      else if(key == "swap_pln") state.swap_pln = StringToDouble(value);
+      else if(key == "extra_fee_pln") state.extra_fee_pln = StringToDouble(value);
+      else if(key == "net_pln") state.net_pln = StringToDouble(value);
      }
    FileClose(h);
    return true;
+  }
+
+double MbPaperPointsToMoney(
+   const MbMarketSnapshot &snapshot,
+   const double lots,
+   const double points
+)
+  {
+   if(lots <= 0.0 || points <= 0.0 || snapshot.tick_size <= 0.0 || snapshot.tick_value <= 0.0 || _Point <= 0.0)
+      return 0.0;
+
+   double price_distance = points * _Point;
+   return ((price_distance / snapshot.tick_size) * snapshot.tick_value * lots);
+  }
+
+void MbPaperRefreshEconomics(
+   const MbMarketSnapshot &snapshot,
+   MbPaperPositionState &state,
+   const double gross_pnl,
+   const datetime now_ts
+)
+  {
+   state.gross_pln = gross_pnl;
+   // Paper PnL is already marked from executable bid/ask prices, so spread is implicit there.
+   state.spread_cost_pln = 0.0;
+   state.slippage_cost_pln = MbPaperPointsToMoney(snapshot,state.lots,state.modeled_slippage_points);
+   state.commission_pln = MbPaperPointsToMoney(snapshot,state.lots,state.modeled_commission_points);
+   if(state.opened_at <= 0 || now_ts <= state.opened_at || (now_ts - state.opened_at) < 86400)
+      state.swap_pln = 0.0;
+   state.net_pln = state.gross_pln - state.slippage_cost_pln - state.commission_pln - state.swap_pln - state.extra_fee_pln;
   }
 
 bool MbPaperHasOpenPosition(const MbPaperPositionState &state)
@@ -170,7 +236,9 @@ void MbPaperOpenPosition(
    const string renko_quality_grade,
    const double renko_score,
    const int renko_run_length,
-   const bool renko_reversal_flag
+   const bool renko_reversal_flag,
+   const double modeled_slippage_points,
+   const double modeled_commission_points
 )
   {
    state.active = true;
@@ -199,6 +267,15 @@ void MbPaperOpenPosition(
    state.renko_score = renko_score;
    state.renko_run_length = renko_run_length;
    state.renko_reversal_flag = renko_reversal_flag;
+   state.modeled_slippage_points = MathMax(0.0,modeled_slippage_points);
+   state.modeled_commission_points = MathMax(0.0,modeled_commission_points);
+   state.gross_pln = 0.0;
+   state.spread_cost_pln = 0.0;
+   state.slippage_cost_pln = 0.0;
+   state.commission_pln = 0.0;
+   state.swap_pln = 0.0;
+   state.extra_fee_pln = 0.0;
+   state.net_pln = 0.0;
   }
 
 void MbPaperOpenPosition(
@@ -239,7 +316,9 @@ void MbPaperOpenPosition(
       "UNKNOWN",
       0.0,
       0,
-      false
+      false,
+      0.0,
+      0.0
    );
   }
 
@@ -324,6 +403,7 @@ bool MbPaperMaybeClosePosition(
       return false;
 
    pnl_money = MbPaperProfitMoney(snapshot,state,mark_price);
+   MbPaperRefreshEconomics(snapshot,state,pnl_money,now_ts);
    closed_state = state;
    MbPaperPositionReset(state);
    return true;
