@@ -671,6 +671,22 @@ def _derive_local_runtime_state(
     return "GLOBAL_ONLY"
 
 
+def _has_package_runtime_mismatch(
+    package_present: bool,
+    runtime_contract_present: bool,
+    registry_present: bool,
+    model_artifact_available: bool,
+    runtime_local_model_available: bool,
+    registry_local_model_available: bool,
+) -> bool:
+    if not package_present or not runtime_contract_present or not registry_present:
+        return True
+    return (
+        runtime_local_model_available != model_artifact_available
+        or registry_local_model_available != model_artifact_available
+    )
+
+
 def _promotion_reasons_indicate_not_beating_global(promotion_reasons: list[str]) -> bool:
     reasons_text = " ".join(promotion_reasons).lower()
     return any(
@@ -715,18 +731,18 @@ def _build_ranking_reasons(
 
 def _build_deployment_reasons(
     ranking_pass: bool,
-    package_present: bool,
-    runtime_contract_present: bool,
     local_model_available: bool,
-    registry_present: bool,
     rollback_detected: bool,
     guardrail_state: str,
     promotion_approved: bool,
     promotion_reasons: list[str],
+    package_runtime_mismatch: bool,
 ) -> list[str]:
     reasons: list[str] = []
-    if (not package_present) or (package_present and not runtime_contract_present) or (package_present and not local_model_available) or not registry_present:
+    if package_runtime_mismatch:
         reasons.append("PACKAGE_RUNTIME_MISMATCH")
+    if not local_model_available:
+        reasons.append("LOCAL_MODEL_MISSING")
     if rollback_detected or guardrail_state.upper() == "FORCED_GLOBAL_FALLBACK":
         reasons.append("RECENT_ROLLBACK")
     if ranking_pass and (not promotion_approved):
@@ -754,25 +770,21 @@ def _derive_ranking_pass(
 
 def _derive_deployment_pass(
     ranking_pass: bool,
-    package_present: bool,
-    runtime_contract_present: bool,
     local_model_available: bool,
-    registry_present: bool,
     rollback_detected: bool,
     guardrail_state: str,
     promotion_approved: bool,
     promotion_reasons: list[str],
+    package_runtime_mismatch: bool,
 ) -> tuple[bool, list[str]]:
     reasons = _build_deployment_reasons(
         ranking_pass=ranking_pass,
-        package_present=package_present,
-        runtime_contract_present=runtime_contract_present,
         local_model_available=local_model_available,
-        registry_present=registry_present,
         rollback_detected=rollback_detected,
         guardrail_state=guardrail_state,
         promotion_approved=promotion_approved,
         promotion_reasons=promotion_reasons,
+        package_runtime_mismatch=package_runtime_mismatch,
     )
     return ranking_pass and len(reasons) == 0, reasons
 
@@ -905,10 +917,25 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
         runtime_contract_path = str(runtime_row.get("path") or "").strip()
         runtime_contract_present = bool(runtime_contract_path) and Path(runtime_contract_path).exists()
         registry_present = symbol in symbol_registry_rows
+        model_artifact_available = bool(model_state["student_model_available"])
+        runtime_local_model_available = _coerce_bool(runtime_row.get("local_model_available"), default=False)
+        registry_local_model_available = bool(
+            str(symbol_registry_row.get("student_model_path") or "").strip()
+            or str(symbol_registry_row.get("onnx_path") or "").strip()
+            or str(symbol_registry_row.get("joblib_path") or "").strip()
+        )
         local_model_available = (
-            model_state["student_model_available"]
-            or _coerce_bool(runtime_row.get("local_model_available"), default=False)
-            or bool(str(symbol_registry_row.get("student_model_path") or "").strip())
+            model_artifact_available
+            or runtime_local_model_available
+            or registry_local_model_available
+        )
+        package_runtime_mismatch = _has_package_runtime_mismatch(
+            package_present=package_present,
+            runtime_contract_present=runtime_contract_present,
+            registry_present=registry_present,
+            model_artifact_available=model_artifact_available,
+            runtime_local_model_available=runtime_local_model_available,
+            registry_local_model_available=registry_local_model_available,
         )
         rollback_detected = bool(local_audit_row) or guardrail_state.upper() == "FORCED_GLOBAL_FALLBACK"
         runtime_state = _derive_local_runtime_state(
@@ -926,14 +953,12 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
         )
         deployment_pass, deployment_reasons = _derive_deployment_pass(
             ranking_pass=ranking_pass,
-            package_present=package_present,
-            runtime_contract_present=runtime_contract_present,
             local_model_available=local_model_available,
-            registry_present=registry_present,
             rollback_detected=rollback_detected,
             guardrail_state=guardrail_state,
             promotion_approved=promotion_approved,
             promotion_reasons=promotion_reasons,
+            package_runtime_mismatch=package_runtime_mismatch,
         )
         readiness_reasons = _dedupe_reasons(ranking_reasons + deployment_reasons)
 
@@ -979,8 +1004,12 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
             "runtime_contract_present": runtime_contract_present,
             "runtime_contract_path": runtime_contract_path,
             "symbol_registry_present": registry_present,
+            "package_runtime_mismatch": package_runtime_mismatch,
             "broker_net_pln_ready": broker_net_ready,
             "local_model_available": local_model_available,
+            "model_artifact_available": model_artifact_available,
+            "runtime_local_model_available": runtime_local_model_available,
+            "registry_local_model_available": registry_local_model_available,
             "student_model_path": model_state["onnx_path"] or str(symbol_registry_row.get("student_model_path") or "").strip(),
             "student_joblib_path": model_state["joblib_path"],
             "metrics_path": model_state["metrics_path"],

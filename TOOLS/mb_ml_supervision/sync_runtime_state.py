@@ -54,12 +54,32 @@ def _scan_global_onnx(paths: OverlayPaths) -> bool:
     return paths.global_model_onnx_path.exists()
 
 
+def _load_local_readiness_rows(paths: OverlayPaths) -> dict[str, dict[str, Any]]:
+    payload = read_json(paths.local_model_readiness_path, default={})
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("items", [])
+    if not isinstance(rows, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol_alias") or row.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        result[symbol] = row
+    return result
+
+
 def write_student_gate_contract(
     target_path: Path,
     *,
     symbol: str,
     local_training_mode: str,
     outcome_ready: bool,
+    ranking_pass: bool,
+    deployment_pass: bool,
     local_model_available: bool,
     global_model_available: bool,
     thresholds: dict[str, float],
@@ -70,10 +90,12 @@ def write_student_gate_contract(
         ("schema_version", "1.0"),
         ("symbol", symbol),
         ("enabled", "1" if package_exists else "0"),
-        ("student_gate_enabled", "1" if (package_exists and local_model_available) else "0"),
+        ("student_gate_enabled", "1" if (package_exists and local_model_available and deployment_pass) else "0"),
         ("teacher_required", "1"),
         ("local_training_mode", local_training_mode),
         ("outcome_ready", "1" if outcome_ready else "0"),
+        ("ranking_pass", "1" if ranking_pass else "0"),
+        ("deployment_pass", "1" if deployment_pass else "0"),
         ("local_model_available", "1" if local_model_available else "0"),
         ("global_model_available", "1" if global_model_available else "0"),
         ("min_gate_probability", f"{thresholds['min_gate_probability']:.6f}"),
@@ -97,20 +119,26 @@ def sync_runtime_state(
     runtime_thresholds = _parse_package_thresholds(paths)
     package_exists = paths.package_json_path.exists()
     global_model_available = _scan_global_onnx(paths)
+    local_readiness_rows = _load_local_readiness_rows(paths)
 
     active_registry = load_active_registry_symbols(paths)
     outputs: dict[str, Any] = {}
     for item in active_registry:
         symbol = item["symbol"]
-        mode = audit["symbol_activity"]["training_modes"].get(symbol, "FALLBACK_ONLY")
-        outcome_rows = int(audit["symbol_activity"]["outcome_counts"].get(symbol, 0))
-        local_model_available = _scan_symbol_onnx(paths, symbol)
+        readiness_row = local_readiness_rows.get(symbol, {})
+        mode = str(readiness_row.get("training_state") or audit["symbol_activity"]["training_modes"].get(symbol, "FALLBACK_ONLY"))
+        outcome_rows = int(readiness_row.get("outcome_rows") or audit["symbol_activity"]["outcome_counts"].get(symbol, 0) or 0)
+        ranking_pass = bool(readiness_row.get("ranking_pass", False))
+        deployment_pass = bool(readiness_row.get("deployment_pass", False))
+        local_model_available = bool(readiness_row.get("local_model_available", False) or _scan_symbol_onnx(paths, symbol))
         target_path = paths.runtime_symbol_state_root / symbol / "student_gate_contract.csv"
         write_student_gate_contract(
             target_path,
             symbol=symbol,
             local_training_mode=mode,
             outcome_ready=outcome_rows >= thresholds.min_outcome_rows_for_shadow_ready,
+            ranking_pass=ranking_pass,
+            deployment_pass=deployment_pass,
             local_model_available=local_model_available,
             global_model_available=global_model_available,
             thresholds=runtime_thresholds,
@@ -120,6 +148,8 @@ def sync_runtime_state(
             "path": str(target_path),
             "local_training_mode": mode,
             "outcome_rows": outcome_rows,
+            "ranking_pass": ranking_pass,
+            "deployment_pass": deployment_pass,
             "local_model_available": local_model_available,
             "global_model_available": global_model_available,
         }

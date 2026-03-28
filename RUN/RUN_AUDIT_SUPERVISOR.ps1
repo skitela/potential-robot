@@ -1352,6 +1352,7 @@ function Invoke-AuditCycle {
         $staleDirCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "stale_symbol_model_dir_count" -Default 0)
         $reasonCounts = Get-OptionalValue -Object $localReadinessSummary -Name "reason_counts" -Default $null
         $costTruthGapCount = [int](Get-OptionalValue -Object $reasonCounts -Name "COST_TRUTH_GAP" -Default 0)
+        $localModelMissingCount = [int](Get-OptionalValue -Object $reasonCounts -Name "LOCAL_MODEL_MISSING" -Default 0)
         $packageMismatchCount = [int](Get-OptionalValue -Object $reasonCounts -Name "PACKAGE_RUNTIME_MISMATCH" -Default 0)
         $recentRollbackCount = [int](Get-OptionalValue -Object $reasonCounts -Name "RECENT_ROLLBACK" -Default 0)
 
@@ -1385,6 +1386,14 @@ function Invoke-AuditCycle {
                 component = "local_model_cost_truth_gap"
                 message = "Lokalne modele nadal widza luke miedzy gotowoscia danych a pelna prawda broker-net."
                 context = @{ cost_truth_gap_count = $costTruthGapCount }
+            }) | Out-Null
+        }
+        if ($localModelMissingCount -gt 0) {
+            $localModelReadinessEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "local_model_artifacts_missing"
+                message = "Lokalne artefakty per symbol nie sa jeszcze zbudowane albo nie sa jeszcze widoczne dla runtime."
+                context = @{ local_model_missing_count = $localModelMissingCount }
             }) | Out-Null
         }
         if ($packageMismatchCount -gt 0) {

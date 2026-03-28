@@ -135,13 +135,30 @@ def _build_symbol_payload(paths: CompatPaths, active_symbols: list[str]) -> dict
         for source in (registry_symbols, registry_alt_symbols):
             existing = source.get(symbol)
             if isinstance(existing, dict):
-                merged = dict(existing)
-                merged.setdefault("symbol_alias", symbol)
-                merged.setdefault("training_mode", entry["training_mode"])
-                merged.setdefault("local_model_available", entry["local_model_available"])
+                merged = dict(entry)
+                merged["symbol_alias"] = symbol
+                merged["training_mode"] = str(entry.get("training_mode") or existing.get("training_mode") or "FALLBACK_ONLY")
+                merged["local_model_available"] = bool(
+                    entry.get("local_model_available")
+                    or existing.get("local_model_available")
+                )
+                merged["metrics"] = entry.get("metrics") if isinstance(entry.get("metrics"), dict) and entry.get("metrics") else (
+                    existing.get("metrics", {}) if isinstance(existing.get("metrics"), dict) else {}
+                )
+                merged["promotion"] = entry.get("promotion") if isinstance(entry.get("promotion"), dict) and entry.get("promotion") else (
+                    existing.get("promotion", {}) if isinstance(existing.get("promotion"), dict) else {}
+                )
+                merged["labeled_rows"] = max(
+                    int(entry.get("labeled_rows", 0) or 0),
+                    int(existing.get("labeled_rows", 0) or 0),
+                )
+                merged["candidate_rows"] = max(
+                    int(entry.get("candidate_rows", 0) or 0),
+                    int(existing.get("candidate_rows", 0) or 0),
+                )
                 merged_artifacts = dict(existing.get("artifacts") or {})
                 for key, value in entry["artifacts"].items():
-                    if not merged_artifacts.get(key) and value:
+                    if value:
                         merged_artifacts[key] = value
                 merged["artifacts"] = merged_artifacts
                 entry = merged

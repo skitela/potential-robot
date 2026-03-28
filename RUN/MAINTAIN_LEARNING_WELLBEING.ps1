@@ -497,6 +497,9 @@ $localModelDeploymentBlockedCount = if ($null -ne $localModelReadinessSummary) {
 $localModelCostTruthGapCount = if ($null -ne $localModelReadinessSummary -and $null -ne $localModelReadinessSummary.reason_counts) {
     [int](Get-OptionalNumber -Object $localModelReadinessSummary.reason_counts -Name "COST_TRUTH_GAP" -Default 0)
 } else { 0 }
+$localModelMissingCount = if ($null -ne $localModelReadinessSummary -and $null -ne $localModelReadinessSummary.reason_counts) {
+    [int](Get-OptionalNumber -Object $localModelReadinessSummary.reason_counts -Name "LOCAL_MODEL_MISSING" -Default 0)
+} else { 0 }
 $localModelPackageMismatchCount = if ($null -ne $localModelReadinessSummary -and $null -ne $localModelReadinessSummary.reason_counts) {
     [int](Get-OptionalNumber -Object $localModelReadinessSummary.reason_counts -Name "PACKAGE_RUNTIME_MISMATCH" -Default 0)
 } else { 0 }
@@ -613,6 +616,7 @@ $report = [ordered]@{
         local_model_deployment_pass_count = $localModelDeploymentPassCount
         local_model_deployment_blocked_count = $localModelDeploymentBlockedCount
         local_model_cost_truth_gap_count = $localModelCostTruthGapCount
+        local_model_missing_count = $localModelMissingCount
         local_model_package_mismatch_count = $localModelPackageMismatchCount
         learning_source_gap_count = $learningSourceGapCount
         learning_source_blocked_count = $learningSourceBlockedCount
@@ -698,6 +702,7 @@ $lines.Add(("- local_model_global_only_count: {0}" -f $report.summary.local_mode
 $lines.Add(("- local_model_deployment_pass_count: {0}" -f $report.summary.local_model_deployment_pass_count))
 $lines.Add(("- local_model_deployment_blocked_count: {0}" -f $report.summary.local_model_deployment_blocked_count))
 $lines.Add(("- local_model_cost_truth_gap_count: {0}" -f $report.summary.local_model_cost_truth_gap_count))
+$lines.Add(("- local_model_missing_count: {0}" -f $report.summary.local_model_missing_count))
 $lines.Add(("- local_model_package_mismatch_count: {0}" -f $report.summary.local_model_package_mismatch_count))
 $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_source_gap_count))
 $lines.Add(("- ml_overlay_rollout_blocked: {0}" -f $report.summary.ml_overlay_rollout_blocked))

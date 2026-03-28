@@ -1277,7 +1277,10 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "local_model_readiness" -Operation {
         $report = (& $localModelReadinessScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
-        "ranking_pass=$($report.summary.ranking_pass_count); deployment_pass=$($report.summary.deployment_pass_count); runtime_ready=$($report.summary.runtime_ready_count); package_disabled=$($report.summary.runtime_package_present_but_disabled_count); global_only=$($report.summary.runtime_global_only_count)"
+        $reasonCounts = if ($null -ne $report.summary) { $report.summary.reason_counts } else { $null }
+        $localModelMissing = if ($null -ne $reasonCounts -and $null -ne $reasonCounts.LOCAL_MODEL_MISSING) { [int]$reasonCounts.LOCAL_MODEL_MISSING } else { 0 }
+        $packageMismatch = if ($null -ne $reasonCounts -and $null -ne $reasonCounts.PACKAGE_RUNTIME_MISMATCH) { [int]$reasonCounts.PACKAGE_RUNTIME_MISMATCH } else { 0 }
+        "ranking_pass=$($report.summary.ranking_pass_count); deployment_pass=$($report.summary.deployment_pass_count); runtime_ready=$($report.summary.runtime_ready_count); local_model_missing=$localModelMissing; package_mismatch=$packageMismatch; global_only=$($report.summary.runtime_global_only_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_plan" -Operation {
