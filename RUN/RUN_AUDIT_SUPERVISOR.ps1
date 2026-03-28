@@ -1343,6 +1343,9 @@ function Invoke-AuditCycle {
     $localModelReadinessEvidence = New-Object System.Collections.Generic.List[object]
     if ($null -ne $localModelReadiness) {
         $localReadinessSummary = Get-OptionalValue -Object $localModelReadiness -Name "summary" -Default $null
+        $rankingPassCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "ranking_pass_count" -Default 0)
+        $deploymentPassCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "deployment_pass_count" -Default 0)
+        $rankingOnlyCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "ranking_only_count" -Default 0)
         $runtimeReadyCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "runtime_ready_count" -Default 0)
         $runtimeDisabledCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "runtime_package_present_but_disabled_count" -Default 0)
         $globalOnlyCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "runtime_global_only_count" -Default 0)
@@ -1361,6 +1364,18 @@ function Invoke-AuditCycle {
                     runtime_ready_count = $runtimeReadyCount
                     runtime_package_present_but_disabled_count = $runtimeDisabledCount
                     runtime_global_only_count = $globalOnlyCount
+                }
+            }) | Out-Null
+        }
+        if ($rankingPassCount -gt 0 -and $deploymentPassCount -le 0) {
+            $localModelReadinessEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "local_model_ranking_deployment_gap"
+                message = "Czesc symboli przeszla juz etap rankingowy, ale zaden nie przeszedl jeszcze bramki wdrozeniowej runtime."
+                context = @{
+                    ranking_pass_count = $rankingPassCount
+                    deployment_pass_count = $deploymentPassCount
+                    ranking_only_count = $rankingOnlyCount
                 }
             }) | Out-Null
         }

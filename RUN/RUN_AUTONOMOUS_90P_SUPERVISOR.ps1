@@ -1277,7 +1277,7 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "local_model_readiness" -Operation {
         $report = (& $localModelReadinessScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
-        "training_ready=$($report.summary.training_ready_count); runtime_ready=$($report.summary.runtime_ready_count); package_disabled=$($report.summary.runtime_package_present_but_disabled_count); global_only=$($report.summary.runtime_global_only_count)"
+        "ranking_pass=$($report.summary.ranking_pass_count); deployment_pass=$($report.summary.deployment_pass_count); runtime_ready=$($report.summary.runtime_ready_count); package_disabled=$($report.summary.runtime_package_present_but_disabled_count); global_only=$($report.summary.runtime_global_only_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_plan" -Operation {

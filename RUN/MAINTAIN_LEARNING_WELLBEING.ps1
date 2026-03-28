@@ -486,9 +486,14 @@ $outcomeClosureBrokerNetReady = if ($null -ne $outcomeClosureSummary) { [bool]$o
 $localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
 $localTrainingLimitedCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_limited_count } else { 0 }
 $localModelTrainingReadyCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.training_ready_count } else { 0 }
+$localModelRankingPassCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.ranking_pass_count } else { 0 }
+$localModelRankingBlockedCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.ranking_blocked_count } else { 0 }
+$localModelRankingOnlyCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.ranking_only_count } else { 0 }
 $localModelRuntimeReadyCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.runtime_ready_count } else { 0 }
 $localModelRuntimeDisabledCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.runtime_package_present_but_disabled_count } else { 0 }
 $localModelGlobalOnlyCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.runtime_global_only_count } else { 0 }
+$localModelDeploymentPassCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.deployment_pass_count } else { 0 }
+$localModelDeploymentBlockedCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.deployment_blocked_count } else { 0 }
 $localModelCostTruthGapCount = if ($null -ne $localModelReadinessSummary -and $null -ne $localModelReadinessSummary.reason_counts) {
     [int](Get-OptionalNumber -Object $localModelReadinessSummary.reason_counts -Name "COST_TRUTH_GAP" -Default 0)
 } else { 0 }
@@ -599,9 +604,14 @@ $report = [ordered]@{
         outcome_closure_full_ledger_cost_count = $outcomeClosureFullLedgerCostCount
         outcome_closure_broker_net_pln_ready = $outcomeClosureBrokerNetReady
         local_model_training_ready_count = $localModelTrainingReadyCount
+        local_model_ranking_pass_count = $localModelRankingPassCount
+        local_model_ranking_blocked_count = $localModelRankingBlockedCount
+        local_model_ranking_only_count = $localModelRankingOnlyCount
         local_model_runtime_ready_count = $localModelRuntimeReadyCount
         local_model_runtime_disabled_count = $localModelRuntimeDisabledCount
         local_model_global_only_count = $localModelGlobalOnlyCount
+        local_model_deployment_pass_count = $localModelDeploymentPassCount
+        local_model_deployment_blocked_count = $localModelDeploymentBlockedCount
         local_model_cost_truth_gap_count = $localModelCostTruthGapCount
         local_model_package_mismatch_count = $localModelPackageMismatchCount
         learning_source_gap_count = $learningSourceGapCount
@@ -679,9 +689,14 @@ $lines.Add(("- outcome_closure_pending_paper_truth_count: {0}" -f $report.summar
 $lines.Add(("- outcome_closure_full_ledger_cost_count: {0}" -f $report.summary.outcome_closure_full_ledger_cost_count))
 $lines.Add(("- outcome_closure_broker_net_pln_ready: {0}" -f ([string]$report.summary.outcome_closure_broker_net_pln_ready).ToLowerInvariant()))
 $lines.Add(("- local_model_training_ready_count: {0}" -f $report.summary.local_model_training_ready_count))
+$lines.Add(("- local_model_ranking_pass_count: {0}" -f $report.summary.local_model_ranking_pass_count))
+$lines.Add(("- local_model_ranking_blocked_count: {0}" -f $report.summary.local_model_ranking_blocked_count))
+$lines.Add(("- local_model_ranking_only_count: {0}" -f $report.summary.local_model_ranking_only_count))
 $lines.Add(("- local_model_runtime_ready_count: {0}" -f $report.summary.local_model_runtime_ready_count))
 $lines.Add(("- local_model_runtime_disabled_count: {0}" -f $report.summary.local_model_runtime_disabled_count))
 $lines.Add(("- local_model_global_only_count: {0}" -f $report.summary.local_model_global_only_count))
+$lines.Add(("- local_model_deployment_pass_count: {0}" -f $report.summary.local_model_deployment_pass_count))
+$lines.Add(("- local_model_deployment_blocked_count: {0}" -f $report.summary.local_model_deployment_blocked_count))
 $lines.Add(("- local_model_cost_truth_gap_count: {0}" -f $report.summary.local_model_cost_truth_gap_count))
 $lines.Add(("- local_model_package_mismatch_count: {0}" -f $report.summary.local_model_package_mismatch_count))
 $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_source_gap_count))

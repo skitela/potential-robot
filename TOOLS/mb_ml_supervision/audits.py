@@ -360,7 +360,7 @@ def build_outcome_closure_audit(paths: OverlayPaths) -> dict[str, Any]:
     )
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_at_utc": utc_now_iso(),
         "active_fleet": {
             "count": len(active_symbols),
@@ -524,6 +524,21 @@ def _coerce_int(*values: Any) -> int:
     return 0
 
 
+def _coerce_max_int(*values: Any) -> int:
+    best = 0
+    found = False
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            parsed = int(value)
+        except Exception:
+            continue
+        best = max(best, parsed)
+        found = True
+    return best if found else 0
+
+
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -656,16 +671,34 @@ def _derive_local_runtime_state(
     return "GLOBAL_ONLY"
 
 
-def _build_readiness_reasons(
+def _promotion_reasons_indicate_not_beating_global(promotion_reasons: list[str]) -> bool:
+    reasons_text = " ".join(promotion_reasons).lower()
+    return any(
+        token in reasons_text
+        for token in (
+            "global",
+            "nauczyciel",
+            "teacher",
+            "beat",
+            "przebija",
+            "stronger than local",
+            "fallback do modelu globalnego",
+        )
+    )
+
+
+def _dedupe_reasons(reasons: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for reason in reasons:
+        if reason and reason not in deduped:
+            deduped.append(reason)
+    return deduped
+
+
+def _build_ranking_reasons(
     candidate_rows: int,
     outcome_rows: int,
     broker_net_ready: bool,
-    package_present: bool,
-    runtime_contract_present: bool,
-    local_model_available: bool,
-    registry_present: bool,
-    rollback_detected: bool,
-    guardrail_state: str,
     promotion_reasons: list[str],
 ) -> list[str]:
     reasons: list[str] = []
@@ -675,20 +708,73 @@ def _build_readiness_reasons(
         reasons.append("NO_OUTCOME")
     if not broker_net_ready:
         reasons.append("COST_TRUTH_GAP")
-    if rollback_detected or guardrail_state.upper() == "FORCED_GLOBAL_FALLBACK":
-        reasons.append("RECENT_ROLLBACK")
+    if _promotion_reasons_indicate_not_beating_global(promotion_reasons):
+        reasons.append("NOT_BEATING_GLOBAL")
+    return _dedupe_reasons(reasons)
+
+
+def _build_deployment_reasons(
+    ranking_pass: bool,
+    package_present: bool,
+    runtime_contract_present: bool,
+    local_model_available: bool,
+    registry_present: bool,
+    rollback_detected: bool,
+    guardrail_state: str,
+    promotion_approved: bool,
+    promotion_reasons: list[str],
+) -> list[str]:
+    reasons: list[str] = []
     if (not package_present) or (package_present and not runtime_contract_present) or (package_present and not local_model_available) or not registry_present:
         reasons.append("PACKAGE_RUNTIME_MISMATCH")
+    if rollback_detected or guardrail_state.upper() == "FORCED_GLOBAL_FALLBACK":
+        reasons.append("RECENT_ROLLBACK")
+    if ranking_pass and (not promotion_approved):
+        if _promotion_reasons_indicate_not_beating_global(promotion_reasons):
+            reasons.append("NOT_BEATING_GLOBAL")
+        else:
+            reasons.append("PROMOTION_PENDING")
+    return _dedupe_reasons(reasons)
 
-    reasons_text = " ".join(promotion_reasons).lower()
-    if any(token in reasons_text for token in ("global", "nauczyciel", "teacher", "beat", "przebija", "stronger than local")):
-        reasons.append("NOT_BEATING_GLOBAL")
 
-    deduped: list[str] = []
-    for reason in reasons:
-        if reason not in deduped:
-            deduped.append(reason)
-    return deduped
+def _derive_ranking_pass(
+    candidate_rows: int,
+    outcome_rows: int,
+    broker_net_ready: bool,
+    promotion_reasons: list[str],
+) -> tuple[bool, list[str]]:
+    reasons = _build_ranking_reasons(
+        candidate_rows=candidate_rows,
+        outcome_rows=outcome_rows,
+        broker_net_ready=broker_net_ready,
+        promotion_reasons=promotion_reasons,
+    )
+    return len(reasons) == 0, reasons
+
+
+def _derive_deployment_pass(
+    ranking_pass: bool,
+    package_present: bool,
+    runtime_contract_present: bool,
+    local_model_available: bool,
+    registry_present: bool,
+    rollback_detected: bool,
+    guardrail_state: str,
+    promotion_approved: bool,
+    promotion_reasons: list[str],
+) -> tuple[bool, list[str]]:
+    reasons = _build_deployment_reasons(
+        ranking_pass=ranking_pass,
+        package_present=package_present,
+        runtime_contract_present=runtime_contract_present,
+        local_model_available=local_model_available,
+        registry_present=registry_present,
+        rollback_detected=rollback_detected,
+        guardrail_state=guardrail_state,
+        promotion_approved=promotion_approved,
+        promotion_reasons=promotion_reasons,
+    )
+    return ranking_pass and len(reasons) == 0, reasons
 
 
 def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
@@ -757,8 +843,12 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
 
     items: list[dict[str, Any]] = []
     reason_counts: dict[str, int] = {}
+    ranking_reason_counts: dict[str, int] = {}
+    deployment_reason_counts: dict[str, int] = {}
     training_state_counts: dict[str, int] = {}
     runtime_state_counts: dict[str, int] = {}
+    ranking_pass_count = 0
+    deployment_pass_count = 0
 
     for registry_row in active_registry:
         symbol = registry_row["symbol"]
@@ -770,26 +860,26 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
         symbol_registry_row = symbol_registry_rows.get(symbol, {})
         model_state = _build_symbol_model_state(paths.symbol_models_dir / symbol)
 
-        candidate_rows = _coerce_int(
+        candidate_rows = _coerce_max_int(
             training_row.get("candidate_contract_rows"),
             model_state["candidate_rows"],
             health_row.get("candidate_rows"),
         )
-        learning_rows = _coerce_int(
+        learning_rows = _coerce_max_int(
             training_row.get("learning_contract_rows"),
             health_row.get("rows_total"),
         )
-        onnx_runtime_rows = _coerce_int(
+        onnx_runtime_rows = _coerce_max_int(
             training_row.get("onnx_runtime_rows"),
             model_state["runtime_rows"],
             runtime_row.get("outcome_rows"),
         )
-        outcome_rows = _coerce_int(
+        outcome_rows = _coerce_max_int(
             training_row.get("outcome_rows"),
             model_state["outcome_rows"],
             runtime_row.get("outcome_rows"),
         )
-        labeled_rows = _coerce_int(
+        labeled_rows = _coerce_max_int(
             model_state["labeled_rows"],
             health_row.get("rows_total"),
         )
@@ -828,24 +918,30 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
             promotion_approved=promotion_approved,
             forced_fallback=(guardrail_state.upper() == "FORCED_GLOBAL_FALLBACK"),
         )
-        readiness_reasons = _build_readiness_reasons(
+        ranking_pass, ranking_reasons = _derive_ranking_pass(
             candidate_rows=candidate_rows,
             outcome_rows=outcome_rows,
             broker_net_ready=broker_net_ready,
+            promotion_reasons=promotion_reasons,
+        )
+        deployment_pass, deployment_reasons = _derive_deployment_pass(
+            ranking_pass=ranking_pass,
             package_present=package_present,
             runtime_contract_present=runtime_contract_present,
             local_model_available=local_model_available,
             registry_present=registry_present,
             rollback_detected=rollback_detected,
             guardrail_state=guardrail_state,
+            promotion_approved=promotion_approved,
             promotion_reasons=promotion_reasons,
         )
+        readiness_reasons = _dedupe_reasons(ranking_reasons + deployment_reasons)
 
         if training_state == "FALLBACK_ONLY":
             readiness_verdict = "GLOBAL_FALLBACK"
-        elif runtime_state == "LOCAL_RUNTIME_READY":
+        elif deployment_pass or runtime_state == "LOCAL_RUNTIME_READY":
             readiness_verdict = "READY_FOR_LOCAL_RUNTIME"
-        elif candidate_rows > 0:
+        elif ranking_pass or candidate_rows > 0:
             readiness_verdict = "TRAIN_ONLY"
         else:
             readiness_verdict = "GLOBAL_FALLBACK"
@@ -858,6 +954,12 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
             "preset": registry_row.get("preset", ""),
             "training_state": training_state,
             "runtime_state": runtime_state,
+            "ranking_pass": ranking_pass,
+            "ranking_verdict": "RANKING_PASS" if ranking_pass else "RANKING_BLOCKED",
+            "ranking_reasons": ranking_reasons,
+            "deployment_pass": deployment_pass,
+            "deployment_verdict": "DEPLOYMENT_PASS" if deployment_pass else "DEPLOYMENT_BLOCKED",
+            "deployment_reasons": deployment_reasons,
             "readiness_verdict": readiness_verdict,
             "readiness_reasons": readiness_reasons,
             "local_training_eligibility": str(training_row.get("local_training_eligibility") or "").strip(),
@@ -890,8 +992,14 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
 
         training_state_counts[training_state] = training_state_counts.get(training_state, 0) + 1
         runtime_state_counts[runtime_state] = runtime_state_counts.get(runtime_state, 0) + 1
+        ranking_pass_count += int(ranking_pass)
+        deployment_pass_count += int(deployment_pass)
         for reason in readiness_reasons:
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        for reason in ranking_reasons:
+            ranking_reason_counts[reason] = ranking_reason_counts.get(reason, 0) + 1
+        for reason in deployment_reasons:
+            deployment_reason_counts[reason] = deployment_reason_counts.get(reason, 0) + 1
 
     items.sort(key=lambda row: (row["runtime_state"], row["symbol_alias"]))
 
@@ -907,14 +1015,21 @@ def build_local_model_readiness_audit(paths: OverlayPaths) -> dict[str, Any]:
         "symbols_with_local_artifacts_count": sum(1 for row in items if row["local_model_available"]),
         "symbols_with_runtime_contract_count": sum(1 for row in items if row["runtime_contract_present"]),
         "symbols_with_package_entry_count": sum(1 for row in items if row["package_present"]),
+        "ranking_pass_count": ranking_pass_count,
+        "ranking_blocked_count": len(active_symbols) - ranking_pass_count,
+        "deployment_pass_count": deployment_pass_count,
+        "deployment_blocked_count": len(active_symbols) - deployment_pass_count,
+        "ranking_only_count": sum(1 for row in items if row["ranking_pass"] and not row["deployment_pass"]),
         "broker_net_pln_ready": broker_net_ready,
         "reason_counts": reason_counts,
+        "ranking_reason_counts": ranking_reason_counts,
+        "deployment_reason_counts": deployment_reason_counts,
         "stale_symbol_model_dir_count": len(stale_symbol_model_dirs),
         "stale_symbol_registry_count": len(stale_registry_symbols),
     }
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_at_utc": utc_now_iso(),
         "active_fleet": {
             "count": len(active_symbols),
