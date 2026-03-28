@@ -112,6 +112,10 @@ class OverlayPaths:
         return self.config_dir / "microbots_registry.json"
 
     @property
+    def scalping_universe_plan_path(self) -> Path:
+        return self.config_dir / "scalping_universe_plan.json"
+
+    @property
     def family_policy_registry_path(self) -> Path:
         return self.config_dir / "family_policy_registry.json"
 
@@ -122,6 +126,10 @@ class OverlayPaths:
     @property
     def runtime_symbol_state_root(self) -> Path:
         return self.common_state_root / "MAKRO_I_MIKRO_BOT" / "state"
+
+    @property
+    def runtime_symbol_key_root(self) -> Path:
+        return self.common_state_root / "MAKRO_I_MIKRO_BOT" / "key"
 
     @property
     def runtime_global_state_dir(self) -> Path:
@@ -170,6 +178,18 @@ class OverlayPaths:
     @property
     def outcome_closure_audit_path(self) -> Path:
         return self.evidence_ops_dir / "outcome_closure_latest.json"
+
+    @property
+    def active_universe_parity_audit_path(self) -> Path:
+        return self.evidence_ops_dir / "active_universe_parity_audit_latest.json"
+
+    @property
+    def broker_realism_parity_audit_path(self) -> Path:
+        return self.evidence_ops_dir / "broker_realism_parity_audit_latest.json"
+
+    @property
+    def scalping_decision_chain_audit_path(self) -> Path:
+        return self.evidence_ops_dir / "scalping_decision_chain_audit_latest.json"
 
     @property
     def learning_source_audit_path(self) -> Path:
@@ -248,3 +268,23 @@ class OverlayPaths:
                 if list(candidate.glob("Profile_*.mqh")):
                     return candidate
         return self.project_root / "MQL5" / "Include" / "Profiles"
+
+    @property
+    def server_profile_root(self) -> Path:
+        return self.project_root / "SERVER_PROFILE"
+
+    @property
+    def server_profile_package_root(self) -> Path:
+        return self.server_profile_root / "PACKAGE"
+
+    @property
+    def server_profile_active_live_root(self) -> Path:
+        return self.server_profile_package_root / "MQL5" / "Presets" / "ActiveLive"
+
+    @property
+    def server_profile_handoff_root(self) -> Path:
+        return self.server_profile_root / "HANDOFF"
+
+    @property
+    def server_profile_remote_sim_root(self) -> Path:
+        return self.server_profile_root / "REMOTE_SIM"

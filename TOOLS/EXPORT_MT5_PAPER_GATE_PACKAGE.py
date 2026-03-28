@@ -6,7 +6,11 @@ from pathlib import Path
 
 from mb_ml_core.io_utils import ensure_dir, write_json
 from mb_ml_core.paths import CompatPaths
-from mb_ml_core.registry import load_active_symbols
+from mb_ml_core.registry import (
+    load_paper_live_bucket_for_symbol,
+    load_scalping_universe_plan,
+    load_training_universe_symbols,
+)
 from mb_ml_core.trainer import train_all_symbol_models, train_global_model, TrainingThresholds
 
 
@@ -75,13 +79,20 @@ def _scan_symbol_entry(paths: CompatPaths, symbol: str) -> dict:
     }
 
 
-def _build_registry_payload(symbol_payload: dict[str, dict]) -> dict:
+def _resolve_runtime_scope(bucket: str) -> str:
+    return "PAPER_LIVE" if bucket == "FIRST_WAVE" else "LAPTOP_ONLY"
+
+
+def _build_registry_payload(symbol_payload: dict[str, dict], universe_plan: dict[str, object]) -> dict:
     items = []
     for symbol, entry in symbol_payload.items():
         metrics = entry.get("metrics", {}) if isinstance(entry.get("metrics"), dict) else {}
         promotion = entry.get("promotion", {}) if isinstance(entry.get("promotion"), dict) else {}
         training_mode = str(entry.get("training_mode", "FALLBACK_ONLY"))
         local_model_available = bool(entry.get("local_model_available", False))
+        paper_live_bucket = str(entry.get("paper_live_bucket") or "GLOBAL_TEACHER_ONLY")
+        paper_live_enabled = bool(entry.get("paper_live_enabled", False))
+        runtime_scope = str(entry.get("runtime_scope") or _resolve_runtime_scope(paper_live_bucket))
         labeled_rows = int(entry.get("labeled_rows", 0) or 0)
         positive_rate = float(metrics.get("positive_rate_actual", 0.0) or 0.0)
         positive_rows = max(0, int(round(labeled_rows * positive_rate)))
@@ -106,6 +117,9 @@ def _build_registry_payload(symbol_payload: dict[str, dict]) -> dict:
                 "joblib_path": entry.get("artifacts", {}).get("joblib_path") or None,
                 "metrics_path": entry.get("artifacts", {}).get("metrics_path") or None,
                 "training_mode": training_mode,
+                "paper_live_bucket": paper_live_bucket,
+                "paper_live_enabled": paper_live_enabled,
+                "runtime_scope": runtime_scope,
                 "promotion_approved": bool(promotion.get("approved", False)),
             }
         )
@@ -114,6 +128,14 @@ def _build_registry_payload(symbol_payload: dict[str, dict]) -> dict:
     return {
         "generated_at_local": __import__("datetime").datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "generated_at_utc": __import__("datetime").datetime.utcnow().isoformat(),
+        "universe_version": str(universe_plan["universe_version"]),
+        "plan_hash": str(universe_plan["plan_hash"]),
+        "training_universe": list(universe_plan["training_universe"]),
+        "paper_live_universe": list(universe_plan["paper_live_first_wave"]),
+        "paper_live_second_wave": list(universe_plan["paper_live_second_wave"]),
+        "paper_live_hold": list(universe_plan["paper_live_hold"]),
+        "global_teacher_only": list(universe_plan["global_teacher_only"]),
+        "retired_symbols": list(universe_plan["retired_symbols"]),
         "total_symbols": len(items),
         "ready_count": ready_count,
         "fallback_count": len(items) - ready_count,
@@ -183,13 +205,35 @@ def main() -> int:
         train_global_model(paths, export_onnx=args.export_onnx, thresholds=thresholds)
         train_all_symbol_models(paths, export_onnx=args.export_onnx, thresholds=thresholds)
 
-    active_symbols = load_active_symbols(paths)
+    universe_plan = load_scalping_universe_plan(paths)
+    active_symbols = load_training_universe_symbols(paths)
     symbol_payload = _build_symbol_payload(paths, active_symbols)
+    for symbol, entry in symbol_payload.items():
+        paper_live_bucket = load_paper_live_bucket_for_symbol(paths, symbol)
+        entry["paper_live_bucket"] = paper_live_bucket
+        entry["paper_live_enabled"] = paper_live_bucket == "FIRST_WAVE"
+        entry["runtime_scope"] = _resolve_runtime_scope(paper_live_bucket)
 
     package = {
         "schema_version": "1.0",
         "project_root": str(paths.project_root),
         "research_root": str(paths.research_root),
+        "universe_version": str(universe_plan["universe_version"]),
+        "plan_hash": str(universe_plan["plan_hash"]),
+        "decision_thresholds": {
+            "min_gate_probability": 0.53,
+            "min_decision_score_pln": 0.0,
+            "max_spread_points": 999.0,
+            "max_server_ping_ms": 35.0,
+            "max_server_latency_us_avg": 250000.0,
+        },
+        "training_universe": list(universe_plan["training_universe"]),
+        "paper_live_universe": list(universe_plan["paper_live_first_wave"]),
+        "paper_live_symbols": list(universe_plan["paper_live_first_wave"]),
+        "paper_live_second_wave": list(universe_plan["paper_live_second_wave"]),
+        "paper_live_hold": list(universe_plan["paper_live_hold"]),
+        "global_teacher_only": list(universe_plan["global_teacher_only"]),
+        "retired_symbols": list(universe_plan["retired_symbols"]),
         "global_model_path": str(paths.global_model_dir / "paper_gate_acceptor_latest.onnx"),
         "global_model_joblib": str(paths.global_model_dir / "paper_gate_acceptor_latest.joblib"),
         "global_metrics_path": str(paths.global_model_dir / "paper_gate_acceptor_latest_metrics.json"),
@@ -200,12 +244,13 @@ def main() -> int:
             "Pakiet zachowuje istniejące nazwy paper_gate_acceptor i paper_gate_acceptor_by_symbol.",
             "Runtime MT5 powinien czytać teacher z paper_gate_acceptor_latest.onnx albo fallback do joblib po stronie research.",
             "Każdy symbol ma własne artefakty gate/edge/fill/slippage, o ile trening nie wypadł do trybu FALLBACK_ONLY.",
+            "training_universe opisuje szeroki laptopowy swiat uczenia, paper_live_universe tylko pierwszy rzut MT5 paper/live.",
         ],
     }
 
     out_path = ensure_dir(paths.models_dir) / "paper_gate_acceptor_mt5_package_latest.json"
     write_json(out_path, package)
-    registry_payload = _build_registry_payload(symbol_payload)
+    registry_payload = _build_registry_payload(symbol_payload, universe_plan)
     write_json(paths.onnx_symbol_registry_latest, registry_payload)
     write_json(paths.onnx_symbol_registry_latest_alt, registry_payload)
     write_json(paths.evidence_onnx_symbol_registry_latest, registry_payload)

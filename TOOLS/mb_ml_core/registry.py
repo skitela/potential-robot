@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import hashlib
 import json
 import re
 from typing import Any
@@ -10,6 +11,10 @@ import pandas as pd
 
 from .io_utils import first_present, read_table
 from .paths import CompatPaths, DEFAULT_SYMBOLS
+
+
+class UniversePlanError(RuntimeError):
+    pass
 
 
 @dataclass(slots=True)
@@ -30,7 +35,21 @@ def _load_json(path: Path | None) -> Any:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
-def load_active_symbols(paths: CompatPaths) -> list[str]:
+def _normalize_symbol_list(values: Any, field_name: str) -> list[str]:
+    if not isinstance(values, list):
+        raise UniversePlanError(f"Pole '{field_name}' musi byc lista symboli.")
+    normalized: list[str] = []
+    for raw in values:
+        symbol = str(raw).strip()
+        if not symbol:
+            raise UniversePlanError(f"Pole '{field_name}' zawiera pusty symbol.")
+        if symbol in normalized:
+            raise UniversePlanError(f"Pole '{field_name}' zawiera duplikat '{symbol}'.")
+        normalized.append(symbol)
+    return normalized
+
+
+def _load_registry_symbols(paths: CompatPaths) -> list[str]:
     registry_path = paths.config_dir / "microbots_registry.json"
     if not registry_path.exists():
         return DEFAULT_SYMBOLS.copy()
@@ -84,6 +103,168 @@ def load_active_symbols(paths: CompatPaths) -> list[str]:
             unique.append(symbol)
 
     return unique or DEFAULT_SYMBOLS.copy()
+
+
+def _stable_plan_hash(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def validate_scalping_universe_plan(paths: CompatPaths, payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise UniversePlanError("Kontrakt universe musi byc obiektem JSON.")
+
+    required_fields = [
+        "schema_version",
+        "universe_version",
+        "training_universe",
+        "paper_live_first_wave",
+        "paper_live_second_wave",
+        "paper_live_hold",
+        "global_teacher_only",
+        "retired_symbols",
+    ]
+    missing = [field for field in required_fields if field not in payload]
+    if missing:
+        raise UniversePlanError(f"Brakuje pol kontraktu universe: {', '.join(missing)}.")
+
+    schema_version = str(payload.get("schema_version") or "").strip()
+    universe_version = str(payload.get("universe_version") or "").strip()
+    if not schema_version:
+        raise UniversePlanError("Pole 'schema_version' nie moze byc puste.")
+    if not universe_version:
+        raise UniversePlanError("Pole 'universe_version' nie moze byc puste.")
+
+    training_universe = _normalize_symbol_list(payload.get("training_universe"), "training_universe")
+    paper_live_first_wave = _normalize_symbol_list(payload.get("paper_live_first_wave"), "paper_live_first_wave")
+    paper_live_second_wave = _normalize_symbol_list(payload.get("paper_live_second_wave"), "paper_live_second_wave")
+    paper_live_hold = _normalize_symbol_list(payload.get("paper_live_hold"), "paper_live_hold")
+    global_teacher_only = _normalize_symbol_list(payload.get("global_teacher_only"), "global_teacher_only")
+    retired_symbols = _normalize_symbol_list(payload.get("retired_symbols"), "retired_symbols")
+
+    active_bucket_names = (
+        "paper_live_first_wave",
+        "paper_live_second_wave",
+        "paper_live_hold",
+        "global_teacher_only",
+    )
+    active_bucket_map = {
+        "paper_live_first_wave": paper_live_first_wave,
+        "paper_live_second_wave": paper_live_second_wave,
+        "paper_live_hold": paper_live_hold,
+        "global_teacher_only": global_teacher_only,
+    }
+
+    training_set = set(training_universe)
+    retired_set = set(retired_symbols)
+    if training_set & retired_set:
+        overlap = ", ".join(sorted(training_set & retired_set))
+        raise UniversePlanError(f"Retired symbols przecinaja sie z training_universe: {overlap}.")
+
+    for bucket_name, bucket_values in active_bucket_map.items():
+        bucket_set = set(bucket_values)
+        if not bucket_set.issubset(training_set):
+            invalid = ", ".join(sorted(bucket_set - training_set))
+            raise UniversePlanError(f"Pole '{bucket_name}' zawiera symbole spoza training_universe: {invalid}.")
+
+    covered: set[str] = set()
+    for bucket_name in active_bucket_names:
+        bucket_values = set(active_bucket_map[bucket_name])
+        overlap = covered & bucket_values
+        if overlap:
+            raise UniversePlanError(
+                f"Bucket '{bucket_name}' przecina sie z innym aktywnym bucketem: {', '.join(sorted(overlap))}."
+            )
+        covered.update(bucket_values)
+
+    if covered != training_set:
+        missing_from_buckets = sorted(training_set - covered)
+        extra_in_buckets = sorted(covered - training_set)
+        problems: list[str] = []
+        if missing_from_buckets:
+            problems.append("brakujace w bucketach: " + ", ".join(missing_from_buckets))
+        if extra_in_buckets:
+            problems.append("nadmiarowe w bucketach: " + ", ".join(extra_in_buckets))
+        raise UniversePlanError("Aktywne buckety nie pokrywaja dokladnie training_universe (" + "; ".join(problems) + ").")
+
+    registry_symbols = _load_registry_symbols(paths)
+    registry_set = set(registry_symbols)
+    if training_set != registry_set:
+        missing_in_registry = sorted(training_set - registry_set)
+        extra_in_registry = sorted(registry_set - training_set)
+        problems = []
+        if missing_in_registry:
+            problems.append("brak w registry: " + ", ".join(missing_in_registry))
+        if extra_in_registry:
+            problems.append("nadmiar w registry: " + ", ".join(extra_in_registry))
+        raise UniversePlanError("training_universe nie zgadza sie z aktywnym microbots_registry (" + "; ".join(problems) + ").")
+
+    normalized_payload = {
+        "schema_version": schema_version,
+        "universe_version": universe_version,
+        "training_universe": training_universe,
+        "paper_live_first_wave": paper_live_first_wave,
+        "paper_live_second_wave": paper_live_second_wave,
+        "paper_live_hold": paper_live_hold,
+        "global_teacher_only": global_teacher_only,
+        "retired_symbols": retired_symbols,
+    }
+    normalized_payload["plan_hash"] = _stable_plan_hash(normalized_payload)
+    return normalized_payload
+
+
+def load_scalping_universe_plan(paths: CompatPaths) -> dict[str, Any]:
+    path = paths.scalping_universe_plan
+    if not path.exists():
+        raise UniversePlanError(f"Brakuje kontraktu universe: {path}")
+    payload = _load_json(path)
+    return validate_scalping_universe_plan(paths, payload)
+
+
+def load_training_universe_symbols(paths: CompatPaths) -> list[str]:
+    return list(load_scalping_universe_plan(paths)["training_universe"])
+
+
+def load_paper_live_first_wave_symbols(paths: CompatPaths) -> list[str]:
+    return list(load_scalping_universe_plan(paths)["paper_live_first_wave"])
+
+
+def load_paper_live_active_symbols(paths: CompatPaths) -> list[str]:
+    return load_paper_live_first_wave_symbols(paths)
+
+
+def load_retired_symbols(paths: CompatPaths) -> list[str]:
+    return list(load_scalping_universe_plan(paths)["retired_symbols"])
+
+
+def load_paper_live_bucket_for_symbol(paths: CompatPaths, symbol: str) -> str:
+    symbol = str(symbol).strip()
+    plan = load_scalping_universe_plan(paths)
+    bucket_map = {
+        "paper_live_first_wave": "FIRST_WAVE",
+        "paper_live_second_wave": "SECOND_WAVE",
+        "paper_live_hold": "HOLD",
+        "global_teacher_only": "GLOBAL_TEACHER_ONLY",
+        "retired_symbols": "RETIRED",
+    }
+    for field_name, bucket_name in bucket_map.items():
+        if symbol in plan[field_name]:
+            return bucket_name
+    if symbol in plan["training_universe"]:
+        raise UniversePlanError(f"Symbol '{symbol}' jest w training_universe, ale nie ma przydzielonego bucketu.")
+    raise UniversePlanError(f"Symbol '{symbol}' nie istnieje w kontrakcie universe.")
+
+
+def load_universe_version(paths: CompatPaths) -> str:
+    return str(load_scalping_universe_plan(paths)["universe_version"])
+
+
+def load_universe_plan_hash(paths: CompatPaths) -> str:
+    return str(load_scalping_universe_plan(paths)["plan_hash"])
+
+
+def load_active_symbols(paths: CompatPaths) -> list[str]:
+    return load_training_universe_symbols(paths)
 
 
 def load_family_policy_registry(paths: CompatPaths) -> pd.DataFrame:

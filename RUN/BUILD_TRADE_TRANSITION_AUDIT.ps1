@@ -71,6 +71,7 @@ function Read-KeyValueTable {
 
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
+$planPath = Join-Path $ProjectRoot "CONFIG\scalping_universe_plan.json"
 $activePresetRoot = Join-Path $ProjectRoot "SERVER_PROFILE\PACKAGE\MQL5\Presets\ActiveLive"
 $migrationReportPath = Join-Path $ProjectRoot "EVIDENCE\migrate_oanda_mt5_vps_clean_latest.json"
 $paperLiveSyncPath = Join-Path $opsRoot "paper_live_sync_latest.json"
@@ -89,6 +90,10 @@ $registry = Read-JsonSafe -Path $registryPath
 if ($null -eq $registry) {
     throw "Brakuje rejestru mikrobotow: $registryPath"
 }
+$plan = Read-JsonSafe -Path $planPath
+if ($null -eq $plan) {
+    throw "Brakuje kontraktu universe: $planPath"
+}
 
 $migrationReport = Read-JsonSafe -Path $migrationReportPath
 $paperLiveSyncReport = Read-JsonSafe -Path $paperLiveSyncPath
@@ -100,7 +105,9 @@ $trainerText = if (Test-Path -LiteralPath $trainerScriptPath) { Get-Content -Lit
 $featureContractText = if (Test-Path -LiteralPath $featureContractPath) { Get-Content -LiteralPath $featureContractPath -Raw -Encoding UTF8 } else { "" }
 
 $registrySymbols = @($registry.symbols)
-$expectedActivePresets = foreach ($row in $registrySymbols) {
+$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
+$paperLiveRows = @($registrySymbols | Where-Object { $paperLiveSymbols -contains [string]$_.symbol })
+$expectedActivePresets = foreach ($row in $paperLiveRows) {
     "{0}_ACTIVE.set" -f ([System.IO.Path]::GetFileNameWithoutExtension([string]$row.preset))
 }
 $packageActivePresetFiles = if (Test-Path -LiteralPath $activePresetRoot) {
@@ -209,6 +216,9 @@ elseif ($activeTradeCount -gt 0) {
 
 $summary = [ordered]@{
     registry_symbols_count = @($registrySymbols).Count
+    training_universe_count = @($plan.training_universe).Count
+    paper_live_universe_count = @($paperLiveSymbols).Count
+    universe_version = [string]$plan.universe_version
     package_active_preset_count = @($packageActivePresetFiles).Count
     missing_active_preset_count = @($missingActivePresets).Count
     dedicated_vps_profile_report_present = $hasDedicatedVpsProfileReport

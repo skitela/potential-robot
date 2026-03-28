@@ -63,6 +63,10 @@ class CompatPaths:
         return self.project_root / "CONFIG"
 
     @property
+    def scalping_universe_plan(self) -> Path:
+        return self.config_dir / "scalping_universe_plan.json"
+
+    @property
     def evidence_ops_dir(self) -> Path:
         return self.project_root / "EVIDENCE" / "OPS"
 

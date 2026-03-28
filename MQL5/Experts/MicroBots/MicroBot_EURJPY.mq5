@@ -927,7 +927,8 @@ void OnTick()
                signal.renko_run_length,
                signal.renko_reversal_flag,
                exec_check.modeled_slippage_points,
-               exec_check.modeled_commission_points
+               exec_check.modeled_commission_points,
+               InpEnableLiveEntries
             );
             MbSavePaperPosition(g_profile.symbol,g_paper_position);
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);

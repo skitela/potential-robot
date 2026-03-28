@@ -6,6 +6,9 @@ from typing import Any
 import importlib.util
 import json
 
+from mb_ml_core.paths import CompatPaths
+from mb_ml_core.registry import load_paper_live_active_symbols, load_retired_symbols, load_scalping_universe_plan, load_training_universe_symbols
+
 from .io_utils import (
     dump_json,
     file_age_hours,
@@ -29,6 +32,55 @@ class AuditThresholds:
     min_labeled_rows_for_rollout: int = 100
     min_outcome_rows_for_shadow_ready: int = 50
     natural_drop_ratio_floor: float = 0.85
+
+
+def _compat_paths(paths: OverlayPaths) -> CompatPaths:
+    return CompatPaths.create(
+        project_root=paths.project_root,
+        research_root=paths.research_root,
+        common_state_root=paths.runtime_root,
+    )
+
+
+def _read_text_file_contains(path: Path, symbols: set[str]) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    if path.suffix.lower() not in {".json", ".txt", ".md", ".ini", ".csv", ".set", ".mqh", ".mq5"}:
+        return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").upper()
+    except Exception:
+        return False
+    return any(symbol.upper() in text for symbol in symbols)
+
+
+def _collect_tree_symbol_hits(root: Path, symbols: list[str]) -> list[str]:
+    if not root.exists():
+        return []
+    symbol_set = {str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()}
+    hits: list[str] = []
+    for path in root.rglob("*"):
+        if path.is_dir():
+            continue
+        normalized_path = str(path).upper()
+        matched = [symbol for symbol in symbol_set if symbol in normalized_path]
+        if not matched and not _read_text_file_contains(path, symbol_set):
+            continue
+        hits.append(str(path))
+    return sorted(hits)
+
+
+def _load_expected_symbols_from_global_metrics(paths: OverlayPaths) -> list[str]:
+    payload = read_json(paths.global_metrics_path, default={})
+    if not isinstance(payload, dict):
+        return []
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        return []
+    values = summary.get("expected_symbols")
+    if not isinstance(values, list):
+        return []
+    return [str(item).strip() for item in values if str(item).strip()]
 
 
 def load_active_registry_symbols(paths: OverlayPaths) -> list[dict[str, Any]]:
@@ -418,9 +470,10 @@ def _find_symbol_registry(paths: OverlayPaths) -> Path | None:
 
 
 def inspect_package(paths: OverlayPaths, thresholds: AuditThresholds) -> dict[str, Any]:
-    symbols = _collect_package_symbols(paths)
     package_exists = paths.package_json_path.exists()
     package_age = file_age_hours(paths.package_json_path)
+    package_payload = read_json(paths.package_json_path, default={})
+    symbols = _collect_package_symbols(paths)
     registry_path = _find_symbol_registry(paths)
     registry_payload = read_json(registry_path, default=None) if registry_path else None
     global_joblib = paths.global_model_joblib_path.exists()
@@ -428,11 +481,17 @@ def inspect_package(paths: OverlayPaths, thresholds: AuditThresholds) -> dict[st
     metrics_exists = paths.global_metrics_path.exists()
     preview_only = package_exists and len(symbols) == 0
     registry_symbols = sorted(recursive_collect_symbols(registry_payload)) if registry_payload is not None else []
+    training_universe = package_payload.get("training_universe", []) if isinstance(package_payload, dict) else []
+    paper_live_universe = package_payload.get("paper_live_universe", []) if isinstance(package_payload, dict) else []
     return {
         "path": str(paths.package_json_path),
         "exists": package_exists,
         "modified_at_utc": file_modified_iso(paths.package_json_path),
         "age_hours": package_age,
+        "universe_version": str(package_payload.get("universe_version") or "") if isinstance(package_payload, dict) else "",
+        "plan_hash": str(package_payload.get("plan_hash") or "") if isinstance(package_payload, dict) else "",
+        "training_universe": list(training_universe) if isinstance(training_universe, list) else [],
+        "paper_live_universe": list(paper_live_universe) if isinstance(paper_live_universe, list) else [],
         "symbols_in_package": sorted(symbols),
         "symbols_count": len(symbols),
         "preview_only": preview_only,
@@ -1134,8 +1193,21 @@ def build_overlay_audit(
     thresholds: AuditThresholds | None = None,
 ) -> dict[str, Any]:
     thresholds = thresholds or AuditThresholds()
+    compat_paths = _compat_paths(paths)
+    universe_plan = load_scalping_universe_plan(compat_paths)
+    training_universe = load_training_universe_symbols(compat_paths)
+    paper_live_symbols = load_paper_live_active_symbols(compat_paths)
+    retired_symbols = load_retired_symbols(compat_paths)
     active_registry = load_active_registry_symbols(paths)
     active_symbols = [item["symbol"] for item in active_registry]
+    retired_symbols_present_in_state = [symbol for symbol in retired_symbols if (paths.runtime_symbol_state_root / symbol).exists()]
+    retired_symbols_present_in_key = [symbol for symbol in retired_symbols if (paths.runtime_symbol_key_root / symbol).exists()]
+    retired_symbols_present_in_handoff = _collect_tree_symbol_hits(paths.server_profile_handoff_root, retired_symbols)
+    retired_symbols_present_in_remote_sim = _collect_tree_symbol_hits(paths.server_profile_remote_sim_root, retired_symbols)
+    expected_symbols_in_metrics = _load_expected_symbols_from_global_metrics(paths)
+    expected_symbols_mismatch = bool(expected_symbols_in_metrics) and (
+        set(expected_symbols_in_metrics) != set(training_universe)
+    )
 
     candidate_counts = parquet_symbol_counts(paths.candidate_contract_path)
     runtime_counts = parquet_symbol_counts(paths.onnx_observations_contract_path)
@@ -1179,6 +1251,10 @@ def build_overlay_audit(
         warnings.append("MQL5_RUNTIME_BRIDGE_INCOMPLETE")
     if not lightgbm_available:
         warnings.append("LIGHTGBM_FALLBACK_ACTIVE")
+    if retired_symbols_present_in_state or retired_symbols_present_in_key or retired_symbols_present_in_handoff or retired_symbols_present_in_remote_sim:
+        warnings.append("RETIRED_SYMBOL_LEAKS_PRESENT")
+    if expected_symbols_mismatch:
+        warnings.append("EXPECTED_SYMBOLS_MISMATCH")
 
     rollout_blocked = len(errors) > 0
     package_should_export = not rollout_blocked and package["exists"] and not package["preview_only"]
@@ -1192,10 +1268,31 @@ def build_overlay_audit(
             "warnings": warnings,
             "errors": errors,
             "lightgbm_available": lightgbm_available,
+            "training_universe_count": len(training_universe),
+            "paper_live_universe_count": len(paper_live_symbols),
+            "paper_live_symbols": paper_live_symbols,
+            "retired_symbols_present_in_state": retired_symbols_present_in_state,
+            "retired_symbols_present_in_key": retired_symbols_present_in_key,
+            "retired_symbols_present_in_handoff": retired_symbols_present_in_handoff,
+            "retired_symbols_present_in_remote_sim": retired_symbols_present_in_remote_sim,
+            "expected_symbols_mismatch": expected_symbols_mismatch,
+            "universe_version": str(universe_plan["universe_version"]),
+            "plan_hash": str(universe_plan["plan_hash"]),
         },
         "active_fleet": {
             "count": len(active_symbols),
             "symbols": active_symbols,
+        },
+        "universe_contract": {
+            "training_universe": training_universe,
+            "paper_live_universe": paper_live_symbols,
+            "paper_live_second_wave": list(universe_plan["paper_live_second_wave"]),
+            "paper_live_hold": list(universe_plan["paper_live_hold"]),
+            "global_teacher_only": list(universe_plan["global_teacher_only"]),
+            "retired_symbols": retired_symbols,
+            "universe_version": str(universe_plan["universe_version"]),
+            "plan_hash": str(universe_plan["plan_hash"]),
+            "expected_symbols_in_metrics": expected_symbols_in_metrics,
         },
         "tail_bridge": tail_bridge,
         "broker_net_ledger": ledger,

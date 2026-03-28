@@ -10,12 +10,21 @@ $ErrorActionPreference = "Stop"
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $profilePath = $ProfileRoot
 $registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
+$planPath = Join-Path $projectPath "CONFIG\scalping_universe_plan.json"
 
 if (-not (Test-Path -LiteralPath $registryPath)) {
     throw "Missing registry: $registryPath"
 }
+if (-not (Test-Path -LiteralPath $planPath)) {
+    throw "Missing scalping universe plan: $planPath"
+}
 
 $registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$planHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $planPath).Hash
+$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
+$trainingUniverse = @($plan.training_universe | ForEach-Object { [string]$_ })
+$retiredSymbols = @($plan.retired_symbols | ForEach-Object { [string]$_ })
 
 function Get-CodeSymbolFromRegistryRow {
     param(
@@ -52,6 +61,36 @@ function Resolve-PreferredCompiledSourceDir {
     }
 
     return $FallbackDir
+}
+
+function Resolve-CompiledExpertPath {
+    param(
+        [string]$PreferredTerminalDataDir,
+        [string]$ExpertName
+    )
+
+    $preferredPath = Join-Path $PreferredTerminalDataDir ("MQL5\\Experts\\MicroBots\\{0}.ex5" -f $ExpertName)
+    if (Test-Path -LiteralPath $preferredPath) {
+        return $preferredPath
+    }
+
+    $terminalRoot = Split-Path -Path $PreferredTerminalDataDir -Parent
+    if (-not (Test-Path -LiteralPath $terminalRoot)) {
+        return $null
+    }
+
+    $matches = @(Get-ChildItem -LiteralPath $terminalRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notin @('Common', 'Community', 'Help') } |
+        ForEach-Object {
+            Join-Path $_.FullName ("MQL5\\Experts\\MicroBots\\{0}.ex5" -f $ExpertName)
+        } |
+        Where-Object { Test-Path -LiteralPath $_ })
+
+    if ($matches.Count -gt 0) {
+        return [string]$matches[0]
+    }
+
+    return $null
 }
 
 $resolvedSourceTerminalDataDir = Resolve-PreferredCompiledSourceDir -ProjectPath $projectPath -FallbackDir $SourceTerminalDataDir
@@ -128,6 +167,7 @@ foreach ($row in @($registry.symbols)) {
     $sourceProfile = Join-Path $projectPath ("MQL5\\Include\\Profiles\\Profile_{0}.mqh" -f $codeSymbol)
     $sourceStrategy = Join-Path $projectPath ("MQL5\\Include\\Strategies\\Strategy_{0}.mqh" -f $codeSymbol)
     $sourcePreset = Join-Path $projectPath ("MQL5\\Presets\\{0}" -f $preset)
+    $shouldGenerateActivePreset = ($paperLiveSymbols -contains [string]$row.symbol)
     $activePresetName = "{0}_ACTIVE.set" -f ([System.IO.Path]::GetFileNameWithoutExtension($preset))
     $targetActivePreset = Join-Path $packageActivePresets $activePresetName
 
@@ -142,22 +182,23 @@ foreach ($row in @($registry.symbols)) {
     Copy-Item -LiteralPath $sourceStrategy -Destination $packageStrategies -Force
     Copy-Item -LiteralPath $sourcePreset -Destination $packagePresets -Force
 
-    $presetContent = Get-Content -LiteralPath $sourcePreset
-    $activePresetContent = foreach ($line in $presetContent) {
-        if ($line -match '^InpEnableLiveEntries=') {
-            'InpEnableLiveEntries=true'
-        }
-        else {
-            $line
-        }
-    }
-    Set-Content -LiteralPath $targetActivePreset -Value $activePresetContent -Encoding ASCII
-
     [void]$copiedExperts.Add([System.IO.Path]::GetFileName($sourceMq5))
     [void]$copiedProfiles.Add([System.IO.Path]::GetFileName($sourceProfile))
     [void]$copiedStrategies.Add([System.IO.Path]::GetFileName($sourceStrategy))
     [void]$copiedPresets.Add([System.IO.Path]::GetFileName($sourcePreset))
-    [void]$copiedActivePresets.Add($activePresetName)
+    if ($shouldGenerateActivePreset) {
+        $presetContent = Get-Content -LiteralPath $sourcePreset
+        $activePresetContent = foreach ($line in $presetContent) {
+            if ($line -match '^InpEnableLiveEntries=') {
+                'InpEnableLiveEntries=true'
+            }
+            else {
+                $line
+            }
+        }
+        Set-Content -LiteralPath $targetActivePreset -Value $activePresetContent -Encoding ASCII
+        [void]$copiedActivePresets.Add($activePresetName)
+    }
 }
 
 Copy-Item (Join-Path $projectPath "MQL5\\Include\\Core\\*.mqh") $packageCore -Force
@@ -175,9 +216,9 @@ $sourceExperts = Join-Path $resolvedSourceTerminalDataDir "MQL5\\Experts\\MicroB
 if (Test-Path -LiteralPath $sourceExperts) {
     foreach ($row in @($registry.symbols)) {
         $expert = [string]$row.expert
-        $sourceEx5 = Join-Path $sourceExperts ("{0}.ex5" -f $expert)
-        if (-not (Test-Path -LiteralPath $sourceEx5)) {
-            throw "Missing compiled active expert: $sourceEx5"
+        $sourceEx5 = Resolve-CompiledExpertPath -PreferredTerminalDataDir $resolvedSourceTerminalDataDir -ExpertName $expert
+        if ([string]::IsNullOrWhiteSpace($sourceEx5)) {
+            throw "Missing compiled active expert across MT5 terminals: $expert"
         }
 
         Copy-Item -LiteralPath $sourceEx5 -Destination $packageExperts -Force
@@ -191,8 +232,16 @@ $manifest = [ordered]@{
     schema_version = "1.0"
     profile_name = "MAKRO_I_MIKRO_BOT_MT5_ONLY_PACKAGE"
     package_root = $profilePath
+    universe_version = [string]$plan.universe_version
+    plan_hash = $planHash
     runtime_model = "mql5_only_microbots"
     deployment_model = "one_microbot_per_chart"
+    training_universe = $trainingUniverse
+    paper_live_universe = $paperLiveSymbols
+    paper_live_second_wave = @($plan.paper_live_second_wave | ForEach-Object { [string]$_ })
+    paper_live_hold = @($plan.paper_live_hold | ForEach-Object { [string]$_ })
+    global_teacher_only = @($plan.global_teacher_only | ForEach-Object { [string]$_ })
+    retired_symbols = $retiredSymbols
     copied = @(
         "MQL5\\Experts\\MicroBots\\*.mq5",
         "MQL5\\Include\\Core\\*.mqh",
@@ -205,6 +254,7 @@ $manifest = [ordered]@{
     )
     source_terminal_data_dir = $resolvedSourceTerminalDataDir
     active_symbols = $activeSymbols
+    active_live_symbols = $paperLiveSymbols
     copied_inventory = [ordered]@{
         experts = @($copiedExperts | Sort-Object -Unique)
         profiles = @($copiedProfiles | Sort-Object -Unique)

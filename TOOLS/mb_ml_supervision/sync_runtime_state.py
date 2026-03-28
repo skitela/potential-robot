@@ -4,6 +4,17 @@ from pathlib import Path
 from typing import Any
 import csv
 
+from mb_ml_core.paths import CompatPaths
+from mb_ml_core.registry import (
+    load_paper_live_active_symbols,
+    load_paper_live_bucket_for_symbol,
+    load_retired_symbols,
+    load_scalping_universe_plan,
+    load_training_universe_symbols,
+    load_universe_plan_hash,
+    load_universe_version,
+)
+
 from .audits import AuditThresholds, build_overlay_audit, load_active_registry_symbols
 from .io_utils import dump_json, ensure_parent, recursive_collect_symbols, read_json, utc_now_iso
 from .paths import OverlayPaths
@@ -77,6 +88,9 @@ def write_student_gate_contract(
     *,
     symbol: str,
     local_training_mode: str,
+    paper_live_enabled: bool,
+    runtime_scope: str,
+    paper_live_bucket: str,
     outcome_ready: bool,
     ranking_pass: bool,
     deployment_pass: bool,
@@ -84,15 +98,22 @@ def write_student_gate_contract(
     global_model_available: bool,
     thresholds: dict[str, float],
     package_exists: bool,
+    universe_version: str,
+    plan_hash: str,
 ) -> None:
     ensure_parent(target_path)
     rows = [
         ("schema_version", "1.0"),
         ("symbol", symbol),
+        ("universe_version", universe_version),
+        ("plan_hash", plan_hash),
         ("enabled", "1" if package_exists else "0"),
         ("student_gate_enabled", "1" if (package_exists and local_model_available and deployment_pass) else "0"),
         ("teacher_required", "1"),
         ("local_training_mode", local_training_mode),
+        ("paper_live_enabled", "1" if paper_live_enabled else "0"),
+        ("runtime_scope", runtime_scope),
+        ("paper_live_bucket", paper_live_bucket),
         ("outcome_ready", "1" if outcome_ready else "0"),
         ("ranking_pass", "1" if ranking_pass else "0"),
         ("deployment_pass", "1" if deployment_pass else "0"),
@@ -120,6 +141,17 @@ def sync_runtime_state(
     package_exists = paths.package_json_path.exists()
     global_model_available = _scan_global_onnx(paths)
     local_readiness_rows = _load_local_readiness_rows(paths)
+    compat_paths = CompatPaths.create(
+        project_root=paths.project_root,
+        research_root=paths.research_root,
+        common_state_root=paths.runtime_root,
+    )
+    universe_plan = load_scalping_universe_plan(compat_paths)
+    training_universe = load_training_universe_symbols(compat_paths)
+    paper_live_active_symbols = load_paper_live_active_symbols(compat_paths)
+    retired_symbols = load_retired_symbols(compat_paths)
+    universe_version = load_universe_version(compat_paths)
+    plan_hash = load_universe_plan_hash(compat_paths)
 
     active_registry = load_active_registry_symbols(paths)
     outputs: dict[str, Any] = {}
@@ -131,11 +163,17 @@ def sync_runtime_state(
         ranking_pass = bool(readiness_row.get("ranking_pass", False))
         deployment_pass = bool(readiness_row.get("deployment_pass", False))
         local_model_available = bool(readiness_row.get("local_model_available", False) or _scan_symbol_onnx(paths, symbol))
+        paper_live_bucket = load_paper_live_bucket_for_symbol(compat_paths, symbol)
+        paper_live_enabled = paper_live_bucket == "FIRST_WAVE"
+        runtime_scope = "PAPER_LIVE" if paper_live_enabled else "LAPTOP_ONLY"
         target_path = paths.runtime_symbol_state_root / symbol / "student_gate_contract.csv"
         write_student_gate_contract(
             target_path,
             symbol=symbol,
             local_training_mode=mode,
+            paper_live_enabled=paper_live_enabled,
+            runtime_scope=runtime_scope,
+            paper_live_bucket=paper_live_bucket,
             outcome_ready=outcome_rows >= thresholds.min_outcome_rows_for_shadow_ready,
             ranking_pass=ranking_pass,
             deployment_pass=deployment_pass,
@@ -143,6 +181,8 @@ def sync_runtime_state(
             global_model_available=global_model_available,
             thresholds=runtime_thresholds,
             package_exists=package_exists,
+            universe_version=universe_version,
+            plan_hash=plan_hash,
         )
         outputs[symbol] = {
             "path": str(target_path),
@@ -152,11 +192,24 @@ def sync_runtime_state(
             "deployment_pass": deployment_pass,
             "local_model_available": local_model_available,
             "global_model_available": global_model_available,
+            "paper_live_enabled": paper_live_enabled,
+            "paper_live_bucket": paper_live_bucket,
+            "runtime_scope": runtime_scope,
+            "universe_version": universe_version,
+            "plan_hash": plan_hash,
         }
 
     registry_payload = {
         "schema_version": "1.0",
         "generated_at_utc": utc_now_iso(),
+        "universe_version": universe_version,
+        "plan_hash": plan_hash,
+        "training_universe": training_universe,
+        "paper_live_universe": paper_live_active_symbols,
+        "paper_live_second_wave": list(universe_plan["paper_live_second_wave"]),
+        "paper_live_hold": list(universe_plan["paper_live_hold"]),
+        "global_teacher_only": list(universe_plan["global_teacher_only"]),
+        "retired_symbols": retired_symbols,
         "package_exists": package_exists,
         "global_model_available": global_model_available,
         "thresholds": runtime_thresholds,

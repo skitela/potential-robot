@@ -9,11 +9,20 @@ $helperPath = Join-Path $ProjectRoot "TOOLS\REGISTRY_SYMBOL_HELPERS.ps1"
 . $helperPath
 
 $registryPath = Join-Path $ProjectRoot "CONFIG\\microbots_registry.json"
+$planPath = Join-Path $ProjectRoot "CONFIG\\scalping_universe_plan.json"
 $registry = Get-Content -LiteralPath $registryPath -Encoding UTF8 | ConvertFrom-Json
+if (-not (Test-Path -LiteralPath $planPath)) {
+    throw "Missing scalping universe plan: $planPath"
+}
+$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
+if ($paperLiveSymbols.Count -le 0) {
+    throw "Universe plan has empty paper_live_first_wave."
+}
 
 $rows = @()
 $index = 1
-foreach ($item in $registry.symbols) {
+foreach ($item in @($registry.symbols | Where-Object { $paperLiveSymbols -contains [string]$_.symbol })) {
     $canonicalSymbol = Get-RegistryCanonicalSymbol -RegistryItem $item
     $brokerSymbol = Get-RegistryBrokerSymbol -RegistryItem $item
     $rows += [PSCustomObject]@{
@@ -26,6 +35,8 @@ foreach ($item in $registry.symbols) {
         chart_tf = [string]$item.chart_tf
         session_profile = [string]$item.session_profile
         status = [string]$item.status
+        paper_live_bucket = "FIRST_WAVE"
+        runtime_scope = "PAPER_LIVE"
     }
     $index++
 }

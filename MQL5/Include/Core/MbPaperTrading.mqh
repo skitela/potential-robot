@@ -211,7 +211,52 @@ bool MbPaperHasOpenPosition(const MbPaperPositionState &state)
    return state.active;
   }
 
-void MbPaperOpenPosition(
+bool MbPaperReadContractValue(const string symbol,const string key_name,string &out_value)
+  {
+   out_value = "";
+   string contract_path = MbStateFilePath(symbol,"student_gate_contract.csv");
+   if(!FileIsExist(contract_path,FILE_COMMON))
+      return false;
+
+   int h = FileOpen(contract_path, FILE_COMMON | FILE_READ | FILE_CSV | FILE_ANSI);
+   if(h == INVALID_HANDLE)
+      return false;
+
+   while(!FileIsEnding(h))
+     {
+      string key = FileReadString(h);
+      string value = FileReadString(h);
+      if(key == key_name)
+        {
+         out_value = value;
+         FileClose(h);
+         return true;
+        }
+     }
+
+   FileClose(h);
+   return false;
+  }
+
+bool MbPaperReadBoolContractValue(const string symbol,const string key_name)
+  {
+   string value = "";
+   if(!MbPaperReadContractValue(symbol,key_name,value))
+      return false;
+   StringToUpper(value);
+   return (value == "1" || value == "TRUE" || value == "YES" || value == "ON");
+  }
+
+bool MbPaperLiveUniverseAllowsSymbol(const string symbol,string &out_bucket,string &out_runtime_scope)
+  {
+   out_bucket = "";
+   out_runtime_scope = "";
+   MbPaperReadContractValue(symbol,"paper_live_bucket",out_bucket);
+   MbPaperReadContractValue(symbol,"runtime_scope",out_runtime_scope);
+   return MbPaperReadBoolContractValue(symbol,"paper_live_enabled");
+  }
+
+bool MbPaperOpenPosition(
    MbPaperPositionState &state,
    const MbSignalSide side,
    const double lots,
@@ -238,9 +283,25 @@ void MbPaperOpenPosition(
    const int renko_run_length,
    const bool renko_reversal_flag,
    const double modeled_slippage_points,
-   const double modeled_commission_points
+   const double modeled_commission_points,
+   const bool enforce_paper_live_scope = false
 )
   {
+   if(enforce_paper_live_scope)
+     {
+      string paper_live_bucket = "";
+      string runtime_scope = "";
+      if(!MbPaperLiveUniverseAllowsSymbol(Symbol(),paper_live_bucket,runtime_scope))
+        {
+         MbPaperPositionReset(state);
+         state.entry_reason = "PAPER_LIVE_SYMBOL_DISABLED";
+         state.setup_type = "PAPER_LIVE_SYMBOL_DISABLED";
+         state.spread_regime = paper_live_bucket;
+         state.execution_regime = runtime_scope;
+         return false;
+        }
+     }
+
    state.active = true;
    state.side = side;
    state.lots = lots;
@@ -276,9 +337,10 @@ void MbPaperOpenPosition(
    state.swap_pln = 0.0;
    state.extra_fee_pln = 0.0;
    state.net_pln = 0.0;
+   return true;
   }
 
-void MbPaperOpenPosition(
+bool MbPaperOpenPosition(
    MbPaperPositionState &state,
    const MbSignalSide side,
    const double lots,
@@ -318,7 +380,8 @@ void MbPaperOpenPosition(
       0,
       false,
       0.0,
-      0.0
+      0.0,
+      false
    );
   }
 

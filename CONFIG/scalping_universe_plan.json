@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "universe_version": "2026-03-28_active13_v1",
+  "training_universe": [
+    "EURUSD",
+    "AUDUSD",
+    "GBPUSD",
+    "USDJPY",
+    "USDCAD",
+    "USDCHF",
+    "EURJPY",
+    "EURAUD",
+    "GOLD",
+    "SILVER",
+    "COPPER-US",
+    "DE30",
+    "US500"
+  ],
+  "paper_live_first_wave": [
+    "US500",
+    "EURJPY",
+    "AUDUSD",
+    "USDCAD"
+  ],
+  "paper_live_second_wave": [
+    "DE30",
+    "GOLD"
+  ],
+  "paper_live_hold": [
+    "SILVER"
+  ],
+  "global_teacher_only": [
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "USDCHF",
+    "EURAUD",
+    "COPPER-US"
+  ],
+  "retired_symbols": [
+    "NZDUSD",
+    "GBPJPY"
+  ]
+}

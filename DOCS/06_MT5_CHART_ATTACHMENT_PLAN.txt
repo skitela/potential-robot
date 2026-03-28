@@ -1,17 +1,6 @@
 MT5 CHART ATTACHMENT PLAN
 
-Chart 1: EURUSD [EURUSD.pro] -> MicroBot_EURUSD -> MicroBot_EURUSD_Live.set -> Magic=910101 -> TF=M5 -> Session=FX_MAIN -> Status=compiled_verified
-Chart 2: AUDUSD [AUDUSD.pro] -> MicroBot_AUDUSD -> MicroBot_AUDUSD_Live.set -> Magic=910104 -> TF=M5 -> Session=FX_ASIA -> Status=compiled_verified
-Chart 3: GBPUSD [GBPUSD.pro] -> MicroBot_GBPUSD -> MicroBot_GBPUSD_Live.set -> Magic=910102 -> TF=M5 -> Session=FX_MAIN -> Status=compiled_verified
-Chart 4: USDJPY [USDJPY.pro] -> MicroBot_USDJPY -> MicroBot_USDJPY_Live.set -> Magic=910103 -> TF=M5 -> Session=FX_ASIA -> Status=compiled_verified
-Chart 5: USDCAD [USDCAD.pro] -> MicroBot_USDCAD -> MicroBot_USDCAD_Live.set -> Magic=910105 -> TF=M5 -> Session=FX_MAIN -> Status=compiled_verified
-Chart 6: USDCHF [USDCHF.pro] -> MicroBot_USDCHF -> MicroBot_USDCHF_Live.set -> Magic=910106 -> TF=M5 -> Session=FX_MAIN -> Status=compiled_verified
-Chart 7: NZDUSD [NZDUSD.pro] -> MicroBot_NZDUSD -> MicroBot_NZDUSD_Live.set -> Magic=910107 -> TF=M5 -> Session=FX_ASIA -> Status=compiled_verified
-Chart 8: EURJPY [EURJPY.pro] -> MicroBot_EURJPY -> MicroBot_EURJPY_Live.set -> Magic=910108 -> TF=M5 -> Session=FX_CROSS -> Status=compiled_verified
-Chart 9: GBPJPY [GBPJPY.pro] -> MicroBot_GBPJPY -> MicroBot_GBPJPY_Live.set -> Magic=910109 -> TF=M5 -> Session=FX_CROSS -> Status=compiled_verified
-Chart 10: EURAUD [EURAUD.pro] -> MicroBot_EURAUD -> MicroBot_EURAUD_Live.set -> Magic=910110 -> TF=M5 -> Session=FX_CROSS -> Status=compiled_verified
-Chart 11: GOLD [GOLD.pro] -> MicroBot_GOLD -> MicroBot_GOLD_Live.set -> Magic=920201 -> TF=M5 -> Session=METALS_SPOT_PM -> Status=compiled_verified
-Chart 12: SILVER [SILVER.pro] -> MicroBot_SILVER -> MicroBot_SILVER_Live.set -> Magic=920202 -> TF=M5 -> Session=METALS_SPOT_PM -> Status=compiled_verified
-Chart 13: COPPER-US [COPPER-US.pro] -> MicroBot_COPPERUS -> MicroBot_COPPERUS_Live.set -> Magic=920204 -> TF=M5 -> Session=METALS_FUTURES -> Status=compiled_verified
-Chart 14: DE30 [DE30.pro] -> MicroBot_DE30 -> MicroBot_DE30_Live.set -> Magic=930301 -> TF=M5 -> Session=INDEX_EU -> Status=compiled_verified
-Chart 15: US500 [US500.pro] -> MicroBot_US500 -> MicroBot_US500_Live.set -> Magic=930302 -> TF=M5 -> Session=INDEX_US -> Status=compiled_verified
+Chart 1: AUDUSD [AUDUSD.pro] -> MicroBot_AUDUSD -> MicroBot_AUDUSD_Live.set -> Magic=910104 -> TF=M5 -> Session=FX_ASIA -> Status=compiled_verified
+Chart 2: USDCAD [USDCAD.pro] -> MicroBot_USDCAD -> MicroBot_USDCAD_Live.set -> Magic=910105 -> TF=M5 -> Session=FX_MAIN -> Status=compiled_verified
+Chart 3: EURJPY [EURJPY.pro] -> MicroBot_EURJPY -> MicroBot_EURJPY_Live.set -> Magic=910108 -> TF=M5 -> Session=FX_CROSS -> Status=compiled_verified
+Chart 4: US500 [US500.pro] -> MicroBot_US500 -> MicroBot_US500_Live.set -> Magic=930302 -> TF=M5 -> Session=INDEX_US -> Status=compiled_verified

@@ -18,7 +18,12 @@ struct MbMlRuntimeBridgeContract
    bool outcome_ready;
    bool local_model_available;
    bool global_model_available;
+   bool paper_live_enabled;
    string local_training_mode;
+   string runtime_scope;
+   string paper_live_bucket;
+   string universe_version;
+   string plan_hash;
    MbDecisionThresholds thresholds;
   };
 
@@ -54,7 +59,12 @@ void MbMlRuntimeBridgeResetContract(MbMlRuntimeBridgeContract &contract)
    contract.outcome_ready = false;
    contract.local_model_available = false;
    contract.global_model_available = false;
+    contract.paper_live_enabled = false;
    contract.local_training_mode = "FALLBACK_ONLY";
+   contract.runtime_scope = "LAPTOP_ONLY";
+   contract.paper_live_bucket = "GLOBAL_TEACHER_ONLY";
+   contract.universe_version = "";
+   contract.plan_hash = "";
    MbSetDefaultDecisionThresholds(contract.thresholds);
   }
 
@@ -109,8 +119,18 @@ bool MbMlRuntimeBridgeLoadContract(MbMlRuntimeBridgeState &state)
          state.contract.local_model_available = MbMlRuntimeBridgeReadBool(value);
       else if(key == "global_model_available")
          state.contract.global_model_available = MbMlRuntimeBridgeReadBool(value);
+      else if(key == "paper_live_enabled")
+         state.contract.paper_live_enabled = MbMlRuntimeBridgeReadBool(value);
       else if(key == "local_training_mode")
          state.contract.local_training_mode = value;
+      else if(key == "runtime_scope")
+         state.contract.runtime_scope = value;
+      else if(key == "paper_live_bucket")
+         state.contract.paper_live_bucket = value;
+      else if(key == "universe_version")
+         state.contract.universe_version = value;
+      else if(key == "plan_hash")
+         state.contract.plan_hash = value;
       else if(key == "min_gate_probability")
          state.contract.thresholds.min_gate_probability = StringToDouble(value);
       else if(key == "min_decision_score_pln")
@@ -127,6 +147,26 @@ bool MbMlRuntimeBridgeLoadContract(MbMlRuntimeBridgeState &state)
    state.contract.present = true;
    state.last_contract_refresh_at = TimeCurrent();
    return true;
+  }
+
+bool MbMlRuntimeBridgePaperLiveEnabled(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.paper_live_enabled;
+  }
+
+string MbMlRuntimeBridgeRuntimeScope(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.runtime_scope;
+  }
+
+string MbMlRuntimeBridgePaperLiveBucket(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.paper_live_bucket;
+  }
+
+string MbMlRuntimeBridgeUniverseVersion(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.universe_version;
   }
 
 void MbMlRuntimeBridgeInit(
