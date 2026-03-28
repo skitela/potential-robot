@@ -13,6 +13,7 @@ $responsesConsumed = Join-Path $MailboxDir "responses\consumed"
 $requestsPending = Join-Path $MailboxDir "requests\pending"
 $requestsInProgress = Join-Path $MailboxDir "requests\in_progress"
 $requestsFailed = Join-Path $MailboxDir "requests\failed"
+$requestsHold = Join-Path $MailboxDir "requests\hold"
 
 function Load-StatusJson {
     param([string]$Name)
@@ -36,6 +37,7 @@ $launcher = Load-StatusJson -Name "launcher_latest"
 $pendingMd = Get-ChildItem -LiteralPath $requestsPending -Filter *.md -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 $inProgressMd = Get-ChildItem -LiteralPath $requestsInProgress -Filter *.md -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 $failedMd = Get-ChildItem -LiteralPath $requestsFailed -Filter *.md -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+$heldMd = Get-ChildItem -LiteralPath $requestsHold -Filter *.md -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 $readyMd = Get-ChildItem -LiteralPath $responsesReady -Filter *.md -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 $consumedDirs = Get-ChildItem -LiteralPath $responsesConsumed -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 
@@ -43,6 +45,7 @@ $summary = [pscustomobject]@{
     pending_requests = @($pendingMd).Count
     in_progress_requests = @($inProgressMd).Count
     failed_requests = @($failedMd).Count
+    held_requests = @($heldMd).Count
     ready_responses = @($readyMd).Count
     consumed_responses = @($consumedDirs).Count
     last_request_file = if ($lastRequest) { [string]$lastRequest.path } else { "" }

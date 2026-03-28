@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from websocket import WebSocketBadStatusException, create_connection
+from websocket import WebSocketBadStatusException, WebSocketTimeoutException, create_connection
 
 
 @dataclass
@@ -31,9 +31,13 @@ class Config:
     response_stable_rounds: int
     response_poll_seconds: int
     response_timeout_seconds: int
+    composer_wait_seconds: int
+    page_settle_seconds: int
     launch_managed_chrome: bool
     create_new_tab_if_missing: bool
     save_html_snapshot: bool
+    save_failure_diagnostics: bool
+    hold_recoverable_failures: bool
 
 
 def load_config(path: Path) -> Config:
@@ -49,6 +53,7 @@ def ensure_mailbox(cfg: Config) -> dict[str, Path]:
         "requests_in_progress": root / "requests" / "in_progress",
         "requests_done": root / "requests" / "done",
         "requests_failed": root / "requests" / "failed",
+        "requests_hold": root / "requests" / "hold",
         "ack_root": root / "ack",
         "ack_executor": root / "ack" / "executor",
         "ack_reviewer": root / "ack" / "reviewer",
@@ -56,6 +61,7 @@ def ensure_mailbox(cfg: Config) -> dict[str, Path]:
         "responses_archive": root / "responses" / "archive",
         "responses_consumed": root / "responses" / "consumed",
         "responses_extracted": root / "responses" / "extracted",
+        "diagnostics": root / "diagnostics",
         "status": root / "status",
         "logs": root / "logs",
     }
@@ -129,9 +135,15 @@ def build_operator_hint(error_text: str) -> str:
             "--remote-allow-origins oraz czy uruchomiono dedykowany profil z launcherem."
         )
     if "composer_not_found_or_not_logged_in" in lowered:
-        return "ChatGPT nie widzi pola wpisu. Zaloguj sie recznie w dedykowanym profilu Chrome."
+        return "ChatGPT nie wystawil jeszcze pola wpisu. Otworz dedykowany profil Chrome, odswiez watek i ponow probe."
+    if "manual_login_required" in lowered:
+        return "Dedykowany profil Chrome nie ma aktywnej sesji ChatGPT. Zaloguj sie raz w profilu orchestratora i wznow zadanie."
+    if "chat_page_not_ready" in lowered:
+        return "Watek otworzyl sie, ale nie zakonczyl ladowania edytora. Odswiez karte albo ponow probe za chwile."
     if "response_timeout" in lowered:
         return "ChatGPT nie oddal stabilnej odpowiedzi w limicie czasu. Sprobuj ponownie lub skróc prompt."
+    if "connection timed out" in lowered:
+        return "Polaczenie z Chrome zerwalo sie podczas rozmowy. Wiadomosc mogla juz zostac wyslana, wiec najpierw sprawdz watek przed ponowna proba."
     return "Sprawdz status Orchestratora, log operatorski i czy Chrome DevTools odpowiada na porcie debugowym."
 
 
@@ -222,24 +234,45 @@ def get_or_create_chat_tab(cfg: Config) -> dict[str, Any]:
 class DevToolsPage:
     def __init__(self, websocket_url: str, timeout_seconds: int = 30):
         self.websocket_url = websocket_url
-        kwargs: dict[str, Any] = {"timeout": timeout_seconds}
-        try:
-            self.ws = create_connection(websocket_url, suppress_origin=True, **kwargs)
-        except TypeError:
-            self.ws = create_connection(websocket_url, **kwargs)
+        self.timeout_seconds = timeout_seconds
+        self.ws = self._connect()
         self.msg_id = 0
 
+    def _connect(self):
+        kwargs: dict[str, Any] = {"timeout": self.timeout_seconds}
+        try:
+            return create_connection(self.websocket_url, suppress_origin=True, **kwargs)
+        except TypeError:
+            return create_connection(self.websocket_url, **kwargs)
+
+    def _reconnect(self) -> None:
+        try:
+            self.ws.close()
+        except Exception:
+            pass
+        self.ws = self._connect()
+
     def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
-        self.msg_id += 1
-        payload = {"id": self.msg_id, "method": method, "params": params or {}}
-        self.ws.send(json.dumps(payload))
-        while True:
-            raw = self.ws.recv()
-            message = json.loads(raw)
-            if message.get("id") == self.msg_id:
-                if "error" in message:
-                    raise RuntimeError(f"{method} failed: {message['error']}")
-                return message.get("result", {})
+        last_error: Exception | None = None
+        for _attempt in range(2):
+            self.msg_id += 1
+            payload = {"id": self.msg_id, "method": method, "params": params or {}}
+            try:
+                self.ws.send(json.dumps(payload))
+                while True:
+                    raw = self.ws.recv()
+                    message = json.loads(raw)
+                    if message.get("id") == self.msg_id:
+                        if "error" in message:
+                            raise RuntimeError(f"{method} failed: {message['error']}")
+                        return message.get("result", {})
+            except (TimeoutError, WebSocketTimeoutException) as exc:
+                last_error = exc
+                self._reconnect()
+                continue
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{method} failed without a recoverable response")
 
     def evaluate(self, expression: str, await_promise: bool = True) -> Any:
         result = self.call(
@@ -398,6 +431,151 @@ def build_html_js() -> str:
 """
 
 
+JS_COMPOSER_PROBE = r"""
+(() => {
+  const pick = (...selectors) => {
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      if (node) return node;
+    }
+    return null;
+  };
+  const bodyText = document.body ? (document.body.innerText || "") : "";
+  const composer = pick(
+    '#prompt-textarea',
+    'textarea[name="prompt-textarea"]',
+    'textarea',
+    'div.ProseMirror[contenteditable="true"]',
+    'div[contenteditable="true"][role="textbox"]',
+    'div[contenteditable="true"]'
+  );
+  const loginNode = pick(
+    'a[href*="login"]',
+    'button[data-testid*="login"]',
+    'button[aria-label*="Log in"]',
+    'button[aria-label*="Zaloguj"]'
+  );
+  const textHasLogin = /log in|zaloguj|sign up|zarejestruj/i.test(bodyText);
+  return {
+    title: document.title,
+    url: location.href,
+    ready_state: document.readyState,
+    composer_present: !!composer,
+    composer_tag: composer ? composer.tagName : "",
+    composer_id: composer ? (composer.id || "") : "",
+    composer_name: composer ? (composer.getAttribute('name') || "") : "",
+    login_required: !!loginNode || textHasLogin,
+    login_button_present: !!loginNode,
+    body_snippet: bodyText.slice(0, 2000)
+  };
+})()
+"""
+
+
+JS_FAILURE_DIAGNOSTICS = r"""
+(() => {
+  const nodes = Array.from(document.querySelectorAll('textarea, div[contenteditable="true"], button, a[href*="login"], a[href*="auth"]'));
+  const compactNodes = nodes.slice(0, 30).map((node, index) => ({
+    index,
+    tag: node.tagName,
+    id: node.id || "",
+    name: node.getAttribute('name') || "",
+    role: node.getAttribute('role') || "",
+    testid: node.getAttribute('data-testid') || "",
+    aria: node.getAttribute('aria-label') || "",
+    text: (node.innerText || node.textContent || '').trim().slice(0, 200),
+    outer: node.outerHTML.slice(0, 500)
+  }));
+  return {
+    title: document.title,
+    url: location.href,
+    ready_state: document.readyState,
+    body_snippet: document.body ? (document.body.innerText || '').slice(0, 4000) : '',
+    nodes: compactNodes
+  };
+})()
+"""
+
+
+RECOVERABLE_ERROR_MARKERS = (
+    "manual_login_required",
+    "composer_not_found_or_not_logged_in",
+    "chat_page_not_ready",
+)
+
+
+def is_recoverable_error(error_text: str) -> bool:
+    lowered = error_text.lower()
+    return any(marker in lowered for marker in RECOVERABLE_ERROR_MARKERS)
+
+
+def wait_for_document_ready(page: DevToolsPage, timeout_seconds: int) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        ready_state = str(page.evaluate("document.readyState") or "")
+        if ready_state == "complete":
+            return
+        time.sleep(0.5)
+
+
+def wait_for_composer(page: DevToolsPage, cfg: Config) -> dict[str, Any]:
+    deadline = time.time() + cfg.composer_wait_seconds
+    last_probe: dict[str, Any] = {}
+    while time.time() < deadline:
+        probe = page.evaluate(JS_COMPOSER_PROBE)
+        last_probe = probe if isinstance(probe, dict) else {}
+        if last_probe.get("composer_present"):
+            return last_probe
+        if last_probe.get("login_required"):
+            raise RuntimeError("manual_login_required")
+        time.sleep(1)
+    if last_probe.get("login_required"):
+        raise RuntimeError("manual_login_required")
+    raise RuntimeError("chat_page_not_ready")
+
+
+def collect_failure_diagnostics(
+    page: DevToolsPage | None, cfg: Config, paths: dict[str, Path], request_id: str, error_text: str
+) -> dict[str, Any]:
+    diagnostics_payload: dict[str, Any] = {"request_id": request_id, "error": error_text}
+    if not cfg.save_failure_diagnostics or page is None:
+        return diagnostics_payload
+
+    diag_root = paths["diagnostics"] / request_id
+    diag_root.mkdir(parents=True, exist_ok=True)
+    try:
+        js_payload = page.evaluate(JS_FAILURE_DIAGNOSTICS)
+        diagnostics_payload["page"] = js_payload
+        (diag_root / "page_diagnostics.json").write_text(
+            json.dumps(js_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as exc:
+        diagnostics_payload["page_error"] = sanitize_error_text(str(exc))
+
+    try:
+        html = page.evaluate("document.documentElement.outerHTML")
+        if isinstance(html, str) and html:
+            (diag_root / "page_snapshot.html").write_text(html, encoding="utf-8")
+            diagnostics_payload["html_path"] = str(diag_root / "page_snapshot.html")
+    except Exception as exc:
+        diagnostics_payload["html_error"] = sanitize_error_text(str(exc))
+
+    try:
+        capture = page.call("Page.captureScreenshot", {"format": "png"})
+        data = capture.get("data", "")
+        if data:
+            import base64
+
+            png_path = diag_root / "page_snapshot.png"
+            png_path.write_bytes(base64.b64decode(data))
+            diagnostics_payload["png_path"] = str(png_path)
+    except Exception as exc:
+        diagnostics_payload["png_error"] = sanitize_error_text(str(exc))
+
+    diagnostics_payload["diagnostics_dir"] = str(diag_root)
+    return diagnostics_payload
+
+
 def wait_for_response(page: DevToolsPage, cfg: Config, initial_assistant_count: int) -> dict[str, Any]:
     deadline = time.time() + cfg.response_timeout_seconds
     last_text = ""
@@ -487,7 +665,7 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
     page: DevToolsPage | None = None
     try:
         page, ws_meta = create_devtools_page(
-            websocket_url, timeout_seconds=max(cfg.response_poll_seconds * 2, 30), retries=3
+            websocket_url, timeout_seconds=max(cfg.response_poll_seconds * 2, 180), retries=3
         )
         write_status(
             paths["status"],
@@ -501,6 +679,17 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
             },
         )
         page.bring_to_front()
+        if cfg.page_settle_seconds > 0:
+            time.sleep(cfg.page_settle_seconds)
+        wait_for_document_ready(page, timeout_seconds=max(cfg.page_settle_seconds, 1) + 10)
+        try:
+            wait_for_composer(page, cfg)
+        except RuntimeError:
+            page.call("Page.reload", {"ignoreCache": False})
+            if cfg.page_settle_seconds > 0:
+                time.sleep(cfg.page_settle_seconds)
+            wait_for_document_ready(page, timeout_seconds=max(cfg.page_settle_seconds, 1) + 10)
+            wait_for_composer(page, cfg)
         before = page.evaluate(JS_STATUS)
         initial_assistant_count = int(before.get("assistant_count", 0))
         prompt_text = in_progress.read_text(encoding="utf-8")
@@ -542,10 +731,12 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
         )
         append_log(log_path, f"request {request_id} completed")
     except Exception as exc:
-        failed_path = paths["requests_failed"] / request_path.name
+        error_text = sanitize_error_text(str(exc))
+        destination_root = paths["requests_hold"] if cfg.hold_recoverable_failures and is_recoverable_error(error_text) else paths["requests_failed"]
+        failed_path = destination_root / request_path.name
         if in_progress.exists():
             move_with_sidecar(in_progress, failed_path)
-        error_text = sanitize_error_text(str(exc))
+        diagnostics_payload = collect_failure_diagnostics(page, cfg, paths, request_id, error_text)
         write_status(
             paths["status"],
             "orchestrator_error",
@@ -557,10 +748,15 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
                 "websocket_url": websocket_url,
                 "operator_hint": build_operator_hint(error_text),
                 "request_path": str(failed_path),
+                "request_bucket": "hold" if destination_root == paths["requests_hold"] else "failed",
                 "request_meta": request_meta,
+                "diagnostics": diagnostics_payload,
             },
         )
-        append_log(log_path, f"request {request_id} failed: {error_text}")
+        append_log(
+            log_path,
+            f"request {request_id} failed -> {'hold' if destination_root == paths['requests_hold'] else 'failed'}: {error_text}",
+        )
     finally:
         if page is not None:
             page.close()
@@ -581,6 +777,7 @@ def command_status(cfg: Config) -> int:
     in_progress = len(list(paths["requests_in_progress"].glob("*.md")))
     ready = len(list(paths["responses_ready"].glob("*.md")))
     failed = len(list(paths["requests_failed"].glob("*.md")))
+    hold = len(list(paths["requests_hold"].glob("*.md")))
     consumed = len(list(paths["responses_consumed"].glob("*")))
 
     def load_status_file(name: str) -> dict[str, Any]:
@@ -601,6 +798,7 @@ def command_status(cfg: Config) -> int:
         "in_progress_requests": in_progress,
         "ready_responses": ready,
         "failed_requests": failed,
+        "held_requests": hold,
         "consumed_responses": consumed,
         "last_request_file": last_request.get("path", ""),
         "last_response_file": last_response.get("response_path", ""),

@@ -11,7 +11,11 @@
   "response_stable_rounds": 3,
   "response_poll_seconds": 3,
   "response_timeout_seconds": 900,
+  "composer_wait_seconds": 20,
+  "page_settle_seconds": 2,
   "launch_managed_chrome": true,
   "create_new_tab_if_missing": true,
-  "save_html_snapshot": true
+  "save_html_snapshot": true,
+  "save_failure_diagnostics": true,
+  "hold_recoverable_failures": true
 }
