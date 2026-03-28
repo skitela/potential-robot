@@ -1,0 +1,78 @@
+{
+  "schema_name": "codex_gpt54_orchestrator_mailbox",
+  "version": "1.0.0",
+  "description": "Schemat wymiany dla Orchestratora Codex <-> GPT-5.4 Pro opartego o pliki i kolejke lokalna.",
+  "request_states": [
+    "NEW",
+    "PENDING",
+    "PICKED",
+    "PROCESSING",
+    "ANSWER_WRITTEN",
+    "ACKED",
+    "DONE",
+    "FAILED",
+    "HOLD"
+  ],
+  "folders": {
+    "requests_pending": "requests/pending",
+    "requests_in_progress": "requests/in_progress",
+    "requests_done": "requests/done",
+    "requests_failed": "requests/failed",
+    "responses_ready": "responses/ready",
+    "responses_consumed": "responses/consumed",
+    "responses_extracted": "responses/extracted",
+    "ack_executor": "ack/executor",
+    "ack_reviewer": "ack/reviewer",
+    "status": "status",
+    "logs": "logs"
+  },
+  "request_sidecar_fields": {
+    "required": [
+      "request_id",
+      "title",
+      "source_path",
+      "source_file_name",
+      "source_sha256",
+      "queued_at_local"
+    ],
+    "optional": [
+      "topic",
+      "phase",
+      "source_role",
+      "target_role",
+      "repo_root",
+      "report_file",
+      "attachments",
+      "requires_ack_from",
+      "extra_instructions_present",
+      "status"
+    ]
+  },
+  "response_manifest_fields": {
+    "required": [
+      "request_id",
+      "request_path",
+      "response_path",
+      "extracted_root",
+      "extracted_files",
+      "status"
+    ],
+    "optional": [
+      "request_meta",
+      "html_snapshot_saved",
+      "html_path"
+    ]
+  },
+  "ack_fields": {
+    "required": [
+      "request_id",
+      "actor",
+      "ack_type",
+      "written_at_local"
+    ],
+    "optional": [
+      "notes",
+      "source_response_path"
+    ]
+  }
+}

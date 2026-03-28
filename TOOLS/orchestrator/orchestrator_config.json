@@ -1,0 +1,17 @@
+{
+  "chat_url": "https://chatgpt.com/c/69c63027-795c-8390-9a23-d033b2e319cb",
+  "chrome_exe": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "chrome_profile_dir": "C:\\Users\\skite\\AppData\\Local\\MAKRO_I_MIKRO_BOT\\orchestrator_chrome_profile",
+  "remote_debugging_host": "127.0.0.1",
+  "remote_debugging_port": 9222,
+  "desktop_agent_dir": "C:\\Users\\skite\\Desktop\\strojenie agenta",
+  "mailbox_dir": "C:\\Users\\skite\\Desktop\\strojenie agenta\\orchestrator_mailbox",
+  "codex_workspace_root": "C:\\MAKRO_I_MIKRO_BOT",
+  "poll_interval_seconds": 5,
+  "response_stable_rounds": 3,
+  "response_poll_seconds": 3,
+  "response_timeout_seconds": 900,
+  "launch_managed_chrome": true,
+  "create_new_tab_if_missing": true,
+  "save_html_snapshot": true
+}
