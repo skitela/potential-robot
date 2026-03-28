@@ -418,8 +418,10 @@ def build_master_training_frame(paths: CompatPaths) -> tuple[pd.DataFrame, dict[
     merged = _merge_outcomes(merged, src.learning, src.runtime_feedback)
     if src.broker_economics is not None and not src.broker_economics.empty:
         broker_lookup = src.broker_economics.drop_duplicates("symbol_alias", keep="last").set_index("symbol_alias")
+        broker_frame = pd.DataFrame(index=merged.index)
         for column in broker_lookup.columns:
-            merged[column] = merged["symbol_alias"].map(broker_lookup[column])
+            broker_frame[column] = merged["symbol_alias"].map(broker_lookup[column])
+        merged = pd.concat([merged, broker_frame], axis=1)
 
     if "side_normalized" not in merged.columns and "side" in merged.columns:
         merged["side_normalized"] = merged["side"]

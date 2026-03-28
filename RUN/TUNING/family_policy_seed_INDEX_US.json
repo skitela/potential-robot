@@ -1,8 +1,8 @@
 {
   "family": "INDEX_US",
-  "source_symbol": "US500.pro",
+  "source_symbol": "US500",
   "symbols": [
-    "US500.pro"
+    "US500"
   ],
   "trusted_data": false,
   "trust_reason": "NO_TRUSTED_SYMBOLS",
@@ -56,7 +56,7 @@
   ],
   "snapshots": [
     {
-      "symbol": "US500.pro",
+      "symbol": "US500",
       "family": "INDEX_US",
       "runtime_present": false,
       "local_policy_present": false,
@@ -77,8 +77,8 @@
       "trend_tax": 0.0,
       "rejection_boost": 0.0,
       "trust_reason": "MISSING",
-      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\US500.pro\\runtime_state.csv",
-      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\US500.pro\\tuning_policy.csv"
+      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\US500\\runtime_state.csv",
+      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\US500\\tuning_policy.csv"
     }
   ]
 }

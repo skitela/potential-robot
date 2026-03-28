@@ -1,8 +1,8 @@
 {
   "family": "INDEX_EU",
-  "source_symbol": "DE30.pro",
+  "source_symbol": "DE30",
   "symbols": [
-    "DE30.pro"
+    "DE30"
   ],
   "trusted_data": false,
   "trust_reason": "NO_TRUSTED_SYMBOLS",
@@ -56,7 +56,7 @@
   ],
   "snapshots": [
     {
-      "symbol": "DE30.pro",
+      "symbol": "DE30",
       "family": "INDEX_EU",
       "runtime_present": false,
       "local_policy_present": false,
@@ -77,8 +77,8 @@
       "trend_tax": 0.0,
       "rejection_boost": 0.0,
       "trust_reason": "MISSING",
-      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\DE30.pro\\runtime_state.csv",
-      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\DE30.pro\\tuning_policy.csv"
+      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\DE30\\runtime_state.csv",
+      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\DE30\\tuning_policy.csv"
     }
   ]
 }

@@ -323,7 +323,7 @@ def _build_symbol_registry_compat(paths: CompatPaths, results: dict[str, Any]) -
                 "data_source": "BROKER_NET_LEDGER",
                 "onnx_path": onnx_path or None,
                 "joblib_path": joblib_path or None,
-                "metrics_path": str(paths.symbol_models_dir / symbol / "paper_gate_acceptor_metrics_latest.json") if (paths.symbol_models_dir / symbol / "paper_gate_acceptor_metrics_latest.json").exists() else None,
+                "metrics_path": str(paths.symbol_models_dir / symbol / "paper_gate_acceptor_latest_metrics.json") if (paths.symbol_models_dir / symbol / "paper_gate_acceptor_latest_metrics.json").exists() else None,
                 "training_mode": training_mode,
                 "promotion_approved": bool(promotion.get("approved", False)),
             }
@@ -723,8 +723,6 @@ def train_global_model(
 
     metrics_path = model_dir / "paper_gate_acceptor_latest_metrics.json"
     write_json(metrics_path, metrics_payload)
-    write_json(model_dir / "paper_gate_acceptor_metrics_latest.json", metrics_payload)
-
     report_md = [
         "# PAPER GATE ACCEPTOR — raport globalny",
         "",

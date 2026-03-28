@@ -78,7 +78,7 @@ function Get-OptionalNumber {
 }
 
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
-$metricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json"
+$metricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_latest_metrics.json"
 $reportPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_report_latest.md"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
 $qdmVisibilityRefreshPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.json"

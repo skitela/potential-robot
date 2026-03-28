@@ -197,14 +197,25 @@ def build_trained_coverage_map(metrics: dict | None) -> tuple[dict[str, float], 
     if not metrics:
         return coverage_map, visible_symbols, row_ratio
 
-    coverage = ((metrics.get("dataset") or {}).get("qdm_coverage") or {})
-    visible_symbols = [normalize_symbol(symbol) for symbol in coverage.get("symbols_with_qdm", []) if normalize_symbol(symbol)]
-    row_ratio = float(coverage.get("row_coverage_ratio", 0.0) or 0.0)
-    for item in coverage.get("symbol_coverage", []):
-        symbol = normalize_symbol(item.get("symbol"))
-        if not symbol:
-            continue
-        coverage_map[symbol] = float(item.get("coverage_ratio", 0.0) or 0.0)
+    dataset = metrics.get("dataset") or {}
+    coverage = (dataset.get("qdm_coverage") or {})
+    if coverage:
+        visible_symbols = [normalize_symbol(symbol) for symbol in coverage.get("symbols_with_qdm", []) if normalize_symbol(symbol)]
+        row_ratio = float(coverage.get("row_coverage_ratio", 0.0) or 0.0)
+        for item in coverage.get("symbol_coverage", []):
+            symbol = normalize_symbol(item.get("symbol"))
+            if not symbol:
+                continue
+            coverage_map[symbol] = float(item.get("coverage_ratio", 0.0) or 0.0)
+        return coverage_map, visible_symbols, row_ratio
+
+    summary = metrics.get("summary") or {}
+    expected_symbols = [normalize_symbol(symbol) for symbol in summary.get("expected_symbols", []) if normalize_symbol(symbol)]
+    visible_symbols = [normalize_symbol(symbol) for symbol in summary.get("symbols", []) if normalize_symbol(symbol)]
+    if expected_symbols:
+        row_ratio = float(len(visible_symbols) / len(expected_symbols))
+    for symbol in visible_symbols:
+        coverage_map[symbol] = 1.0
     return coverage_map, visible_symbols, row_ratio
 
 
@@ -286,7 +297,7 @@ def main() -> None:
     parser.add_argument("--qdm-profile", default=r"C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_missing_only_profile_latest.json")
     parser.add_argument("--candidate-contract", default=r"C:\TRADING_DATA\RESEARCH\datasets\contracts\candidate_signals_norm_latest.parquet")
     parser.add_argument("--qdm-minute-bars", default=r"C:\TRADING_DATA\RESEARCH\datasets\qdm_minute_bars_latest.parquet")
-    parser.add_argument("--global-metrics", default=r"C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json")
+    parser.add_argument("--global-metrics", default=r"C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor\paper_gate_acceptor_latest_metrics.json")
     parser.add_argument("--output-json", default=r"C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_visibility_refresh_profile_latest.json")
     parser.add_argument("--output-md", default=r"C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_visibility_refresh_profile_latest.md")
     parser.add_argument("--output-csv", default=r"C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_visibility_refresh_pack_latest.csv")

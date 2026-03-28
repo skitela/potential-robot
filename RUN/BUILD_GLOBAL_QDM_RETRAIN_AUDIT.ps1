@@ -57,7 +57,7 @@ $qdmVisibilityPath = Join-Path $opsRoot "qdm_visibility_refresh_profile_latest.j
 $qdmSyncStatusPath = Join-Path $opsRoot "qdm_missing_supported_sync_latest.json"
 $jsonPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json"
 $mdPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.md"
-$metricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json"
+$metricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_latest_metrics.json"
 
 foreach ($path in @($qdmVisibilityScript, $starterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {

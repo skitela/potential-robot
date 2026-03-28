@@ -195,14 +195,15 @@ function Resolve-Recommendation {
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
-$globalMetricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json"
+$globalMetricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_latest_metrics.json"
 $dataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
 $trainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
 $learningHealthPath = Join-Path $opsRoot "learning_health_registry_latest.json"
 $onnxMicroReviewPath = Join-Path $opsRoot "onnx_micro_review_latest.json"
 $onnxFeedbackPath = Join-Path $opsRoot "onnx_feedback_loop_latest.json"
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
-$trainerScriptPath = Join-Path $ProjectRoot "TOOLS\TRAIN_PAPER_GATE_ACCEPTOR_MODEL.py"
+$trainerScriptPath = Join-Path $ProjectRoot "TOOLS\mb_ml_core\trainer.py"
+$featureContractPath = Join-Path $ProjectRoot "TOOLS\mb_ml_core\features.py"
 $executionPingContractPath = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state\_global\execution_ping_contract.csv"
 
 $globalMetrics = Read-JsonSafe -Path $globalMetricsPath
@@ -213,6 +214,7 @@ $onnxMicroReview = Read-JsonSafe -Path $onnxMicroReviewPath
 $onnxFeedback = Read-JsonSafe -Path $onnxFeedbackPath
 $registry = Read-JsonSafe -Path $registryPath
 $trainerText = if (Test-Path -LiteralPath $trainerScriptPath) { Get-Content -LiteralPath $trainerScriptPath -Raw -Encoding UTF8 } else { "" }
+$featureContractText = if (Test-Path -LiteralPath $featureContractPath) { Get-Content -LiteralPath $featureContractPath -Raw -Encoding UTF8 } else { "" }
 $executionPingContract = Read-KeyValueTable -Path $executionPingContractPath
 
 if ($null -eq $dataReadiness -or $null -eq $trainingReadiness -or $null -eq $learningHealth -or $null -eq $onnxMicroReview) {
@@ -224,16 +226,38 @@ $globalCoverageSymbols = @()
 $globalCoverageRatio = 0.0
 $globalPositiveRate = $null
 if ($null -ne $globalMetrics) {
-    $coverage = Get-OptionalValue -Object (Get-OptionalValue -Object $globalMetrics -Name "dataset" -Default $null) -Name "qdm_coverage" -Default $null
-    $globalCoverageSymbols = @((Get-OptionalValue -Object $coverage -Name "symbols_with_qdm" -Default @()))
-    foreach ($item in @((Get-OptionalValue -Object $coverage -Name "symbol_coverage" -Default @()))) {
-        $symbol = Normalize-SymbolAlias ([string](Get-OptionalValue -Object $item -Name "symbol" -Default ""))
-        if (-not [string]::IsNullOrWhiteSpace($symbol)) {
-            $globalCoverageMap[$symbol] = $item
+    $datasetMetrics = Get-OptionalValue -Object $globalMetrics -Name "dataset" -Default $null
+    $coverage = Get-OptionalValue -Object $datasetMetrics -Name "qdm_coverage" -Default $null
+    if ($null -ne $coverage) {
+        $globalCoverageSymbols = @((Get-OptionalValue -Object $coverage -Name "symbols_with_qdm" -Default @()))
+        foreach ($item in @((Get-OptionalValue -Object $coverage -Name "symbol_coverage" -Default @()))) {
+            $symbol = Normalize-SymbolAlias ([string](Get-OptionalValue -Object $item -Name "symbol" -Default ""))
+            if (-not [string]::IsNullOrWhiteSpace($symbol)) {
+                $globalCoverageMap[$symbol] = $item
+            }
+        }
+        $globalCoverageRatio = [double](Get-OptionalValue -Object $coverage -Name "row_coverage_ratio" -Default 0.0)
+        $globalPositiveRate = Get-OptionalValue -Object $datasetMetrics -Name "positive_rate" -Default $null
+    }
+    else {
+        $summaryMetrics = Get-OptionalValue -Object $globalMetrics -Name "summary" -Default $null
+        $expectedSymbols = @((Get-OptionalValue -Object $summaryMetrics -Name "expected_symbols" -Default @()))
+        $visibleSymbols = @((Get-OptionalValue -Object $summaryMetrics -Name "symbols" -Default @()))
+        $globalCoverageSymbols = @($visibleSymbols)
+        if (@($expectedSymbols).Count -gt 0) {
+            $globalCoverageRatio = [double](@($visibleSymbols).Count / [double]@($expectedSymbols).Count)
+        }
+        foreach ($symbolName in @($visibleSymbols)) {
+            $symbol = Normalize-SymbolAlias ([string]$symbolName)
+            if (-not [string]::IsNullOrWhiteSpace($symbol)) {
+                $globalCoverageMap[$symbol] = [pscustomobject]@{
+                    symbol = $symbol
+                    rows_with_qdm = 1
+                    coverage_ratio = 1.0
+                }
+            }
         }
     }
-    $globalCoverageRatio = [double](Get-OptionalValue -Object $coverage -Name "row_coverage_ratio" -Default 0.0)
-    $globalPositiveRate = Get-OptionalValue -Object (Get-OptionalValue -Object $globalMetrics -Name "dataset" -Default $null) -Name "positive_rate" -Default $null
 }
 
 $dataMap = @{}
@@ -378,9 +402,9 @@ $summary = [ordered]@{
     dodatni_udzial_globalnego_modelu = $(if ($null -eq $globalPositiveRate) { $null } else { [math]::Round([double]$globalPositiveRate, 4) })
     kontrakt_pingu_serwera_wlaczony = ([string](Get-OptionalValue -Object $executionPingContract -Name "enabled" -Default "0") -eq "1")
     zrodlo_pingu_serwera = [string](Get-OptionalValue -Object $executionPingContract -Name "source" -Default "")
-    globalny_model_uzywa_latencji_runtime = ($trainerText -match 'runtime_latency_us')
-    globalny_model_uzywa_pingu_serwera = ($trainerText -match 'server_operational_ping_ms' -or $trainerText -match 'execution_ping_contract')
-    globalny_model_uzywa_latencji_serwera = ($trainerText -match 'server_local_latency_us_avg' -or $trainerText -match 'server_local_latency_us_max')
+    globalny_model_uzywa_latencji_runtime = (($trainerText -match 'runtime_latency_us') -or ($featureContractText -match 'runtime_latency_us'))
+    globalny_model_uzywa_pingu_serwera = (($trainerText -match 'server_operational_ping_ms' -or $trainerText -match 'execution_ping_contract') -or ($featureContractText -match 'server_operational_ping_ms'))
+    globalny_model_uzywa_latencji_serwera = (($trainerText -match 'server_local_latency_us_avg' -or $trainerText -match 'server_local_latency_us_max') -or ($featureContractText -match 'server_local_latency_us_avg') -or ($featureContractText -match 'server_local_latency_us_max'))
 }
 
 $topCritical = @(

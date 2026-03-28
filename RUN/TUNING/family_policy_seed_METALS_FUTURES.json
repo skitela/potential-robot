@@ -1,8 +1,8 @@
 {
   "family": "METALS_FUTURES",
-  "source_symbol": "COPPER-US.pro",
+  "source_symbol": "COPPER-US",
   "symbols": [
-    "COPPER-US.pro"
+    "COPPER-US"
   ],
   "trusted_data": false,
   "trust_reason": "NO_TRUSTED_SYMBOLS",
@@ -56,7 +56,7 @@
   ],
   "snapshots": [
     {
-      "symbol": "COPPER-US.pro",
+      "symbol": "COPPER-US",
       "family": "METALS_FUTURES",
       "runtime_present": false,
       "local_policy_present": false,
@@ -77,8 +77,8 @@
       "trend_tax": 0.0,
       "rejection_boost": 0.0,
       "trust_reason": "MISSING",
-      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US.pro\\runtime_state.csv",
-      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US.pro\\tuning_policy.csv"
+      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US\\runtime_state.csv",
+      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\COPPER-US\\tuning_policy.csv"
     }
   ]
 }

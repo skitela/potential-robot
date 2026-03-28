@@ -26,7 +26,11 @@ function Read-JsonSafe {
     }
 
     try {
-        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+        if ($null -ne $raw) {
+            $raw = $raw.TrimStart([char]0xFEFF)
+        }
+        return $raw | ConvertFrom-Json
     }
     catch {
         return $null

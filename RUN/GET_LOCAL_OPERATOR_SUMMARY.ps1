@@ -162,7 +162,7 @@ if (-not [string]::IsNullOrWhiteSpace($currentTesterSymbol) -or
         $lines.Add("")
 }
 
-$metricsPath = "C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json"
+$metricsPath = "C:\TRADING_DATA\RESEARCH\models\paper_gate_acceptor\paper_gate_acceptor_latest_metrics.json"
 if (Test-Path -LiteralPath $metricsPath) {
     $metrics = Get-Content -LiteralPath $metricsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $metricValues = if ($metrics.PSObject.Properties.Name -contains 'metrics') { $metrics.metrics } else { $metrics }

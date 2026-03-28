@@ -97,7 +97,7 @@ $datasetsDir = Join-Path $ResearchRoot "datasets"
 $qdmCacheDir = Join-Path $ResearchRoot "qdm_cache\minute_bars"
 $manifestPath = Join-Path $ResearchRoot "reports\research_export_manifest_latest.json"
 $cacheManifestPath = Join-Path $ResearchRoot "reports\qdm_cache_manifest_latest.json"
-$metricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_metrics_latest.json"
+$metricsPath = Join-Path $ResearchRoot "models\paper_gate_acceptor\paper_gate_acceptor_latest_metrics.json"
 $duckdbPath = Join-Path $ResearchRoot "microbot_research.duckdb"
 
 $manifest = Read-JsonFile -Path $manifestPath

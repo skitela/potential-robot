@@ -1,9 +1,9 @@
 {
   "family": "METALS_SPOT_PM",
-  "source_symbol": "GOLD.pro",
+  "source_symbol": "GOLD",
   "symbols": [
-    "GOLD.pro",
-    "SILVER.pro"
+    "GOLD",
+    "SILVER"
   ],
   "trusted_data": false,
   "trust_reason": "NO_TRUSTED_SYMBOLS",
@@ -57,7 +57,7 @@
   ],
   "snapshots": [
     {
-      "symbol": "GOLD.pro",
+      "symbol": "GOLD",
       "family": "METALS_SPOT_PM",
       "runtime_present": false,
       "local_policy_present": false,
@@ -78,11 +78,11 @@
       "trend_tax": 0.0,
       "rejection_boost": 0.0,
       "trust_reason": "MISSING",
-      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GOLD.pro\\runtime_state.csv",
-      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GOLD.pro\\tuning_policy.csv"
+      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GOLD\\runtime_state.csv",
+      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GOLD\\tuning_policy.csv"
     },
     {
-      "symbol": "SILVER.pro",
+      "symbol": "SILVER",
       "family": "METALS_SPOT_PM",
       "runtime_present": false,
       "local_policy_present": false,
@@ -103,8 +103,8 @@
       "trend_tax": 0.0,
       "rejection_boost": 0.0,
       "trust_reason": "MISSING",
-      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\SILVER.pro\\runtime_state.csv",
-      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\SILVER.pro\\tuning_policy.csv"
+      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\SILVER\\runtime_state.csv",
+      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\SILVER\\tuning_policy.csv"
     }
   ]
 }
