@@ -94,6 +94,12 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\QUEUE_FILE_FOR_GPT54_PRO.ps1 -SourcePath "C:
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\IMPORT_GPT54_READY_RESPONSE.ps1
 ```
 
+8. Uruchom kontrolowany smoke test end-to-end:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\RUN_ORCHESTRATOR_SMOKE_TEST.ps1
+```
+
 6. Jesli chcesz przetworzyc tylko jeden request, zamiast stalej petli:
 
 ```powershell
@@ -133,6 +139,56 @@ Wtedy orchestrator zapisze te pliki do:
 - Jesli Chrome nie ma jeszcze sesji logowania, orchestrator zapisze blad `composer_not_found_or_not_logged_in`.
 - Request ma teraz tez metadane `.json`, wiec mozna bezpiecznie sledzic, co wyslalismy i z jakiego pliku to pochodzilo.
 - Warstwa `ack\...` jest na razie przygotowana strukturalnie; to fundament pod dojrzalszy obieg executor/reviewer.
+
+## Utwardzony launcher Chrome
+
+Launcher:
+
+- wykrywa Chrome w `Program Files` albo `Program Files (x86)`
+- otwiera dedykowany profil przez `--user-data-dir`
+- startuje DevTools na `127.0.0.1:9222`
+- dodaje `--remote-allow-origins=http://127.0.0.1:9222,http://localhost:9222`
+- nie miesza sie z istniejacymi oknami uzytkownika, bo otwiera osobne okno z wlasnym profilem
+
+Status launchera trafia do:
+
+- `orchestrator_mailbox\status\launcher_latest.json`
+
+## Najczestsze usterki
+
+### 403 Forbidden przy WebSocket
+
+Objaw:
+- `WebSocketBadStatusException`
+- `Handshake status 403 Forbidden`
+
+Znaczenie:
+- Chrome DevTools odrzucil polaczenie z powodu origin albo zlego profilu.
+
+Naprawa:
+- uruchomic przez `START_CHATGPT_CODEX_ORCHESTRATOR.ps1`
+- upewnic sie, ze dedykowany profil otworzyl poprawny thread
+- nie otwierac przypadkowego Chrome bez flag debugowych na tym samym porcie
+
+### `composer_not_found_or_not_logged_in`
+
+Znaczenie:
+- w dedykowanym profilu nie ma zalogowanej sesji ChatGPT albo DOM nie zawiera pola wpisu
+
+Naprawa:
+- uruchomic `-Mode open-chat`
+- zalogowac sie recznie
+- ponowic `process-once`
+
+### `response_timeout`
+
+Znaczenie:
+- GPT nie oddal stabilnej odpowiedzi w zadanym limicie
+
+Naprawa:
+- skrocic prompt
+- ponowic request
+- sprawdzic czy thread nie utknal na spinnerze / stop button
 
 ## Dodatkowe dokumenty
 

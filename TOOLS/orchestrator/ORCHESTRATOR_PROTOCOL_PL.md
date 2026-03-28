@@ -120,6 +120,25 @@ Najwazniejsze pliki statusowe:
 - `status\gpt_last_response.json`
 - `status\orchestrator_error.json`
 - `status\orchestrator_heartbeat.json`
+- `status\launcher_latest.json`
+- `status\orchestrator_transport.json`
+
+### 5. Retry i failover requestu
+
+- WebSocket do Chrome DevTools ma lekki retry / backoff po stronie Pythona.
+- Przy bledzie transportowym request nie znika: przechodzi do `failed` z czytelnym powodem.
+- Przy bledzie 403 operator dostaje wprost wskazowke, ze problem dotyczy `remote-allow-origins` albo zlego profilu Chrome.
+
+### 6. Dedykowany profil Chrome jest obowiazkowy
+
+Launcher uruchamia Chrome z:
+
+- `--remote-debugging-port=9222`
+- `--remote-debugging-address=127.0.0.1`
+- `--remote-allow-origins=http://127.0.0.1:9222,http://localhost:9222`
+- `--user-data-dir=<profil_orchestratora>`
+
+Ten profil jest oddzielony od zwyklych okien Chrome, zeby nie mieszac sesji operatora z sesja Orchestratora.
 
 ## Minimalny rytm pracy
 
@@ -128,6 +147,7 @@ Najwazniejsze pliki statusowe:
 3. Orchestrator w trybie `run` albo `process-once` obsluguje request.
 4. `IMPORT_GPT54_READY_RESPONSE.ps1` pokazuje odpowiedz i opcjonalnie odkłada ja do `consumed`.
 5. Codex wdraza zmiany albo generuje kolejny request.
+6. `RUN_ORCHESTRATOR_SMOKE_TEST.ps1` daje szybka walidacje end-to-end po zmianach w moscie.
 
 W bardziej dojrzalej wersji:
 
@@ -141,6 +161,7 @@ Udany cykl to taki, w ktorym:
 - odpowiedz jest w `responses\ready`
 - opcjonalne pliki dodatkowe sa w `responses\extracted`
 - nie ma aktywnego bledu w `orchestrator_error.json`
+- smoke test zapisuje `orchestrator_smoke_latest.json` z `smoke_ok = true`
 
 ## Co uwazamy za rzecz do poprawy
 
@@ -149,3 +170,25 @@ Udany cykl to taki, w ktorym:
 - brak jeszcze automatycznego mostu z odpowiedzi GPT do konkretnego wdrozenia w repo
 
 To sa juz kolejne etapy rozwoju, nie blokery obecnej wersji.
+
+## Smoke test operatorski
+
+Smoke test tworzy prosty prompt z oczekiwanym tokenem:
+
+```text
+RECEIVED: YES
+TOKEN: ORCH_SMOKE_OK_20260328
+MODE: REVIEWER
+TOPIC: MAKRO_I_MIKRO_BOT
+NEXT_STEP: READY_FOR_NEXT_REQUEST
+```
+
+Skrypt:
+
+- kolejkuje prompt,
+- uruchamia `process-once`,
+- odbiera odpowiedz,
+- sprawdza dokladny token,
+- zapisuje wynik do:
+  - `C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\orchestrator_smoke_latest.json`
+  - `C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\orchestrator_smoke_latest.md`

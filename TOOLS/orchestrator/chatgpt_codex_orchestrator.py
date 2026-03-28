@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from websocket import create_connection
+from websocket import WebSocketBadStatusException, create_connection
 
 
 @dataclass
@@ -82,6 +82,102 @@ def devtools_url(cfg: Config, suffix: str) -> str:
     return f"http://{cfg.remote_debugging_host}:{cfg.remote_debugging_port}{suffix}"
 
 
+def resolved_chat_url(cfg: Config) -> str:
+    return os.environ.get("ORCH_CHAT_URL", cfg.chat_url)
+
+
+def resolved_chrome_profile_dir(cfg: Config) -> str:
+    return os.environ.get("ORCH_CHROME_PROFILE_DIR", cfg.chrome_profile_dir)
+
+
+def resolve_chrome_exe(cfg: Config) -> str:
+    candidates = [
+        os.environ.get("ORCH_CHROME_EXE", "").strip(),
+        cfg.chrome_exe,
+        os.path.join(os.environ.get("ProgramFiles", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return candidate
+    raise FileNotFoundError("Chrome executable not found in config, env, Program Files or Program Files (x86).")
+
+
+def chrome_launch_args(cfg: Config, chrome_exe: str) -> list[str]:
+    remote_host = cfg.remote_debugging_host
+    remote_port = cfg.remote_debugging_port
+    profile_dir = resolved_chrome_profile_dir(cfg)
+    chat_url = resolved_chat_url(cfg)
+    return [
+        chrome_exe,
+        f"--remote-debugging-port={remote_port}",
+        f"--remote-debugging-address={remote_host}",
+        f"--remote-allow-origins=http://127.0.0.1:{remote_port},http://localhost:{remote_port}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--disable-session-crashed-bubble",
+        "--new-window",
+        chat_url,
+    ]
+
+
+def build_operator_hint(error_text: str) -> str:
+    lowered = error_text.lower()
+    if "403" in lowered or "forbidden" in lowered:
+        return (
+            "Chrome DevTools odrzucil WebSocket. Sprawdz flagi "
+            "--remote-allow-origins oraz czy uruchomiono dedykowany profil z launcherem."
+        )
+    if "composer_not_found_or_not_logged_in" in lowered:
+        return "ChatGPT nie widzi pola wpisu. Zaloguj sie recznie w dedykowanym profilu Chrome."
+    if "response_timeout" in lowered:
+        return "ChatGPT nie oddal stabilnej odpowiedzi w limicie czasu. Sprobuj ponownie lub skróc prompt."
+    return "Sprawdz status Orchestratora, log operatorski i czy Chrome DevTools odpowiada na porcie debugowym."
+
+
+def sanitize_error_text(text: str) -> str:
+    return text.replace("\r", " ").replace("\n", " ").strip()
+
+
+def create_devtools_page(websocket_url: str, timeout_seconds: int = 30, retries: int = 3) -> tuple["DevToolsPage", dict[str, Any]]:
+    last_error: Exception | None = None
+    attempts: list[dict[str, Any]] = []
+    for attempt in range(1, retries + 1):
+        try:
+            page = DevToolsPage(websocket_url, timeout_seconds=timeout_seconds)
+            return page, {"attempts": attempts}
+        except WebSocketBadStatusException as exc:
+            last_error = exc
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "error_type": type(exc).__name__,
+                    "error": sanitize_error_text(str(exc)),
+                }
+            )
+            if exc.status_code == 403:
+                raise RuntimeError(
+                    "Chrome DevTools WebSocket handshake 403 Forbidden. "
+                    "Uzyj launchera z flagami --remote-allow-origins=http://127.0.0.1:9222,http://localhost:9222 "
+                    "albo otworz dedykowany profil orchestratora."
+                ) from exc
+        except Exception as exc:
+            last_error = exc
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "error_type": type(exc).__name__,
+                    "error": sanitize_error_text(str(exc)),
+                }
+            )
+        time.sleep(min(2 * attempt, 5))
+    assert last_error is not None
+    raise RuntimeError(
+        f"Nie udalo sie nawiazac polaczenia WebSocket z Chrome DevTools po {retries} probach: "
+        f"{sanitize_error_text(str(last_error))}"
+    ) from last_error
+
+
 def devtools_get(cfg: Config, suffix: str) -> Any:
     with urllib.request.urlopen(devtools_url(cfg, suffix), timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -101,21 +197,12 @@ def wait_for_devtools(cfg: Config, timeout: int = 30) -> bool:
 def launch_chrome(cfg: Config) -> None:
     if not cfg.launch_managed_chrome:
         return
-    chrome = Path(cfg.chrome_exe)
-    if not chrome.exists():
-        raise FileNotFoundError(f"Chrome not found: {chrome}")
-    Path(cfg.chrome_profile_dir).mkdir(parents=True, exist_ok=True)
+    chrome = Path(resolve_chrome_exe(cfg))
+    profile_dir = Path(resolved_chrome_profile_dir(cfg))
+    profile_dir.mkdir(parents=True, exist_ok=True)
     if wait_for_devtools(cfg, timeout=2):
         return
-    args = [
-        str(chrome),
-        f"--remote-debugging-port={cfg.remote_debugging_port}",
-        f"--user-data-dir={cfg.chrome_profile_dir}",
-        "--no-first-run",
-        "--disable-session-crashed-bubble",
-        "--new-window",
-        cfg.chat_url,
-    ]
+    args = chrome_launch_args(cfg, str(chrome))
     subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if not wait_for_devtools(cfg, timeout=30):
         raise RuntimeError("Chrome DevTools did not start in time.")
@@ -133,8 +220,13 @@ def get_or_create_chat_tab(cfg: Config) -> dict[str, Any]:
 
 
 class DevToolsPage:
-    def __init__(self, websocket_url: str):
-        self.ws = create_connection(websocket_url, timeout=30)
+    def __init__(self, websocket_url: str, timeout_seconds: int = 30):
+        self.websocket_url = websocket_url
+        kwargs: dict[str, Any] = {"timeout": timeout_seconds}
+        try:
+            self.ws = create_connection(websocket_url, suppress_origin=True, **kwargs)
+        except TypeError:
+            self.ws = create_connection(websocket_url, **kwargs)
         self.msg_id = 0
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
@@ -220,7 +312,7 @@ JS_STATUS = r"""
 
 def build_send_js(prompt_text: str) -> str:
     return f"""
-(() => {{
+((async () => {{
   const text = {js_string(prompt_text)};
   const pick = (...selectors) => {{
     for (const selector of selectors) {{
@@ -239,6 +331,27 @@ def build_send_js(prompt_text: str) -> str:
   if (!composer) {{
     return {{ ok: false, error: 'composer_not_found_or_not_logged_in' }};
   }}
+  const form = composer.closest('form');
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const findSendButton = () => {{
+    const scopedPick = (root, selectors) => {{
+      if (!root) return null;
+      for (const selector of selectors) {{
+        const node = root.querySelector(selector);
+        if (node) return node;
+      }}
+      return null;
+    }};
+    const selectors = [
+      '#composer-submit-button',
+      'button[data-testid="send-button"]',
+      'button[aria-label*="Send"]',
+      'button[aria-label*="Wyślij"]',
+      'button[aria-label*="Wyślij polecenie"]',
+      'button[type="submit"]'
+    ];
+    return scopedPick(form, selectors) || pick(...selectors);
+  }};
   composer.focus();
   if (composer.tagName && composer.tagName.toLowerCase() === 'textarea') {{
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
@@ -254,17 +367,22 @@ def build_send_js(prompt_text: str) -> str:
       inputType: 'insertText'
     }}));
   }}
-  const sendButton = pick(
-    'button[data-testid="send-button"]',
-    'button[aria-label*="Send"]',
-    'button[aria-label*="Wyślij"]'
-  );
-  if (!sendButton) {{
-    return {{ ok: false, error: 'send_button_not_found' }};
+  await wait(200);
+  let sendButton = findSendButton();
+  if (sendButton && sendButton.disabled) {{
+    await wait(300);
+    sendButton = findSendButton();
   }}
-  sendButton.click();
-  return {{ ok: true }};
-}})()
+  if (sendButton && !sendButton.disabled) {{
+    sendButton.click();
+    return {{ ok: true, method: 'send_button_click' }};
+  }}
+  composer.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true }}));
+  composer.dispatchEvent(new KeyboardEvent('keypress', {{ key: 'Enter', code: 'Enter', bubbles: true }}));
+  composer.dispatchEvent(new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', bubbles: true }}));
+  await wait(150);
+  return {{ ok: true, method: 'keyboard_enter_fallback' }};
+}})())
 """
 
 
@@ -365,8 +483,23 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
     append_log(log_path, f"processing request {request_id}")
     launch_chrome(cfg)
     tab = get_or_create_chat_tab(cfg)
-    page = DevToolsPage(tab["webSocketDebuggerUrl"])
+    websocket_url = str(tab["webSocketDebuggerUrl"])
+    page: DevToolsPage | None = None
     try:
+        page, ws_meta = create_devtools_page(
+            websocket_url, timeout_seconds=max(cfg.response_poll_seconds * 2, 30), retries=3
+        )
+        write_status(
+            paths["status"],
+            "orchestrator_transport",
+            {
+                "request_id": request_id,
+                "chat_url": resolved_chat_url(cfg),
+                "chrome_profile_dir": resolved_chrome_profile_dir(cfg),
+                "websocket_url": websocket_url,
+                "attempts": ws_meta.get("attempts", []),
+            },
+        )
         page.bring_to_front()
         before = page.evaluate(JS_STATUS)
         initial_assistant_count = int(before.get("assistant_count", 0))
@@ -412,19 +545,25 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
         failed_path = paths["requests_failed"] / request_path.name
         if in_progress.exists():
             move_with_sidecar(in_progress, failed_path)
+        error_text = sanitize_error_text(str(exc))
         write_status(
             paths["status"],
             "orchestrator_error",
             {
                 "request_id": request_id,
-                "error": str(exc),
+                "error": error_text,
+                "chat_url": resolved_chat_url(cfg),
+                "chrome_profile_dir": resolved_chrome_profile_dir(cfg),
+                "websocket_url": websocket_url,
+                "operator_hint": build_operator_hint(error_text),
                 "request_path": str(failed_path),
                 "request_meta": request_meta,
             },
         )
-        append_log(log_path, f"request {request_id} failed: {exc}")
+        append_log(log_path, f"request {request_id} failed: {error_text}")
     finally:
-        page.close()
+        if page is not None:
+            page.close()
 
 
 def command_open_chat(cfg: Config) -> int:
@@ -441,11 +580,33 @@ def command_status(cfg: Config) -> int:
     pending = len(list(paths["requests_pending"].glob("*.md")))
     in_progress = len(list(paths["requests_in_progress"].glob("*.md")))
     ready = len(list(paths["responses_ready"].glob("*.md")))
+    failed = len(list(paths["requests_failed"].glob("*.md")))
+    consumed = len(list(paths["responses_consumed"].glob("*")))
+
+    def load_status_file(name: str) -> dict[str, Any]:
+        path = paths["status"] / f"{name}.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    last_request = load_status_file("codex_last_request")
+    last_response = load_status_file("gpt_last_response")
+    last_error = load_status_file("orchestrator_error")
     payload = {
         "devtools_ok": devtools_ok,
         "pending_requests": pending,
         "in_progress_requests": in_progress,
         "ready_responses": ready,
+        "failed_requests": failed,
+        "consumed_responses": consumed,
+        "last_request_file": last_request.get("path", ""),
+        "last_response_file": last_response.get("response_path", ""),
+        "chrome_debug_port": cfg.remote_debugging_port,
+        "chat_url": resolved_chat_url(cfg),
+        "last_error_summary": last_error.get("error", ""),
         "mailbox_dir": str(paths["root"]),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
