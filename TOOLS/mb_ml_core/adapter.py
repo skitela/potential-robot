@@ -588,11 +588,21 @@ def build_broker_net_ledger(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str,
     ]
     available = [c for c in ledger_cols if c in frame.columns]
     ledger = frame[available].copy()
+    if "slippage_cost_pln" in ledger.columns and "slippage_pln" not in ledger.columns:
+        ledger["slippage_pln"] = ledger["slippage_cost_pln"]
+    if "net_pln" in ledger.columns and "net_pln_broker_full" not in ledger.columns:
+        ledger["net_pln_broker_full"] = ledger["net_pln"]
     ensure_dir(paths.broker_net_ledger_latest.parent)
     ledger.to_parquet(paths.broker_net_ledger_latest, index=False)
+    labeled_mask = (ledger.get("outcome_known", 0) == 1)
     return ledger, {
         "rows": int(len(ledger)),
-        "labeled_rows": int((ledger.get("outcome_known", 0) == 1).sum()),
+        "labeled_rows": int(labeled_mask.sum()),
+        "spread_rows": int(ledger.get("spread_cost_pln", pd.Series(dtype=float)).notna().sum()) if "spread_cost_pln" in ledger.columns else 0,
+        "slippage_rows": int(ledger.get("slippage_cost_pln", pd.Series(dtype=float)).notna().sum()) if "slippage_cost_pln" in ledger.columns else 0,
+        "commission_rows": int(ledger.get("commission_pln", pd.Series(dtype=float)).notna().sum()) if "commission_pln" in ledger.columns else 0,
+        "swap_rows": int(ledger.get("swap_pln", pd.Series(dtype=float)).notna().sum()) if "swap_pln" in ledger.columns else 0,
+        "net_rows": int(ledger.get("net_pln", pd.Series(dtype=float)).notna().sum()) if "net_pln" in ledger.columns else 0,
         "output_path": str(paths.broker_net_ledger_latest),
         "expected_symbols": summary.get("expected_symbols", []),
         "symbols": summary["symbols"],

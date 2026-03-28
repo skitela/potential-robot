@@ -297,6 +297,8 @@ function Invoke-AuditCycle {
     $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
     $instrumentTrainingReadinessPath = Join-Path $opsRoot "instrument_training_readiness_latest.json"
+    $outcomeClosureAuditPath = Join-Path $opsRoot "outcome_closure_latest.json"
+    $localModelReadinessPath = Join-Path $opsRoot "local_model_readiness_latest.json"
     $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
     $mlScalpingFitAuditPath = Join-Path $opsRoot "ml_scalping_fit_audit_latest.json"
     $tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.json"
@@ -349,6 +351,24 @@ function Invoke-AuditCycle {
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1")
             params = @{ ProjectRoot = $ProjectRoot }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_OUTCOME_CLOSURE_AUDIT.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = $researchRoot
+                ResearchPython = $researchPython
+                CommonStateRoot = $commonStateRoot
+            }
+        },
+        @{
+            path = (Join-Path $ProjectRoot "RUN\BUILD_LOCAL_MODEL_READINESS_AUDIT.ps1")
+            params = @{
+                ProjectRoot = $ProjectRoot
+                ResearchRoot = $researchRoot
+                ResearchPython = $researchPython
+                CommonStateRoot = $commonStateRoot
+            }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1")
@@ -520,6 +540,24 @@ function Invoke-AuditCycle {
                 params = @{ ProjectRoot = $ProjectRoot }
             },
             @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_OUTCOME_CLOSURE_AUDIT.ps1")
+                params = @{
+                    ProjectRoot = $ProjectRoot
+                    ResearchRoot = $researchRoot
+                    ResearchPython = $researchPython
+                    CommonStateRoot = $commonStateRoot
+                }
+            },
+            @{
+                path = (Join-Path $ProjectRoot "RUN\BUILD_LOCAL_MODEL_READINESS_AUDIT.ps1")
+                params = @{
+                    ProjectRoot = $ProjectRoot
+                    ResearchRoot = $researchRoot
+                    ResearchPython = $researchPython
+                    CommonStateRoot = $commonStateRoot
+                }
+            },
+            @{
                 path = (Join-Path $ProjectRoot "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1")
                 params = @{ ProjectRoot = $ProjectRoot }
             },
@@ -610,6 +648,8 @@ function Invoke-AuditCycle {
     $instrumentDataReadiness = Read-JsonSafe -Path $instrumentDataReadinessPath
     $instrumentShadowDatasets = Read-JsonSafe -Path $instrumentShadowDatasetsPath
     $instrumentTrainingReadiness = Read-JsonSafe -Path $instrumentTrainingReadinessPath
+    $outcomeClosureAudit = Read-JsonSafe -Path $outcomeClosureAuditPath
+    $localModelReadiness = Read-JsonSafe -Path $localModelReadinessPath
     $learningSourceAudit = Read-JsonSafe -Path $learningSourceAuditPath
     $mlScalpingFitAudit = Read-JsonSafe -Path $mlScalpingFitAuditPath
     $tradeTransitionAudit = Read-JsonSafe -Path $tradeTransitionAuditPath
@@ -1247,6 +1287,118 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_DANYCH_I_TRENINGU_PER_INSTRUMENT" -Gate "RAPORTUJ" -Severity (Get-HighestSeverity -Findings $instrumentReadinessEvidence) -Reason "Gotowosc danych i treningu per instrument jest pod kontrola." -Evidence $instrumentReadinessEvidence)) | Out-Null
     }
 
+    $outcomeClosureEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $outcomeClosureAudit) {
+        $outcomeSummary = Get-OptionalValue -Object $outcomeClosureAudit -Name "summary" -Default $null
+        $brokerNetReady = [bool](Get-OptionalValue -Object $outcomeSummary -Name "broker_net_pln_ready" -Default $false)
+        $outcomeGapCount = [int](Get-OptionalValue -Object $outcomeSummary -Name "outcome_gap_count" -Default 0)
+        $pendingPaperTruthCount = [int](Get-OptionalValue -Object $outcomeSummary -Name "pending_paper_truth_count" -Default 0)
+        $fullLedgerCostCount = [int](Get-OptionalValue -Object $outcomeSummary -Name "symbols_with_full_ledger_costs_count" -Default 0)
+
+        if (-not $brokerNetReady) {
+            $outcomeClosureEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "broker_net_truth_not_ready"
+                message = "Prawda broker-net nie jest jeszcze domknieta end-to-end, wiec lokalny runtime nie ma pelnego kosztowego fundamentu."
+                context = @{
+                    broker_net_pln_ready = $brokerNetReady
+                    full_ledger_cost_count = $fullLedgerCostCount
+                }
+            }) | Out-Null
+        }
+        if ($outcomeGapCount -gt 0) {
+            $outcomeClosureEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "outcome_closure_gap"
+                message = "Czesc symboli ma juz kandydatow i runtime, ale nie ma jeszcze domknietego outcome do lokalnej nauki."
+                context = @{ outcome_gap_count = $outcomeGapCount }
+            }) | Out-Null
+        }
+        if ($pendingPaperTruthCount -gt 0) {
+            $outcomeClosureEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "outcome_ready_pending_paper_truth"
+                message = "Ledger ma juz domkniete koszty dla czesci symboli, ale tor paper nie raportuje jeszcze pelnej prawdy broker-net."
+                context = @{ pending_paper_truth_count = $pendingPaperTruthCount }
+            }) | Out-Null
+        }
+    }
+
+    if ($outcomeClosureEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "OUTCOME_I_BROKER_NET" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $outcomeClosureEvidence) -Reason "Przejscie z nauczyciela globalnego na lokalny model wymaga jawnie domknietego outcome i pelnego kosztu brokera." -Evidence $outcomeClosureEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "OUTCOME_I_BROKER_NET" -Gate "RAPORTUJ" -Severity "info" -Reason "Audyt outcome closure nie pokazuje swiezej luki w broker-net.")) | Out-Null
+    }
+
+    $localModelReadinessEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $localModelReadiness) {
+        $localReadinessSummary = Get-OptionalValue -Object $localModelReadiness -Name "summary" -Default $null
+        $runtimeReadyCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "runtime_ready_count" -Default 0)
+        $runtimeDisabledCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "runtime_package_present_but_disabled_count" -Default 0)
+        $globalOnlyCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "runtime_global_only_count" -Default 0)
+        $staleDirCount = [int](Get-OptionalValue -Object $localReadinessSummary -Name "stale_symbol_model_dir_count" -Default 0)
+        $reasonCounts = Get-OptionalValue -Object $localReadinessSummary -Name "reason_counts" -Default $null
+        $costTruthGapCount = [int](Get-OptionalValue -Object $reasonCounts -Name "COST_TRUTH_GAP" -Default 0)
+        $packageMismatchCount = [int](Get-OptionalValue -Object $reasonCounts -Name "PACKAGE_RUNTIME_MISMATCH" -Default 0)
+        $recentRollbackCount = [int](Get-OptionalValue -Object $reasonCounts -Name "RECENT_ROLLBACK" -Default 0)
+
+        if ($runtimeReadyCount -le 0 -and ($runtimeDisabledCount + $globalOnlyCount) -gt 0) {
+            $localModelReadinessEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "local_model_runtime_not_ready"
+                message = "Lokalne modele nadal nie maja ani jednego symbolu gotowego do lokalnego runtime; system jedzie przez nauczyciela globalnego."
+                context = @{
+                    runtime_ready_count = $runtimeReadyCount
+                    runtime_package_present_but_disabled_count = $runtimeDisabledCount
+                    runtime_global_only_count = $globalOnlyCount
+                }
+            }) | Out-Null
+        }
+        if ($costTruthGapCount -gt 0) {
+            $localModelReadinessEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "local_model_cost_truth_gap"
+                message = "Lokalne modele nadal widza luke miedzy gotowoscia danych a pelna prawda broker-net."
+                context = @{ cost_truth_gap_count = $costTruthGapCount }
+            }) | Out-Null
+        }
+        if ($packageMismatchCount -gt 0) {
+            $localModelReadinessEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "local_model_package_runtime_mismatch"
+                message = "Pakiet MT5 i runtime symboli nie sa jeszcze zgodne z lokalnymi artefaktami dla calej floty."
+                context = @{ package_runtime_mismatch_count = $packageMismatchCount }
+            }) | Out-Null
+        }
+        if ($recentRollbackCount -gt 0) {
+            $localModelReadinessEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "local_model_recent_rollback"
+                message = "Czesc symboli zostala niedawno cofnięta przez guardraile lokalnego toru."
+                context = @{ recent_rollback_count = $recentRollbackCount }
+            }) | Out-Null
+        }
+        if ($staleDirCount -gt 0) {
+            $localModelReadinessEvidence.Add([pscustomobject]@{
+                severity = "low"
+                component = "local_model_stale_dirs"
+                message = "W katalogu modeli per symbol zostaly stare foldery po wycofanych instrumentach."
+                context = @{
+                    stale_symbol_model_dir_count = $staleDirCount
+                    stale_symbol_model_dirs = @(Get-OptionalValue -Object $localModelReadiness -Name "stale_symbol_model_dirs" -Default @())
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($localModelReadinessEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_MODELI_LOKALNYCH" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $localModelReadinessEvidence) -Reason "Trzeba jasno rozdzielic trening lokalny od gotowosci runtime i zamknac luki artefaktow per symbol." -Evidence $localModelReadinessEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "GOTOWOSC_MODELI_LOKALNYCH" -Gate "RAPORTUJ" -Severity "info" -Reason "Audyt gotowosci modeli lokalnych nie pokazuje swiezej luki miedzy treningiem a runtime.")) | Out-Null
+    }
+
     $learningSourceEvidence = New-Object System.Collections.Generic.List[object]
     if ($null -ne $learningSourceAudit) {
         $sourceSummary = Get-OptionalValue -Object $learningSourceAudit -Name "summary" -Default $null
@@ -1741,6 +1893,8 @@ function Invoke-AuditCycle {
         instrument_data_readiness = $instrumentDataReadinessPath
         instrument_shadow_datasets = $instrumentShadowDatasetsPath
         instrument_training_readiness = $instrumentTrainingReadinessPath
+        outcome_closure_audit = $outcomeClosureAuditPath
+        local_model_readiness = $localModelReadinessPath
         learning_source_audit = $learningSourceAuditPath
         ml_scalping_fit_audit = $mlScalpingFitAuditPath
         ml_overlay_audit = $mlOverlayAuditPath

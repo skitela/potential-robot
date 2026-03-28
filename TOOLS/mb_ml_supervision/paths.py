@@ -160,8 +160,36 @@ class OverlayPaths:
         return self.evidence_ops_dir / "instrument_training_readiness_latest.json"
 
     @property
+    def local_model_readiness_path(self) -> Path:
+        return self.evidence_ops_dir / "local_model_readiness_latest.json"
+
+    @property
+    def outcome_closure_audit_path(self) -> Path:
+        return self.evidence_ops_dir / "outcome_closure_latest.json"
+
+    @property
     def learning_source_audit_path(self) -> Path:
         return self.evidence_ops_dir / "learning_source_audit_latest.json"
+
+    @property
+    def learning_health_registry_path(self) -> Path:
+        return self.evidence_ops_dir / "learning_health_registry_latest.json"
+
+    @property
+    def instrument_local_training_audit_path(self) -> Path:
+        return self.evidence_ops_dir / "instrument_local_training_audit_latest.json"
+
+    @property
+    def instrument_local_training_guardrails_path(self) -> Path:
+        return self.evidence_ops_dir / "instrument_local_training_guardrails_latest.json"
+
+    @property
+    def instrument_local_training_lane_path(self) -> Path:
+        return self.evidence_ops_dir / "instrument_local_training_lane_latest.json"
+
+    @property
+    def instrument_local_training_plan_path(self) -> Path:
+        return self.evidence_ops_dir / "instrument_local_training_plan_latest.json"
 
     @property
     def ml_scalping_fit_audit_path(self) -> Path:
@@ -174,6 +202,14 @@ class OverlayPaths:
     @property
     def paper_live_action_gap_audit_path(self) -> Path:
         return self.evidence_ops_dir / "paper_live_action_gap_audit_latest.json"
+
+    @property
+    def paper_trading_path(self) -> Path:
+        return self.project_root / "MQL5" / "Include" / "Core" / "MbPaperTrading.mqh"
+
+    @property
+    def execution_precheck_path(self) -> Path:
+        return self.project_root / "MQL5" / "Include" / "Core" / "MbExecutionPrecheck.mqh"
 
     @property
     def possible_mql5_microbot_dirs(self) -> list[Path]:

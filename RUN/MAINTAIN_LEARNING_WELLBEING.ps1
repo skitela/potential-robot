@@ -183,6 +183,8 @@ $globalQdmRetrainScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_QDM_RETRAIN_A
 $instrumentDataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $instrumentShadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $instrumentTrainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
+$outcomeClosureAuditScript = Join-Path $ProjectRoot "RUN\BUILD_OUTCOME_CLOSURE_AUDIT.ps1"
+$localModelReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_LOCAL_MODEL_READINESS_AUDIT.ps1"
 $learningSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_SOURCE_AUDIT.ps1"
 $mlScalpingFitAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_SCALPING_FIT_AUDIT.ps1"
 $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
@@ -197,6 +199,8 @@ $qdmMissingSyncStatusPath = Join-Path $opsRoot "qdm_missing_supported_sync_lates
 $instrumentLocalTrainingLanePath = Join-Path $opsRoot "instrument_local_training_lane_latest.json"
 $instrumentLocalTrainingAuditPath = Join-Path $opsRoot "instrument_local_training_audit_latest.json"
 $instrumentLocalTrainingGuardrailsPath = Join-Path $opsRoot "instrument_local_training_guardrails_latest.json"
+$outcomeClosureAuditPath = Join-Path $opsRoot "outcome_closure_latest.json"
+$localModelReadinessPath = Join-Path $opsRoot "local_model_readiness_latest.json"
 $learningSourceAuditPath = Join-Path $opsRoot "learning_source_audit_latest.json"
 $mlScalpingFitAuditPath = Join-Path $opsRoot "ml_scalping_fit_audit_latest.json"
 $tradeTransitionAuditPath = Join-Path $opsRoot "trade_transition_audit_latest.json"
@@ -209,7 +213,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -235,6 +239,8 @@ $vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parame
 $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$outcomeClosureAudit = (& $outcomeClosureAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
+$localModelReadiness = (& $localModelReadinessScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
 $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
 $mlScalpingFitAudit = (& $mlScalpingFitAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
 $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
@@ -258,6 +264,8 @@ if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootst
     $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+    $outcomeClosureAudit = (& $outcomeClosureAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
+    $localModelReadiness = (& $localModelReadinessScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
     $learningSourceAudit = (& $learningSourceAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
     $mlScalpingFitAudit = (& $mlScalpingFitAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
     $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
@@ -426,6 +434,8 @@ elseif (Test-Path -LiteralPath $logsRoot) {
 $totalFreedGb = [math]::Round((($opsFreedBytes + $runtimeFreedBytes) / 1GB) + [double]$artifactCleanup.freed_gb_total, 3)
 $dataReadinessSummary = if ($null -ne $instrumentDataReadiness) { $instrumentDataReadiness.summary } else { $null }
 $trainingReadinessSummary = if ($null -ne $instrumentTrainingReadiness) { $instrumentTrainingReadiness.summary } else { $null }
+$outcomeClosureSummary = if ($null -ne $outcomeClosureAudit) { $outcomeClosureAudit.summary } else { $null }
+$localModelReadinessSummary = if ($null -ne $localModelReadiness) { $localModelReadiness.summary } else { $null }
 $exportPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.export_pending_count } else { 0 }
 $contractPendingCount = if ($null -ne $dataReadinessSummary) { [int]$dataReadinessSummary.contract_pending_count } else { 0 }
 $instrumentShadowSummary = Get-OptionalValue -Object $instrumentShadowDatasets -Name "summary" -Default $null
@@ -462,8 +472,23 @@ $paperLossQualityDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$pape
 $paperLossTimeoutDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.timeout_driven_count } else { 0 }
 $shadowRuntimeBootstrapAppliedCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.applied_count } else { 0 }
 $shadowRuntimeBootstrapPendingCount = if ($null -ne $shadowRuntimeBootstrap) { [int]$shadowRuntimeBootstrap.summary.pending_count } else { 0 }
+$outcomeClosureReadyCount = if ($null -ne $outcomeClosureSummary) { [int]$outcomeClosureSummary.symbols_with_outcome_count } else { 0 }
+$outcomeClosureGapCount = if ($null -ne $outcomeClosureSummary) { [int]$outcomeClosureSummary.outcome_gap_count } else { 0 }
+$outcomeClosurePendingPaperTruthCount = if ($null -ne $outcomeClosureSummary) { [int]$outcomeClosureSummary.pending_paper_truth_count } else { 0 }
+$outcomeClosureFullLedgerCostCount = if ($null -ne $outcomeClosureSummary) { [int]$outcomeClosureSummary.symbols_with_full_ledger_costs_count } else { 0 }
+$outcomeClosureBrokerNetReady = if ($null -ne $outcomeClosureSummary) { [bool]$outcomeClosureSummary.broker_net_pln_ready } else { $false }
 $localTrainingReadyCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_ready_count } else { 0 }
 $localTrainingLimitedCount = if ($null -ne $trainingReadinessSummary) { [int]$trainingReadinessSummary.local_training_limited_count } else { 0 }
+$localModelTrainingReadyCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.training_ready_count } else { 0 }
+$localModelRuntimeReadyCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.runtime_ready_count } else { 0 }
+$localModelRuntimeDisabledCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.runtime_package_present_but_disabled_count } else { 0 }
+$localModelGlobalOnlyCount = if ($null -ne $localModelReadinessSummary) { [int]$localModelReadinessSummary.runtime_global_only_count } else { 0 }
+$localModelCostTruthGapCount = if ($null -ne $localModelReadinessSummary -and $null -ne $localModelReadinessSummary.reason_counts) {
+    [int](Get-OptionalNumber -Object $localModelReadinessSummary.reason_counts -Name "COST_TRUTH_GAP" -Default 0)
+} else { 0 }
+$localModelPackageMismatchCount = if ($null -ne $localModelReadinessSummary -and $null -ne $localModelReadinessSummary.reason_counts) {
+    [int](Get-OptionalNumber -Object $localModelReadinessSummary.reason_counts -Name "PACKAGE_RUNTIME_MISMATCH" -Default 0)
+} else { 0 }
 $localTrainingStartGroupCount = if ($null -ne $instrumentLocalTrainingPlan) { [int]$instrumentLocalTrainingPlan.summary.start_group_count } else { 0 }
 $localTrainingLaneState = if ($null -ne $instrumentLocalTrainingLane) { [string]$instrumentLocalTrainingLane.state } else { "" }
 $localTrainingAuditRollbackCount = if ($null -ne $instrumentLocalTrainingAudit) { [int]$instrumentLocalTrainingAudit.summary.rollback_count } else { 0 }
@@ -514,6 +539,8 @@ $report = [ordered]@{
     instrument_data_readiness = $instrumentDataReadiness
     instrument_shadow_datasets = $instrumentShadowDatasets
     instrument_training_readiness = $instrumentTrainingReadiness
+    outcome_closure_audit = $outcomeClosureAudit
+    local_model_readiness = $localModelReadiness
     learning_source_audit = $learningSourceAudit
     ml_scalping_fit_audit = $mlScalpingFitAudit
     trade_transition_audit = $tradeTransitionAudit
@@ -556,6 +583,17 @@ $report = [ordered]@{
         qdm_export_pending_count = $exportPendingCount
         qdm_contract_pending_count = $contractPendingCount
         shadow_dataset_ready_count = $shadowDatasetReadyCount
+        outcome_closure_ready_count = $outcomeClosureReadyCount
+        outcome_closure_gap_count = $outcomeClosureGapCount
+        outcome_closure_pending_paper_truth_count = $outcomeClosurePendingPaperTruthCount
+        outcome_closure_full_ledger_cost_count = $outcomeClosureFullLedgerCostCount
+        outcome_closure_broker_net_pln_ready = $outcomeClosureBrokerNetReady
+        local_model_training_ready_count = $localModelTrainingReadyCount
+        local_model_runtime_ready_count = $localModelRuntimeReadyCount
+        local_model_runtime_disabled_count = $localModelRuntimeDisabledCount
+        local_model_global_only_count = $localModelGlobalOnlyCount
+        local_model_cost_truth_gap_count = $localModelCostTruthGapCount
+        local_model_package_mismatch_count = $localModelPackageMismatchCount
         learning_source_gap_count = $learningSourceGapCount
         learning_source_blocked_count = $learningSourceBlockedCount
         ml_scalping_fit_verdict = $mlScalpingFitVerdict
@@ -622,6 +660,17 @@ $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridg
 $lines.Add(("- qdm_export_pending_count: {0}" -f $report.summary.qdm_export_pending_count))
 $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_pending_count))
 $lines.Add(("- shadow_dataset_ready_count: {0}" -f $report.summary.shadow_dataset_ready_count))
+$lines.Add(("- outcome_closure_ready_count: {0}" -f $report.summary.outcome_closure_ready_count))
+$lines.Add(("- outcome_closure_gap_count: {0}" -f $report.summary.outcome_closure_gap_count))
+$lines.Add(("- outcome_closure_pending_paper_truth_count: {0}" -f $report.summary.outcome_closure_pending_paper_truth_count))
+$lines.Add(("- outcome_closure_full_ledger_cost_count: {0}" -f $report.summary.outcome_closure_full_ledger_cost_count))
+$lines.Add(("- outcome_closure_broker_net_pln_ready: {0}" -f ([string]$report.summary.outcome_closure_broker_net_pln_ready).ToLowerInvariant()))
+$lines.Add(("- local_model_training_ready_count: {0}" -f $report.summary.local_model_training_ready_count))
+$lines.Add(("- local_model_runtime_ready_count: {0}" -f $report.summary.local_model_runtime_ready_count))
+$lines.Add(("- local_model_runtime_disabled_count: {0}" -f $report.summary.local_model_runtime_disabled_count))
+$lines.Add(("- local_model_global_only_count: {0}" -f $report.summary.local_model_global_only_count))
+$lines.Add(("- local_model_cost_truth_gap_count: {0}" -f $report.summary.local_model_cost_truth_gap_count))
+$lines.Add(("- local_model_package_mismatch_count: {0}" -f $report.summary.local_model_package_mismatch_count))
 $lines.Add(("- learning_source_gap_count: {0}" -f $report.summary.learning_source_gap_count))
 $lines.Add(("- ml_overlay_rollout_blocked: {0}" -f $report.summary.ml_overlay_rollout_blocked))
 $lines.Add(("- ml_overlay_warning_count: {0}" -f $report.summary.ml_overlay_warning_count))

@@ -44,6 +44,8 @@ $technicalReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TECHNIC
 $dataReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_DATA_READINESS_REPORT.ps1"
 $shadowDatasetsScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_SHADOW_DATASETS_REPORT.ps1"
 $trainingReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
+$outcomeClosureAuditScript = Join-Path $ProjectRoot "RUN\BUILD_OUTCOME_CLOSURE_AUDIT.ps1"
+$localModelReadinessScript = Join-Path $ProjectRoot "RUN\BUILD_LOCAL_MODEL_READINESS_AUDIT.ps1"
 $localTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
 $localTrainingLaneScript = Join-Path $ProjectRoot "RUN\RUN_LIMITED_LOCAL_TRAINING_LANE.ps1"
 $localTrainingAuditScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1"
@@ -108,6 +110,8 @@ foreach ($path in @(
     $dataReadinessScript,
     $shadowDatasetsScript,
     $trainingReadinessScript,
+    $outcomeClosureAuditScript,
+    $localModelReadinessScript,
     $localTrainingPlanScript,
     $localTrainingLaneScript,
     $localTrainingAuditScript,
@@ -595,6 +599,28 @@ function Write-SupervisorStatus {
         }
     }
 
+    $outcomeClosureAuditPath = Join-Path $statusDir "outcome_closure_latest.json"
+    $outcomeClosureAudit = $null
+    $outcomeClosureAuditHead = @()
+    if (Test-Path -LiteralPath $outcomeClosureAuditPath) {
+        $outcomeClosureAudit = Get-Content -LiteralPath $outcomeClosureAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $outcomeClosureAuditHead = @($outcomeClosureAudit.items | Where-Object { $_.closure_state -ne "FULL_BROKER_NET_READY" } | Select-Object -First 5)
+        if (@($outcomeClosureAuditHead).Count -eq 0) {
+            $outcomeClosureAuditHead = @($outcomeClosureAudit.items | Select-Object -First 5)
+        }
+    }
+
+    $localModelReadinessPath = Join-Path $statusDir "local_model_readiness_latest.json"
+    $localModelReadiness = $null
+    $localModelReadinessHead = @()
+    if (Test-Path -LiteralPath $localModelReadinessPath) {
+        $localModelReadiness = Get-Content -LiteralPath $localModelReadinessPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $localModelReadinessHead = @($localModelReadiness.items | Where-Object { $_.runtime_state -ne "LOCAL_RUNTIME_READY" } | Select-Object -First 5)
+        if (@($localModelReadinessHead).Count -eq 0) {
+            $localModelReadinessHead = @($localModelReadiness.items | Select-Object -First 5)
+        }
+    }
+
     $learningSourceAuditPath = Join-Path $statusDir "learning_source_audit_latest.json"
     $learningSourceAudit = $null
     $learningSourceAuditHead = @()
@@ -712,6 +738,10 @@ function Write-SupervisorStatus {
         top_instrument_shadow_datasets = $shadowDatasetsHead
         instrument_training_readiness = $trainingReadiness
         top_instrument_training_readiness = $trainingReadinessHead
+        outcome_closure_audit = $outcomeClosureAudit
+        top_outcome_closure_audit = $outcomeClosureAuditHead
+        local_model_readiness = $localModelReadiness
+        top_local_model_readiness = $localModelReadinessHead
         learning_source_audit = $learningSourceAudit
         top_learning_source_audit = $learningSourceAuditHead
         ml_scalping_fit_audit = $mlScalpingFitAudit
@@ -1219,6 +1249,16 @@ while ($true) {
     Invoke-SupervisorAction -Actions $actions -Name "instrument_training_readiness" -Operation {
         $report = (& $trainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
         "shadow_ready=$($report.summary.training_shadow_ready_count); limited=$($report.summary.local_training_limited_count); ready=$($report.summary.local_training_ready_count)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "outcome_closure_audit" -Operation {
+        $report = (& $outcomeClosureAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
+        "outcome_ready=$($report.summary.symbols_with_outcome_count); gaps=$($report.summary.outcome_gap_count); pending_paper_truth=$($report.summary.pending_paper_truth_count); broker_net=$($report.summary.broker_net_pln_ready)"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "local_model_readiness" -Operation {
+        $report = (& $localModelReadinessScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
+        "training_ready=$($report.summary.training_ready_count); runtime_ready=$($report.summary.runtime_ready_count); package_disabled=$($report.summary.runtime_package_present_but_disabled_count); global_only=$($report.summary.runtime_global_only_count)"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_plan" -Operation {

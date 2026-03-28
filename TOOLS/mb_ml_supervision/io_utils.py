@@ -17,12 +17,17 @@ def ensure_parent(path: Path) -> None:
 
 
 def read_json(path: Path, default: Any = None) -> Any:
-    if not path.exists():
+    if not path.exists() or path.is_dir():
         return default
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
+        return json.loads(raw.lstrip("\ufeff"))
     except Exception:
-        return default
+        try:
+            raw = path.read_text(encoding="utf-8-sig")
+            return json.loads(raw)
+        except Exception:
+            return default
 
 
 def dump_json(path: Path, payload: Any) -> None:
