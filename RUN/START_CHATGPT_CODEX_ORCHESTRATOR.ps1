@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("open-chat", "run", "status", "process-once")]
+    [ValidateSet("open-chat", "run", "status", "process-once", "recover-last-response")]
     [string]$Mode = "run",
     [string]$ConfigPath = "C:\MAKRO_I_MIKRO_BOT\TOOLS\orchestrator\orchestrator_config.json"
 )

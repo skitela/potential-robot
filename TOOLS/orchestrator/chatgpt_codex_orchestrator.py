@@ -607,6 +607,24 @@ def wait_for_response(page: DevToolsPage, cfg: Config, initial_assistant_count: 
     }
 
 
+def recover_response_after_timeout(
+    page: DevToolsPage, cfg: Config, initial_assistant_count: int
+) -> dict[str, Any]:
+    status = page.evaluate(JS_STATUS)
+    assistant_count = int(status.get("assistant_count", 0))
+    current_text = str(status.get("last_assistant", "")).strip()
+    if assistant_count <= initial_assistant_count or not current_text:
+        return {"ok": False}
+    return {
+        "ok": True,
+        "assistant_count": assistant_count,
+        "text": current_text,
+        "html": page.evaluate(build_html_js()) if cfg.save_html_snapshot else "",
+        "status": status,
+        "recovered_after_timeout": True,
+    }
+
+
 FILE_BLOCK_RE = re.compile(
     r"(?ms)^FILE:\s*(?P<path>[^\r\n]+)\r?\n```[^\n]*\n(?P<content>.*?)\n```"
 )
@@ -644,6 +662,49 @@ def move_with_sidecar(source: Path, destination: Path) -> None:
         shutil.move(str(source_sidecar), str(destination_sidecar))
 
 
+def load_status_file(status_dir: Path, name: str) -> dict[str, Any]:
+    path = status_dir / f"{name}.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def write_response_files(
+    cfg: Config,
+    paths: dict[str, Path],
+    request_id: str,
+    in_progress: Path,
+    request_meta: dict[str, Any],
+    response: dict[str, Any],
+) -> Path:
+    response_md = paths["responses_ready"] / f"{request_id}_response.md"
+    response_json = paths["responses_ready"] / f"{request_id}_response.json"
+    extracted_root = paths["responses_extracted"] / request_id
+    extracted = extract_file_blocks(str(response["text"]), extracted_root)
+
+    response_md.write_text(str(response["text"]), encoding="utf-8")
+    response_payload = {
+        "request_id": request_id,
+        "request_path": str(in_progress),
+        "request_meta": request_meta,
+        "response_path": str(response_md),
+        "extracted_root": str(extracted_root),
+        "extracted_files": extracted,
+        "status": response.get("status", {}),
+        "html_snapshot_saved": cfg.save_html_snapshot,
+        "recovered_after_timeout": bool(response.get("recovered_after_timeout", False)),
+    }
+    if cfg.save_html_snapshot and response.get("html"):
+        html_path = paths["responses_ready"] / f"{request_id}_response.html"
+        html_path.write_text(str(response["html"]), encoding="utf-8")
+        response_payload["html_path"] = str(html_path)
+    response_json.write_text(json.dumps(response_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return response_md
+
+
 def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log_path: Path) -> None:
     request_id = request_path.stem
     in_progress = paths["requests_in_progress"] / request_path.name
@@ -663,6 +724,7 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
     tab = get_or_create_chat_tab(cfg)
     websocket_url = str(tab["webSocketDebuggerUrl"])
     page: DevToolsPage | None = None
+    initial_assistant_count = 0
     try:
         page, ws_meta = create_devtools_page(
             websocket_url, timeout_seconds=max(cfg.response_poll_seconds * 2, 180), retries=3
@@ -699,28 +761,7 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
         response = wait_for_response(page, cfg, initial_assistant_count)
         if not response.get("ok"):
             raise RuntimeError(response.get("error", "response_error"))
-
-        response_md = paths["responses_ready"] / f"{request_id}_response.md"
-        response_json = paths["responses_ready"] / f"{request_id}_response.json"
-        extracted_root = paths["responses_extracted"] / request_id
-        extracted = extract_file_blocks(str(response["text"]), extracted_root)
-
-        response_md.write_text(str(response["text"]), encoding="utf-8")
-        response_payload = {
-            "request_id": request_id,
-            "request_path": str(in_progress),
-            "request_meta": request_meta,
-            "response_path": str(response_md),
-            "extracted_root": str(extracted_root),
-            "extracted_files": extracted,
-            "status": response.get("status", {}),
-            "html_snapshot_saved": cfg.save_html_snapshot,
-        }
-        if cfg.save_html_snapshot and response.get("html"):
-            html_path = paths["responses_ready"] / f"{request_id}_response.html"
-            html_path.write_text(str(response["html"]), encoding="utf-8")
-            response_payload["html_path"] = str(html_path)
-        response_json.write_text(json.dumps(response_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        response_md = write_response_files(cfg, paths, request_id, in_progress, request_meta, response)
 
         done_path = paths["requests_done"] / request_path.name
         move_with_sidecar(in_progress, done_path)
@@ -732,6 +773,31 @@ def process_request(cfg: Config, paths: dict[str, Path], request_path: Path, log
         append_log(log_path, f"request {request_id} completed")
     except Exception as exc:
         error_text = sanitize_error_text(str(exc))
+        if "connection timed out" in error_text.lower() and page is not None:
+            try:
+                recovered = recover_response_after_timeout(page, cfg, initial_assistant_count)
+                if recovered.get("ok"):
+                    response_md = write_response_files(cfg, paths, request_id, in_progress, request_meta, recovered)
+                    done_path = paths["requests_done"] / request_path.name
+                    if in_progress.exists():
+                        move_with_sidecar(in_progress, done_path)
+                    write_status(
+                        paths["status"],
+                        "gpt_last_response",
+                        {
+                            "request_id": request_id,
+                            "response_path": str(response_md),
+                            "request_meta": request_meta,
+                            "recovered_after_timeout": True,
+                        },
+                    )
+                    append_log(log_path, f"request {request_id} recovered after timeout")
+                    return
+            except Exception as recovery_exc:
+                append_log(
+                    log_path,
+                    f"request {request_id} timeout recovery failed: {sanitize_error_text(str(recovery_exc))}",
+                )
         destination_root = paths["requests_hold"] if cfg.hold_recoverable_failures and is_recoverable_error(error_text) else paths["requests_failed"]
         failed_path = destination_root / request_path.name
         if in_progress.exists():
@@ -811,6 +877,65 @@ def command_status(cfg: Config) -> int:
     return 0
 
 
+def command_recover_last_response(cfg: Config) -> int:
+    paths = ensure_mailbox(cfg)
+    log_path = paths["logs"] / f"orchestrator_{time.strftime('%Y%m%d')}.log"
+    append_log(log_path, "orchestrator recover-last-response started")
+    launch_chrome(cfg)
+
+    last_error = load_status_file(paths["status"], "orchestrator_error")
+    last_request = load_status_file(paths["status"], "codex_last_request")
+
+    request_id = str(last_error.get("request_id") or last_request.get("request_id") or "").strip()
+    request_meta = last_error.get("request_meta") or last_request.get("request_meta") or {}
+    request_path = str(last_error.get("request_path") or last_request.get("path") or "").strip()
+
+    if not request_id or not request_path:
+        raise RuntimeError("Brak poprzedniego requestu do odzyskania.")
+
+    tab = get_or_create_chat_tab(cfg)
+    page, _meta = create_devtools_page(
+        str(tab["webSocketDebuggerUrl"]),
+        timeout_seconds=max(cfg.response_poll_seconds * 2, 180),
+        retries=3,
+    )
+    try:
+        page.bring_to_front()
+        wait_for_document_ready(page, timeout_seconds=max(cfg.page_settle_seconds, 1) + 10)
+        response = recover_response_after_timeout(page, cfg, initial_assistant_count=-1)
+        if not response.get("ok"):
+            raise RuntimeError("W zywej rozmowie nie znaleziono odpowiedzi do odzyskania.")
+
+        response_md = write_response_files(
+            cfg,
+            paths,
+            request_id,
+            Path(request_path),
+            request_meta,
+            {**response, "recovered_after_timeout": True},
+        )
+
+        request_file = Path(request_path)
+        if request_file.exists():
+            done_path = paths["requests_done"] / request_file.name
+            move_with_sidecar(request_file, done_path)
+
+        write_status(
+            paths["status"],
+            "gpt_last_response",
+            {
+                "request_id": request_id,
+                "response_path": str(response_md),
+                "request_meta": request_meta,
+                "manual_recovery": True,
+            },
+        )
+        append_log(log_path, f"request {request_id} manually recovered from live chat")
+    finally:
+        page.close()
+    return 0
+
+
 def command_run(cfg: Config) -> int:
     paths = ensure_mailbox(cfg)
     log_path = paths["logs"] / f"orchestrator_{time.strftime('%Y%m%d')}.log"
@@ -856,7 +981,7 @@ def command_process_once(cfg: Config) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["open-chat", "run", "status", "process-once"])
+    parser.add_argument("mode", choices=["open-chat", "run", "status", "process-once", "recover-last-response"])
     parser.add_argument("--config", default="C:\\MAKRO_I_MIKRO_BOT\\TOOLS\\orchestrator\\orchestrator_config.json")
     return parser.parse_args()
 
@@ -870,6 +995,8 @@ def main() -> int:
         return command_status(cfg)
     if args.mode == "process-once":
         return command_process_once(cfg)
+    if args.mode == "recover-last-response":
+        return command_recover_last_response(cfg)
     return command_run(cfg)
 
 

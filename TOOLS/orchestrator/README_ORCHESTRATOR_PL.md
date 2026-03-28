@@ -48,6 +48,8 @@ Teraz dochodzi tez bezpieczny odbior:
 
 6. `IMPORT_GPT54_READY_RESPONSE.ps1` pokazuje najnowsza odpowiedz i moze odlozyc ja do `responses\consumed`
 7. `BUILD_CODEX_REQUEST_FROM_REPORT.ps1` buduje request bezposrednio z raportu technicznego
+8. `START_ORCHESTRATOR_RESPONSE_WATCH.ps1` stale nasluchuje nowych odpowiedzi i zapisuje sygnal do `status\gpt_inbox_latest.json`
+9. `START_ORCHESTRATOR_AUTOFLOW.ps1` podnosi w tle obie petle naraz: wysylke i nasluch odpowiedzi
 
 ## Struktura katalogow
 
@@ -57,6 +59,7 @@ Po uruchomieniu tworzone sa m.in.:
 - `requests\in_progress`
 - `requests\done`
 - `requests\failed`
+- `requests\hold`
 - `responses\ready`
 - `responses\consumed`
 - `responses\archive`
@@ -94,19 +97,37 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\QUEUE_FILE_FOR_GPT54_PRO.ps1 -SourcePath "C:
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\IMPORT_GPT54_READY_RESPONSE.ps1
 ```
 
+6. Jesli chcesz stalego nasluchu odpowiedzi:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\START_ORCHESTRATOR_RESPONSE_WATCH.ps1 -Mode run
+```
+
+7. Jesli chcesz uruchomic obie petle naraz w tle:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\START_ORCHESTRATOR_AUTOFLOW.ps1
+```
+
 8. Uruchom kontrolowany smoke test end-to-end:
 
 ```powershell
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\RUN_ORCHESTRATOR_SMOKE_TEST.ps1
 ```
 
-6. Jesli chcesz przetworzyc tylko jeden request, zamiast stalej petli:
+9. Jesli chcesz przetworzyc tylko jeden request, zamiast stalej petli:
 
 ```powershell
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\START_CHATGPT_CODEX_ORCHESTRATOR.ps1 -Mode process-once
 ```
 
-7. Jesli chcesz zbudowac request z gotowego raportu Codex:
+10. Jesli wiadomosc zostala wyslana, ale odbior odpowiedzi urwal sie po stronie DevTools, odzyskaj ostatnia odpowiedz z zywego watku:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\START_CHATGPT_CODEX_ORCHESTRATOR.ps1 -Mode recover-last-response
+```
+
+11. Jesli chcesz zbudowac request z gotowego raportu Codex:
 
 ```powershell
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_CODEX_REQUEST_FROM_REPORT.ps1 -ReportPath "C:\Users\skite\Desktop\strojenie agenta\raport.md" -Title "Diagnoza i plan" -Phase analysis
@@ -137,6 +158,7 @@ Wtedy orchestrator zapisze te pliki do:
 - Jesli `latest.json` na tej maszynie jest przepisywany w tej samej chwili, orchestrator tego nie naprawia; on tylko transportuje tresc.
 - Jesli ChatGPT zmieni DOM i selektory przestana pasowac, trzeba poprawic sekcje JavaScript w `chatgpt_codex_orchestrator.py`.
 - Jesli Chrome nie ma jeszcze sesji logowania, orchestrator zapisze blad `composer_not_found_or_not_logged_in`.
+- Jesli problem z sesja albo chwilowa gotowoscia watku jest odzyskiwalny, request moze trafic do `requests\hold` zamiast do twardej porazki.
 - Request ma teraz tez metadane `.json`, wiec mozna bezpiecznie sledzic, co wyslalismy i z jakiego pliku to pochodzilo.
 - Warstwa `ack\...` jest na razie przygotowana strukturalnie; to fundament pod dojrzalszy obieg executor/reviewer.
 
@@ -189,6 +211,15 @@ Naprawa:
 - skrocic prompt
 - ponowic request
 - sprawdzic czy thread nie utknal na spinnerze / stop button
+
+### `Connection timed out`
+
+Znaczenie:
+- polaczenie DevTools urwalo sie w trakcie wysylki albo odbioru
+
+Naprawa:
+- najpierw sprawdzic, czy wiadomosc nie weszla juz do watku
+- w razie potrzeby uruchomic `-Mode recover-last-response`
 
 ## Dodatkowe dokumenty
 
