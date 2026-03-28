@@ -112,8 +112,6 @@ if ($UsePriorityReport -and (Test-Path -LiteralPath $PriorityReportPath)) {
 
 if ($symbols.Count -eq 0) {
     $symbols = @(
-        "NZDUSD",
-        "GBPJPY",
         "SILVER",
         "DE30",
         "GOLD",

@@ -28,9 +28,7 @@ $symbols = @(
     "USDJPY",
     "USDCHF",
     "USDCAD",
-    "NZDUSD",
     "EURJPY",
-    "GBPJPY",
     "EURAUD"
 )
 

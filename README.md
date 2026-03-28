@@ -4,6 +4,8 @@ Nowy projekt `100% MQL5` jest teraz glownym aktywnym systemem.
 
 Historyczne repo i stare eksperymenty pozostaja tylko jako kontekst zrodlowy, a nie jako aktywna zaleznosc runtime.
 
+Aktywna flota po ostatnim cleanupie runtime obejmuje `13` symboli. `NZDUSD` i `GBPJPY` zostaly wycofane z aktywnego obiegu i pozostaja tylko w materialach historycznych.
+
 Cel projektu:
 
 - zbudowac cienki `Core` jako wspolna biblioteke,
@@ -92,12 +94,10 @@ W projekcie utworzono:
 - `GBPUSD` jest juz drugim pelnym wzorcem z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `USDJPY` jest pierwszym rozwinietym archetypem azjatyckim z lokalnym scoringiem i suchym torem wejscia,
 - `USDJPY` jest juz tez pelnym archetypem azjatyckim z live-send pod bezpiecznym przelacznikiem,
-- `NZDUSD` jest juz drugim pelnym archetypem azjatyckim z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `USDCAD` jest juz trzecim pelnym wzorcem sesji glownej z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `USDCHF` jest juz czwartym pelnym wzorcem sesji glownej z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `AUDUSD` jest juz trzecim pelnym archetypem azjatycko-przejsciowym z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `EURJPY` jest juz pierwszym pelnym wzorcem crossowym z lokalnym live-send pod bezpiecznym przelacznikiem,
-- `GBPJPY` jest juz drugim pelnym wzorcem crossowym z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `EURAUD` jest juz trzecim pelnym wzorcem crossowym z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `GBPAUD` jest juz czwartym pelnym wzorcem crossowym z lokalnym live-send pod bezpiecznym przelacznikiem,
 - `GOLD`, `SILVER`, `PLATIN` i `COPPER-US` sa juz lokalnie przygotowane jako domena `METALS` z profilem, strategia, presetem, hierarchia strojenia i rodzinnymi seedami,

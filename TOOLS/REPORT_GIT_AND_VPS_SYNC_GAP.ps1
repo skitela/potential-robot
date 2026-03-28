@@ -109,7 +109,7 @@ $commitsSinceSync = @((Invoke-Git -Args @(
 $keyBotNames = @(
     "MicroBot_AUDUSD.ex5",
     "MicroBot_GBPUSD.ex5",
-    "MicroBot_NZDUSD.ex5",
+    "MicroBot_EURJPY.ex5",
     "MicroBot_USDCAD.ex5",
     "MicroBot_USDCHF.ex5",
     "MicroBot_USDJPY.ex5"

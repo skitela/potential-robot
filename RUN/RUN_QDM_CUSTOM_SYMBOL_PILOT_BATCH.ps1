@@ -56,7 +56,7 @@ function Get-DefaultSymbolAliases {
         [string]$ReadinessReportPath
     )
 
-    $fallback = @("AUDUSD", "EURAUD", "EURUSD", "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY")
+    $fallback = @("AUDUSD", "EURAUD", "EURUSD", "GBPUSD", "USDCAD", "USDCHF", "USDJPY")
     if (Test-Path -LiteralPath $ReadinessReportPath) {
         try {
             $report = Get-Content -LiteralPath $ReadinessReportPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop

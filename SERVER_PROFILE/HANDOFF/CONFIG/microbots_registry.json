@@ -69,34 +69,12 @@
       "status": "compiled_verified"
     },
     {
-      "symbol": "NZDUSD",
-      "broker_symbol": "NZDUSD.pro",
-      "code_symbol": "NZDUSD",
-      "expert": "MicroBot_NZDUSD",
-      "preset": "MicroBot_NZDUSD_Live.set",
-      "magic": 910107,
-      "chart_tf": "M5",
-      "session_profile": "FX_ASIA",
-      "status": "compiled_verified"
-    },
-    {
       "symbol": "EURJPY",
       "broker_symbol": "EURJPY.pro",
       "code_symbol": "EURJPY",
       "expert": "MicroBot_EURJPY",
       "preset": "MicroBot_EURJPY_Live.set",
       "magic": 910108,
-      "chart_tf": "M5",
-      "session_profile": "FX_CROSS",
-      "status": "compiled_verified"
-    },
-    {
-      "symbol": "GBPJPY",
-      "broker_symbol": "GBPJPY.pro",
-      "code_symbol": "GBPJPY",
-      "expert": "MicroBot_GBPJPY",
-      "preset": "MicroBot_GBPJPY_Live.set",
-      "magic": 910109,
       "chart_tf": "M5",
       "session_profile": "FX_CROSS",
       "status": "compiled_verified"

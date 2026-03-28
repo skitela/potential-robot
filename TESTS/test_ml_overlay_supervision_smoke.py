@@ -38,7 +38,7 @@ def test_ml_overlay_supervision_smoke(tmp_path: Path):
         "schema_version": "1.1",
         "symbols": [
             {"symbol": "EURUSD", "code_symbol": "EURUSD", "expert": "MicroBot_EURUSD", "session_profile": "FX_MAIN"},
-            {"symbol": "GBPJPY", "code_symbol": "GBPJPY", "expert": "MicroBot_GBPJPY", "session_profile": "FX_CROSS"},
+            {"symbol": "EURAUD", "code_symbol": "EURAUD", "expert": "MicroBot_EURAUD", "session_profile": "FX_CROSS"},
         ],
     }
     (repo / "CONFIG" / "microbots_registry.json").write_text(json.dumps(registry), encoding="utf-8")
@@ -47,7 +47,7 @@ def test_ml_overlay_supervision_smoke(tmp_path: Path):
         '#include "..\\\\..\\\\Include\\\\Core\\\\MbMlRuntimeBridge.mqh"\nvoid x(){MbMlRuntimeBridgeApplyStudentGate(a,b,c,d,e,f,g,h,0.1);}\n',
         encoding="utf-8",
     )
-    (repo / "MQL5" / "Experts" / "MicroBots" / "MicroBot_GBPJPY.mq5").write_text(
+    (repo / "MQL5" / "Experts" / "MicroBots" / "MicroBot_EURAUD.mq5").write_text(
         '#include "..\\\\..\\\\Include\\\\Core\\\\MbMlRuntimeBridge.mqh"\n',
         encoding="utf-8",
     )
@@ -56,7 +56,7 @@ def test_ml_overlay_supervision_smoke(tmp_path: Path):
         research / "datasets" / "contracts" / "server_parity_tail_bridge_latest.parquet",
         [
             {"symbol_alias": "EURUSD", "state": "OK"},
-            {"symbol_alias": "GBPJPY", "state": "BRAK_SWIEZEGO_OGONA"},
+            {"symbol_alias": "EURAUD", "state": "BRAK_SWIEZEGO_OGONA"},
         ],
     )
     _write_parquet(
@@ -92,6 +92,6 @@ def test_ml_overlay_supervision_smoke(tmp_path: Path):
     paths = OverlayPaths.create(project_root=repo, research_root=research, common_state_root=common)
     audit = build_overlay_audit(paths)
     assert audit["active_fleet"]["count"] == 2
-    assert audit["symbol_activity"]["training_modes"]["GBPJPY"] == "FALLBACK_ONLY"
+    assert audit["symbol_activity"]["training_modes"]["EURAUD"] == "FALLBACK_ONLY"
     registry_payload = sync_runtime_state(paths)
     assert "EURUSD" in registry_payload["symbols"]

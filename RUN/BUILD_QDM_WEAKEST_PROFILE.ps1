@@ -90,18 +90,6 @@ function Get-QdmSpec {
                 notes = "weakest_dynamic_fx"
             }
         }
-        "NZDUSD" {
-            return [pscustomobject]@{
-                supported = $true
-                symbol = "NZDUSD"
-                datasource = "dukascopy"
-                datatype = "TICK"
-                date_from = "2016.01.01"
-                date_to = ""
-                mt5_export_name = "MB_NZDUSD_DUKA"
-                notes = "weakest_dynamic_fx"
-            }
-        }
         "EURJPY" {
             return [pscustomobject]@{
                 supported = $true
@@ -111,18 +99,6 @@ function Get-QdmSpec {
                 date_from = "2016.01.01"
                 date_to = ""
                 mt5_export_name = "MB_EURJPY_DUKA"
-                notes = "weakest_dynamic_fx"
-            }
-        }
-        "GBPJPY" {
-            return [pscustomobject]@{
-                supported = $true
-                symbol = "GBPJPY"
-                datasource = "dukascopy"
-                datatype = "TICK"
-                date_from = "2016.01.01"
-                date_to = ""
-                mt5_export_name = "MB_GBPJPY_DUKA"
                 notes = "weakest_dynamic_fx"
             }
         }

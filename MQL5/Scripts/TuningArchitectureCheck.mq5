@@ -6,8 +6,8 @@
 void OnStart()
   {
    string fx_main[] = {"EURUSD","GBPUSD","USDCAD","USDCHF"};
-   string fx_asia[] = {"USDJPY","AUDUSD","NZDUSD"};
-   string fx_cross[] = {"EURJPY","GBPJPY","EURAUD","GBPAUD"};
+   string fx_asia[] = {"USDJPY","AUDUSD"};
+   string fx_cross[] = {"EURJPY","EURAUD","GBPAUD"};
    string families[] = {"FX_MAIN","FX_ASIA","FX_CROSS"};
 
    MbTuningFamilyPolicy family_policy;

@@ -428,61 +428,6 @@
                                    }
                      },
                      {
-                         "symbol":  "GBPJPY",
-                         "alias_symbol":  "GBPJPY",
-                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GBPJPY.mqh",
-                         "profile":  {
-                                         "alias_symbol":  "GBPJPY",
-                                         "symbol":  "GBPJPY",
-                                         "trade_tf":  "PERIOD_M5",
-                                         "session_profile":  "FX_CROSS",
-                                         "trade_window_start_hour":  7,
-                                         "trade_window_end_hour":  12,
-                                         "max_spread_points":  48,
-                                         "caution_spread_points":  36,
-                                         "hard_daily_loss_pct":  2,
-                                         "hard_session_loss_pct":  1,
-                                         "min_seconds_between_entries":  60,
-                                         "kill_switch_token_name":  "oandakey_gbpjpy.token",
-                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GBPJPY.mqh"
-                                     },
-                         "indicators":  {
-                                            "ema_fast":  12,
-                                            "ema_slow":  30,
-                                            "atr_period":  14,
-                                            "rsi_period":  14
-                                        },
-                         "risk":  {
-                                      "base_risk_pct":  0.34,
-                                      "execution_floor":  0.7,
-                                      "execution_decay":  0.52,
-                                      "min_risk_pct":  0.2,
-                                      "max_risk_pct":  0.48,
-                                      "sl_atr_multiplier":  1.9,
-                                      "sl_min_points":  36,
-                                      "tp_atr_multiplier":  2.4,
-                                      "tp_min_points":  64,
-                                      "trail_atr_multiplier":  1.28
-                                  },
-                         "decision":  {
-                                          "caution_trigger_abs":  1,
-                                          "ready_trigger_abs":  0.84,
-                                          "setup_labels":  [
-                                                               "SETUP_BREAKOUT",
-                                                               "SETUP_PULLBACK",
-                                                               "SETUP_RANGE",
-                                                               "SETUP_TREND"
-                                                           ]
-                                      },
-                         "model":  {
-                                       "has_rejection":  false,
-                                       "has_range":  true,
-                                       "has_reversal":  false,
-                                       "uses_new_bar_gate":  true,
-                                       "has_live_manage_position":  true
-                                   }
-                     },
-                     {
                          "symbol":  "GBPUSD",
                          "alias_symbol":  "GBPUSD",
                          "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GBPUSD.mqh",
@@ -587,61 +532,6 @@
                          "model":  {
                                        "has_rejection":  true,
                                        "has_range":  false,
-                                       "has_reversal":  false,
-                                       "uses_new_bar_gate":  true,
-                                       "has_live_manage_position":  true
-                                   }
-                     },
-                     {
-                         "symbol":  "NZDUSD",
-                         "alias_symbol":  "NZDUSD",
-                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_NZDUSD.mqh",
-                         "profile":  {
-                                         "alias_symbol":  "NZDUSD",
-                                         "symbol":  "NZDUSD",
-                                         "trade_tf":  "PERIOD_M5",
-                                         "session_profile":  "FX_ASIA",
-                                         "trade_window_start_hour":  0,
-                                         "trade_window_end_hour":  5,
-                                         "max_spread_points":  25,
-                                         "caution_spread_points":  18,
-                                         "hard_daily_loss_pct":  2,
-                                         "hard_session_loss_pct":  1,
-                                         "min_seconds_between_entries":  60,
-                                         "kill_switch_token_name":  "oandakey_nzdusd.token",
-                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_NZDUSD.mqh"
-                                     },
-                         "indicators":  {
-                                            "ema_fast":  12,
-                                            "ema_slow":  32,
-                                            "atr_period":  14,
-                                            "rsi_period":  14
-                                        },
-                         "risk":  {
-                                      "base_risk_pct":  0.28,
-                                      "execution_floor":  0.74,
-                                      "execution_decay":  0.5,
-                                      "min_risk_pct":  0.17,
-                                      "max_risk_pct":  0.42,
-                                      "sl_atr_multiplier":  1.6,
-                                      "sl_min_points":  24,
-                                      "tp_atr_multiplier":  2,
-                                      "tp_min_points":  42,
-                                      "trail_atr_multiplier":  1.14
-                                  },
-                         "decision":  {
-                                          "caution_trigger_abs":  1,
-                                          "ready_trigger_abs":  0.82,
-                                          "setup_labels":  [
-                                                               "SETUP_BREAKOUT",
-                                                               "SETUP_PULLBACK",
-                                                               "SETUP_RANGE",
-                                                               "SETUP_TREND"
-                                                           ]
-                                      },
-                         "model":  {
-                                       "has_rejection":  false,
-                                       "has_range":  true,
                                        "has_reversal":  false,
                                        "uses_new_bar_gate":  true,
                                        "has_live_manage_position":  true

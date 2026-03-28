@@ -62,7 +62,7 @@ function Get-ExpectedFeedState {
     $day = $LocalNow.DayOfWeek
     $time = $LocalNow.TimeOfDay
     $open2301 = @("COPPER-US", "US500")
-    $open2305 = @("AUDUSD","EURUSD","GBPUSD","USDJPY","USDCAD","USDCHF","NZDUSD","EURJPY","GBPJPY","EURAUD","GOLD","SILVER")
+    $open2305 = @("AUDUSD","EURUSD","GBPUSD","USDJPY","USDCAD","USDCHF","EURJPY","EURAUD","GOLD","SILVER")
 
     if ($day -eq [System.DayOfWeek]::Sunday) {
         if ($open2301 -contains $Symbol) {

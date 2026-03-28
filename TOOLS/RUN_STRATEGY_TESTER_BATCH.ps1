@@ -40,8 +40,6 @@ function Get-SymbolTimeoutSec {
     if ($Optimization -ne 0) {
         $DefaultTimeoutSec = [Math]::Max($DefaultTimeoutSec, 14400)
         $optimizationOverrides = @{
-            "NZDUSD"    = 21600
-            "GBPJPY"    = 21600
             "AUDUSD"    = 14400
             "COPPER-US" = 21600
             "SILVER"    = 21600

@@ -3,18 +3,17 @@
   "source_symbol": "EURJPY",
   "symbols": [
     "EURAUD",
-    "EURJPY",
-    "GBPJPY"
+    "EURJPY"
   ],
   "trusted_data": true,
   "trust_reason": "TRUSTED",
   "freeze_new_changes": true,
-  "symbol_count": 3,
-  "trusted_symbol_count": 3,
-  "degraded_symbol_count": 3,
-  "chaos_symbol_count": 3,
-  "bad_spread_symbol_count": 3,
-  "total_samples": 224.0,
+  "symbol_count": 2,
+  "trusted_symbol_count": 2,
+  "degraded_symbol_count": 2,
+  "chaos_symbol_count": 2,
+  "bad_spread_symbol_count": 2,
+  "total_samples": 198.0,
   "dominant_confidence_cap": 0.82,
   "dominant_risk_cap": 0.8,
   "breakout_family_tax": 0.06,
@@ -106,31 +105,6 @@
       "trust_reason": "INFRASTRUCTURE_WEAK",
       "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURJPY\\runtime_state.csv",
       "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\EURJPY\\tuning_policy.csv"
-    },
-    {
-      "symbol": "GBPJPY",
-      "family": "FX_CROSS",
-      "runtime_present": true,
-      "local_policy_present": true,
-      "local_policy_trusted": false,
-      "learning_sample_count": 26,
-      "learning_win_count": 4,
-      "learning_loss_count": 22,
-      "loss_ratio": 0.8462,
-      "loss_streak": 5,
-      "adaptive_risk_scale": 0.912162,
-      "market_regime": "CHAOS",
-      "spread_regime": "BAD",
-      "execution_regime": "GOOD",
-      "last_setup_type": "SETUP_RANGE",
-      "confidence_cap": 1.0,
-      "risk_cap": 1.0,
-      "breakout_tax": 0.0,
-      "trend_tax": 0.0,
-      "rejection_boost": 0.0,
-      "trust_reason": "LOW_SAMPLE",
-      "runtime_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPJPY\\runtime_state.csv",
-      "local_policy_path": "C:\\Users\\skite\\AppData\\Roaming\\MetaQuotes\\\\Terminal\\\\Common\\\\Files\\\\MAKRO_I_MIKRO_BOT\\state\\GBPJPY\\tuning_policy.csv"
     }
   ]
 }

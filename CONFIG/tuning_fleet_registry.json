@@ -9,7 +9,6 @@
       "source_symbol": "USDJPY",
       "symbols": [
         "AUDUSD",
-        "NZDUSD",
         "USDJPY"
       ],
       "trusted_data": true,
@@ -51,8 +50,7 @@
       "source_symbol": "EURJPY",
       "symbols": [
         "EURAUD",
-        "EURJPY",
-        "GBPJPY"
+        "EURJPY"
       ],
       "trusted_data": true,
       "trust_reason": "TRUSTED",

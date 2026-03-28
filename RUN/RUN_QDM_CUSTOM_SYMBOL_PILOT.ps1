@@ -1,8 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$SymbolAlias = "NZDUSD",
-    [string]$QdmSymbol = "NZDUSD",
-    [string]$BrokerTemplateSymbol = "NZDUSD.pro",
+    [string]$SymbolAlias = "AUDUSD",
+    [string]$QdmSymbol = "AUDUSD",
+    [string]$BrokerTemplateSymbol = "AUDUSD.pro",
     [string]$ExpertCodeSymbol = "",
     [string]$Period = "M1",
     [string]$FromDate = "2026.03.12",

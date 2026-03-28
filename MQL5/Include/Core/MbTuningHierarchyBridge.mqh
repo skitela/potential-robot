@@ -48,17 +48,15 @@ int MbGetTuningFamilySymbols(const string family,string &out[])
      }
    else if(family == "FX_ASIA")
      {
-      ArrayResize(out,3);
+      ArrayResize(out,2);
       out[0] = "AUDUSD";
       out[1] = "USDJPY";
-      out[2] = "NZDUSD";
      }
    else if(family == "FX_CROSS")
      {
-      ArrayResize(out,3);
+      ArrayResize(out,2);
       out[0] = "EURJPY";
-      out[1] = "GBPJPY";
-      out[2] = "EURAUD";
+      out[1] = "EURAUD";
      }
    else if(family == "METALS_SPOT_PM")
      {

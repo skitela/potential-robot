@@ -8,7 +8,6 @@
                          "family":  "FX_ASIA",
                          "symbols":  [
                                          "AUDUSD",
-                                         "NZDUSD",
                                          "USDJPY"
                                      ],
                          "invariants":  {
@@ -51,8 +50,7 @@
                          "family":  "FX_CROSS",
                          "symbols":  [
                                          "EURAUD",
-                                         "EURJPY",
-                                         "GBPJPY"
+                                         "EURJPY"
                                      ],
                          "invariants":  {
                                             "trade_tf":  "PERIOD_M5",
