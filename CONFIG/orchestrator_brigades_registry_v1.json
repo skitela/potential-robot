@@ -1,0 +1,298 @@
+{
+  "schema_version": "1.0",
+  "registry_kind": "orchestrator_brigades",
+  "project_name": "MAKRO_I_MIKRO_BOT",
+  "all_tasks_must_be_assigned_to_brigades": true,
+  "actor_field_policy": "Actor and AssignedTo should use actor_id from this registry whenever work belongs to a stable brigade lane.",
+  "primary_objectives": [
+    "Protect the entrusted scalping capital before any other local optimisation.",
+    "Deliver net profit without violating global capital or session veto layers.",
+    "Keep active-instrument work, training and rollout safety above side work or cosmetic cleanup.",
+    "Run laptop research and validation in a lab that mirrors the VPS OANDA MT5 and TMS Brokers runtime as closely as practical.",
+    "Continuously pull MT5, OANDA and TMS runtime evidence back into tests, reports, databases and deployment decisions.",
+    "Adopt only those innovations that improve capital protection, runtime realism or scalping efficiency."
+  ],
+  "universal_execution_policy": [
+    "Codex remains the base executor and can perform work from any brigade lane when ordered by the user.",
+    "Every brigade can execute cross-domain work when explicitly instructed, but its specialization defines the default lane, backlog and reporting duty.",
+    "Even when work is cross-domain, the task should still be stamped with the brigade actor_id that owns the lane so the taskboard remains auditable.",
+    "Every new note should be treated as readable by all brigades, but execution belongs only to the explicitly targeted brigade or actor.",
+    "A targeted brigade should first review safety, capital impact, contradiction with current contracts and overall system sense before executing the requested action.",
+    "No brigade should blindly execute destructive, contradictory or unsafe instructions even when addressed directly; such cases must be escalated through note plus task or note plus warning."
+  ],
+  "message_handling_policy": {
+    "all_brigades_read_every_new_note": true,
+    "default_visibility": "ALL_BRIGADES_READ",
+    "default_execution_policy": "TARGET_ONLY_AFTER_REVIEW",
+    "default_non_target_policy": "READ_ONLY_UNLESS_EXPLICITLY_ASSIGNED",
+    "execution_requires_safety_review": true,
+    "dangerous_or_conflicting_requests_must_be_escalated": true,
+    "targeted_actor_should_execute_when_safe": true,
+    "codex_rule": "If Codex is explicitly targeted for an action, Codex should open the message, assess whether it is safe and coherent, and execute it when it passes review."
+  },
+  "learning_command": {
+    "always_on_brigades": [
+      "ml_migracja_mt5",
+      "nadzor_uczenia_rolloutu"
+    ],
+    "training_brigade_id": "ml_migracja_mt5",
+    "supervision_brigade_id": "nadzor_uczenia_rolloutu",
+    "reporting_rule": "Training and supervision lanes should continuously report learning progress, regressions, rollout readiness and risk to the remaining brigades.",
+    "other_brigades_priority_rule": "Other brigades should prioritise tasks and handoffs that unblock safe instrument learning, validation, deployment realism and profit protection."
+  },
+  "autostart_policy": {
+    "workspace_open_bootstrap": true,
+    "mailbox_state_path": "status/brigade_runtime_state.json",
+    "mailbox_autostart_status_path": "status/brigade_autostart_latest.json",
+    "paused_state_blocks_new_tasks": true,
+    "skip_if_open_task_exists": true
+  },
+  "global_veto_layers": [
+    "CONFIG/core_capital_contract_v1.json",
+    "CONFIG/session_capital_coordinator_v1.json"
+  ],
+  "global_rules": [
+    "Every new work item should be routed through a brigade lane and written to the taskboard when it becomes actionable.",
+    "One chat or agent session should own one brigade role at a time.",
+    "Every write-capable brigade should create a claim before touching shared scopes.",
+    "Long tasks should emit heartbeat entries through coordination/activity.",
+    "Cross-brigade handoff should be written to notes plus a parallel task, not only to chat memory.",
+    "All brigades should read new bridge notes, but only the explicitly targeted brigade should start execution unless the operator assigns another actor deliberately.",
+    "Every actionable note or task should state who is the execution owner, what is the visibility scope and whether safety review is mandatory before action.",
+    "If a request is destructive, contradictory, exceeds the lane scope or breaks capital/session contracts, the brigade should stop execution and escalate instead of obeying blindly.",
+    "ML and rollout supervision lanes are always-on by default unless the operator pauses a brigade explicitly.",
+    "All brigades should treat capital protection, instrument performance and learning feedback as higher priority than side work.",
+    "Laptop-lab conclusions should be grounded in evidence aligned with the VPS OANDA MT5 and TMS Brokers runtime.",
+    "Capital and session contracts remain global veto layers even when work is distributed across brigades."
+  ],
+  "brigades": [
+    {
+      "brigade_id": "ml_migracja_mt5",
+      "actor_id": "brygada_ml_migracja_mt5",
+      "chat_name": "Rozwoj systemu - ML i migracja MT5",
+      "primary_focus": "trening microbotow, ONNX, QDM i migracja state/model do terminali MT5",
+      "specialization_summary": "zawsze aktywne uczenie modeli i przygotowanie materialu modelowego dla aktywnych instrumentow",
+      "can_execute_cross_domain_tasks": true,
+      "autostart_enabled": true,
+      "default_runtime_state": "RUNNING",
+      "startup_priority": "CRITICAL",
+      "startup_task_title": "Prowadz ciagle uczenie i raportuj stan modeli",
+      "startup_instructions": "Szkol system na biezaco dla aktywnych instrumentow, zbieraj sygnaly z MT5/QDM/OANDA/TMS, raportuj co dziala, co nie dziala, jaki jest postep uczenia i co trzeba zlecic innym brygadom.",
+      "mission": "Ta brygada utrzymuje lane uczenia, modeli i migracji danych lub modeli do MT5. Jest zawsze aktywna, stale szkoli system dla aktywnych instrumentow i raportuje pozostalim brygadom postep uczenia, regresje oraz potrzeby wdrozeniowe.",
+      "default_claim_roots": [
+        "TOOLS/mb_ml_core",
+        "TOOLS/mb_ml_supervision",
+        "RUN/TRAIN_PAPER_GATE_ACCEPTOR_MODEL.ps1",
+        "RUN/TRAIN_PAPER_GATE_ACCEPTOR_MODELS_PER_SYMBOL.ps1",
+        "RUN/SYNC_MT5_ML_RUNTIME_STATE.ps1"
+      ],
+      "shared_contracts": [
+        "CONFIG/tuning_fleet_registry.json",
+        "CONFIG/strategy_variant_registry.json",
+        "CONFIG/scalping_universe_plan.json",
+        "CONFIG/microbots_registry.json"
+      ],
+      "task_examples": [
+        "Zbuduj lokalna gotowosc modelu dla symbolu",
+        "Przetrenuj paper gate acceptor i opublikuj wynik",
+        "Zsynchronizuj runtime ML state do MT5",
+        "Przygotuj migracje modelu dla nowej partii botow"
+      ],
+      "handoff_targets": [
+        "brygada_nadzor_uczenia_rolloutu",
+        "brygada_wdrozenia_mt5",
+        "brygada_rozwoj_kodu"
+      ]
+    },
+    {
+      "brigade_id": "audyt_cleanup",
+      "actor_id": "brygada_audyt_cleanup",
+      "chat_name": "Rozwoj systemu - Audyt i cleanup",
+      "primary_focus": "ciagly audit, sprzatanie residue, wyszukiwanie starych bledow i higiena repo/runtime",
+      "specialization_summary": "higiena repo i runtime oraz usuwanie wszystkiego, co zagraza czytelnosci, parity albo bezpieczenstwu aktywnych instrumentow",
+      "can_execute_cross_domain_tasks": true,
+      "autostart_enabled": true,
+      "default_runtime_state": "RUNNING",
+      "startup_priority": "HIGH",
+      "startup_task_title": "Pilnuj higieny i residue pod katem kapitalu i uczenia",
+      "startup_instructions": "Skanuj EVIDENCE, LOGS, BACKUP i dokumentacje pod residue, parity gaps i stare artefakty, ktore moga zaburzac uczenie, raporty lub bezpieczenstwo kapitalu. Priorytet maja znaleziska wskazane przez brygade uczaca i nadzor.",
+      "mission": "Ta brygada czyta szeroko i czysci konsekwentnie: stare instrumenty, residue w EVIDENCE, LOGS, BACKUP, skrypty i dokumenty. Priorytetem jest usuwanie problemow, ktore przeszkadzaja uczeniu, parity testow albo ochronie kapitalu. Nie wdraza live zmian bez jawnego handoffu do rozwoju albo wdrozen.",
+      "default_claim_roots": [
+        "EVIDENCE",
+        "LOGS",
+        "BACKUP",
+        "RUN/CLEAN_RETIRED_SYMBOL_RESIDUE.ps1",
+        "RUN/BUILD_REPO_HYGIENE_REPORT.ps1",
+        "RUN/BUILD_RETIRED_SYMBOL_EXCLUSION_REPORT.ps1"
+      ],
+      "shared_contracts": [
+        "CONFIG/microbots_registry.json",
+        "CONFIG/family_reference_registry.json",
+        "CONFIG/domain_architecture_registry_v1.json"
+      ],
+      "task_examples": [
+        "Usun residue po wycietych instrumentach",
+        "Zbuduj repo hygiene report i parity audit",
+        "Przeskanuj backupy i evidence pod stare symbole",
+        "Zbierz liste starych bledow i przygotuj taski naprawcze"
+      ],
+      "handoff_targets": [
+        "brygada_rozwoj_kodu",
+        "brygada_wdrozenia_mt5",
+        "brygada_architektura_innowacje"
+      ]
+    },
+    {
+      "brigade_id": "wdrozenia_mt5",
+      "actor_id": "brygada_wdrozenia_mt5",
+      "chat_name": "Rozwoj systemu - Wdrozenia MT5",
+      "primary_focus": "pakowanie, instalacja, handoff i walidacja rolloutow MT5",
+      "specialization_summary": "kontrolowane wejscie zmian do MT5, z naciskiem na parity laptop-vps i bezpieczny rollout dla aktywnych instrumentow",
+      "can_execute_cross_domain_tasks": true,
+      "autostart_enabled": true,
+      "default_runtime_state": "RUNNING",
+      "startup_priority": "HIGH",
+      "startup_task_title": "Pilnuj rollout readiness i parity VPS z labem",
+      "startup_instructions": "Monitoruj package, install, validate i parity miedzy laptopem a VPS OANDA MT5/TMS. Odbieraj handoffy od uczenia i nadzoru, ale niczego nie wypychaj bez zgodnosci z kontraktami kapitalowymi i sesyjnymi.",
+      "mission": "Ta brygada jest od fizycznego wejscia zmian do terminala i serwera: package, install, validate, handoff, remote deploy. Jej praca ma byc podporzadkowana bezpiecznej obsludze aktywnych instrumentow i wynikom brygady uczacej oraz nadzoru. Nie powinna samodzielnie zmieniac logiki strategii ani modeli bez tasku od odpowiedniej brygady.",
+      "default_claim_roots": [
+        "SERVER_PROFILE",
+        "RUN/PREPARE_MT5_ROLLOUT.ps1",
+        "RUN/PREPARE_MT5_LAB_TERMINAL.ps1",
+        "TOOLS/INSTALL_MT5_SERVER_PACKAGE.ps1",
+        "TOOLS/VALIDATE_MT5_SERVER_INSTALL.ps1"
+      ],
+      "shared_contracts": [
+        "CONFIG/core_capital_contract_v1.json",
+        "CONFIG/session_capital_coordinator_v1.json",
+        "CONFIG/remote_deployment_targets.example.json"
+      ],
+      "task_examples": [
+        "Spakuj i zwaliduj nowy package MT5",
+        "Wykonaj remote deployment i preflight",
+        "Wygeneruj handoff operatorski",
+        "Potwierdz heartbeat po wdrozeniu"
+      ],
+      "handoff_targets": [
+        "brygada_audyt_cleanup",
+        "brygada_nadzor_uczenia_rolloutu",
+        "brygada_architektura_innowacje"
+      ]
+    },
+    {
+      "brigade_id": "rozwoj_kodu",
+      "actor_id": "brygada_rozwoj_kodu",
+      "chat_name": "Rozwoj systemu - Rozwoj kodu",
+      "primary_focus": "implementacja funkcji, naprawy kodu, kompilacja i wykonywanie zmian technicznych",
+      "specialization_summary": "glowny lane implementacyjny dla zmian technicznych, ktore poprawiaja ochrone kapitalu i wynik aktywnych instrumentow",
+      "can_execute_cross_domain_tasks": true,
+      "autostart_enabled": true,
+      "default_runtime_state": "RUNNING",
+      "startup_priority": "HIGH",
+      "startup_task_title": "Utrzymuj backlog implementacyjny pod cele kapitalowe i uczenie",
+      "startup_instructions": "Monitoruj backlog zmian wynikajacy z uczenia, nadzoru i architektury. Priorytet maja poprawki dla aktywnych instrumentow, ochrony kapitalu, zysku netto i parity testow laptop-vps.",
+      "mission": "Ta brygada dostarcza fizyczne zmiany w kodzie MQL5, helperach i skryptach operatorskich. To jest glowne pasmo implementacyjne dla feature work i bugfixow, ale jego priorytet jest ustawiany przez ochrone kapitalu, wyniki aktywnych instrumentow oraz sygnaly z uczenia i nadzoru.",
+      "default_claim_roots": [
+        "MQL5/Experts",
+        "MQL5/Include",
+        "RUN/BUILD_MT5_PRETRADE_EXECUTION_TRUTH.ps1",
+        "TOOLS/COMPILE_ALL_MICROBOTS.ps1",
+        "TOOLS/COMPILE_MICROBOT.ps1"
+      ],
+      "shared_contracts": [
+        "CONFIG/microbots_registry.json",
+        "CONFIG/strategy_variant_registry.json",
+        "CONFIG/domain_architecture_registry_v1.json"
+      ],
+      "task_examples": [
+        "Dodaj nowy flow do 13 aktywnych botow",
+        "Napraw helper send albo pretrade truth",
+        "Przebuduj pakiet botow po zmianie Include/Core",
+        "Dodaj nowy wrapper operatorski"
+      ],
+      "handoff_targets": [
+        "brygada_wdrozenia_mt5",
+        "brygada_audyt_cleanup",
+        "brygada_nadzor_uczenia_rolloutu"
+      ]
+    },
+    {
+      "brigade_id": "architektura_innowacje",
+      "actor_id": "brygada_architektura_innowacje",
+      "chat_name": "Rozwoj systemu - Architektura i innowacje",
+      "primary_focus": "projektowanie nowych koncepcji, badanie MT5 i OANDA, oraz koordynacja usprawnien miedzy brygadami",
+      "specialization_summary": "badanie parametrow, kontraktow i innowacji tylko wtedy, gdy wzmacniaja kapital, parity i skutecznosc scalpingu",
+      "can_execute_cross_domain_tasks": true,
+      "autostart_enabled": true,
+      "default_runtime_state": "RUNNING",
+      "startup_priority": "HIGH",
+      "startup_task_title": "Badaj parametry i innowacje podporzadkowane skalpingowi",
+      "startup_instructions": "Badaj wszystkie mierzalne parametry w labie laptopowym odwzorowujacym VPS OANDA MT5 i TMS. Przygotowuj tylko takie kontrakty i usprawnienia, ktore poprawiaja ochrone kapitalu, zysk netto, realizm testow albo sprawnosc pracy innych brygad.",
+      "mission": "Ta brygada nie powinna byc glowna od wdrozen produkcyjnych. Jej rola to zbieranie danych, szukanie lepszych koncepcji, badanie ograniczen MT5 i przygotowywanie kontraktow dla pozostalych brygad. Kazda innowacja ma byc podporzadkowana ochronie kapitalu, zyskowi netto i realizmowi testow laptop-vps.",
+      "default_claim_roots": [
+        "TOOLS/orchestrator",
+        "CONFIG",
+        "DOCS",
+        "RUN/BUILD_CODEX_REQUEST_FROM_REPORT.ps1",
+        "RUN/WRITE_ORCHESTRATOR_NOTE.ps1"
+      ],
+      "shared_contracts": [
+        "CONFIG/domain_architecture_registry_v1.json",
+        "CONFIG/core_capital_contract_v1.json",
+        "CONFIG/session_capital_coordinator_v1.json",
+        "CONFIG/family_policy_registry.json"
+      ],
+      "task_examples": [
+        "Przygotuj nowy kontrakt architektoniczny dla domen",
+        "Zaproponuj ulepszenie mostu GPT i Codex",
+        "Zbierz wymagania pod kolejny rollout MT5 only",
+        "Zmapuj nowe informacje z MT5 albo OANDA na wdrozenia"
+      ],
+      "handoff_targets": [
+        "brygada_rozwoj_kodu",
+        "brygada_ml_migracja_mt5",
+        "brygada_wdrozenia_mt5",
+        "brygada_nadzor_uczenia_rolloutu"
+      ]
+    },
+    {
+      "brigade_id": "nadzor_uczenia_rolloutu",
+      "actor_id": "brygada_nadzor_uczenia_rolloutu",
+      "chat_name": "Rozwoj systemu - Nadzor uczenia i rolloutow",
+      "primary_focus": "go-no-go, readiness, audyty uczenia, kontrola czy lane ML i rollout sa bezpieczne",
+      "specialization_summary": "zawsze aktywny nadzor uczenia, gotowosci i ryzyka wdrozen wobec ochrony kapitalu",
+      "can_execute_cross_domain_tasks": true,
+      "autostart_enabled": true,
+      "default_runtime_state": "RUNNING",
+      "startup_priority": "CRITICAL",
+      "startup_task_title": "Nadzoruj uczenie i raportuj gotowosc calej floty",
+      "startup_instructions": "Pilnuj learning health, readiness, overlay audit i go-no-go dla aktywnych instrumentow. Raportuj innym brygadom co mozna wdrazac, co blokowac, gdzie spada jakosc uczenia i jakie taski maja najwyzszy priorytet dla ochrony kapitalu.",
+      "mission": "Ta brygada jest pomostem miedzy uczeniem, kodem i wdrozeniem. Pilnuje readiness, overlay audit, learning health i prelive gating. Jest zawsze aktywna, raportuje pozostale brygady i ma pilnowac, czy praca calego systemu nadal chroni kapital oraz wzmacnia zysk netto na aktywnych instrumentach.",
+      "default_claim_roots": [
+        "RUN/BUILD_LEARNING_HEALTH_REGISTRY.ps1",
+        "RUN/BUILD_LOCAL_MODEL_READINESS_AUDIT.ps1",
+        "RUN/BUILD_ML_OVERLAY_AUDIT.ps1",
+        "RUN/VALIDATE_PRELIVE_GONOGO.ps1",
+        "RUN/BUILD_OUTCOME_CLOSURE_AUDIT.ps1"
+      ],
+      "shared_contracts": [
+        "CONFIG/core_capital_contract_v1.json",
+        "CONFIG/session_capital_coordinator_v1.json",
+        "CONFIG/rollover_guard_v1.json",
+        "CONFIG/tuning_cost_window_guard_matrix_v1.json"
+      ],
+      "task_examples": [
+        "Sprawdz local model readiness przed rolloutem",
+        "Zbuduj overlay audit po zmianach ML albo MQL5",
+        "Wydaj go-no-go dla prelive",
+        "Zglos rollback, jezeli learning health spada"
+      ],
+      "handoff_targets": [
+        "brygada_ml_migracja_mt5",
+        "brygada_wdrozenia_mt5",
+        "brygada_rozwoj_kodu",
+        "brygada_audyt_cleanup"
+      ]
+    }
+  ]
+}
