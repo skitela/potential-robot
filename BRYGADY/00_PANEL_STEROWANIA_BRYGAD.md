@@ -28,6 +28,18 @@ Te prompt files otwieraja start sesji dla konkretnej brygady. Najpierw wybierasz
 
 ## Sterowanie runtime
 
+Szybki start kontekstu jednej brygady:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\GET_ORCHESTRATOR_BRIGADE_START_CONTEXT.ps1 -BrigadeId rozwoj_kodu
+```
+
+Szybki odczyt nowych notatek dla jednej brygady z zapisem sladu odczytu:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\READ_ORCHESTRATOR_BRIGADE_NOTES.ps1 -BrigadeId rozwoj_kodu -Limit 10 -ShowContent
+```
+
 Otworz panel mostu z kontrolkami brygad:
 
 ```powershell
@@ -52,18 +64,35 @@ Raport dzienny + publikacja skrotu na wspolna liste:
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_BRIGADE_DAILY_STATUS.ps1 -PublishToNotes
 ```
 
+Manifest spiecia brygad do kontroli przez Codexa:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_BRIGADE_SYNC_MANIFEST.ps1
+```
+
 Otworz ostatni raport:
 
 - [../EVIDENCE/OPS/brigade_daily_status_latest.md](../EVIDENCE/OPS/brigade_daily_status_latest.md)
 - [../EVIDENCE/OPS/brigade_daily_status_latest.json](../EVIDENCE/OPS/brigade_daily_status_latest.json)
+- [../EVIDENCE/OPS/brigade_sync_manifest_latest.md](../EVIDENCE/OPS/brigade_sync_manifest_latest.md)
+- [../EVIDENCE/OPS/brigade_sync_manifest_latest.json](../EVIDENCE/OPS/brigade_sync_manifest_latest.json)
 
 ## Regula obslugi nowych wiadomosci
 
 - kazda nowa note z mostu ma byc otwarta i przeczytana,
+- preferowana komenda odczytu to `RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1`, bo zapisuje tez receipt brygady,
 - wszystkie brygady czytaja, ale wykonuje tylko adresat tasku albo note,
 - jezeli adresatem jest Codex, Codex ma po review przejsc do wykonania, a nie tylko do odczytu,
 - kazda brygada przed wykonaniem robi review bezpieczenstwa i zgodnosci z kontraktami,
 - jezeli polecenie jest destrukcyjne albo sprzeczne, brygada ma eskalowac zamiast wykonywac slepo.
+
+## Gdzie czytac i gdzie zapisywac
+
+- notatki wspolne: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\notes\inbox`
+- receipt odczytu brygady: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\status\brigade_note_receipts.json`
+- taski pending/active/blocked/done: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\tasks\...`
+- claimy robocze: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\claims\active`
+- wynik pracy brygady: wraca do wspolnego inboxu przez `RUN/WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1`
 
 Lista brygad:
 
@@ -91,6 +120,25 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\START_ORCHESTRATOR_BRIGADE_AUTOSTART.ps1
 ```
 
 ## Wspolna lista notatek
+
+Zasada pracy z notatkami:
+
+- wszystkie brygady czytaja nowe note,
+- wykonuje tylko brygada wskazana jako target po safety review,
+- jesli execution owner potrzebuje innej brygady, robi handoff przez note plus task,
+- wynik wykonania albo blokady wraca note do wszystkich brygad i do Codexa.
+
+Publikacja wyniku execution ownera:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1 -TaskId <task_id> -Actor brygada_rozwoj_kodu -Outcome COMPLETED -Summary "Poprawka wdrozona i zwalidowana." -NextAction "Przekazac do wdrozen MT5."
+```
+
+Jesli nadzor zbiera relacje zbiorcza, dodaj tez pola:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1 -TaskId <task_id> -Actor brygada_rozwoj_kodu -Outcome STATUS -Summary "Hot-path truth przejrzany." -Checked "OnTradeTransaction","send order hook" -Confirmed "candidate_id jest juz w EURUSD" -Blockers "brak live spool write w MT5" -DelegateWork "wdrozenia_mt5: test terminalowy spool" -CodexAction "tak, dopiac brakujace hooki dla aktywnej 13" -NextAction "Oddac liste brakow integracji."
+```
 
 Podglad ostatnich wpisow:
 

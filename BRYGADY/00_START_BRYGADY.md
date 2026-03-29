@@ -10,6 +10,28 @@ To nie sa automatycznie tworzone rozmowy w historii czatu. To jest praktyczny pa
 - masz gotowy wzorzec polecenia,
 - mozesz zlecic zadanie innej brygadzie przez task i note.
 
+## Obowiazkowa obsluga wiadomosci
+
+- wszystkie brygady czytaja kazda nowa note ze wspolnej listy,
+- wykonuje tylko brygada wskazana jako target albo brygada jawnie przypisana przez operatora lub Codexa,
+- brygady niewskazane pozostaja w trybie read-only, chyba ze dostana jawny task albo handoff,
+- tylko brygada bedaca execution owner moze zlecic dalsza prace innej brygadzie i robi to przez note plus task,
+- po wykonaniu, blokadzie albo delegacji execution owner publikuje krotki wynik dla wszystkich brygad i dla Codexa.
+
+Szybki bootstrap lane'u:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\GET_ORCHESTRATOR_BRIGADE_START_CONTEXT.ps1 -BrigadeId ml_migracja_mt5
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\READ_ORCHESTRATOR_BRIGADE_NOTES.ps1 -BrigadeId ml_migracja_mt5 -Limit 10 -ShowContent
+```
+
+Obowiazkowy rytm startu jednej brygady:
+
+1. uruchom `GET_ORCHESTRATOR_BRIGADE_START_CONTEXT.ps1`,
+2. odczytaj nowe notatki przez `READ_ORCHESTRATOR_BRIGADE_NOTES.ps1`,
+3. jesli masz target albo pending task, wez claim przez `CLAIM_ORCHESTRATOR_WORK.ps1`,
+4. po wykonaniu albo blokadzie opublikuj wynik przez `WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1` albo `COMPLETE_ORCHESTRATOR_PARALLEL_TASK.ps1 -PublishResultNote`.
+
 ## Szybki start
 
 - [00_PANEL_STEROWANIA_BRYGAD.md](00_PANEL_STEROWANIA_BRYGAD.md) - szybkie wejscia, komendy operatorskie i najnowsze wnioski ze wspolnej listy.
@@ -105,6 +127,12 @@ Przekazanie zadania od jednej brygady do drugiej z note plus task:
 
 ```powershell
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\HANDOFF_ORCHESTRATOR_BRIGADE_TASK.ps1 -FromBrigadeId rozwoj_kodu -ToBrigadeId audyt_cleanup -Title "Cleanup residue po starych instrumentach" -Instructions "Znalazlem stare slady i prosze o cleanup." -ReportPath ".\README.md"
+```
+
+Raport wyniku po wykonaniu albo blokadzie:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1 -TaskId <task_id> -Actor brygada_rozwoj_kodu -Outcome COMPLETED -Summary "Zmiana wdrozona i skompilowana." -NextAction "Przekazac do wdrozen MT5."
 ```
 
 Pauza brygady:

@@ -2,6 +2,25 @@
 
 Tu masz wszystkie brygady opisane normalnie, bez szukania po nazwach plikow.
 
+## ZASADA WIADOMOSCI I WYKONANIA
+
+Kazda nowa wiadomosc albo note na wspolnej liscie ma byc przeczytana przez wszystkie brygady.
+
+Wykonanie nalezy tylko do brygady jawnie wskazanej jako target albo do brygady, ktorej operator albo Codex jawnie przypisal task.
+
+Brygady niewskazane czytaja, obserwuja i eskaluja tylko wtedy, gdy widza ryzyko albo sprzecznosc. Nie przejmuja samodzielnie wykonania.
+
+Jesli brygada wykonawcza potrzebuje pracy od innej brygady, zleca to tylko przez note plus task handoff, nigdy nie tylko przez rozmowe.
+
+Po wykonaniu, blokadzie albo delegacji brygada wykonawcza raportuje wynik na wspolna liste dla wszystkich brygad i dla Codexa.
+
+Szybki start lane'u:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\GET_ORCHESTRATOR_BRIGADE_START_CONTEXT.ps1 -BrigadeId rozwoj_kodu
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\READ_ORCHESTRATOR_BRIGADE_NOTES.ps1 -BrigadeId rozwoj_kodu -Limit 10 -ShowContent
+```
+
 ## BRYGADA ML I MIGRACJA MT5
 
 [Otworz brygade 01](BRYGADY/01_BRYGADA_ML_MT5__ONNX_QDM_GOTOWOSC_MIGRACJA.md)
@@ -68,14 +87,32 @@ To jest plik przekazywania pracy miedzy brygadami.
 
 To jest aktualny plan pracy brygad.
 
+[Manifest spiecia brygad](EVIDENCE/OPS/brigade_sync_manifest_latest.md)
+
+To jest jeden jawny punkt kontroli dla Codexa: pokazuje czy kazda brygada ma kontrakt ogolny, task, note i aktualne spiecie lane.
+
 ## Regula nowych wiadomosci
 
 - wszystkie brygady czytaja nowe notatki z mostu,
+- preferowana komenda odczytu to `RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1`, bo zapisuje tez slad odczytu brygady,
 - ale wykonuje tylko brygada jednoznacznie wskazana jako adresat albo wlasciciel tasku,
 - adresat najpierw robi review bezpieczenstwa i zgodnosci z kontraktami,
 - jezeli polecenie jest sprzeczne albo destrukcyjne, nie wykonuje go slepo tylko eskaluje.
 
+## Gdzie brygady czytaja i gdzie zapisuja
+
+- czytanie notatek: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\notes\inbox`
+- slad odczytu notatek: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\status\brigade_note_receipts.json`
+- taski pending: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\tasks\pending`
+- taski active: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\tasks\active`
+- claimy: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\claims\active`
+- raport wyniku brygady wraca znow do `notes\inbox` przez `RUN/WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1`
+
 ## SESJE COPILOT DLA BRYGAD
+
+Te wejscia startuja sesje Copilot dla konkretnej brygady i dziedzicza wspolne zasady pracy z [.github/copilot-instructions.md](.github/copilot-instructions.md).
+
+Najprostszy tryb pracy jest taki: kliknij prompt brygady, wejdz do sesji, a potem w razie potrzeby otworz jej karte operacyjna z katalogu BRYGADY.
 
 [Wejdz: BRYGADA ML I MIGRACJA MT5](.github/prompts/wejdz-brygada-ml-migracja-mt5.prompt.md)
 

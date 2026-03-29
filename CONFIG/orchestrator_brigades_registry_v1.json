@@ -17,18 +17,30 @@
     "Every brigade can execute cross-domain work when explicitly instructed, but its specialization defines the default lane, backlog and reporting duty.",
     "Even when work is cross-domain, the task should still be stamped with the brigade actor_id that owns the lane so the taskboard remains auditable.",
     "Every new note should be treated as readable by all brigades, but execution belongs only to the explicitly targeted brigade or actor.",
+    "The brigade explicitly targeted by a safe request becomes the execution owner for that message and is the only brigade that may delegate follow-up work to another brigade through note plus task.",
+    "Non-target brigades should stay read-only for a message unless the operator or the owning brigade assigns them deliberately.",
     "A targeted brigade should first review safety, capital impact, contradiction with current contracts and overall system sense before executing the requested action.",
-    "No brigade should blindly execute destructive, contradictory or unsafe instructions even when addressed directly; such cases must be escalated through note plus task or note plus warning."
+    "No brigade should blindly execute destructive, contradictory or unsafe instructions even when addressed directly; such cases must be escalated through note plus task or note plus warning.",
+    "After execution, block or delegation, the execution owner should publish a short result note to all brigades and Codex."
   ],
   "message_handling_policy": {
     "all_brigades_read_every_new_note": true,
+    "notes_reader_script": "RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1",
+    "notes_receipts_status_path": "status/brigade_note_receipts.json",
     "default_visibility": "ALL_BRIGADES_READ",
     "default_execution_policy": "TARGET_ONLY_AFTER_REVIEW",
     "default_non_target_policy": "READ_ONLY_UNLESS_EXPLICITLY_ASSIGNED",
     "execution_requires_safety_review": true,
     "dangerous_or_conflicting_requests_must_be_escalated": true,
     "targeted_actor_should_execute_when_safe": true,
-    "codex_rule": "If Codex is explicitly targeted for an action, Codex should open the message, assess whether it is safe and coherent, and execute it when it passes review."
+    "delegation_requires_handoff": true,
+    "delegation_allowed_for_targeted_owner_only": true,
+    "completion_report_required": true,
+    "completion_report_visibility": "ALL_BRIGADES_READ",
+    "completion_report_audience": "ALL_BRIGADES_AND_CODEX",
+    "handoff_rule": "If another brigade is needed, the targeted execution owner should create a note plus task handoff instead of asking informally in chat.",
+    "completion_report_rule": "After completing, blocking or delegating work, the execution owner should publish a short result note to all brigades and Codex, preferably through RUN/WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1.",
+    "codex_rule": "Codex should read every new note, but execute only when explicitly targeted or assigned; if Codex owns the request and it passes safety review, Codex should execute it or delegate through note plus task."
   },
   "learning_command": {
     "always_on_brigades": [
@@ -46,6 +58,17 @@
     "mailbox_autostart_status_path": "status/brigade_autostart_latest.json",
     "paused_state_blocks_new_tasks": true,
     "skip_if_open_task_exists": true
+  },
+  "startup_protocol": {
+    "enabled": true,
+    "start_context_script": "RUN/GET_ORCHESTRATOR_BRIGADE_START_CONTEXT.ps1",
+    "required_steps": [
+      "Read every new shared note before taking action, preferably through RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1 so note receipts are updated.",
+      "Only the explicitly targeted brigade executes after safety review; non-target brigades stay read-only unless explicitly assigned.",
+      "If another brigade is needed, the targeted brigade delegates only through note plus task handoff.",
+      "At real work start, create claim or activity with TaskId so the task becomes ACTIVE.",
+      "After execution, block or delegation, publish a short result note to all brigades and Codex through RUN/WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1."
+    ]
   },
   "global_veto_layers": [
     "CONFIG/core_capital_contract_v1.json",
