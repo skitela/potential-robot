@@ -46,6 +46,16 @@ Skorzystaj z pakietu operatorskiego `HANDOFF`:
 - rollout checklist
 - readiness reports
 - preset safety reports
+- baseline status report dla `MT5 pretrade/execution truth`
+
+## Krok 4A
+
+Po attach i pierwszym heartbeat sprawdz w katalogu Common Files:
+
+- `...\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\spool\pretrade_truth`
+- `...\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\spool\execution_truth`
+
+Jesli nie pojawiaja sie swieze CSV albo czas modyfikacji stoi, truth pozostaje dormant i rollout parity nie jest jeszcze domkniete.
 
 ## Krok 5
 

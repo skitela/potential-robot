@@ -2,7 +2,7 @@
 
 ## Cel
 
-Ten dokument opisuje najkrotszy bezpieczny przebieg operatora przed attach `17` mikro-botow do wykresow `OANDA MT5`, obejmujacych:
+Ten dokument opisuje najkrotszy bezpieczny przebieg operatora przed attach aktywnej floty mikro-botow do wykresow `OANDA MT5`, obejmujacych:
 
 - `FX`
 - `METALS`
@@ -28,7 +28,7 @@ Sprawdz raport:
 - `EVIDENCE\deployment_readiness_report.json`
 - `EVIDENCE\preset_safety_report.json`
 
-Oba raporty musza dawac `ok=true`.
+Wszystkie raporty musza dawac `ok=true`.
 
 ## Krok 3
 
@@ -61,7 +61,8 @@ To jest komplet:
 - checklist,
 - chart planu,
 - raportow gotowosci,
-- raportu bezpieczenstwa presetow.
+- raportu bezpieczenstwa presetow,
+- baseline statusu `MT5 pretrade/execution truth`,
 - instrukcji instalacji na zdalnym terminalu `MT5`.
 
 ## Krok 4B
@@ -74,7 +75,7 @@ Jesli pakiet ma byc przenoszony jako archiwum, uzyj osobnego ZIP operatorskiego:
 
 W `MetaTrader 5`:
 
-- otworz `17` wykresow,
+- otworz wykresy dla symboli z aktualnego chart planu,
 - przypnij wlasciwy `MicroBot_*` do wlasciwego symbolu,
 - zaladuj odpowiadajacy preset `*_Live.set` jako bezpieczny attach startowy,
 - upewnij sie, ze `Algo Trading` jest wlaczone.
@@ -113,6 +114,15 @@ Po attach potwierdz:
 - brak blokady `kill-switch`,
 - poprawny heartbeat i lokalny status bota.
 
+## Krok 6A
+
+Po pierwszym heartbeat sprawdz pierwszy zywy zapis do spoola truth:
+
+- `MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\spool\pretrade_truth`
+- `MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\spool\execution_truth`
+
+Jesli katalogi pozostaja puste albo timestamp CSV nie rusza po attach, sekcja 3 nadal jest dormant i rollout parity nie jest domkniety.
+
 ## Krok 7
 
 Jesli raport gotowosci wskazuje `TOKEN_STALE`, najpierw odswiez tokeny:
@@ -129,5 +139,4 @@ Operator ma jeden glowny punkt wejscia:
 
 - `RUN\PREPARE_MT5_ROLLOUT.ps1`
 
-To ma byc standardowa droga przed wdrozeniem lub wznowieniem pracy calej partii `11`.
-To ma byc standardowa droga przed wdrozeniem lub wznowieniem pracy calej partii `17`.
+To ma byc standardowa droga przed wdrozeniem lub wznowieniem pracy aktywnej floty MT5 zgodnej z aktualnym registry i chart planem.

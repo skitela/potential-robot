@@ -15,7 +15,18 @@ $issues = New-Object System.Collections.Generic.List[string]
 $targetTerminal = $TargetTerminalDataDir
 $targetCommon = Join-Path $TargetCommonFilesDir "MAKRO_I_MIKRO_BOT"
 $registryPath = Join-Path $ProjectRoot "CONFIG\microbots_registry.json"
+$planPath = Join-Path $ProjectRoot "CONFIG\scalping_universe_plan.json"
+
+if (-not (Test-Path -LiteralPath $registryPath)) {
+    throw "Missing registry: $registryPath"
+}
+if (-not (Test-Path -LiteralPath $planPath)) {
+    throw "Missing scalping universe plan: $planPath"
+}
+
 $registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
 
 $required = @(
     (Join-Path $targetTerminal "MQL5\Include\Core\MbRuntimeTypes.mqh"),
@@ -35,19 +46,18 @@ $required = @(
 foreach ($item in $registry.symbols) {
     $expert = [string]$item.expert
     $preset = [string]$item.preset
-    $codeSymbol = if ($item.PSObject.Properties.Name -contains 'code_symbol' -and -not [string]::IsNullOrWhiteSpace([string]$item.code_symbol)) {
-        [string]$item.code_symbol
-    } else {
-        [string]$expert.Replace("MicroBot_","")
-    }
+    $symbol = [string]$item.symbol
     $activePreset = "{0}_ACTIVE.set" -f ([System.IO.Path]::GetFileNameWithoutExtension($preset))
 
     $required += @(
         (Join-Path $targetTerminal ("MQL5\Experts\MicroBots\{0}.mq5" -f $expert)),
         (Join-Path $targetTerminal ("MQL5\Presets\{0}" -f $preset)),
-        (Join-Path $targetTerminal ("MQL5\Presets\ActiveLive\{0}" -f $activePreset)),
         (Join-Path $targetTerminal ("MQL5\Experts\MicroBots\{0}.ex5" -f $expert))
     )
+
+    if ($paperLiveSymbols -contains $symbol) {
+        $required += (Join-Path $targetTerminal ("MQL5\Presets\ActiveLive\{0}" -f $activePreset))
+    }
 }
 
 $required = $required | Sort-Object -Unique

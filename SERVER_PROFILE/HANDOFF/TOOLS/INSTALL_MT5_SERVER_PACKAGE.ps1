@@ -19,12 +19,18 @@ $packagePath = (Resolve-Path -LiteralPath $PackageRoot).Path
 $targetTerminal = $TargetTerminalDataDir
 $targetCommon = $TargetCommonFilesDir
 $registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
+$planPath = Join-Path $projectPath "CONFIG\scalping_universe_plan.json"
 
 if (-not (Test-Path -LiteralPath $registryPath)) {
     throw "Missing registry: $registryPath"
 }
+if (-not (Test-Path -LiteralPath $planPath)) {
+    throw "Missing scalping universe plan: $planPath"
+}
 
 $registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
 
 function Get-CodeSymbolFromRegistryRow {
     param(
@@ -92,6 +98,7 @@ foreach ($row in @($registry.symbols)) {
     $expert = [string]$row.expert
     $preset = [string]$row.preset
     $codeSymbol = Get-CodeSymbolFromRegistryRow -Row $row
+    $symbol = [string]$row.symbol
     $activePresetName = "{0}_ACTIVE.set" -f ([System.IO.Path]::GetFileNameWithoutExtension($preset))
 
     [void]$allowedExpertFiles.Add(("{0}.mq5" -f $expert))
@@ -99,7 +106,9 @@ foreach ($row in @($registry.symbols)) {
     [void]$allowedProfileFiles.Add(("Profile_{0}.mqh" -f $codeSymbol))
     [void]$allowedStrategyFiles.Add(("Strategy_{0}.mqh" -f $codeSymbol))
     [void]$allowedPresetFiles.Add($preset)
-    [void]$allowedActivePresetFiles.Add($activePresetName)
+    if ($paperLiveSymbols -contains $symbol) {
+        [void]$allowedActivePresetFiles.Add($activePresetName)
+    }
 }
 
 foreach ($file in @(Get-ChildItem -LiteralPath $targetExperts -File -ErrorAction SilentlyContinue)) {

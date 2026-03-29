@@ -82,6 +82,8 @@ $required = @(
     (Join-Path $handoffRoot "EVIDENCE\family_scenario_test_report.json"),
     (Join-Path $handoffRoot "EVIDENCE\family_operator_report.json"),
     (Join-Path $handoffRoot "EVIDENCE\runtime_control_summary.json"),
+    (Join-Path $handoffRoot "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.json"),
+    (Join-Path $handoffRoot "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.md"),
     (Join-Path $handoffRoot "EVIDENCE\daily_reports_generation_report.json"),
     (Join-Path $handoffRoot "EVIDENCE\evening_reports_generation_report.json"),
     (Join-Path $handoffRoot "EVIDENCE\DAILY\raport_dzienny_latest.txt"),
@@ -141,6 +143,12 @@ if ($null -ne $handoffManifest) {
     }
     if (-not ($handoffManifest.copied -contains "EVIDENCE\family_operator_report.json")) {
         $issues.Add("HANDOFF_FAMILY_OPERATOR_REPORT_NOT_DECLARED")
+    }
+    if (-not ($handoffManifest.copied -contains "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.json")) {
+        $issues.Add("HANDOFF_TRUTH_STATUS_JSON_NOT_DECLARED")
+    }
+    if (-not ($handoffManifest.copied -contains "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.md")) {
+        $issues.Add("HANDOFF_TRUTH_STATUS_MD_NOT_DECLARED")
     }
     if (-not ($handoffManifest.copied -contains "RUN\GENERATE_DAILY_REPORTS_NOW.ps1")) {
         $issues.Add("HANDOFF_DAILY_REPORT_RUNNER_NOT_DECLARED")

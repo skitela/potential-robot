@@ -13,11 +13,17 @@ Sprawdz przed attach:
 - EVIDENCE\\DAILY\\dashboard_dzienny_latest.html
 - EVIDENCE\\DAILY\\raport_wieczorny_latest.txt
 - EVIDENCE\\DAILY\\dashboard_wieczorny_latest.html
+- EVIDENCE\\OPS\\mt5_pretrade_execution_truth_status_latest.md
 - DOCS\\10_OPERATOR_ROLLOUT_CHECKLIST.md
 - DOCS\\11_REMOTE_MT5_INSTALL.md
 - DOCS\\24_FAMILY_SCENARIO_TESTS_AND_OPERATOR_REPORTS.md
 - DOCS\\25_DZIENNE_RAPORTY_I_DASHBOARD_PL.md
 - DOCS\\26_RAPORT_WIECZORNY_WLASCICIELA_PL.md
+
+Po pierwszym attach i heartbeat sprawdz:
+- Common\\Files\\MAKRO_I_MIKRO_BOT\\spool\\pretrade_truth
+- Common\\Files\\MAKRO_I_MIKRO_BOT\\spool\\execution_truth
+- brak swiezych CSV oznacza, ze sekcja 3 nadal jest dormant
 
 Domyslne presety repo sa bezpieczne (InpEnableLiveEntries=false).
 Presety aktywne sa generowane swiadomie do SERVER_PROFILE\\PACKAGE\\MQL5\\Presets\\ActiveLive.

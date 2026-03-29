@@ -65,6 +65,8 @@ $copies = @(
     @{ src = "EVIDENCE\family_operator_report.txt"; dst = "EVIDENCE\family_operator_report.txt" },
     @{ src = "EVIDENCE\runtime_control_summary.json"; dst = "EVIDENCE\runtime_control_summary.json" },
     @{ src = "EVIDENCE\runtime_control_summary.txt"; dst = "EVIDENCE\runtime_control_summary.txt" },
+    @{ src = "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.json"; dst = "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.json" },
+    @{ src = "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.md"; dst = "EVIDENCE\OPS\mt5_pretrade_execution_truth_status_latest.md" },
     @{ src = "EVIDENCE\runtime_control_set_report.json"; dst = "EVIDENCE\runtime_control_set_report.json" },
     @{ src = "EVIDENCE\runtime_control_set_report.txt"; dst = "EVIDENCE\runtime_control_set_report.txt" },
     @{ src = "EVIDENCE\daily_reports_generation_report.json"; dst = "EVIDENCE\daily_reports_generation_report.json" },
@@ -114,11 +116,17 @@ $summary += "- EVIDENCE\\DAILY\\raport_dzienny_latest.txt"
 $summary += "- EVIDENCE\\DAILY\\dashboard_dzienny_latest.html"
 $summary += "- EVIDENCE\\DAILY\\raport_wieczorny_latest.txt"
 $summary += "- EVIDENCE\\DAILY\\dashboard_wieczorny_latest.html"
+$summary += "- EVIDENCE\\OPS\\mt5_pretrade_execution_truth_status_latest.md"
 $summary += "- DOCS\\10_OPERATOR_ROLLOUT_CHECKLIST.md"
 $summary += "- DOCS\\11_REMOTE_MT5_INSTALL.md"
 $summary += "- DOCS\\24_FAMILY_SCENARIO_TESTS_AND_OPERATOR_REPORTS.md"
 $summary += "- DOCS\\25_DZIENNE_RAPORTY_I_DASHBOARD_PL.md"
 $summary += "- DOCS\\26_RAPORT_WIECZORNY_WLASCICIELA_PL.md"
+$summary += ""
+$summary += "Po pierwszym attach i heartbeat sprawdz:"
+$summary += "- Common\\Files\\MAKRO_I_MIKRO_BOT\\spool\\pretrade_truth"
+$summary += "- Common\\Files\\MAKRO_I_MIKRO_BOT\\spool\\execution_truth"
+$summary += "- brak swiezych CSV oznacza, ze sekcja 3 nadal jest dormant"
 $summary += ""
 $summary += "Domyslne presety repo sa bezpieczne (`InpEnableLiveEntries=false`)."
 $summary += "Presety aktywne sa generowane swiadomie do SERVER_PROFILE\\PACKAGE\\MQL5\\Presets\\ActiveLive."

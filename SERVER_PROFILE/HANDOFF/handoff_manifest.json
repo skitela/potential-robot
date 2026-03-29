@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "ts_utc": "2026-03-29T08:06:00.4712324Z",
+  "ts_utc": "2026-03-29T19:58:56.8204859Z",
   "handoff_root": "C:\\MAKRO_I_MIKRO_BOT\\SERVER_PROFILE\\HANDOFF",
   "copied": [
     "DOCS\\02_MODEL_WDROZENIA_11_BOTOW_OANDA_MT5.md",
@@ -45,6 +45,8 @@
     "EVIDENCE\\family_operator_report.txt",
     "EVIDENCE\\runtime_control_summary.json",
     "EVIDENCE\\runtime_control_summary.txt",
+    "EVIDENCE\\OPS\\mt5_pretrade_execution_truth_status_latest.json",
+    "EVIDENCE\\OPS\\mt5_pretrade_execution_truth_status_latest.md",
     "EVIDENCE\\runtime_control_set_report.json",
     "EVIDENCE\\runtime_control_set_report.txt",
     "EVIDENCE\\daily_reports_generation_report.json",
