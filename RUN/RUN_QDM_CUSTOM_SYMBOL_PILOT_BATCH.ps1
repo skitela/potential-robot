@@ -9,7 +9,8 @@ param(
     [string]$LatestStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_batch_latest.json",
     [string]$PilotRegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_pilot_registry_latest.json",
     [string]$ReadinessReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_technical_readiness_latest.json",
-    [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json"
+    [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
+    [string]$UniversePlanPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\scalping_universe_plan.json"
 )
 
 Set-StrictMode -Version Latest
@@ -52,11 +53,27 @@ function Convert-ToolResultToObject {
 
 function Get-DefaultSymbolAliases {
     param(
+        [string]$UniversePlanPath,
         [string]$RegistryPath,
         [string]$ReadinessReportPath
     )
 
     $fallback = @("AUDUSD", "EURAUD", "EURUSD", "GBPUSD", "USDCAD", "USDCHF", "USDJPY")
+    if (Test-Path -LiteralPath $UniversePlanPath) {
+        try {
+            $plan = Get-Content -LiteralPath $UniversePlanPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            $firstWave = @($plan.paper_live_first_wave | ForEach-Object { ([string]$_).ToUpperInvariant() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($firstWave.Count -gt 0) {
+                return [pscustomobject]@{
+                    symbols = $firstWave
+                    source = "scalping_universe_first_wave"
+                }
+            }
+        }
+        catch {
+        }
+    }
+
     if (Test-Path -LiteralPath $ReadinessReportPath) {
         try {
             $report = Get-Content -LiteralPath $ReadinessReportPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
@@ -176,7 +193,7 @@ if (-not (Test-Path -LiteralPath $pilotScript)) {
 
 $pwsh = (Get-Command powershell.exe -ErrorAction Stop).Source
 $results = New-Object System.Collections.Generic.List[object]
-$defaultSymbols = Get-DefaultSymbolAliases -RegistryPath $PilotRegistryPath -ReadinessReportPath $ReadinessReportPath
+$defaultSymbols = Get-DefaultSymbolAliases -UniversePlanPath $UniversePlanPath -RegistryPath $PilotRegistryPath -ReadinessReportPath $ReadinessReportPath
 $resolutionMap = Get-SymbolResolutionMap -RegistryPath $RegistryPath -ReadinessReportPath $ReadinessReportPath
 $selectedSymbolInput = @($SymbolAliases | ForEach-Object { ([string]$_).ToUpperInvariant() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $selectedSymbols = if ($selectedSymbolInput.Count -gt 0) { @($selectedSymbolInput) } else { @($defaultSymbols.symbols) }
