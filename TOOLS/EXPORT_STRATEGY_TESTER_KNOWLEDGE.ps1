@@ -52,6 +52,16 @@ function Get-TesterReadiness {
         $executionState = [string]$Summary.execution_quality_state
     }
 
+    $observationDataState = ""
+    if ($Summary -and $Summary.PSObject.Properties.Name -contains 'observation_data_state') {
+        $observationDataState = [string]$Summary.observation_data_state
+    }
+
+    $paperLearningState = ""
+    if ($Summary -and $Summary.PSObject.Properties.Name -contains 'paper_learning_state') {
+        $paperLearningState = [string]$Summary.paper_learning_state
+    }
+
     $dominantConstraint = "LOCAL_SIGNAL"
     $readinessState = "READY_FOR_DELTA"
     $recommendedFocus = "Strojenie lokalnej logiki setupow na czystym materiale."
@@ -60,6 +70,21 @@ function Get-TesterReadiness {
         $readinessState = "EXECUTION_LIMITED"
         $dominantConstraint = "EXECUTION"
         $recommendedFocus = "Najpierw warstwa wykonania i stabilnosc srodowiska testu, dopiero potem strategia."
+    }
+    elseif ($trustState -eq "OBSERVATIONS_MISSING" -and $paperLearningState -eq "WAITING_FOR_FIRST_PAPER_CLOSE") {
+        $readinessState = "WAITING_PAPER_CLOSURE"
+        $dominantConstraint = "PAPER_CLOSE"
+        $recommendedFocus = "Nie stroic jeszcze deckhanda; doprowadzic do pierwszego zamkniecia paper albo wydluzyc okno testowe."
+    }
+    elseif ($trustState -eq "OBSERVATIONS_MISSING" -and $paperLearningState -eq "WAITING_FOR_FIRST_PAPER_OPEN") {
+        $readinessState = "WAITING_PAPER_OPEN"
+        $dominantConstraint = "PAPER_OPEN"
+        $recommendedFocus = "Najpierw doprowadzic do pierwszych otwarc paper; dopiero potem oczekiwac learning_observations_v2."
+    }
+    elseif ($trustState -eq "OBSERVATIONS_MISSING" -and $observationDataState -eq "OBSERVATION_INFRA_NOT_MATERIALIZED") {
+        $readinessState = "OBSERVATION_INFRA_MISSING"
+        $dominantConstraint = "INFRA"
+        $recommendedFocus = "Najpierw sprawdzic pipeline kandydat/onnx/tester, bo brak nawet materializacji wspierajacych artefaktow."
     }
     elseif ($sampleCount -lt 20 -or $trustState -eq "LOW_SAMPLE") {
         $readinessState = "INSUFFICIENT_SAMPLE"
@@ -89,6 +114,8 @@ function Get-TesterReadiness {
         trust_reason       = $trustReason
         cost_state         = $costState
         execution_state    = $executionState
+        observation_data_state = $observationDataState
+        paper_learning_state = $paperLearningState
         sample_count       = $sampleCount
         recommended_focus  = $recommendedFocus
     }
@@ -194,6 +221,9 @@ $mdLines = @(
     ("- tester_custom_score: {0}" -f $summary.tester_custom_score),
     ("- tester_optimization_pass_count: {0}" -f $optimizationPassCount),
     ("- samples: {0}" -f $summary.learning_sample_count),
+    ("- observation_data_state: {0}" -f $summary.observation_data_state),
+    ("- paper_learning_state: {0}" -f $summary.paper_learning_state),
+    ("- observation_rows candidate/onnx/learning: {0}/{1}/{2}" -f $summary.candidate_signal_rows_total, $summary.onnx_observation_rows, $summary.learning_observation_rows),
     ("- wins/losses: {0}/{1}" -f $summary.learning_win_count, $summary.learning_loss_count),
     ("- paper_open_rows: {0}" -f $summary.paper_open_rows),
     ("- paper_score_gate_rows: {0}" -f $summary.paper_score_gate_rows),

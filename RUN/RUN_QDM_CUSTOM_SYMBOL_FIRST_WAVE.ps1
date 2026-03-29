@@ -139,22 +139,65 @@ function Get-OptionalPropertyValue {
 }
 
 function Get-LatestArtifactBackfillMap {
-    param([string]$PilotRegistryPath)
+    param(
+        [string]$PilotRegistryPath,
+        [string]$ProjectRoot
+    )
 
     $map = @{}
-    if (-not (Test-Path -LiteralPath $PilotRegistryPath)) {
+
+    if (Test-Path -LiteralPath $PilotRegistryPath) {
+        try {
+            $registry = Get-Content -LiteralPath $PilotRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            foreach ($entry in @($registry.entries)) {
+                $alias = ([string]$entry.symbol_alias).ToUpperInvariant()
+                if ([string]::IsNullOrWhiteSpace($alias)) { continue }
+                $map[$alias] = $entry
+            }
+        }
+        catch {
+        }
+    }
+
+    $smokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
+    if (-not (Test-Path -LiteralPath $smokeDir)) {
         return $map
     }
 
-    try {
-        $registry = Get-Content -LiteralPath $PilotRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
-        foreach ($entry in @($registry.entries)) {
-            $alias = ([string]$entry.symbol_alias).ToUpperInvariant()
-            if ([string]::IsNullOrWhiteSpace($alias)) { continue }
-            $map[$alias] = $entry
+    $summaryFiles = Get-ChildItem -LiteralPath $smokeDir -Filter "*_summary.json" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending
+    foreach ($summaryFile in @($summaryFiles)) {
+        try {
+            $summary = Get-Content -LiteralPath $summaryFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            $alias = ([string](Get-OptionalPropertyValue -Object $summary -PropertyName "symbol_alias" -Default "")).ToUpperInvariant()
+            $runId = [string](Get-OptionalPropertyValue -Object $summary -PropertyName "run_id" -Default "")
+            if ([string]::IsNullOrWhiteSpace($alias) -or [string]::IsNullOrWhiteSpace($runId)) {
+                continue
+            }
+
+            $existing = if ($map.ContainsKey($alias)) { $map[$alias] } else { [pscustomobject]@{ symbol_alias = $alias } }
+            $latestWriteUtc = if ($existing.PSObject.Properties.Name -contains "latest_summary_last_write_utc") {
+                [datetime](Get-OptionalPropertyValue -Object $existing -PropertyName "latest_summary_last_write_utc" -Default ([datetime]::MinValue))
+            } else {
+                [datetime]::MinValue
+            }
+
+            if ($summaryFile.LastWriteTimeUtc -le $latestWriteUtc) {
+                continue
+            }
+
+            $merged = [ordered]@{}
+            foreach ($property in @($existing.PSObject.Properties)) {
+                $merged[$property.Name] = $property.Value
+            }
+            $merged["symbol_alias"] = $alias
+            $merged["last_run_id"] = $runId
+            $merged["latest_summary_path"] = $summaryFile.FullName
+            $merged["latest_summary_last_write_utc"] = $summaryFile.LastWriteTimeUtc.ToString("o")
+            $map[$alias] = [pscustomobject]$merged
         }
-    }
-    catch {
+        catch {
+        }
     }
 
     return $map
@@ -227,6 +270,16 @@ function Build-BackfilledRunResult {
             test_duration = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "test_duration" -Default $RegistryEntry.test_duration } else { $RegistryEntry.test_duration }
             evidence_dir = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "evidence_dir" -Default $null } else { $null }
             summary_path = if (Test-Path -LiteralPath $summaryPath) { $summaryPath } else { $null }
+            trust_state = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "trust_state" -Default $null } else { $null }
+            trust_reason = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "trust_reason" -Default $null } else { $null }
+            observation_data_state = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "observation_data_state" -Default $null } else { $null }
+            observation_data_reason = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "observation_data_reason" -Default $null } else { $null }
+            paper_learning_state = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "paper_learning_state" -Default $null } else { $null }
+            paper_open_rows = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "paper_open_rows" -Default $null } else { $null }
+            paper_score_gate_rows = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "paper_score_gate_rows" -Default $null } else { $null }
+            candidate_signal_rows_total = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "candidate_signal_rows_total" -Default $null } else { $null }
+            onnx_observation_rows = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "onnx_observation_rows" -Default $null } else { $null }
+            learning_observation_rows = if ($null -ne $summary) { Get-OptionalPropertyValue -Object $summary -PropertyName "learning_observation_rows" -Default $null } else { $null }
         }
         state = "completed"
     }
@@ -298,6 +351,27 @@ function Write-MarkdownReport {
             if (-not [string]::IsNullOrWhiteSpace([string]$resultLabel)) {
                 $lines.Add(("- smoke_result: {0}" -f $resultLabel))
             }
+            $trustState = $entry.result.smoke.trust_state
+            if (-not [string]::IsNullOrWhiteSpace([string]$trustState)) {
+                $lines.Add(("- trust: {0} / {1}" -f $trustState, $entry.result.smoke.trust_reason))
+            }
+            $observationState = $entry.result.smoke.observation_data_state
+            if (-not [string]::IsNullOrWhiteSpace([string]$observationState)) {
+                $lines.Add(("- observation_data_state: {0}" -f $observationState))
+            }
+            $paperLearningState = $entry.result.smoke.paper_learning_state
+            if (-not [string]::IsNullOrWhiteSpace([string]$paperLearningState)) {
+                $lines.Add(("- paper_learning_state: {0}" -f $paperLearningState))
+            }
+            if ($null -ne $entry.result.smoke.paper_open_rows) {
+                $lines.Add(("- paper_open_rows: {0}" -f $entry.result.smoke.paper_open_rows))
+            }
+            if ($null -ne $entry.result.smoke.paper_score_gate_rows) {
+                $lines.Add(("- paper_score_gate_rows: {0}" -f $entry.result.smoke.paper_score_gate_rows))
+            }
+            if ($null -ne $entry.result.smoke.candidate_signal_rows_total -or $null -ne $entry.result.smoke.onnx_observation_rows -or $null -ne $entry.result.smoke.learning_observation_rows) {
+                $lines.Add(("- observation_rows candidate/onnx/learning: {0}/{1}/{2}" -f $entry.result.smoke.candidate_signal_rows_total, $entry.result.smoke.onnx_observation_rows, $entry.result.smoke.learning_observation_rows))
+            }
         }
         if (-not [string]::IsNullOrWhiteSpace([string]$entry.error)) {
             $lines.Add(("- error: {0}" -f $entry.error))
@@ -329,7 +403,7 @@ if (-not (Test-Path -LiteralPath $pilotScript)) {
 $pwsh = (Get-Command powershell.exe -ErrorAction Stop).Source
 $firstWave = Get-FirstWaveSymbols -Path $UniversePlanPath
 $resolutionMap = Get-SymbolResolutionMap -RegistryPath $RegistryPath -ReadinessReportPath $ReadinessReportPath
-$artifactBackfillMap = Get-LatestArtifactBackfillMap -PilotRegistryPath $PilotRegistryPath
+$artifactBackfillMap = Get-LatestArtifactBackfillMap -PilotRegistryPath $PilotRegistryPath -ProjectRoot $ProjectRoot
 $results = New-Object System.Collections.Generic.List[object]
 
 $initialPayload = New-ReportPayload -UniverseVersion $firstWave.universe_version -SelectedSymbols $firstWave.symbols -Results @() -State "running" -CurrentSymbol ""

@@ -70,6 +70,21 @@ function Get-OptionalPropertyValue {
     return $Default
 }
 
+function Read-JsonFileSafe {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop)
+    }
+    catch {
+        return $null
+    }
+}
+
 $importScript = Join-Path $ProjectRoot "RUN\IMPORT_QDM_PILOT_CUSTOM_SYMBOL.ps1"
 $testerScript = Join-Path $ProjectRoot "TOOLS\RUN_MICROBOT_STRATEGY_TESTER.ps1"
 
@@ -136,6 +151,37 @@ if ($null -eq $testerResult) {
     throw "QDM custom symbol smoke tester returned no result."
 }
 
+$testerRunId = [string]$testerResult.run_id
+$smokeEvidenceDir = Get-OptionalPropertyValue -Object $testerResult -PropertyName "evidence_dir" -Default (Join-Path $ProjectRoot ("EVIDENCE\\STRATEGY_TESTER\\{0}" -f $EvidenceSubdir))
+$smokeJsonPath = Get-OptionalPropertyValue -Object $testerResult -PropertyName "json_path" -Default $(if (-not [string]::IsNullOrWhiteSpace($testerRunId)) { Join-Path $smokeEvidenceDir ($testerRunId + ".json") } else { $null })
+$smokeSummaryPath = Get-OptionalPropertyValue -Object $testerResult -PropertyName "summary_path" -Default $(if (-not [string]::IsNullOrWhiteSpace($testerRunId)) { Join-Path $smokeEvidenceDir ($testerRunId + "_summary.json") } else { $null })
+$testerJson = Read-JsonFileSafe -Path $smokeJsonPath
+$testerSummary = Read-JsonFileSafe -Path $smokeSummaryPath
+
+function Get-TesterField {
+    param(
+        [string]$PropertyName,
+        $Default = $null
+    )
+
+    $value = Get-OptionalPropertyValue -Object $testerResult -PropertyName $PropertyName -Default $null
+    if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+        return $value
+    }
+
+    $value = Get-OptionalPropertyValue -Object $testerSummary -PropertyName $PropertyName -Default $null
+    if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+        return $value
+    }
+
+    $value = Get-OptionalPropertyValue -Object $testerJson -PropertyName $PropertyName -Default $null
+    if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+        return $value
+    }
+
+    return $Default
+}
+
 $result = [ordered]@{
     schema_version = "1.0"
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
@@ -149,15 +195,31 @@ $result = [ordered]@{
     broker_template_symbol = $BrokerTemplateSymbol
     import_status = $importResult.run_status
     import_message = $importResult.import_message
-    tester_run_id = $testerResult.run_id
+    tester_run_id = $testerRunId
     requested_model = $testerResult.requested_model
     model = $testerResult.model
     model_normalized_for_qdm_custom_symbol = $testerResult.model_normalized_for_qdm_custom_symbol
     result_label = $testerResult.result_label
     final_balance = $testerResult.final_balance
     test_duration = $testerResult.test_duration
-    evidence_dir = Get-OptionalPropertyValue -Object $testerResult -PropertyName "evidence_dir" -Default $null
-    summary_path = Get-OptionalPropertyValue -Object $testerResult -PropertyName "summary_path" -Default $null
+    evidence_dir = $smokeEvidenceDir
+    summary_path = $smokeSummaryPath
+    json_path = $smokeJsonPath
+    knowledge_json_path = Get-TesterField -PropertyName "knowledge_json_path"
+    knowledge_markdown_path = Get-TesterField -PropertyName "knowledge_markdown_path"
+    trust_state = Get-TesterField -PropertyName "trust_state"
+    trust_reason = Get-TesterField -PropertyName "trust_reason"
+    learning_sample_count = Get-TesterField -PropertyName "learning_sample_count"
+    candidate_signal_rows_total = Get-TesterField -PropertyName "candidate_signal_rows_total"
+    onnx_observation_rows = Get-TesterField -PropertyName "onnx_observation_rows"
+    learning_observation_rows = Get-TesterField -PropertyName "learning_observation_rows"
+    paper_open_rows = Get-TesterField -PropertyName "paper_open_rows"
+    paper_score_gate_rows = Get-TesterField -PropertyName "paper_score_gate_rows"
+    accepted_evaluated_rows = Get-TesterField -PropertyName "accepted_evaluated_rows"
+    observation_infra_ready = Get-TesterField -PropertyName "observation_infra_ready"
+    observation_data_state = Get-TesterField -PropertyName "observation_data_state"
+    observation_data_reason = Get-TesterField -PropertyName "observation_data_reason"
+    paper_learning_state = Get-TesterField -PropertyName "paper_learning_state"
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LatestStatusPath) | Out-Null

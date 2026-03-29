@@ -500,10 +500,19 @@ $report = [ordered]@{
                 result_label = $qdmCustomSmokeLatest.result_label
                 final_balance = $qdmCustomSmokeLatest.final_balance
                 test_duration = $qdmCustomSmokeLatest.test_duration
-                learning_sample_count = $null
+                learning_sample_count = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'learning_sample_count' -Default $null)
                 requested_model = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'requested_model' -Default $null)
                 model = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'model' -Default $null)
                 model_normalized_for_qdm_custom_symbol = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'model_normalized_for_qdm_custom_symbol' -Default $false)
+                trust_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'trust_state' -Default $null)
+                trust_reason = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'trust_reason' -Default $null)
+                observation_data_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'observation_data_state' -Default $null)
+                paper_learning_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'paper_learning_state' -Default $null)
+                paper_open_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'paper_open_rows' -Default $null)
+                paper_score_gate_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'paper_score_gate_rows' -Default $null)
+                candidate_signal_rows_total = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'candidate_signal_rows_total' -Default $null)
+                onnx_observation_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'onnx_observation_rows' -Default $null)
+                learning_observation_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'learning_observation_rows' -Default $null)
             }
         } elseif ($null -ne $qdmCustomSmokeSummaryFile -and $null -ne $qdmCustomSmokeSummary) {
             [ordered]@{
@@ -518,6 +527,15 @@ $report = [ordered]@{
                 requested_model = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'requested_model' -Default $null } else { $null })
                 model = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'model' -Default $null } else { $null })
                 model_normalized_for_qdm_custom_symbol = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'model_normalized_for_qdm_custom_symbol' -Default $false } else { $false })
+                trust_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'trust_state' -Default $null)
+                trust_reason = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'trust_reason' -Default $null)
+                observation_data_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'observation_data_state' -Default $null)
+                paper_learning_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'paper_learning_state' -Default $null)
+                paper_open_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'paper_open_rows' -Default $null)
+                paper_score_gate_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'paper_score_gate_rows' -Default $null)
+                candidate_signal_rows_total = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'candidate_signal_rows_total' -Default $null)
+                onnx_observation_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'onnx_observation_rows' -Default $null)
+                learning_observation_rows = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'learning_observation_rows' -Default $null)
             }
         } else { $null }
         qdm_custom_symbol_pilot_registry = if ($null -ne $qdmCustomPilotRegistry) {
@@ -724,6 +742,13 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_smoke) {
     $lines.Add(("- smoke_model_normalized_for_qdm_custom_symbol: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.model_normalized_for_qdm_custom_symbol))
     $lines.Add(("- smoke_final_balance: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.final_balance))
     $lines.Add(("- smoke_duration: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.test_duration))
+    $lines.Add(("- smoke_trust: {0} / {1}" -f $report.lab_health.qdm_custom_symbol_smoke.trust_state, $report.lab_health.qdm_custom_symbol_smoke.trust_reason))
+    $lines.Add(("- smoke_observation_data_state: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.observation_data_state))
+    $lines.Add(("- smoke_paper_learning_state: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.paper_learning_state))
+    $lines.Add(("- smoke_learning_sample_count: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.learning_sample_count))
+    $lines.Add(("- smoke_paper_open_rows: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.paper_open_rows))
+    $lines.Add(("- smoke_paper_score_gate_rows: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.paper_score_gate_rows))
+    $lines.Add(("- smoke_observation_rows candidate/onnx/learning: {0}/{1}/{2}" -f $report.lab_health.qdm_custom_symbol_smoke.candidate_signal_rows_total, $report.lab_health.qdm_custom_symbol_smoke.onnx_observation_rows, $report.lab_health.qdm_custom_symbol_smoke.learning_observation_rows))
 }
 else {
     $lines.Add("- qdm custom-symbol smoke status not available")

@@ -853,6 +853,7 @@ if ($Optimization -ne 0) {
 $executionSummaryPath = Join-Path $sandboxRoot ("state\{0}\execution_summary.json" -f $sandboxSymbolAlias)
 $runtimeStatePath = Join-Path $sandboxRoot ("state\{0}\runtime_state.csv" -f $sandboxSymbolAlias)
 $candidateSignalsPath = Join-Path $sandboxRoot ("logs\{0}\candidate_signals.csv" -f $sandboxSymbolAlias)
+$onnxObservationPath = Join-Path $sandboxRoot ("logs\{0}\onnx_observations.csv" -f $sandboxSymbolAlias)
 $bucketSummaryPath = Join-Path $sandboxRoot ("logs\{0}\learning_bucket_summary_v1.csv" -f $sandboxSymbolAlias)
 $learningObservationsPath = Join-Path $sandboxRoot ("logs\{0}\learning_observations_v2.csv" -f $sandboxSymbolAlias)
 $tuningDeckhandPath = Join-Path $sandboxRoot ("logs\{0}\tuning_deckhand.csv" -f $sandboxSymbolAlias)
@@ -900,12 +901,16 @@ $paperOpenRows = 0
 $paperScoreGateRows = 0
 $acceptedEvaluatedRows = 0
 $scoreBelowTriggerRows = 0
+$candidateSignalRowsTotal = 0
+$onnxObservationRows = 0
+$learningObservationRows = 0
 $topCandidateReasons = @()
 $paperCloseStats = @()
 $paperOpenBySetupRegime = @()
 $deckhandSnapshot = $null
 if (Test-Path -LiteralPath $candidateSignalsPath) {
     $candidateRows = Import-TabCsvWithRetry -Path $candidateSignalsPath
+    $candidateSignalRowsTotal = @($candidateRows).Count
     $paperOpenRows = @($candidateRows | Where-Object { $_.stage -eq 'PAPER_OPEN' -and $_.reason_code -eq 'PAPER_POSITION_OPENED' }).Count
     $paperScoreGateRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and $_.reason_code -eq 'PAPER_SCORE_GATE' }).Count
     $acceptedEvaluatedRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and $_.accepted -eq '1' }).Count
@@ -925,6 +930,10 @@ if (Test-Path -LiteralPath $candidateSignalsPath) {
     )
 }
 
+if (Test-Path -LiteralPath $onnxObservationPath) {
+    $onnxObservationRows = @(Import-TabCsvWithRetry -Path $onnxObservationPath).Count
+}
+
 $worstBuckets = @()
 if (Test-Path -LiteralPath $bucketSummaryPath) {
     $worstBuckets = @(
@@ -935,6 +944,7 @@ if (Test-Path -LiteralPath $bucketSummaryPath) {
 }
 
 if (Test-Path -LiteralPath $learningObservationsPath) {
+    $learningObservationRows = @(Import-TabCsvWithRetry -Path $learningObservationsPath).Count
     $paperCloseStats = @(
         Import-TabCsvWithRetry -Path $learningObservationsPath |
         Group-Object close_reason |
@@ -994,6 +1004,38 @@ if ($acceptedEvaluatedRows -gt 0) {
     $conversionRatio = [math]::Round(($paperOpenRows / [double]$acceptedEvaluatedRows), 4)
 }
 
+$testerTelemetryPresentForRun = (Test-Path -LiteralPath $testerTelemetryPath)
+$candidateSignalsPresentForRun = (Test-Path -LiteralPath $candidateSignalsPath)
+$onnxObservationsPresentForRun = (Test-Path -LiteralPath $onnxObservationPath)
+$learningObservationsPresentForRun = (Test-Path -LiteralPath $learningObservationsPath)
+$observationInfraReady = ($candidateSignalsPresentForRun -and $onnxObservationsPresentForRun -and $testerTelemetryPresentForRun)
+$observationDataState = "OBSERVATION_INFRA_NOT_MATERIALIZED"
+$observationDataReason = "NO_CANDIDATE_OR_ONNX_ARTIFACTS"
+$paperLearningState = "MISSING_SUPPORTING_ARTIFACTS"
+
+if ($learningObservationRows -gt 0) {
+    $observationDataState = "LEARNING_OBSERVATIONS_PRESENT"
+    $observationDataReason = "PAPER_LESSONS_AVAILABLE"
+    $paperLearningState = "READY"
+}
+elseif ($paperOpenRows -gt 0) {
+    $observationDataState = "PAPER_POSITIONS_OPENED_BUT_NOT_CLOSED"
+    $observationDataReason = "WAIT_FOR_FIRST_PAPER_CLOSURE"
+    $paperLearningState = "WAITING_FOR_FIRST_PAPER_CLOSE"
+}
+elseif ($paperScoreGateRows -gt 0 -or $acceptedEvaluatedRows -gt 0) {
+    if ($observationInfraReady -or $candidateSignalsPresentForRun -or $onnxObservationsPresentForRun) {
+        $observationDataState = "NO_PAPER_LESSONS_YET"
+        $observationDataReason = "SIGNALS_EXIST_BUT_NO_PAPER_CLOSES"
+        $paperLearningState = "WAITING_FOR_FIRST_PAPER_OPEN"
+    }
+}
+elseif ($candidateSignalRowsTotal -gt 0 -or $onnxObservationRows -gt 0 -or $testerTelemetryPresentForRun) {
+    $observationDataState = "SIGNAL_PATH_WITHOUT_PAPER_ACTIVITY"
+    $observationDataReason = "NO_ACCEPTED_PAPER_ACTIVITY"
+    $paperLearningState = "NO_ACCEPTED_PAPER_ACTIVITY"
+}
+
 if ($RestoreMicrobotsProfile) {
     & (Join-Path $ProjectRoot "RUN\OPEN_OANDA_MT5_WITH_MICROBOTS.ps1") | Out-Null
 }
@@ -1038,6 +1080,21 @@ $result = [ordered]@{
     tester_telemetry_session_path = $(if (Test-Path -LiteralPath $testerTelemetrySessionPath) { $testerTelemetrySessionPath } else { $null })
     tester_optimization_passes_path = $(if (Test-Path -LiteralPath $testerOptimizationPassesPath) { $testerOptimizationPassesPath } else { $null })
     tester_optimization_pass_count = $testerOptimizationPassCount
+    candidate_signal_rows_total = $candidateSignalRowsTotal
+    onnx_observation_rows = $onnxObservationRows
+    learning_observation_rows = $learningObservationRows
+    trust_state = $summaryTrustState
+    trust_reason = $summaryTrustReason
+    execution_quality_state = $summaryExecutionQualityState
+    cost_pressure_state = $summaryCostPressureState
+    learning_sample_count = [int](Get-SafeObjectValue -Object $executionSummary -PropertyName 'learning_sample_count' -Default 0)
+    paper_open_rows = $paperOpenRows
+    paper_score_gate_rows = $paperScoreGateRows
+    accepted_evaluated_rows = $acceptedEvaluatedRows
+    observation_infra_ready = $observationInfraReady
+    observation_data_state = $observationDataState
+    observation_data_reason = $observationDataReason
+    paper_learning_state = $paperLearningState
 }
 
 $summary = [ordered]@{
@@ -1081,11 +1138,18 @@ $summary = [ordered]@{
     tester_cost_penalty       = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'cost_penalty' -Default 0.0)
     tester_execution_penalty  = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'execution_penalty' -Default 0.0)
     tester_latency_penalty    = [double](Get-SafeObjectValue -Object $testerTelemetry -PropertyName 'latency_penalty' -Default 0.0)
+    candidate_signal_rows_total = $candidateSignalRowsTotal
+    onnx_observation_rows    = $onnxObservationRows
+    learning_observation_rows = $learningObservationRows
     paper_open_rows           = $paperOpenRows
     paper_score_gate_rows     = $paperScoreGateRows
     accepted_evaluated_rows   = $acceptedEvaluatedRows
     score_below_trigger_rows  = $scoreBelowTriggerRows
     paper_conversion_ratio    = $conversionRatio
+    observation_infra_ready   = $observationInfraReady
+    observation_data_state    = $observationDataState
+    observation_data_reason   = $observationDataReason
+    paper_learning_state      = $paperLearningState
     realized_pnl_lifetime     = $effectiveRealizedPnlLifetime
     runtime_realized_pnl_lifetime = $runtimeRealizedPnlLifetime
     execution_summary_trust_state = [string](Get-SafeObjectValue -Object $executionSummary -PropertyName 'trust_state' -Default '')
@@ -1100,6 +1164,10 @@ $summary = [ordered]@{
     paper_close_stats         = $paperCloseStats
     deckhand_snapshot         = $deckhandSnapshot
     worst_buckets             = $worstBuckets
+    tester_telemetry_present_for_run = $testerTelemetryPresentForRun
+    candidate_signals_present_for_run = $candidateSignalsPresentForRun
+    onnx_observations_present_for_run = $onnxObservationsPresentForRun
+    learning_observations_present_for_run = $learningObservationsPresentForRun
 }
 
 $jsonPath = Join-Path $evidenceDir ($runId + ".json")
@@ -1107,6 +1175,7 @@ $txtPath = Join-Path $evidenceDir ($runId + ".txt")
 $summaryPath = Join-Path $evidenceDir ($runId + "_summary.json")
 
 $knowledgeJsonPath = Join-Path $evidenceDir ($runId + "_knowledge.json")
+$knowledgeMarkdownPath = Join-Path $evidenceDir ($runId + "_knowledge.md")
 $researchManifestPath = Join-Path $ResearchOutputRoot "reports\research_export_manifest_latest.json"
 $researchRefreshStatus = "SKIPPED_NOT_REQUIRED"
 $researchRefreshNeeded = $false
@@ -1115,6 +1184,12 @@ $researchRefreshError = $null
 $researchManifest = $null
 $researchTesterTelemetryRows = 0
 $researchTesterPassRows = 0
+
+$result['evidence_dir'] = $evidenceDir
+$result['json_path'] = $jsonPath
+$result['summary_path'] = $summaryPath
+$summary['evidence_dir'] = $evidenceDir
+$summary['summary_path'] = $summaryPath
 
 $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
 $result | Out-String | Set-Content -LiteralPath $txtPath -Encoding UTF8
@@ -1189,6 +1264,8 @@ $result['research_export_tester_pass_rows'] = $researchTesterPassRows
 $result['research_export_tester_telemetry_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetryPath)
 $result['research_export_tester_telemetry_session_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetrySessionPath)
 $result['research_export_tester_pass_rows_for_run'] = $testerOptimizationPassCount
+$result['knowledge_json_path'] = $(if (Test-Path -LiteralPath $knowledgeJsonPath) { $knowledgeJsonPath } else { $null })
+$result['knowledge_markdown_path'] = $(if (Test-Path -LiteralPath $knowledgeMarkdownPath) { $knowledgeMarkdownPath } else { $null })
 
 $summary['research_export_manifest_path'] = $(if (Test-Path -LiteralPath $researchManifestPath) { $researchManifestPath } else { $null })
 $summary['research_export_status'] = $researchRefreshStatus
@@ -1201,6 +1278,8 @@ $summary['research_export_tester_pass_rows'] = $researchTesterPassRows
 $summary['research_export_tester_telemetry_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetryPath)
 $summary['research_export_tester_telemetry_session_present_for_run'] = [bool](Test-Path -LiteralPath $testerTelemetrySessionPath)
 $summary['research_export_tester_pass_rows_for_run'] = $testerOptimizationPassCount
+$summary['knowledge_json_path'] = $(if (Test-Path -LiteralPath $knowledgeJsonPath) { $knowledgeJsonPath } else { $null })
+$summary['knowledge_markdown_path'] = $(if (Test-Path -LiteralPath $knowledgeMarkdownPath) { $knowledgeMarkdownPath } else { $null })
 
 $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
 $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
