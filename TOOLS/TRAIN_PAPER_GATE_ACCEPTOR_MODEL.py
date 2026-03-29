@@ -80,6 +80,18 @@ def build_thresholds(args: argparse.Namespace) -> TrainingThresholds:
     )
 
 
+def load_existing_global_payload(paths: CompatPaths) -> dict[str, object] | None:
+    global_metrics_path = Path(paths.global_model_dir) / "paper_gate_acceptor_latest_metrics.json"
+    global_model_path = Path(paths.global_model_dir) / "paper_gate_acceptor_latest.joblib"
+    if not (global_metrics_path.exists() and global_model_path.exists()):
+        return None
+
+    payload = json.loads(global_metrics_path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        payload["reused_existing_model"] = True
+    return payload
+
+
 def resolve_symbol_selection(paths: CompatPaths, args: argparse.Namespace) -> list[str] | None:
     explicit = [str(symbol).strip() for symbol in (args.symbols or []) if str(symbol).strip()]
     group_symbols: list[str] = []
@@ -138,8 +150,12 @@ def main() -> int:
         if not args.symbol:
             raise SystemExit("--mode symbol wymaga --symbol")
         if global_payload is None:
+            global_payload = load_existing_global_payload(paths)
+        if global_payload is None:
             # potrzebny model globalny jako teacher
             global_payload = train_global_model(paths, export_onnx=args.export_onnx, thresholds=thresholds)
+            payload["global"] = global_payload
+        else:
             payload["global"] = global_payload
         single = train_symbol_model(paths, symbol=args.symbol, export_onnx=args.export_onnx, thresholds=thresholds)
         symbol_payload = {"symbols": {args.symbol: single}}
@@ -149,12 +165,8 @@ def main() -> int:
         return 0
 
     if global_payload is None:
-        global_metrics_path = Path(paths.global_model_dir) / "paper_gate_acceptor_latest_metrics.json"
-        global_model_path = Path(paths.global_model_dir) / "paper_gate_acceptor_latest.joblib"
-        if args.mode == "symbols" and global_metrics_path.exists() and global_model_path.exists():
-            global_payload = json.loads(global_metrics_path.read_text(encoding="utf-8"))
-            if isinstance(global_payload, dict):
-                global_payload["reused_existing_model"] = True
+        global_payload = load_existing_global_payload(paths)
+        if args.mode == "symbols" and global_payload is not None:
             payload["global"] = global_payload
         else:
             global_payload = train_global_model(paths, export_onnx=args.export_onnx, thresholds=thresholds)

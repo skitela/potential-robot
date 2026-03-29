@@ -866,6 +866,7 @@ def _train_symbol_model_from_prepared(
         regression_clip_pln=thresholds.regression_clip_pln,
         sample_weight_abs_cap_pln=thresholds.sample_weight_abs_cap_pln,
     )
+    local_thresholds = _adjust_split_thresholds_for_frame(symbol_features, local_thresholds)
 
     splits = make_walk_forward_splits(
         symbol_features,

@@ -548,11 +548,24 @@ def _load_items_by_symbol(
     payload = read_json(path, default={})
     if not isinstance(payload, dict):
         return {}
-    items = payload.get("items", [])
-    if not isinstance(items, list):
-        return {}
     by_symbol: dict[str, dict[str, Any]] = {}
-    for item in items:
+
+    items = payload.get("items", [])
+    if isinstance(items, list):
+        iterable: list[dict[str, Any]] = [item for item in items if isinstance(item, dict)]
+    else:
+        iterable = []
+
+    symbols_payload = payload.get("symbols", {})
+    if isinstance(symbols_payload, dict):
+        for symbol, row in symbols_payload.items():
+            if not isinstance(row, dict):
+                continue
+            merged = dict(row)
+            merged.setdefault("symbol_alias", str(symbol).strip())
+            iterable.append(merged)
+
+    for item in iterable:
         if not isinstance(item, dict):
             continue
         symbol = ""

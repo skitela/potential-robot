@@ -15,7 +15,7 @@ from mb_ml_core.registry import (
     load_universe_version,
 )
 
-from .audits import AuditThresholds, build_overlay_audit, load_active_registry_symbols
+from .audits import AuditThresholds, load_active_registry_symbols
 from .io_utils import dump_json, ensure_parent, recursive_collect_symbols, read_json, utc_now_iso
 from .paths import OverlayPaths
 
@@ -56,9 +56,9 @@ def _parse_package_thresholds(paths: OverlayPaths) -> dict[str, float]:
     return defaults
 
 
-def _scan_symbol_onnx(paths: OverlayPaths, symbol: str) -> bool:
+def _scan_symbol_model_artifacts(paths: OverlayPaths, symbol: str) -> bool:
     model_dir = paths.symbol_models_dir / symbol
-    return model_dir.exists() and any(model_dir.glob("*.onnx"))
+    return model_dir.exists() and (any(model_dir.glob("*.onnx")) or any(model_dir.glob("*.joblib")))
 
 
 def _scan_global_onnx(paths: OverlayPaths) -> bool:
@@ -80,6 +80,34 @@ def _load_local_readiness_rows(paths: OverlayPaths) -> dict[str, dict[str, Any]]
         if not symbol:
             continue
         result[symbol] = row
+    return result
+
+
+def _load_training_readiness_rows(paths: OverlayPaths) -> dict[str, dict[str, Any]]:
+    payload = read_json(paths.instrument_training_readiness_path, default={})
+    if not isinstance(payload, dict):
+        return {}
+
+    result: dict[str, dict[str, Any]] = {}
+    rows = payload.get("items", [])
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol_alias") or row.get("symbol") or "").strip()
+            if symbol:
+                result[symbol] = row
+
+    symbols_payload = payload.get("symbols", {})
+    if isinstance(symbols_payload, dict):
+        for symbol, row in symbols_payload.items():
+            symbol_name = str(symbol).strip()
+            if not symbol_name or not isinstance(row, dict):
+                continue
+            merged = dict(row)
+            merged.setdefault("symbol_alias", symbol_name)
+            result[symbol_name] = merged
+
     return result
 
 
@@ -136,11 +164,11 @@ def sync_runtime_state(
     thresholds: AuditThresholds | None = None,
 ) -> dict[str, Any]:
     thresholds = thresholds or AuditThresholds()
-    audit = build_overlay_audit(paths, thresholds=thresholds)
     runtime_thresholds = _parse_package_thresholds(paths)
     package_exists = paths.package_json_path.exists()
     global_model_available = _scan_global_onnx(paths)
     local_readiness_rows = _load_local_readiness_rows(paths)
+    training_readiness_rows = _load_training_readiness_rows(paths)
     compat_paths = CompatPaths.create(
         project_root=paths.project_root,
         research_root=paths.research_root,
@@ -158,11 +186,26 @@ def sync_runtime_state(
     for item in active_registry:
         symbol = item["symbol"]
         readiness_row = local_readiness_rows.get(symbol, {})
-        mode = str(readiness_row.get("training_state") or audit["symbol_activity"]["training_modes"].get(symbol, "FALLBACK_ONLY"))
-        outcome_rows = int(readiness_row.get("outcome_rows") or audit["symbol_activity"]["outcome_counts"].get(symbol, 0) or 0)
+        training_row = training_readiness_rows.get(symbol, {})
+        mode = str(
+            readiness_row.get("training_state")
+            or training_row.get("training_state")
+            or training_row.get("training_mode")
+            or training_row.get("training_readiness_state")
+            or "FALLBACK_ONLY"
+        )
+        outcome_rows = int(
+            readiness_row.get("outcome_rows")
+            or training_row.get("outcome_rows")
+            or training_row.get("learning_contract_rows")
+            or 0
+        )
         ranking_pass = bool(readiness_row.get("ranking_pass", False))
         deployment_pass = bool(readiness_row.get("deployment_pass", False))
-        local_model_available = bool(readiness_row.get("local_model_available", False) or _scan_symbol_onnx(paths, symbol))
+        local_model_available = bool(
+            readiness_row.get("local_model_available", False)
+            or _scan_symbol_model_artifacts(paths, symbol)
+        )
         paper_live_bucket = load_paper_live_bucket_for_symbol(compat_paths, symbol)
         paper_live_enabled = paper_live_bucket == "FIRST_WAVE"
         runtime_scope = "PAPER_LIVE" if paper_live_enabled else "LAPTOP_ONLY"

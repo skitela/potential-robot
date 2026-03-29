@@ -2,8 +2,11 @@ param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$PlanScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1",
     [string]$TrainerScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\TRAIN_PAPER_GATE_ACCEPTOR_MODELS_PER_SYMBOL.ps1",
+    [string]$ExportPackageScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\EXPORT_MT5_PAPER_GATE_PACKAGE.ps1",
+    [string]$SyncRuntimeScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\SYNC_MT5_ML_RUNTIME_STATE.ps1",
     [string]$OnnxReviewScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_ONNX_MICRO_REVIEW_REPORT.ps1",
     [string]$HealthRegistryScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1",
+    [string]$LocalModelReadinessScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_LOCAL_MODEL_READINESS_AUDIT.ps1",
     [string]$LocalTrainingAuditScriptPath = "C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1",
     [string]$PlanPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_local_training_plan_latest.json",
     [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\onnx_symbol_registry_latest.json",
@@ -43,7 +46,7 @@ function ConvertTo-SymbolSet {
     )
 }
 
-foreach ($path in @($PlanScriptPath, $TrainerScriptPath, $OnnxReviewScriptPath, $HealthRegistryScriptPath, $LocalTrainingAuditScriptPath)) {
+foreach ($path in @($PlanScriptPath, $TrainerScriptPath, $ExportPackageScriptPath, $SyncRuntimeScriptPath, $OnnxReviewScriptPath, $HealthRegistryScriptPath, $LocalModelReadinessScriptPath, $LocalTrainingAuditScriptPath)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -131,8 +134,11 @@ else {
         -Symbols $selectedSymbols `
         -PerfProfile $PerfProfile
 
+    & $ExportPackageScriptPath -ProjectRoot $ProjectRoot | Out-Null
+    & $SyncRuntimeScriptPath -ProjectRoot $ProjectRoot | Out-Null
     & $OnnxReviewScriptPath | Out-Null
     & $HealthRegistryScriptPath -ProjectRoot $ProjectRoot | Out-Null
+    & $LocalModelReadinessScriptPath -ProjectRoot $ProjectRoot | Out-Null
 
     $registry = Read-JsonSafe -Path $RegistryPath
     if ($null -ne $registry) {

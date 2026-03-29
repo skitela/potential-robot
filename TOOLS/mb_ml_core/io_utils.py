@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 import json
 import math
 import re
-
-import pandas as pd
 
 try:
     import duckdb
 except Exception:  # pragma: no cover - opcjonalna zależność w środowiskach testowych
     duckdb = None
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+
+def _import_pandas():
+    import pandas as pd  # type: ignore
+
+    return pd
 
 
 def ensure_dir(path: str | Path) -> Path:
@@ -38,7 +45,9 @@ def write_json(path: str | Path, payload: Any) -> Path:
     return path
 
 
-def to_frame(payload: Any) -> pd.DataFrame:
+def to_frame(payload: Any) -> "pd.DataFrame":
+    pd = _import_pandas()
+
     if payload is None:
         return pd.DataFrame()
     if isinstance(payload, list):
@@ -67,6 +76,7 @@ def _quote_sql(value: str) -> str:
 
 
 def _sql_timestamp_literal(value: Any) -> str:
+    pd = _import_pandas()
     ts = pd.Timestamp(value)
     if ts.tzinfo is None:
         ts = ts.tz_localize("UTC")
@@ -84,6 +94,7 @@ def read_parquet_window(
     ts_min: Any = None,
     ts_max: Any = None,
 ) -> pd.DataFrame:
+    pd = _import_pandas()
     path = Path(path)
     if not path.exists():
         return pd.DataFrame()
@@ -124,7 +135,9 @@ def read_parquet_window(
     return duckdb.sql(sql).df()
 
 
-def read_table(path: str | Path | None) -> pd.DataFrame | None:
+def read_table(path: str | Path | None) -> "pd.DataFrame | None":
+    pd = _import_pandas()
+
     if path is None:
         return None
     path = Path(path)
@@ -144,7 +157,9 @@ def read_table(path: str | Path | None) -> pd.DataFrame | None:
     return None
 
 
-def normalize_ts(series: pd.Series) -> pd.Series:
+def normalize_ts(series: "pd.Series") -> "pd.Series":
+    pd = _import_pandas()
+
     if pd.api.types.is_datetime64_any_dtype(series):
         return pd.to_datetime(series, utc=True)
     s = series.copy()
@@ -159,7 +174,13 @@ def normalize_ts(series: pd.Series) -> pd.Series:
     return pd.to_datetime(s, utc=True, errors="coerce")
 
 
-def coalesce_columns(df: pd.DataFrame, names: Iterable[str], default: float | str | bool | None = None) -> pd.Series:
+def coalesce_columns(
+    df: "pd.DataFrame",
+    names: Iterable[str],
+    default: float | str | bool | None = None,
+) -> "pd.Series":
+    pd = _import_pandas()
+
     result = None
     for name in names:
         if name in df.columns:
@@ -188,7 +209,7 @@ def find_optional_file(root: str | Path, filename: str) -> Path | None:
     return matches[0] if matches else None
 
 
-def normalize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_column_names(df: "pd.DataFrame") -> "pd.DataFrame":
     out = df.copy()
     out.columns = [
         re.sub(r"[^a-zA-Z0-9_]+", "_", str(col)).strip("_").lower()

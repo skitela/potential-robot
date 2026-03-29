@@ -78,6 +78,35 @@ function New-MapByAlias {
     return $map
 }
 
+function Get-PayloadRows {
+    param([object]$Payload)
+
+    if ($null -eq $Payload) {
+        return @()
+    }
+
+    if ($Payload.PSObject.Properties.Name -contains "items" -and $Payload.items -is [System.Collections.IEnumerable]) {
+        return @($Payload.items)
+    }
+
+    if ($Payload.PSObject.Properties.Name -contains "symbols" -and $Payload.symbols -is [System.Collections.IDictionary]) {
+        return @(
+            $Payload.symbols.GetEnumerator() | ForEach-Object {
+                $row = if ($_.Value -is [psobject]) { $_.Value.PSObject.Copy() } else { [pscustomobject]@{} }
+                if (-not ($row.PSObject.Properties.Name -contains "symbol_alias")) {
+                    Add-Member -InputObject $row -NotePropertyName "symbol_alias" -NotePropertyValue ([string]$_.Key)
+                }
+                elseif ([string]::IsNullOrWhiteSpace([string]$row.symbol_alias)) {
+                    $row.symbol_alias = [string]$_.Key
+                }
+                $row
+            }
+        )
+    }
+
+    return @()
+}
+
 function Get-OptionalNumber {
     param(
         [object]$Object,
@@ -229,9 +258,9 @@ if ($null -eq $plan) {
     throw "Missing local training plan: $PlanPath"
 }
 
-$trainingMap = New-MapByAlias -Items @($trainingReadiness.items)
-$healthMap = New-MapByAlias -Items @($learningHealth.items)
-$registryMap = New-MapByAlias -Items @($registry.items)
+$trainingMap = New-MapByAlias -Items (Get-PayloadRows -Payload $trainingReadiness)
+$healthMap = New-MapByAlias -Items (Get-PayloadRows -Payload $learningHealth)
+$registryMap = New-MapByAlias -Items (Get-PayloadRows -Payload $registry)
 
 $monitorSet = New-Object System.Collections.Generic.List[object]
 $seen = @{}

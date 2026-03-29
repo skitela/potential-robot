@@ -5,9 +5,10 @@ from pathlib import Path
 import hashlib
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 from .io_utils import first_present, read_table
 from .paths import CompatPaths, DEFAULT_SYMBOLS
@@ -279,7 +280,9 @@ def load_active_symbols(paths: CompatPaths) -> list[str]:
     return load_training_universe_symbols(paths)
 
 
-def load_family_policy_registry(paths: CompatPaths) -> pd.DataFrame:
+def load_family_policy_registry(paths: CompatPaths) -> "pd.DataFrame":
+    import pandas as pd
+
     path = paths.config_dir / "family_policy_registry.json"
     df = read_table(path)
     if df is None:
