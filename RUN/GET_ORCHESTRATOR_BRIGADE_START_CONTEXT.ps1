@@ -112,8 +112,12 @@ function Get-NoteRows {
                     author = [string](Get-OptionalValue -Object $meta -Name "author" -Default "")
                     title = [string](Get-OptionalValue -Object $meta -Name "title" -Default "")
                     relevance = $relevance
+                    request_owner_actor = [string](Get-OptionalValue -Object $meta -Name "request_owner_actor" -Default "")
+                    request_owner_brigade_id = [string](Get-OptionalValue -Object $meta -Name "request_owner_brigade_id" -Default "")
                     target_actor = $targetActor
                     target_brigade_id = $targetBrigadeId
+                    report_to_actor = [string](Get-OptionalValue -Object $meta -Name "report_to_actor" -Default "")
+                    report_to_brigade_id = [string](Get-OptionalValue -Object $meta -Name "report_to_brigade_id" -Default "")
                     execution_intent = [string](Get-OptionalValue -Object $meta -Name "execution_intent" -Default "")
                     execution_policy = [string](Get-OptionalValue -Object $meta -Name "execution_policy" -Default "")
                     note_path = [string](Get-OptionalValue -Object $meta -Name "note_path" -Default "")
@@ -160,10 +164,14 @@ function Get-BrigadeRecommendation {
 function New-CommandExamples {
     param(
         [object]$Brigade,
-        [object[]]$PendingRows
+        [object[]]$PendingRows,
+        [object]$Policy
     )
 
     $claimExample = ""
+    $defaultReportToActor = [string](Get-OptionalValue -Object $Policy -Name "default_report_to_actor" -Default "")
+    $defaultReportToBrigadeId = [string](Get-OptionalValue -Object $Policy -Name "default_report_to_brigade_id" -Default "")
+    $directedNoteExample = 'pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_ORCHESTRATOR_NOTE.ps1 -Title "Krotki temat" -Text "Tres note." -Author {0} -TargetActor <actor_id> -TargetBrigadeId <brigade_id> -ReportToActor {1} -ReportToBrigadeId {2} -ExecutionIntent ACTION_REQUEST' -f [string]$Brigade.actor_id, $defaultReportToActor, $defaultReportToBrigadeId
     $resultExample = 'pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1 -TaskId <task_id> -Actor {0} -Outcome STATUS -Summary "Krotki status brygady." -NextAction "Co dalej."' -f [string]$Brigade.actor_id
     $completeExample = 'pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\COMPLETE_ORCHESTRATOR_PARALLEL_TASK.ps1 -TaskId <task_id> -Actor {0} -Outcome COMPLETED -Notes "Zadanie domkniete." -PublishResultNote -ResultSummary "Wynik przekazany wszystkim brygadom."' -f [string]$Brigade.actor_id
 
@@ -175,9 +183,12 @@ function New-CommandExamples {
     }
 
     return [ordered]@{
+        sync_all_notes = 'pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\FORCE_BRIGADE_NOTE_SYNC.ps1'
         read_notes = 'pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\READ_ORCHESTRATOR_BRIGADE_NOTES.ps1 -BrigadeId {0} -Limit 10 -ShowContent' -f [string]$Brigade.brigade_id
         list_notes = 'pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\GET_ORCHESTRATOR_NOTES.ps1 -Limit 10'
+        write_directed_note = $directedNoteExample
         claim_work = $claimExample
+        reply_to_codex = 'pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_BRIGADE_REPLY_TO_CODEX.ps1 -TaskId <task_id> -BrigadeId {0} -Outcome STATUS -Summary "Krotki status brygady." -NextAction "Co dalej."' -f [string]$Brigade.brigade_id
         write_result = $resultExample
         complete_task = $completeExample
     }
@@ -221,7 +232,8 @@ $targetedNotes = @($noteRows | Where-Object { [string]$_.relevance -eq "TARGETED
 
 $policy = Get-OptionalValue -Object $registry -Name "message_handling_policy" -Default $null
 $startupProtocol = Get-OptionalValue -Object $registry -Name "startup_protocol" -Default $null
-$commandExamples = New-CommandExamples -Brigade $brigade -PendingRows $pendingRows
+$desktopExchangePolicy = Get-OptionalValue -Object $registry -Name "desktop_exchange_policy" -Default $null
+$commandExamples = New-CommandExamples -Brigade $brigade -PendingRows $pendingRows -Policy $policy
 
 $payload = [ordered]@{
     brigade = [ordered]@{
@@ -238,14 +250,31 @@ $payload = [ordered]@{
     latest_notes = @($noteRows)
     recommendation = Get-BrigadeRecommendation -BrigadeRow $brigadeRow -PendingRows $pendingRows -ActiveRows $activeRows -TargetedNotes $targetedNotes
     message_policy = [ordered]@{
+        notes_reader_script = [string](Get-OptionalValue -Object $policy -Name "notes_reader_script" -Default "")
+        notes_sync_all_script = [string](Get-OptionalValue -Object $policy -Name "notes_sync_all_script" -Default "")
+        notes_receipts_status_path = [string](Get-OptionalValue -Object $policy -Name "notes_receipts_status_path" -Default "")
+        reply_to_codex_script = [string](Get-OptionalValue -Object $policy -Name "reply_to_codex_script" -Default "")
+        reply_to_codex_required_sections = @(Get-OptionalValue -Object $policy -Name "reply_to_codex_required_sections" -Default @())
         all_brigades_read_every_new_note = [bool](Get-OptionalValue -Object $policy -Name "all_brigades_read_every_new_note" -Default $false)
         default_execution_policy = [string](Get-OptionalValue -Object $policy -Name "default_execution_policy" -Default "")
         default_non_target_policy = [string](Get-OptionalValue -Object $policy -Name "default_non_target_policy" -Default "")
+        processing_owner_must_be_declared = [bool](Get-OptionalValue -Object $policy -Name "processing_owner_must_be_declared" -Default $false)
+        request_owner_must_be_declared = [bool](Get-OptionalValue -Object $policy -Name "request_owner_must_be_declared" -Default $false)
+        report_to_must_be_declared = [bool](Get-OptionalValue -Object $policy -Name "report_to_must_be_declared" -Default $false)
+        request_owner_default_rule = [string](Get-OptionalValue -Object $policy -Name "request_owner_default_rule" -Default "")
+        result_return_rule = [string](Get-OptionalValue -Object $policy -Name "result_return_rule" -Default "")
+        chief_engineer_broadcast_rule = [string](Get-OptionalValue -Object $policy -Name "chief_engineer_broadcast_rule" -Default "")
+        default_report_to_actor = [string](Get-OptionalValue -Object $policy -Name "default_report_to_actor" -Default "")
+        default_report_to_brigade_id = [string](Get-OptionalValue -Object $policy -Name "default_report_to_brigade_id" -Default "")
+        information_admin_actor_id = [string](Get-OptionalValue -Object $policy -Name "information_admin_actor_id" -Default "")
+        information_admin_brigade_id = [string](Get-OptionalValue -Object $policy -Name "information_admin_brigade_id" -Default "")
         delegation_requires_handoff = [bool](Get-OptionalValue -Object $policy -Name "delegation_requires_handoff" -Default $false)
         delegation_allowed_for_targeted_owner_only = [bool](Get-OptionalValue -Object $policy -Name "delegation_allowed_for_targeted_owner_only" -Default $false)
         completion_report_required = [bool](Get-OptionalValue -Object $policy -Name "completion_report_required" -Default $false)
         completion_report_visibility = [string](Get-OptionalValue -Object $policy -Name "completion_report_visibility" -Default "")
         completion_report_audience = [string](Get-OptionalValue -Object $policy -Name "completion_report_audience" -Default "")
+        addressing_rule = [string](Get-OptionalValue -Object $policy -Name "addressing_rule" -Default "")
+        information_admin_rule = [string](Get-OptionalValue -Object $policy -Name "information_admin_rule" -Default "")
         handoff_rule = [string](Get-OptionalValue -Object $policy -Name "handoff_rule" -Default "")
         completion_report_rule = [string](Get-OptionalValue -Object $policy -Name "completion_report_rule" -Default "")
     }
@@ -263,6 +292,16 @@ $payload = [ordered]@{
         claim_active = Join-Path $MailboxDir "coordination\claims\active"
         activity = Join-Path $MailboxDir "coordination\activity"
         note_receipts = Join-Path $MailboxDir "status\brigade_note_receipts.json"
+    }
+    desktop_exchange_policy = [ordered]@{
+        base_dir = [string](Get-OptionalValue -Object $desktopExchangePolicy -Name "base_dir" -Default "")
+        archive_root_name = [string](Get-OptionalValue -Object $desktopExchangePolicy -Name "archive_root_name" -Default "")
+        keep_last_days = [int](Get-OptionalValue -Object $desktopExchangePolicy -Name "keep_last_days" -Default 0)
+        exclude_names = @(Get-OptionalValue -Object $desktopExchangePolicy -Name "exclude_names" -Default @())
+        archive_script = [string](Get-OptionalValue -Object $desktopExchangePolicy -Name "archive_script" -Default "")
+        archive_latest_report_json = [string](Get-OptionalValue -Object $desktopExchangePolicy -Name "archive_latest_report_json" -Default "")
+        archive_latest_report_md = [string](Get-OptionalValue -Object $desktopExchangePolicy -Name "archive_latest_report_md" -Default "")
+        policy_rule = [string](Get-OptionalValue -Object $desktopExchangePolicy -Name "policy_rule" -Default "")
     }
     command_examples = $commandExamples
     written_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -291,7 +330,7 @@ if ($null -ne $payload.lane_status) {
 @($payload.blocked_rows) | Select-Object state, priority, title, task_id, last_activity_at_local | Format-Table -AutoSize
 ""
 "LATEST NOTES"
-@($payload.latest_notes) | Select-Object written_at_local, author, relevance, title, execution_intent, execution_policy | Format-Table -AutoSize
+@($payload.latest_notes) | Select-Object written_at_local, author, relevance, title, request_owner_actor, target_actor, report_to_actor, execution_intent, execution_policy | Format-Table -AutoSize
 ""
 "MESSAGE POLICY"
 [pscustomobject]$payload.message_policy | Format-List
@@ -305,6 +344,9 @@ if ($null -ne $payload.lane_status) {
 ""
 "MAILBOX PATHS"
 [pscustomobject]$payload.mailbox_paths | Format-List
+""
+"DESKTOP EXCHANGE POLICY"
+[pscustomobject]$payload.desktop_exchange_policy | Format-List
 ""
 "COMMAND EXAMPLES"
 [pscustomobject]$payload.command_examples | Format-List

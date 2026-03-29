@@ -15,6 +15,7 @@ To jest szybki pulpit operatorski dla brygad. Otwieraj ten plik, gdy chcesz szyb
 - [07 HANDOFF BRYGAD](07_HANDOFF_BRYGAD.md)
 - [08 PLAN BRYGAD 20260329](08_PLAN_BRYGAD_20260329.md)
 - [09 SPIS Z NATURY BRYGAD I NARZEDZI](09_SPIS_Z_NATURY_BRYGAD_I_NARZEDZI_20260329.md)
+- [10 NATYCHMIASTOWY ODCZYT I ODPOWIEDZ DO CODEXA](10_NATYCHMIASTOWY_ODCZYT_I_ODPOWIEDZ_DO_CODEXA_20260329.md)
 
 ## Wejscia Copilot
 
@@ -44,7 +45,19 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\READ_ORCHESTRATOR_BRIGADE_NOTES.ps1 -Brigade
 Automatyczna synchronizacja not mostu dla wszystkich brygad:
 
 ```powershell
-pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\SYNC_ORCHESTRATOR_BRIGADE_NOTES.ps1 -PublishToNotes
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\FORCE_BRIGADE_NOTE_SYNC.ps1
+```
+
+Standardowa odpowiedz brygady do Codexa:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_BRIGADE_REPLY_TO_CODEX.ps1 -TaskId <task_id> -BrigadeId rozwoj_kodu -Outcome STATUS -Summary "Krotki status brygady." -NextAction "Co dalej."
+```
+
+Archiwizacja starszej wiedzy z pulpitu z pozostawieniem ostatniego dnia i zywego mailboxa:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\ARCHIVE_DESKTOP_KNOWLEDGE_EXCHANGE.ps1
 ```
 
 Otworz panel mostu z kontrolkami brygad:

@@ -28,7 +28,18 @@
   "message_handling_policy": {
     "all_brigades_read_every_new_note": true,
     "notes_reader_script": "RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1",
+    "notes_sync_all_script": "RUN/FORCE_BRIGADE_NOTE_SYNC.ps1",
     "notes_receipts_status_path": "status/brigade_note_receipts.json",
+    "reply_to_codex_script": "RUN/WRITE_BRIGADE_REPLY_TO_CODEX.ps1",
+    "reply_to_codex_required_sections": [
+      "Summary",
+      "Checked",
+      "Confirmed",
+      "Blockers",
+      "Delegate further work",
+      "Codex action",
+      "Next action"
+    ],
     "default_visibility": "ALL_BRIGADES_READ",
     "default_execution_policy": "TARGET_ONLY_AFTER_REVIEW",
     "default_non_target_policy": "READ_ONLY_UNLESS_EXPLICITLY_ASSIGNED",
@@ -61,6 +72,19 @@
     "completion_report_rule": "After completing, blocking or delegating work, the execution owner should publish a short result note to all brigades and Codex, preferably through RUN/WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1, with the result routed back to Codex unless the operator set another report owner explicitly.",
     "codex_rule": "Codex should read every new note and remains the default coordinator of the bridge; when Codex is targeted or owns the request and it passes safety review, Codex should execute it or delegate through note plus task.",
     "question_rule": "Brigades should not ask each other operational questions directly. Questions, ambiguities and requests for clarification should go to Codex, and Codex decides whether to answer directly, delegate work or issue a clarified note plus task."
+  },
+  "desktop_exchange_policy": {
+    "base_dir": "C:\\Users\\skite\\Desktop\\strojenie agenta",
+    "archive_root_name": "ARCHIWUM_WIEDZY",
+    "keep_last_days": 1,
+    "exclude_names": [
+      "orchestrator_mailbox",
+      "ARCHIWUM_WIEDZY"
+    ],
+    "archive_script": "RUN/ARCHIVE_DESKTOP_KNOWLEDGE_EXCHANGE.ps1",
+    "archive_latest_report_json": "desktop_knowledge_archive_latest.json",
+    "archive_latest_report_md": "desktop_knowledge_archive_latest.md",
+    "policy_rule": "The live mailbox stays in place. Older top-level knowledge files and folders from the desktop exchange area should be moved into a dated archive session inside ARCHIWUM_WIEDZY."
   },
   "coordination_contract": {
     "single_source_of_truth_actor_id": "codex",

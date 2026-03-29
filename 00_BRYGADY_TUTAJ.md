@@ -101,6 +101,10 @@ To jest aktualny plan pracy brygad.
 
 To jest operacyjna instrukcja Codexa: kto od czego jest, jakimi narzedziami pracuje, kiedy ma raportowac i czego nie pytac poza Codexem.
 
+[Natychmiastowy odczyt i odpowiedz do Codexa](BRYGADY/10_NATYCHMIASTOWY_ODCZYT_I_ODPOWIEDZ_DO_CODEXA_20260329.md)
+
+To jest najprostszy kontrakt pracy brygady: jak natychmiast czytac nowe noty i w jakiej formie odpowiadac do Codexa.
+
 [Manifest spiecia brygad](EVIDENCE/OPS/brigade_sync_manifest_latest.md)
 
 To jest jeden jawny punkt kontroli dla Codexa: pokazuje czy kazda brygada ma kontrakt ogolny, task, note i aktualne spiecie lane.
@@ -117,6 +121,7 @@ Ten raport pokazuje czy latest note z mostu zostala odebrana przez kazda brygade
 
 - wszystkie brygady czytaja nowe notatki z mostu,
 - preferowana komenda odczytu to `RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1`, bo zapisuje tez slad odczytu brygady,
+- jesli trzeba od razu zszyc receipts i latest note dla wszystkich lane, uzywaj `RUN/FORCE_BRIGADE_NOTE_SYNC.ps1`,
 - ale wykonuje tylko brygada jednoznacznie wskazana jako adresat albo wlasciciel tasku,
 - kazda note, handoff, task i wynik musza wskazac adres przetwarzania, wlasciciela zlecenia oraz adres raportowania,
 - domyslnie raport wraca do Codexa, a brygada nadzoru pilnuje readiness, syntezy ryzyka i czyta wszystko,
@@ -131,7 +136,8 @@ Ten raport pokazuje czy latest note z mostu zostala odebrana przez kazda brygade
 - taski pending: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\tasks\pending`
 - taski active: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\tasks\active`
 - claimy: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\claims\active`
-- raport wyniku brygady wraca znow do `notes\inbox` przez `RUN/WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1`
+- raport wyniku brygady wraca znow do `notes\inbox` przez `RUN/WRITE_BRIGADE_REPLY_TO_CODEX.ps1`
+- starsza wiedza z pulpitu jest archiwizowana przez `RUN/ARCHIVE_DESKTOP_KNOWLEDGE_EXCHANGE.ps1`, ale zywy `orchestrator_mailbox` zostaje na miejscu
 
 ## SESJE COPILOT DLA BRYGAD
 
