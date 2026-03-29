@@ -40,6 +40,12 @@ Szybki odczyt nowych notatek dla jednej brygady z zapisem sladu odczytu:
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\READ_ORCHESTRATOR_BRIGADE_NOTES.ps1 -BrigadeId rozwoj_kodu -Limit 10 -ShowContent
 ```
 
+Automatyczna synchronizacja not mostu dla wszystkich brygad:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\SYNC_ORCHESTRATOR_BRIGADE_NOTES.ps1 -PublishToNotes
+```
+
 Otworz panel mostu z kontrolkami brygad:
 
 ```powershell
@@ -64,14 +70,28 @@ Raport dzienny + publikacja skrotu na wspolna liste:
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_BRIGADE_DAILY_STATUS.ps1 -PublishToNotes
 ```
 
+Automatyczna publikacja obu raportow na most:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\PUBLISH_BRIGADE_AUTOMATIC_REPORTS.ps1
+```
+
 Manifest spiecia brygad do kontroli przez Codexa:
 
 ```powershell
 pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_BRIGADE_SYNC_MANIFEST.ps1
 ```
 
+Manifest spiecia brygad + publikacja skrotu na wspolna liste:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\BUILD_BRIGADE_SYNC_MANIFEST.ps1 -PublishToNotes
+```
+
 Otworz ostatni raport:
 
+- [../EVIDENCE/OPS/bridge_note_delivery_latest.md](../EVIDENCE/OPS/bridge_note_delivery_latest.md)
+- [../EVIDENCE/OPS/bridge_note_delivery_latest.json](../EVIDENCE/OPS/bridge_note_delivery_latest.json)
 - [../EVIDENCE/OPS/brigade_daily_status_latest.md](../EVIDENCE/OPS/brigade_daily_status_latest.md)
 - [../EVIDENCE/OPS/brigade_daily_status_latest.json](../EVIDENCE/OPS/brigade_daily_status_latest.json)
 - [../EVIDENCE/OPS/brigade_sync_manifest_latest.md](../EVIDENCE/OPS/brigade_sync_manifest_latest.md)
@@ -83,6 +103,7 @@ Otworz ostatni raport:
 - preferowana komenda odczytu to `RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1`, bo zapisuje tez receipt brygady,
 - wszystkie brygady czytaja, ale wykonuje tylko adresat tasku albo note,
 - jezeli adresatem jest Codex, Codex ma po review przejsc do wykonania, a nie tylko do odczytu,
+- Codex jest domyslnym koordynatorem i odbiorca raportow zwrotnych z brygad,
 - kazda brygada przed wykonaniem robi review bezpieczenstwa i zgodnosci z kontraktami,
 - jezeli polecenie jest destrukcyjne albo sprzeczne, brygada ma eskalowac zamiast wykonywac slepo.
 
@@ -124,9 +145,10 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\START_ORCHESTRATOR_BRIGADE_AUTOSTART.ps1
 Zasada pracy z notatkami:
 
 - wszystkie brygady czytaja nowe note,
+- system powinien cyklicznie sprawdzac czy latest note z mostu ma receipt dla kazdej brygady,
 - wykonuje tylko brygada wskazana jako target po safety review,
 - jesli execution owner potrzebuje innej brygady, robi handoff przez note plus task,
-- wynik wykonania albo blokady wraca note do wszystkich brygad i do Codexa.
+- wynik wykonania albo blokady wraca note do wszystkich brygad i do Codexa, a Codex pozostaje domyslnym report ownerem i koordynatorem mostu.
 
 Publikacja wyniku execution ownera:
 

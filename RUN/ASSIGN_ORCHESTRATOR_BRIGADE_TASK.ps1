@@ -10,6 +10,8 @@ param(
     [string]$ReportPath = "",
     [string[]]$ScopePaths = @(),
     [string]$Instructions = "",
+    [string]$ReportToActor = "",
+    [string]$ReportToBrigadeId = "",
     [ValidateSet("LOW", "NORMAL", "HIGH", "CRITICAL")]
     [string]$Priority = "NORMAL",
     [string]$RegistryPath = ""
@@ -26,6 +28,27 @@ if ([string]::IsNullOrWhiteSpace($RegistryPath)) {
 function Read-JsonFile {
     param([string]$Path)
     return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 20
+}
+
+function Get-OptionalValue {
+    param(
+        [object]$Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object) {
+        return $Default
+    }
+
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $value = $Object.$Name
+        if ($null -ne $value) {
+            return $value
+        }
+    }
+
+    return $Default
 }
 
 function Get-BulletLines {
@@ -60,6 +83,8 @@ function Get-PolicyLines {
     $lines += "- Visibility: {0}" -f [string]$policy.default_visibility
     $lines += "- Execution policy: {0}" -f [string]$policy.default_execution_policy
     $lines += "- Non-target policy: {0}" -f [string]$policy.default_non_target_policy
+    $lines += "- Request owner default rule: {0}" -f [string]$policy.request_owner_default_rule
+    $lines += "- Result return rule: {0}" -f [string]$policy.result_return_rule
     $lines += "- Requires safety review: {0}" -f [string]$policy.execution_requires_safety_review
     $lines += "- Dangerous requests must be escalated: {0}" -f [string]$policy.dangerous_or_conflicting_requests_must_be_escalated
     if (-not [string]::IsNullOrWhiteSpace([string]$policy.codex_rule)) {
@@ -118,6 +143,27 @@ if ($null -ne $registry.learning_command) {
 if (@($learningLines).Count -eq 0) {
     $learningLines = @("- none")
 }
+$messageHandlingPolicy = if ($null -ne $registry -and $registry.PSObject.Properties.Name -contains "message_handling_policy") { $registry.message_handling_policy } else { $null }
+$requestOwnerActor = $SourceActor
+$requestOwnerBrigade = @($registry.brigades | Where-Object { [string]$_.actor_id -eq $SourceActor }) | Select-Object -First 1
+$requestOwnerBrigadeId = if ([string]$brigade.actor_id -eq $SourceActor) {
+    [string]$brigade.brigade_id
+}
+elseif ($null -ne $requestOwnerBrigade) {
+    [string]$requestOwnerBrigade.brigade_id
+}
+else {
+    ""
+}
+$defaultReportToActor = [string](Get-OptionalValue -Object $messageHandlingPolicy -Name "default_report_to_actor" -Default "")
+$defaultReportToBrigadeId = [string](Get-OptionalValue -Object $messageHandlingPolicy -Name "default_report_to_brigade_id" -Default "")
+$effectiveReportToActor = if ([string]::IsNullOrWhiteSpace($ReportToActor)) {
+    if (-not [string]::IsNullOrWhiteSpace($defaultReportToActor)) { $defaultReportToActor } else { $requestOwnerActor }
+} else { $ReportToActor }
+$effectiveReportToBrigadeId = if ([string]::IsNullOrWhiteSpace($ReportToBrigadeId)) {
+    if (-not [string]::IsNullOrWhiteSpace($defaultReportToBrigadeId)) { $defaultReportToBrigadeId } else { $requestOwnerBrigadeId }
+} else { $ReportToBrigadeId }
+$informationAdminRule = [string](Get-OptionalValue -Object $messageHandlingPolicy -Name "information_admin_rule" -Default "")
 $allTasksFlag = if ($registry.all_tasks_must_be_assigned_to_brigades) { "yes" } else { "no" }
 $specializationSummary = if ([string]::IsNullOrWhiteSpace([string]$brigade.specialization_summary)) { [string]$brigade.primary_focus } else { [string]$brigade.specialization_summary }
 $crossDomainExecution = if ($brigade.can_execute_cross_domain_tasks) { "yes" } else { "no" }
@@ -144,6 +190,13 @@ $effectiveInstructions = @(
     "",
     "Message handling contract:",
     @($messagePolicyLines),
+    ("Processing target actor: {0}" -f [string]$brigade.actor_id),
+    ("Processing target brigade id: {0}" -f [string]$brigade.brigade_id),
+    ("Request owner actor: {0}" -f $requestOwnerActor),
+    ("Request owner brigade id: {0}" -f $requestOwnerBrigadeId),
+    ("Report to actor: {0}" -f $effectiveReportToActor),
+    ("Report to brigade id: {0}" -f $effectiveReportToBrigadeId),
+    $(if ([string]::IsNullOrWhiteSpace($informationAdminRule)) { "" } else { "Information admin rule:`n$informationAdminRule" }),
     "",
     "Mission:",
     [string]$brigade.mission,
@@ -159,8 +212,13 @@ $effectiveInstructions = @(
     -Title $Title `
     -AssignedTo ([string]$brigade.actor_id) `
     -TargetBrigadeId ([string]$brigade.brigade_id) `
+    -RequestOwnerActor $requestOwnerActor `
+    -RequestOwnerBrigadeId $requestOwnerBrigadeId `
+    -ReportToActor $effectiveReportToActor `
+    -ReportToBrigadeId $effectiveReportToBrigadeId `
     -SourceActor $SourceActor `
     -MailboxDir $MailboxDir `
+    -RegistryPath $RegistryPath `
     -RequestId $RequestId `
     -ParentClaimId $ParentClaimId `
     -ReportPath $ReportPath `

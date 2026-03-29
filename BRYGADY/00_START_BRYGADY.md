@@ -14,7 +14,12 @@ To nie sa automatycznie tworzone rozmowy w historii czatu. To jest praktyczny pa
 
 - wszystkie brygady czytaja kazda nowa note ze wspolnej listy,
 - wykonuje tylko brygada wskazana jako target albo brygada jawnie przypisana przez operatora lub Codexa,
+- kazda note, handoff, task i wynik musza jawnie wskazac target przetwarzania, wlasciciela zlecenia oraz kierunek raportu zwrotnego,
+- domyslnym administratorem informacji i koordynatorem calego mostu jest Codex,
+- report ownerem jest domyslnie Codex; request owner pozostaje widoczny w nocie albo tasku, ale raport zwrotny wraca do Codexa, chyba ze operator jawnie wskaze inaczej,
 - brygady niewskazane pozostaja w trybie read-only, chyba ze dostana jawny task albo handoff,
+- brygada nadzoru zbiera raporty dla Codexa, rozsyla doprecyzowania routingowe i dopomina brakujace odpowiedzi, jezeli przeplyw informacji sie rozjezdza,
+- dyspozycje inzyniera naczelnego sa broadcastem do wszystkich brygad i Codexa do wiadomosci; dziala tylko adresat wskazany w tej nocie albo w tasku,
 - tylko brygada bedaca execution owner moze zlecic dalsza prace innej brygadzie i robi to przez note plus task,
 - po wykonaniu, blokadzie albo delegacji execution owner publikuje krotki wynik dla wszystkich brygad i dla Codexa.
 
@@ -30,7 +35,8 @@ Obowiazkowy rytm startu jednej brygady:
 1. uruchom `GET_ORCHESTRATOR_BRIGADE_START_CONTEXT.ps1`,
 2. odczytaj nowe notatki przez `READ_ORCHESTRATOR_BRIGADE_NOTES.ps1`,
 3. jesli masz target albo pending task, wez claim przez `CLAIM_ORCHESTRATOR_WORK.ps1`,
-4. po wykonaniu albo blokadzie opublikuj wynik przez `WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1` albo `COMPLETE_ORCHESTRATOR_PARALLEL_TASK.ps1 -PublishResultNote`.
+4. przy kazdej nowej nocie albo handoffie jawnie wskaz target przetwarzania, request ownera i report ownera,
+5. po wykonaniu albo blokadzie opublikuj wynik przez `WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1` albo `COMPLETE_ORCHESTRATOR_PARALLEL_TASK.ps1 -PublishResultNote`.
 
 ## Szybki start
 

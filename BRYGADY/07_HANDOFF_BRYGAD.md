@@ -4,6 +4,13 @@ Najwazniejsza zasada: brygady nie przekazuja sobie roboty tylko w rozmowie. Robi
 
 Kazde zadanie powinno pozostac przypisane do konkretnej brygady, nawet jezeli wykonuje je Codex albo inna brygada na polecenie operatora.
 
+Nowa zasada operacyjna:
+
+- wszystkie brygady czytaja note handoffowa,
+- wykonuje tylko brygada docelowa po review bezpieczenstwa, kapitalu i zgodnosci z zasadami scalpingu,
+- tylko execution owner moze zrobic dalszy handoff do kolejnej brygady,
+- po wykonaniu, blokadzie albo delegacji execution owner publikuje note wynikowa dla wszystkich brygad i dla Codexa, a raport zwrotny domyslnie wraca do Codexa.
+
 Druga zasada: handoff i note sa widoczne dla wszystkich brygad, ale wykonanie nalezy tylko do brygady wskazanej jako adresat albo wlasciciel tasku.
 
 Trzecia zasada: adresat nie wykonuje polecenia slepo. Najpierw sprawdza, czy:
@@ -34,8 +41,10 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\HANDOFF_ORCHESTRATOR_BRIGADE_TASK.ps1 -FromB
 1. Zapisuje note handoffowy do `notes/inbox`.
 2. Zaklada task dla docelowej brygady.
 3. Ustawia `SourceActor` na brygade zglaszajaca.
-4. Zostawia audytowalny slad, kto komu i co przekazal.
-5. Oznacza, kto tylko czyta, a kto jest wykonawca po review.
+4. Oznacza note jako targetowana dla konkretnej brygady i widoczna dla wszystkich lane'ow.
+5. Zostawia audytowalny slad, kto komu i co przekazal.
+6. Oznacza, kto tylko czyta, a kto jest wykonawca po review.
+7. Ustawia Codexa jako domyslnego odbiorce raportu zwrotnego, chyba ze operator jawnie wskazal inaczej.
 
 ## Kiedy uzywac
 
@@ -51,3 +60,25 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\HANDOFF_ORCHESTRATOR_BRIGADE_TASK.ps1 -FromB
 - do drobnego pytania bez pracy,
 - do zmian w swoim wlasnym lane,
 - zamiast claimu, gdy dotykasz wspolnych plikow.
+
+## Jak zamknac wynik po wykonaniu
+
+Po wykonaniu, blokadzie albo delegacji execution owner publikuje note wynikowa dla wszystkich brygad i dla Codexa:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1 -TaskId <task_id> -Actor brygada_audyt_cleanup -Outcome COMPLETED -Summary "Cleanup zakonczony, residue usuniete." -NextAction "Brak dalszych krokow."
+```
+
+Gdy brygada nadzoru zbiera relacje zbiorcza, warto uzupelnic tez:
+
+- `-Checked` co sprawdzono,
+- `-Confirmed` co potwierdzono,
+- `-Blockers` co nadal blokuje,
+- `-DelegateWork` co trzeba zlecic dalej,
+- `-CodexAction` czy Codex ma wejsc z implementacja.
+
+Jesli zamykasz task przez wrapper kompletacji, mozesz od razu dolaczyc note wynikowa:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\COMPLETE_ORCHESTRATOR_PARALLEL_TASK.ps1 -TaskId <task_id> -Actor brygada_audyt_cleanup -Outcome COMPLETED -Notes "Cleanup zakonczony." -PublishResultNote -Checked "EVIDENCE","LOGS","BACKUP" -Confirmed "stare residue oznaczone" -Blockers "brak" -DelegateWork "brak" -CodexAction "nie" -NextAction "Brak dalszych krokow."
+```

@@ -8,6 +8,10 @@ param(
     [string]$SourceRole = "local_agent",
     [string]$TargetActor = "",
     [string]$TargetBrigadeId = "",
+    [string]$RequestOwnerActor = "",
+    [string]$RequestOwnerBrigadeId = "",
+    [string]$ReportToActor = "",
+    [string]$ReportToBrigadeId = "",
     [string[]]$ObserverActors = @(),
     [ValidateSet("ALL_BRIGADES_READ", "TARGET_PLUS_OBSERVERS", "TARGET_ONLY")]
     [string]$Visibility = "ALL_BRIGADES_READ",
@@ -19,7 +23,8 @@ param(
     [string]$NonTargetPolicy = "READ_AND_ESCALATE_IF_NEEDED",
     [Nullable[bool]]$RequiresSafetyReview = $null,
     [string]$RelatedRequestId = "",
-    [string[]]$Tags = @()
+    [string[]]$Tags = @(),
+    [string]$RegistryPath = ""
 )
 
 Set-StrictMode -Version Latest
@@ -37,6 +42,60 @@ function Get-TextSha256 {
     finally {
         $sha.Dispose()
     }
+}
+
+function Read-JsonFile {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 20
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-OptionalValue {
+    param(
+        [object]$Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object) {
+        return $Default
+    }
+
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $value = $Object.$Name
+        if ($null -ne $value) {
+            return $value
+        }
+    }
+
+    return $Default
+}
+
+function Resolve-BrigadeByActor {
+    param(
+        [object]$Registry,
+        [string]$ActorId
+    )
+
+    if ($null -eq $Registry -or [string]::IsNullOrWhiteSpace($ActorId)) {
+        return $null
+    }
+
+    return @($Registry.brigades | Where-Object { [string]$_.actor_id -eq $ActorId }) | Select-Object -First 1
+}
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($RegistryPath)) {
+    $RegistryPath = Join-Path $repoRoot "CONFIG\orchestrator_brigades_registry_v1.json"
 }
 
 if ($FromClipboard) {
@@ -58,9 +117,62 @@ if ([string]::IsNullOrWhiteSpace($Title)) {
     $Title = if (-not [string]::IsNullOrWhiteSpace($SourcePath)) { [IO.Path]::GetFileNameWithoutExtension($SourcePath) } else { "Bridge note" }
 }
 
+$registry = Read-JsonFile -Path $RegistryPath
+$policy = Get-OptionalValue -Object $registry -Name "message_handling_policy" -Default $null
+$informationAdminActor = [string](Get-OptionalValue -Object $policy -Name "information_admin_actor_id" -Default "")
+$informationAdminBrigadeId = [string](Get-OptionalValue -Object $policy -Name "information_admin_brigade_id" -Default "")
+$effectiveRequestOwnerActor = if ([string]::IsNullOrWhiteSpace($RequestOwnerActor)) { $Author } else { $RequestOwnerActor }
+$effectiveRequestOwnerBrigadeId = $RequestOwnerBrigadeId
+$requestOwnerBrigade = $null
+if ([string]::IsNullOrWhiteSpace($effectiveRequestOwnerBrigadeId)) {
+    $requestOwnerBrigade = Resolve-BrigadeByActor -Registry $registry -ActorId $effectiveRequestOwnerActor
+    if ($null -ne $requestOwnerBrigade) {
+        $effectiveRequestOwnerBrigadeId = [string]$requestOwnerBrigade.brigade_id
+    }
+}
+$effectiveTargetActor = $TargetActor
+$effectiveTargetBrigadeId = $TargetBrigadeId
+$effectiveReportToActor = $ReportToActor
+$effectiveReportToBrigadeId = $ReportToBrigadeId
+$policyDefaultReportToActor = [string](Get-OptionalValue -Object $policy -Name "default_report_to_actor" -Default "")
+$policyDefaultReportToBrigadeId = [string](Get-OptionalValue -Object $policy -Name "default_report_to_brigade_id" -Default "")
+
+if ([bool](Get-OptionalValue -Object $policy -Name "request_owner_must_be_declared" -Default $false) -and [string]::IsNullOrWhiteSpace($effectiveRequestOwnerActor)) {
+    throw "Request owner actor is required by message policy. Pass -RequestOwnerActor or set -Author."
+}
+
+if ([string]::IsNullOrWhiteSpace($effectiveReportToActor)) {
+    $effectiveReportToActor = $policyDefaultReportToActor
+}
+if ([string]::IsNullOrWhiteSpace($effectiveReportToBrigadeId)) {
+    $effectiveReportToBrigadeId = $policyDefaultReportToBrigadeId
+}
+
+if ([string]::IsNullOrWhiteSpace($effectiveReportToActor)) {
+    $effectiveReportToActor = $effectiveRequestOwnerActor
+}
+if ([string]::IsNullOrWhiteSpace($effectiveReportToBrigadeId)) {
+    $effectiveReportToBrigadeId = $effectiveRequestOwnerBrigadeId
+}
+
+$mustDeclareProcessingOwner = [bool](Get-OptionalValue -Object $policy -Name "processing_owner_must_be_declared" -Default $false)
+if ($mustDeclareProcessingOwner -and [string]::IsNullOrWhiteSpace($effectiveTargetActor) -and [string]::IsNullOrWhiteSpace($effectiveTargetBrigadeId)) {
+    $effectiveTargetActor = $informationAdminActor
+    $effectiveTargetBrigadeId = $informationAdminBrigadeId
+}
+
+if ([string]::IsNullOrWhiteSpace($effectiveReportToActor) -and -not [string]::IsNullOrWhiteSpace($effectiveTargetActor)) {
+    $effectiveReportToActor = $effectiveTargetActor
+}
+if ([string]::IsNullOrWhiteSpace($effectiveReportToBrigadeId) -and -not [string]::IsNullOrWhiteSpace($effectiveTargetBrigadeId)) {
+    $effectiveReportToBrigadeId = $effectiveTargetBrigadeId
+}
+
+$hasProcessingTarget = -not [string]::IsNullOrWhiteSpace($effectiveTargetActor) -or -not [string]::IsNullOrWhiteSpace($effectiveTargetBrigadeId)
+
 $effectiveExecutionPolicy = $ExecutionPolicy
 if ([string]::IsNullOrWhiteSpace($effectiveExecutionPolicy)) {
-    $effectiveExecutionPolicy = if (-not [string]::IsNullOrWhiteSpace($TargetActor) -or -not [string]::IsNullOrWhiteSpace($TargetBrigadeId)) {
+    $effectiveExecutionPolicy = if ($hasProcessingTarget -and $ExecutionIntent -in @("ACTION_REQUEST", "AUDIT_REQUEST", "HANDOFF", "DECISION")) {
         "TARGET_ONLY_AFTER_REVIEW"
     }
     else {
@@ -70,11 +182,7 @@ if ([string]::IsNullOrWhiteSpace($effectiveExecutionPolicy)) {
 
 $effectiveSafetyReview = $RequiresSafetyReview
 if ($null -eq $effectiveSafetyReview) {
-    $effectiveSafetyReview = (
-        -not [string]::IsNullOrWhiteSpace($TargetActor) -or
-        -not [string]::IsNullOrWhiteSpace($TargetBrigadeId) -or
-        $ExecutionIntent -in @("ACTION_REQUEST", "AUDIT_REQUEST", "HANDOFF", "DECISION")
-    )
+    $effectiveSafetyReview = ($ExecutionIntent -in @("ACTION_REQUEST", "AUDIT_REQUEST", "HANDOFF", "DECISION"))
 }
 
 $notesInbox = Join-Path $MailboxDir "notes\inbox"
@@ -94,8 +202,14 @@ $meta = [ordered]@{
     title = $Title
     author = $Author
     source = $SourceRole
-    target_actor = $TargetActor
-    target_brigade_id = $TargetBrigadeId
+    request_owner_actor = $effectiveRequestOwnerActor
+    request_owner_brigade_id = $effectiveRequestOwnerBrigadeId
+    target_actor = $effectiveTargetActor
+    target_brigade_id = $effectiveTargetBrigadeId
+    report_to_actor = $effectiveReportToActor
+    report_to_brigade_id = $effectiveReportToBrigadeId
+    information_admin_actor_id = $informationAdminActor
+    information_admin_brigade_id = $informationAdminBrigadeId
     observer_actors = @($ObserverActors)
     visibility = $Visibility
     execution_intent = $ExecutionIntent

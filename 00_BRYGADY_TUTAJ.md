@@ -8,11 +8,19 @@ Kazda nowa wiadomosc albo note na wspolnej liscie ma byc przeczytana przez wszys
 
 Wykonanie nalezy tylko do brygady jawnie wskazanej jako target albo do brygady, ktorej operator albo Codex jawnie przypisal task.
 
-Brygady niewskazane czytaja, obserwuja i eskaluja tylko wtedy, gdy widza ryzyko albo sprzecznosc. Nie przejmuja samodzielnie wykonania.
+Domyslnym administratorem informacji i koordynatorem calego mostu jest Codex.
+
+Kazda note, handoff, task i raport wyniku ma jawnie wskazywac trzy rzeczy: kto przetwarza informacje, kto jest wlascicielem zlecenia oraz gdzie wraca raport po wykonaniu.
+
+Wlascicielem zlecenia pozostaje chat albo aktor, ktory wydal polecenie albo handoff, ale domyslny raport zwrotny wraca do Codexa. To Codex trzyma jedna wersje prawdy dla calego mostu i koordynuje dalsze kroki.
+
+Dyspozycje inzyniera naczelnego powinny byc domyslnie rozglaszane do wszystkich brygad i do Codexa, zeby caly system znal kierunek pracy. Sama widocznosc nie oznacza obowiazku odpowiedzi; odpowiada albo dziala tylko jawnie wskazany adresat albo wlasciciel tasku.
+
+Brygady niewskazane czytaja, obserwuja i eskaluja tylko wtedy, gdy widza ryzyko albo sprzecznosc. Nie przejmuja samodzielnie wykonania i nie przechwytuja routingu od Codexa.
 
 Jesli brygada wykonawcza potrzebuje pracy od innej brygady, zleca to tylko przez note plus task handoff, nigdy nie tylko przez rozmowe.
 
-Po wykonaniu, blokadzie albo delegacji brygada wykonawcza raportuje wynik na wspolna liste dla wszystkich brygad i dla Codexa.
+Po wykonaniu, blokadzie albo delegacji brygada wykonawcza raportuje wynik na wspolna liste dla wszystkich brygad i dla Codexa, a domyslnym odbiorca raportu pozostaje Codex, chyba ze operator wskaze inaczej.
 
 Szybki start lane'u:
 
@@ -91,11 +99,22 @@ To jest aktualny plan pracy brygad.
 
 To jest jeden jawny punkt kontroli dla Codexa: pokazuje czy kazda brygada ma kontrakt ogolny, task, note i aktualne spiecie lane.
 
+[Automatyczna publikacja raportow](RUN/PUBLISH_BRIGADE_AUTOMATIC_REPORTS.ps1)
+
+Ten wrapper jednym poleceniem buduje i publikuje na most raport dzienny brygad oraz manifest spiecia brygad.
+
+[Raport doreczenia informacji z mostu](EVIDENCE/OPS/bridge_note_delivery_latest.md)
+
+Ten raport pokazuje czy latest note z mostu zostala odebrana przez kazda brygade i czy receipts sa zsynchronizowane.
+
 ## Regula nowych wiadomosci
 
 - wszystkie brygady czytaja nowe notatki z mostu,
 - preferowana komenda odczytu to `RUN/READ_ORCHESTRATOR_BRIGADE_NOTES.ps1`, bo zapisuje tez slad odczytu brygady,
 - ale wykonuje tylko brygada jednoznacznie wskazana jako adresat albo wlasciciel tasku,
+- kazda note, handoff, task i wynik musza wskazac adres przetwarzania, wlasciciela zlecenia oraz adres raportowania,
+- domyslnie raport wraca do Codexa, a brygada nadzoru pilnuje readiness, syntezy ryzyka i czyta wszystko,
+- dyspozycje inzyniera naczelnego sa broadcastem do wszystkich do wiadomosci, chyba ze w tej samej nocie pada jawne zlecenie wykonania,
 - adresat najpierw robi review bezpieczenstwa i zgodnosci z kontraktami,
 - jezeli polecenie jest sprzeczne albo destrukcyjne, nie wykonuje go slepo tylko eskaluje.
 
