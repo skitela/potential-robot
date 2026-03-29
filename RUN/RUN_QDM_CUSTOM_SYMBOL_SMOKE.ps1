@@ -12,7 +12,8 @@ param(
     [string]$ToDate = "2026.03.16",
     [int]$TimeoutSec = 300,
     [string]$EvidenceSubdir = "qdm_custom_symbol_smoke",
-    [string]$LatestStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_smoke_latest.json"
+    [string]$LatestStatusPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\qdm_custom_symbol_smoke_latest.json",
+    [switch]$ExportKnowledge
 )
 
 Set-StrictMode -Version Latest
@@ -144,7 +145,7 @@ $testerResult = Convert-ToolResultToObject (& $testerScript `
     -ToDate $ToDate `
     -TimeoutSec $TimeoutSec `
     -EvidenceSubdir $EvidenceSubdir `
-    -SkipKnowledgeExport `
+    -SkipKnowledgeExport:(!$ExportKnowledge) `
     -SkipResearchRefresh)
 
 if ($null -eq $testerResult) {
