@@ -198,6 +198,7 @@ $freshness = @(
     Get-FileFreshness -Label "qdm_custom_symbol_smoke" -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_pilot_registry" -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_registry_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_pilot_batch" -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_batch_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "qdm_custom_symbol_first_wave" -Path (Join-Path $opsRoot "qdm_custom_symbol_first_wave_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "daily_system_report" -Path (Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json") -ThresholdSeconds 5400
@@ -219,6 +220,7 @@ $qdmCustomPilot = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\QDM_PILO
 $qdmCustomSmokeLatest = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_smoke_latest.json")
 $qdmCustomPilotRegistry = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_registry_latest.json")
 $qdmCustomPilotBatch = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_batch_latest.json")
+$qdmCustomFirstWave = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_first_wave_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -535,6 +537,16 @@ $report = [ordered]@{
                 selected_symbols = @($qdmCustomPilotBatch.selected_symbols)
             }
         } else { $null }
+        qdm_custom_symbol_first_wave = if ($null -ne $qdmCustomFirstWave) {
+            [ordered]@{
+                state = $qdmCustomFirstWave.state
+                universe_version = $(Get-SafeObjectValue -Object $qdmCustomFirstWave -PropertyName 'universe_version' -Default $null)
+                symbol_scope = $(Get-SafeObjectValue -Object $qdmCustomFirstWave -PropertyName 'symbol_scope' -Default $null)
+                successful_count = $qdmCustomFirstWave.successful_count
+                failed_count = $qdmCustomFirstWave.failed_count
+                selected_symbols = @($qdmCustomFirstWave.selected_symbols)
+            }
+        } else { $null }
     }
     freshness = @($freshness)
     cleanliness = [ordered]@{
@@ -734,6 +746,16 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_pilot_batch) {
 }
 else {
     $lines.Add("- qdm custom-symbol pilot batch not available")
+}
+if ($null -ne $report.lab_health.qdm_custom_symbol_first_wave) {
+    $lines.Add(("- first_wave_state: {0}" -f $report.lab_health.qdm_custom_symbol_first_wave.state))
+    $lines.Add(("- first_wave_universe_version: {0}" -f $report.lab_health.qdm_custom_symbol_first_wave.universe_version))
+    $lines.Add(("- first_wave_successful_count: {0}" -f $report.lab_health.qdm_custom_symbol_first_wave.successful_count))
+    $lines.Add(("- first_wave_failed_count: {0}" -f $report.lab_health.qdm_custom_symbol_first_wave.failed_count))
+    $lines.Add(("- first_wave_symbols: {0}" -f ($report.lab_health.qdm_custom_symbol_first_wave.selected_symbols -join ", ")))
+}
+else {
+    $lines.Add("- qdm custom-symbol first-wave status not available")
 }
 $lines.Add("")
 $lines.Add("## Consistency")

@@ -22,6 +22,69 @@ bool EnsureCustomSymbol(const string custom_symbol,const string group_name,const
    return(false);
   }
 
+void CopySessionsForDay(const string broker_symbol,
+                        const string custom_symbol,
+                        const ENUM_DAY_OF_WEEK day_of_week,
+                        const bool trade_sessions,
+                        int &copied_count,
+                        int &failed_count)
+  {
+   for(uint session_index = 0; session_index < 16; ++session_index)
+     {
+      datetime from_time = 0;
+      datetime to_time = 0;
+      const bool source_ok = trade_sessions
+         ? SymbolInfoSessionTrade(broker_symbol,day_of_week,session_index,from_time,to_time)
+         : SymbolInfoSessionQuote(broker_symbol,day_of_week,session_index,from_time,to_time);
+      if(!source_ok)
+         break;
+
+      ResetLastError();
+      const bool apply_ok = trade_sessions
+         ? CustomSymbolSetSessionTrade(custom_symbol,day_of_week,session_index,from_time,to_time)
+         : CustomSymbolSetSessionQuote(custom_symbol,day_of_week,session_index,from_time,to_time);
+      if(apply_ok)
+         copied_count++;
+      else
+        {
+         failed_count++;
+         PrintFormat("Failed to copy %s session for %s day=%d idx=%d err=%d",
+                     (trade_sessions ? "trade" : "quote"),
+                     custom_symbol,
+                     (int)day_of_week,
+                     (int)session_index,
+                     GetLastError());
+         ResetLastError();
+        }
+     }
+  }
+
+void CopyBrokerSessions(const string broker_symbol,const string custom_symbol)
+  {
+   if(StringLen(broker_symbol) == 0 || StringLen(custom_symbol) == 0)
+      return;
+
+   int copied_trade = 0;
+   int copied_quote = 0;
+   int failed_trade = 0;
+   int failed_quote = 0;
+
+   for(int day = (int)SUNDAY; day <= (int)SATURDAY; ++day)
+     {
+      const ENUM_DAY_OF_WEEK day_of_week = (ENUM_DAY_OF_WEEK)day;
+      CopySessionsForDay(broker_symbol,custom_symbol,day_of_week,true,copied_trade,failed_trade);
+      CopySessionsForDay(broker_symbol,custom_symbol,day_of_week,false,copied_quote,failed_quote);
+     }
+
+   PrintFormat("Copied broker sessions from %s to %s: trade=%d quote=%d failed_trade=%d failed_quote=%d",
+               broker_symbol,
+               custom_symbol,
+               copied_trade,
+               copied_quote,
+               failed_trade,
+               failed_quote);
+  }
+
 bool ReadRatesFromCommonCsv(const string relative_csv_path,MqlRates &rates[],int &skipped_non_increasing)
   {
    ArrayResize(rates,0);
@@ -96,6 +159,8 @@ void OnStart()
 
    if(!EnsureCustomSymbol(InpCustomSymbol,InpCustomGroup,InpBrokerTemplateSymbol))
       return;
+
+   CopyBrokerSessions(InpBrokerTemplateSymbol,InpCustomSymbol);
 
    const datetime from_time = rates[0].time;
    const datetime to_time = rates[ArraySize(rates) - 1].time;

@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string[]]$SymbolAliases = @(),
+    [string]$SelectedSymbolSource = "",
     [string]$TerminalRoot = "C:\TRADING_TOOLS\MT5_QDM_CUSTOM_LAB",
     [string]$Period = "M1",
     [string]$FromDate = "2026.03.12",
@@ -197,7 +198,15 @@ $defaultSymbols = Get-DefaultSymbolAliases -UniversePlanPath $UniversePlanPath -
 $resolutionMap = Get-SymbolResolutionMap -RegistryPath $RegistryPath -ReadinessReportPath $ReadinessReportPath
 $selectedSymbolInput = @($SymbolAliases | ForEach-Object { ([string]$_).ToUpperInvariant() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $selectedSymbols = if ($selectedSymbolInput.Count -gt 0) { @($selectedSymbolInput) } else { @($defaultSymbols.symbols) }
-$selectedSymbolSource = if ($selectedSymbolInput.Count -gt 0) { "manual" } else { [string]$defaultSymbols.source }
+$selectedSymbolSource = if (-not [string]::IsNullOrWhiteSpace($SelectedSymbolSource)) {
+    [string]$SelectedSymbolSource
+}
+elseif ($selectedSymbolInput.Count -gt 0) {
+    "manual"
+}
+else {
+    [string]$defaultSymbols.source
+}
 
 foreach ($symbolAlias in $selectedSymbols) {
     $normalizedAlias = [string]$symbolAlias
