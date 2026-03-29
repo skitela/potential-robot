@@ -123,13 +123,16 @@ def _resolve_operational_state(hooks: dict[str, Any], pretrade: dict[str, Any], 
     pretrade_rows = int(pretrade.get("total_rows", 0) or 0)
     execution_rows = int(execution.get("total_rows", 0) or 0)
     merged_rows = int(truth_summary.get("merged_rows", 0) or 0)
+    truth_chain_rows = int(truth_summary.get("truth_chain_rows", 0) or 0)
 
     if fully_implanted and pretrade_rows == 0 and execution_rows == 0:
         return "IMPLANTED_BUT_DORMANT"
     if fully_implanted and (pretrade_rows > 0 or execution_rows > 0) and merged_rows <= 0:
         return "SPOOL_LIVE_CONTRACT_BUILD_PENDING"
-    if fully_implanted and merged_rows > 0:
-        return "OPERATIONAL"
+    if fully_implanted and merged_rows > 0 and truth_chain_rows <= 0:
+        return "OPERATIONAL_BASE_CONTRACT_ONLY"
+    if fully_implanted and truth_chain_rows > 0:
+        return "OPERATIONAL_WITH_CONTRACT_CHAIN"
     return "PARTIAL_IMPLANT"
 
 
@@ -150,12 +153,18 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
     notes: list[str] = []
     if operational_state == "IMPLANTED_BUT_DORMANT":
         notes.append("Hooki sa wpiete, ale spool pretrade/execution nie produkuje jeszcze zadnych rekordow.")
+    if operational_state == "OPERATIONAL_BASE_CONTRACT_ONLY":
+        notes.append("Bazowy kontrakt execution + pretrade dziala, ale contract chain do kandydatow i learningu nie ma jeszcze zywych wierszy.")
+    if operational_state == "OPERATIONAL_WITH_CONTRACT_CHAIN":
+        notes.append("Contract chain execution -> candidate -> learning jest juz zywy w artefaktach truth.")
     if not pretrade_spool["exists"]:
         notes.append("Brakuje katalogu spool/pretrade_truth.")
     if not execution_spool["exists"]:
         notes.append("Brakuje katalogu spool/execution_truth.")
     if truth_summary.get("exists") and int(truth_summary.get("merged_rows", 0) or 0) <= 0:
         notes.append("Kontrakty truth istnieja, ale nie maja jeszcze polaczonego materialu execution + pretrade.")
+    if truth_summary.get("exists") and int(truth_summary.get("truth_chain_rows", 0) or 0) <= 0:
+        notes.append("Contract chain do kandydatow, ONNX i learningu nie ma jeszcze zywych wierszy.")
     if not truth_summary.get("exists"):
         notes.append("Builder truth nie wygenerowal jeszcze podsumowania mt5_execution_truth_summary_latest.json.")
 
@@ -204,6 +213,10 @@ def write_reports(payload: dict[str, Any], project_root: Path) -> dict[str, str]
         f"- execution_total_rows: {execution['total_rows']}",
         f"- truth_summary_exists: {truth_summary.get('exists', False)}",
         f"- merged_rows: {truth_summary.get('merged_rows', 0)}",
+        f"- truth_chain_rows: {truth_summary.get('truth_chain_rows', 0)}",
+        f"- candidate_contract_matched_rows: {truth_summary.get('candidate_contract_matched_rows', 0)}",
+        f"- onnx_contract_matched_rows: {truth_summary.get('onnx_contract_matched_rows', 0)}",
+        f"- learning_contract_matched_rows: {truth_summary.get('learning_contract_matched_rows', 0)}",
         "",
         "## Notes",
         "",
