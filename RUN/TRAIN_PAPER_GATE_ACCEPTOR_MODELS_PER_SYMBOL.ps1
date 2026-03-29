@@ -4,8 +4,14 @@ param(
     [string]$ResearchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe",
     [string]$CommonStateRoot = "",
     [string[]]$Symbols = @(),
+    [string]$SymbolGroup = "",
+    [ValidateSet("ConcurrentLab", "OfflineMax", "Light")]
+    [string]$PerfProfile = "ConcurrentLab",
     [switch]$ExportOnnx
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
 $mlOverlayCommonScript = Join-Path $ProjectRoot "RUN\ML_OVERLAY_COMMON.ps1"
 $trainScript = Join-Path $ProjectRoot "TOOLS\TRAIN_PAPER_GATE_ACCEPTOR_MODEL.py"
@@ -26,6 +32,9 @@ if ($CommonStateRoot -ne "") {
 if ($Symbols.Count -gt 0) {
     $args += "--symbols"
     $args += $Symbols
+}
+if (-not [string]::IsNullOrWhiteSpace($SymbolGroup)) {
+    $args += @("--symbol-group", $SymbolGroup)
 }
 if ($ExportOnnx) {
     $args += "--export-onnx"

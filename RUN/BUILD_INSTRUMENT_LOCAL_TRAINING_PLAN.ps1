@@ -1,7 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$TrainingReadinessPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_training_readiness_latest.json",
+    [string]$TrainingReadinessPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\local_model_readiness_latest.json",
     [string]$LocalTrainingGuardrailsPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\instrument_local_training_guardrails_latest.json",
+    [string]$UniversePlanPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\scalping_universe_plan.json",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [int]$MaxStartGroupSize = 2,
     [int]$MaxLimitedWatchlistSize = 5
@@ -59,6 +60,121 @@ function New-GuardrailMap {
     return $map
 }
 
+function Get-PropertyValue {
+    param(
+        [object]$Item,
+        [string[]]$Names,
+        $Default = $null
+    )
+
+    if ($null -eq $Item) {
+        return $Default
+    }
+
+    foreach ($name in $Names) {
+        if ($Item.PSObject.Properties.Name -contains $name) {
+            $value = $Item.$name
+            if ($null -ne $value -and -not ([string]::IsNullOrWhiteSpace([string]$value) -and $value -is [string])) {
+                return $value
+            }
+        }
+    }
+
+    return $Default
+}
+
+function Normalize-TrainingItems {
+    param([object]$Payload)
+
+    if ($null -eq $Payload) {
+        return @()
+    }
+
+    $rawItems = @()
+    if ($Payload.PSObject.Properties.Name -contains "items") {
+        $rawItems = @($Payload.items)
+    }
+    elseif ($Payload.PSObject.Properties.Name -contains "symbols") {
+        foreach ($property in $Payload.symbols.PSObject.Properties) {
+            $record = $property.Value
+            $rawItems += [pscustomobject]@{
+                symbol_alias = $property.Name
+                training_state = Get-PropertyValue -Item $record -Names @("training_state", "training_mode") -Default "FALLBACK_ONLY"
+                teacher_dependency_level = "MAXIMAL"
+                outcome_rows = 0
+                onnx_runtime_rows = 0
+                candidate_rows = 0
+                guardrail_state = ""
+                next_safe_action = "Brak pelnego raportu gotowosci lokalnej; pozostawic symbol przy nauczycielu globalnym."
+            }
+        }
+    }
+
+    $normalized = foreach ($item in @($rawItems)) {
+        [pscustomobject]@{
+            symbol_alias = [string](Get-PropertyValue -Item $item -Names @("symbol_alias", "symbol") -Default "")
+            training_readiness_state = [string](Get-PropertyValue -Item $item -Names @("training_readiness_state", "training_state", "training_mode") -Default "FALLBACK_ONLY")
+            teacher_dependency_level = [string](Get-PropertyValue -Item $item -Names @("teacher_dependency_level") -Default "MAXIMAL")
+            outcome_rows = [int](0 + (Get-PropertyValue -Item $item -Names @("outcome_rows") -Default 0))
+            onnx_runtime_rows = [int](0 + (Get-PropertyValue -Item $item -Names @("onnx_runtime_rows") -Default 0))
+            candidate_contract_rows = [int](0 + (Get-PropertyValue -Item $item -Names @("candidate_contract_rows", "candidate_rows") -Default 0))
+            guardrail_state = [string](Get-PropertyValue -Item $item -Names @("guardrail_state") -Default "")
+            next_safe_action = [string](Get-PropertyValue -Item $item -Names @("next_safe_action") -Default "")
+            local_training_eligibility = [string](Get-PropertyValue -Item $item -Names @("local_training_eligibility") -Default "")
+        }
+    }
+
+    return @($normalized | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.symbol_alias) })
+}
+
+function New-UniversePriorityMap {
+    param([object]$UniversePlan)
+
+    $map = @{}
+    if ($null -eq $UniversePlan) {
+        return $map
+    }
+
+    foreach ($symbol in @($UniversePlan.paper_live_first_wave)) {
+        $alias = ([string]$symbol).Trim().ToUpperInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($alias)) { $map[$alias] = "FIRST_WAVE" }
+    }
+    foreach ($symbol in @($UniversePlan.paper_live_second_wave)) {
+        $alias = ([string]$symbol).Trim().ToUpperInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($alias) -and -not $map.ContainsKey($alias)) { $map[$alias] = "SECOND_WAVE" }
+    }
+    foreach ($symbol in @($UniversePlan.paper_live_hold)) {
+        $alias = ([string]$symbol).Trim().ToUpperInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($alias) -and -not $map.ContainsKey($alias)) { $map[$alias] = "HOLD" }
+    }
+    foreach ($symbol in @($UniversePlan.global_teacher_only)) {
+        $alias = ([string]$symbol).Trim().ToUpperInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($alias) -and -not $map.ContainsKey($alias)) { $map[$alias] = "GLOBAL_TEACHER_ONLY" }
+    }
+
+    return $map
+}
+
+function Get-UniversePriority {
+    param(
+        [string]$SymbolAlias,
+        [hashtable]$UniversePriorityMap
+    )
+
+    $alias = ([string]$SymbolAlias).Trim().ToUpperInvariant()
+    if ($UniversePriorityMap.ContainsKey($alias)) {
+        switch ($UniversePriorityMap[$alias]) {
+            "FIRST_WAVE" { return 0 }
+            "SECOND_WAVE" { return 1 }
+            "HOLD" { return 2 }
+            "GLOBAL_TEACHER_ONLY" { return 3 }
+            default { return 4 }
+        }
+    }
+
+    return 5
+}
+
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 $trainingReadiness = Read-JsonSafe -Path $TrainingReadinessPath
@@ -68,8 +184,10 @@ if ($null -eq $trainingReadiness) {
 
 $guardrails = Read-JsonSafe -Path $LocalTrainingGuardrailsPath
 $guardrailMap = New-GuardrailMap -Items @($guardrails.items)
+$universePlan = Read-JsonSafe -Path $UniversePlanPath
+$universePriorityMap = New-UniversePriorityMap -UniversePlan $universePlan
 
-$items = @($trainingReadiness.items)
+$items = Normalize-TrainingItems -Payload $trainingReadiness
 $readyCandidates = Sort-TrainingItems -Items @(
     $items | Where-Object {
         $alias = ([string]$_.symbol_alias).Trim().ToUpperInvariant()
@@ -87,6 +205,27 @@ $limitedCandidates = Sort-TrainingItems -Items @(
     }
 )
 $shadowCandidates = Sort-TrainingItems -Items @($items | Where-Object { $_.training_readiness_state -eq "TRAINING_SHADOW_READY" })
+
+$readyCandidates = @(
+    $readyCandidates |
+        Sort-Object `
+            @{ Expression = { Get-UniversePriority -SymbolAlias ([string]$_.symbol_alias) -UniversePriorityMap $universePriorityMap }; Ascending = $true }, `
+            @{ Expression = { Get-TeacherPriority -Value ([string]$_.teacher_dependency_level) }; Ascending = $true }, `
+            @{ Expression = { -1 * [int](0 + $_.outcome_rows) }; Ascending = $true }, `
+            @{ Expression = { -1 * [int](0 + $_.onnx_runtime_rows) }; Ascending = $true }, `
+            @{ Expression = { -1 * [int](0 + $_.candidate_contract_rows) }; Ascending = $true }, `
+            symbol_alias
+)
+$limitedCandidates = @(
+    $limitedCandidates |
+        Sort-Object `
+            @{ Expression = { Get-UniversePriority -SymbolAlias ([string]$_.symbol_alias) -UniversePriorityMap $universePriorityMap }; Ascending = $true }, `
+            @{ Expression = { Get-TeacherPriority -Value ([string]$_.teacher_dependency_level) }; Ascending = $true }, `
+            @{ Expression = { -1 * [int](0 + $_.outcome_rows) }; Ascending = $true }, `
+            @{ Expression = { -1 * [int](0 + $_.onnx_runtime_rows) }; Ascending = $true }, `
+            @{ Expression = { -1 * [int](0 + $_.candidate_contract_rows) }; Ascending = $true }, `
+            symbol_alias
+)
 
 $limitedStartGroupSize = [Math]::Min([Math]::Max($MaxStartGroupSize, 1), 1)
 $startGroup = @(
@@ -132,6 +271,7 @@ $report = [ordered]@{
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     execution_mode = "TEACHER_GUARDED_SMALL_SPOON"
+    universe_priority_mode = "SCALPING_FIRST_WAVE_FIRST"
     max_start_group_size = $MaxStartGroupSize
     max_limited_watchlist_size = $MaxLimitedWatchlistSize
     start_group_mode = $startGroupMode
@@ -141,6 +281,12 @@ $report = [ordered]@{
         ready_candidates_count = @($readyCandidates).Count
         limited_candidates_count = @($limitedCandidates).Count
         shadow_candidates_count = @($shadowCandidates).Count
+        prioritized_first_wave_candidates_count = @(
+            $items | Where-Object {
+                $alias = ([string]$_.symbol_alias).Trim().ToUpperInvariant()
+                $universePriorityMap.ContainsKey($alias) -and $universePriorityMap[$alias] -eq "FIRST_WAVE"
+            }
+        ).Count
         start_group_count = @($startGroup).Count
         limited_start_group_count = if ($startGroupMode -eq "LIMITED") { @($startGroup).Count } else { 0 }
         reserve_ready_count = @($reserveReady).Count
@@ -167,6 +313,7 @@ $lines.Add("# Instrument Local Training Plan")
 $lines.Add("")
 $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- execution_mode: {0}" -f $report.execution_mode))
+$lines.Add(("- universe_priority_mode: {0}" -f $report.universe_priority_mode))
 $lines.Add(("- start_group_mode: {0}" -f $report.start_group_mode))
 $lines.Add(("- next_action: {0}" -f $report.next_action))
 foreach ($property in $report.summary.GetEnumerator()) {

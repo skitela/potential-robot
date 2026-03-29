@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import Sequence
 
 from mb_ml_core.paths import CompatPaths
+from mb_ml_core.registry import (
+    load_global_teacher_only_symbols,
+    load_paper_live_active_symbols,
+    load_paper_live_hold_symbols,
+    load_paper_live_second_wave_symbols,
+    load_training_universe_symbols,
+)
 from mb_ml_core.trainer import (
     TrainingThresholds,
     train_all_symbol_models,
@@ -30,6 +37,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--symbol", default=None, help="Pojedynczy symbol dla --mode symbol.")
     parser.add_argument("--symbols", nargs="*", default=None, help="Lista symboli dla --mode symbols lub full.")
+    parser.add_argument(
+        "--symbol-group",
+        choices=("training_universe", "paper_live_active", "paper_live_second_wave", "paper_live_hold", "global_teacher_only"),
+        default=None,
+        help="Zamiast calej aktywnej floty wybiera gotowa grupe symboli z kontraktu universe.",
+    )
     parser.add_argument("--export-onnx", action="store_true")
     parser.add_argument("--global-train-days", type=int, default=45)
     parser.add_argument("--global-valid-days", type=int, default=5)
@@ -67,6 +80,29 @@ def build_thresholds(args: argparse.Namespace) -> TrainingThresholds:
     )
 
 
+def resolve_symbol_selection(paths: CompatPaths, args: argparse.Namespace) -> list[str] | None:
+    explicit = [str(symbol).strip() for symbol in (args.symbols or []) if str(symbol).strip()]
+    group_symbols: list[str] = []
+
+    if args.symbol_group == "training_universe":
+        group_symbols = load_training_universe_symbols(paths)
+    elif args.symbol_group == "paper_live_active":
+        group_symbols = load_paper_live_active_symbols(paths)
+    elif args.symbol_group == "paper_live_second_wave":
+        group_symbols = load_paper_live_second_wave_symbols(paths)
+    elif args.symbol_group == "paper_live_hold":
+        group_symbols = load_paper_live_hold_symbols(paths)
+    elif args.symbol_group == "global_teacher_only":
+        group_symbols = load_global_teacher_only_symbols(paths)
+
+    combined: list[str] = []
+    for symbol in [*explicit, *group_symbols]:
+        if symbol not in combined:
+            combined.append(symbol)
+
+    return combined or None
+
+
 def main() -> int:
     args = parse_args()
     paths = CompatPaths.create(
@@ -75,12 +111,17 @@ def main() -> int:
         common_state_root=args.common_state_root,
     )
     thresholds = build_thresholds(args)
+    selected_symbols = resolve_symbol_selection(paths, args)
 
     payload: dict[str, object] = {
         "mode": args.mode,
         "project_root": str(paths.project_root),
         "research_root": str(paths.research_root),
     }
+    if selected_symbols:
+        payload["selected_symbols"] = selected_symbols
+    if args.symbol_group:
+        payload["symbol_group"] = args.symbol_group
 
     global_payload = None
     symbol_payload = None
@@ -119,12 +160,13 @@ def main() -> int:
             global_payload = train_global_model(paths, export_onnx=args.export_onnx, thresholds=thresholds)
             payload["global"] = global_payload
 
-    all_symbols = train_all_symbol_models(paths, export_onnx=args.export_onnx, thresholds=thresholds)
-    if args.symbols:
-        selected = {symbol: all_symbols["symbols"][symbol] for symbol in args.symbols if symbol in all_symbols["symbols"]}
-        symbol_payload = {"symbols": selected, "registry_path": all_symbols["registry_path"]}
-    else:
-        symbol_payload = all_symbols
+    all_symbols = train_all_symbol_models(
+        paths,
+        export_onnx=args.export_onnx,
+        thresholds=thresholds,
+        symbols=selected_symbols,
+    )
+    symbol_payload = all_symbols
 
     payload["symbols"] = symbol_payload
     payload["audits"] = write_training_audits(paths, global_payload, symbol_payload)

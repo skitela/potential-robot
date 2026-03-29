@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -24,12 +25,39 @@ class LoadedSources:
     symbols: list[str]
 
 
-def load_sources(paths: CompatPaths) -> LoadedSources:
-    symbols = load_active_symbols(paths)
+def _filter_frame_to_symbols(frame: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
+    if frame.empty or not symbols:
+        return frame
+    if "symbol_alias" not in frame.columns:
+        return frame
+    return frame.loc[frame["symbol_alias"].isin(symbols)].copy()
 
-    candidates = read_table(paths.candidate_signals_norm_latest)
-    runtime = read_table(paths.onnx_observations_norm_latest)
-    learning = read_table(paths.learning_observations_v2_norm_latest)
+
+def _read_symbol_scoped_table(path: str | Path | None, symbols: list[str]) -> pd.DataFrame:
+    if path is None:
+        return pd.DataFrame()
+
+    candidate_path = Path(path)
+    if not candidate_path.exists():
+        return pd.DataFrame()
+
+    if candidate_path.suffix.lower() == ".parquet":
+        try:
+            return read_parquet_window(candidate_path, symbol_aliases=symbols)
+        except Exception:
+            frame = read_table(candidate_path)
+            return frame if frame is not None else pd.DataFrame()
+
+    frame = read_table(candidate_path)
+    return frame if frame is not None else pd.DataFrame()
+
+
+def load_sources(paths: CompatPaths, symbols_override: list[str] | None = None) -> LoadedSources:
+    symbols = symbols_override or load_active_symbols(paths)
+
+    candidates = _read_symbol_scoped_table(paths.candidate_signals_norm_latest, symbols)
+    runtime = _read_symbol_scoped_table(paths.onnx_observations_norm_latest, symbols)
+    learning = _read_symbol_scoped_table(paths.learning_observations_v2_norm_latest, symbols)
     ping = read_table(paths.execution_ping_contract_csv)
 
     feedback_path = find_optional_file(paths.common_state_root, "paper_live_feedback_latest.json")
@@ -44,6 +72,11 @@ def load_sources(paths: CompatPaths) -> LoadedSources:
     for frame in (candidates, runtime, learning):
         if not frame.empty and "ts" in frame.columns:
             frame["ts"] = normalize_ts(frame["ts"])
+
+    candidates = _filter_frame_to_symbols(candidates, symbols)
+    runtime = _filter_frame_to_symbols(runtime, symbols)
+    learning = _filter_frame_to_symbols(learning, symbols)
+    runtime_feedback = _filter_frame_to_symbols(runtime_feedback, symbols)
 
     qdm = pd.DataFrame()
     if not candidates.empty and "ts" in candidates.columns:
@@ -119,8 +152,12 @@ def normalize_ping_contract(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_server_parity_tail_bridge(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str, Any]]:
-    src = load_sources(paths)
+def _build_server_parity_tail_bridge_from_sources(
+    src: LoadedSources,
+    *,
+    output_path: str | None = None,
+    write_output: bool = True,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     candidates = src.candidates.copy()
     qdm = src.qdm.copy()
     base = pd.DataFrame({"symbol_alias": src.symbols})
@@ -158,8 +195,9 @@ def build_server_parity_tail_bridge(paths: CompatPaths) -> tuple[pd.DataFrame, d
         & (out["qdm_minute_max"] < out["candidate_minute_min"]),
         "tail_state",
     ] = "BRAK_SWIEZEGO_OGONA"
-    ensure_dir(paths.server_parity_tail_bridge_latest.parent)
-    out.to_parquet(paths.server_parity_tail_bridge_latest, index=False)
+    if write_output and output_path:
+        ensure_dir(Path(output_path).parent)
+        out.to_parquet(output_path, index=False)
     missing_qdm_count = int((out["tail_state"] == "BRAK_QDM").sum())
     stale_tail_count = int((out["tail_state"] == "BRAK_SWIEZEGO_OGONA").sum())
     missing_candidate_count = int((out["tail_state"] == "BRAK_KANDYDATOW").sum())
@@ -172,8 +210,17 @@ def build_server_parity_tail_bridge(paths: CompatPaths) -> tuple[pd.DataFrame, d
         "stale_tail_count": stale_tail_count,
         "missing_candidate_count": missing_candidate_count,
         "symbols_without_candidates": out.loc[out["tail_state"] == "BRAK_KANDYDATOW", "symbol_alias"].tolist(),
-        "output_path": str(paths.server_parity_tail_bridge_latest),
+        "output_path": str(output_path or ""),
     }
+
+
+def build_server_parity_tail_bridge(paths: CompatPaths, symbols: list[str] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
+    src = load_sources(paths, symbols_override=symbols)
+    return _build_server_parity_tail_bridge_from_sources(
+        src,
+        output_path=str(paths.server_parity_tail_bridge_latest),
+        write_output=True,
+    )
 
 
 def _merge_runtime_features(candidates: pd.DataFrame, runtime: pd.DataFrame) -> pd.DataFrame:
@@ -393,8 +440,37 @@ def _merge_outcomes(frame: pd.DataFrame, learning: pd.DataFrame, feedback: pd.Da
     return out
 
 
-def build_master_training_frame(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str, Any], LoadedSources]:
-    src = load_sources(paths)
+def _collapse_duplicate_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or not frame.columns.duplicated().any():
+        return frame
+
+    ordered_names: list[str] = []
+    seen: set[str] = set()
+    collapsed: dict[str, pd.Series] = {}
+
+    for raw_name in frame.columns:
+        name = str(raw_name)
+        if name in seen:
+            continue
+        seen.add(name)
+        ordered_names.append(name)
+
+        selected = frame.loc[:, frame.columns == raw_name]
+        if isinstance(selected, pd.Series):
+            collapsed[name] = selected
+            continue
+
+        if selected.shape[1] == 1:
+            collapsed[name] = selected.iloc[:, 0]
+            continue
+
+        collapsed[name] = selected.bfill(axis=1).iloc[:, 0]
+
+    return pd.DataFrame({name: collapsed[name] for name in ordered_names}, index=frame.index)
+
+
+def build_master_training_frame(paths: CompatPaths, symbols: list[str] | None = None) -> tuple[pd.DataFrame, dict[str, Any], LoadedSources]:
+    src = load_sources(paths, symbols_override=symbols)
     candidates = src.candidates.copy()
     if candidates.empty:
         return pd.DataFrame(), {
@@ -422,6 +498,8 @@ def build_master_training_frame(paths: CompatPaths) -> tuple[pd.DataFrame, dict[
         for column in broker_lookup.columns:
             broker_frame[column] = merged["symbol_alias"].map(broker_lookup[column])
         merged = pd.concat([merged, broker_frame], axis=1)
+
+    merged = _collapse_duplicate_columns(merged)
 
     if "side_normalized" not in merged.columns and "side" in merged.columns:
         merged["side_normalized"] = merged["side"]
@@ -564,12 +642,18 @@ def build_master_training_frame(paths: CompatPaths) -> tuple[pd.DataFrame, dict[
     return merged, summary, src
 
 
-def build_broker_net_ledger(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str, Any]]:
-    frame, summary, _ = build_master_training_frame(paths)
+def _build_broker_net_ledger_from_frame(
+    frame: pd.DataFrame,
+    summary: dict[str, Any],
+    *,
+    output_path: str | None = None,
+    write_output: bool = True,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     if frame.empty:
         out = pd.DataFrame()
-        ensure_dir(paths.broker_net_ledger_latest.parent)
-        out.to_parquet(paths.broker_net_ledger_latest, index=False)
+        if write_output and output_path:
+            ensure_dir(Path(output_path).parent)
+            out.to_parquet(output_path, index=False)
         return out, {
             "rows": 0,
             "labeled_rows": 0,
@@ -577,7 +661,7 @@ def build_broker_net_ledger(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str,
             "symbols": [],
             "symbols_without_rows": summary.get("symbols_without_rows", []),
             "symbols_without_candidates": summary.get("symbols_without_candidates", []),
-            "output_path": str(paths.broker_net_ledger_latest),
+            "output_path": str(output_path or ""),
         }
 
     ledger_cols = [
@@ -592,8 +676,9 @@ def build_broker_net_ledger(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str,
         ledger["slippage_pln"] = ledger["slippage_cost_pln"]
     if "net_pln" in ledger.columns and "net_pln_broker_full" not in ledger.columns:
         ledger["net_pln_broker_full"] = ledger["net_pln"]
-    ensure_dir(paths.broker_net_ledger_latest.parent)
-    ledger.to_parquet(paths.broker_net_ledger_latest, index=False)
+    if write_output and output_path:
+        ensure_dir(Path(output_path).parent)
+        ledger.to_parquet(output_path, index=False)
     labeled_mask = (ledger.get("outcome_known", 0) == 1)
     return ledger, {
         "rows": int(len(ledger)),
@@ -603,9 +688,19 @@ def build_broker_net_ledger(paths: CompatPaths) -> tuple[pd.DataFrame, dict[str,
         "commission_rows": int(ledger.get("commission_pln", pd.Series(dtype=float)).notna().sum()) if "commission_pln" in ledger.columns else 0,
         "swap_rows": int(ledger.get("swap_pln", pd.Series(dtype=float)).notna().sum()) if "swap_pln" in ledger.columns else 0,
         "net_rows": int(ledger.get("net_pln", pd.Series(dtype=float)).notna().sum()) if "net_pln" in ledger.columns else 0,
-        "output_path": str(paths.broker_net_ledger_latest),
+        "output_path": str(output_path or ""),
         "expected_symbols": summary.get("expected_symbols", []),
         "symbols": summary["symbols"],
         "symbols_without_rows": summary.get("symbols_without_rows", []),
         "symbols_without_candidates": summary.get("symbols_without_candidates", []),
     }
+
+
+def build_broker_net_ledger(paths: CompatPaths, symbols: list[str] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
+    frame, summary, _ = build_master_training_frame(paths, symbols=symbols)
+    return _build_broker_net_ledger_from_frame(
+        frame,
+        summary,
+        output_path=str(paths.broker_net_ledger_latest),
+        write_output=True,
+    )

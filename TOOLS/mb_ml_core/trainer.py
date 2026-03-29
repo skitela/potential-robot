@@ -19,7 +19,11 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from .adapter import build_broker_net_ledger, build_master_training_frame, build_server_parity_tail_bridge
+from .adapter import (
+    _build_broker_net_ledger_from_frame,
+    _build_server_parity_tail_bridge_from_sources,
+    build_master_training_frame,
+)
 from .evaluation import aggregate_fold_reports, build_decisions, fold_report, fold_reports_to_frame
 from .export import export_model_to_onnx
 from .features import (
@@ -570,10 +574,14 @@ def _save_training_artifacts(
     return result
 
 
-def _prepare_labeled_frame(paths: CompatPaths, thresholds: TrainingThresholds) -> tuple[pd.DataFrame, dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    master, summary, src = build_master_training_frame(paths)
-    tail_bridge, tail_summary = build_server_parity_tail_bridge(paths)
-    ledger, ledger_summary = build_broker_net_ledger(paths)
+def _prepare_labeled_frame(
+    paths: CompatPaths,
+    thresholds: TrainingThresholds,
+    symbols: list[str] | None = None,
+) -> tuple[pd.DataFrame, dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    master, summary, src = build_master_training_frame(paths, symbols=symbols)
+    _, tail_summary = _build_server_parity_tail_bridge_from_sources(src, write_output=False)
+    _, ledger_summary = _build_broker_net_ledger_from_frame(master, summary, write_output=False)
 
     if master.empty:
         raise RuntimeError("Brak kandydatów w candidate_signals_norm_latest.parquet.")
@@ -758,21 +766,46 @@ def _load_global_teacher(paths: CompatPaths) -> tuple[FittedBundle, dict[str, An
     return bundle, metrics
 
 
-def train_symbol_model(
+def _resolve_symbol_selection(paths: CompatPaths, symbols: list[str] | None) -> list[str]:
+    active_symbols = load_active_symbols(paths)
+    if not symbols:
+        return active_symbols
+
+    requested: list[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        symbol = str(raw).strip()
+        if not symbol or symbol in seen:
+            continue
+        requested.append(symbol)
+        seen.add(symbol)
+
+    active_set = set(active_symbols)
+    invalid = [symbol for symbol in requested if symbol not in active_set]
+    if invalid:
+        raise ValueError(f"Wybrano symbole spoza aktywnej floty: {', '.join(invalid)}")
+
+    return requested
+
+
+def _train_symbol_model_from_prepared(
     paths: CompatPaths,
     symbol: str,
-    export_onnx: bool = False,
-    thresholds: TrainingThresholds | None = None,
+    *,
+    export_onnx: bool,
+    thresholds: TrainingThresholds,
+    labeled: pd.DataFrame,
+    master: pd.DataFrame,
+    runtime: pd.DataFrame,
+    learning: pd.DataFrame,
+    readiness_df: pd.DataFrame,
+    teacher_bundle: FittedBundle,
+    global_metrics: dict[str, Any],
 ) -> dict[str, Any]:
-    thresholds = thresholds or TrainingThresholds()
-    labeled, summary, master, runtime, learning = _prepare_labeled_frame(paths, thresholds)
-    readiness_df = build_symbol_readiness(labeled, master, runtime, learning, load_active_symbols(paths), min_local_rows=thresholds.min_symbol_labeled_rows)
     ready_row = readiness_df.loc[readiness_df["symbol_alias"] == symbol]
     if ready_row.empty:
         raise ValueError(f"Symbol {symbol} nie figuruje w aktywnej flocie.")
     ready = ready_row.iloc[0]
-
-    teacher_bundle, global_metrics = _load_global_teacher(paths)
 
     symbol_dir = ensure_dir(paths.symbol_models_dir / symbol)
     result = {
@@ -937,17 +970,66 @@ def train_symbol_model(
     return result
 
 
-def train_all_symbol_models(
+def train_symbol_model(
     paths: CompatPaths,
+    symbol: str,
     export_onnx: bool = False,
     thresholds: TrainingThresholds | None = None,
 ) -> dict[str, Any]:
     thresholds = thresholds or TrainingThresholds()
-    symbols = load_active_symbols(paths)
+    labeled, summary, master, runtime, learning = _prepare_labeled_frame(paths, thresholds, symbols=[symbol])
+    readiness_df = build_symbol_readiness(labeled, master, runtime, learning, load_active_symbols(paths), min_local_rows=thresholds.min_symbol_labeled_rows)
+    teacher_bundle, global_metrics = _load_global_teacher(paths)
+    return _train_symbol_model_from_prepared(
+        paths,
+        symbol,
+        export_onnx=export_onnx,
+        thresholds=thresholds,
+        labeled=labeled,
+        master=master,
+        runtime=runtime,
+        learning=learning,
+        readiness_df=readiness_df,
+        teacher_bundle=teacher_bundle,
+        global_metrics=global_metrics,
+    )
+
+
+def train_all_symbol_models(
+    paths: CompatPaths,
+    export_onnx: bool = False,
+    thresholds: TrainingThresholds | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    thresholds = thresholds or TrainingThresholds()
+    active_symbols = load_active_symbols(paths)
+    selected_symbols = _resolve_symbol_selection(paths, symbols)
+    labeled, summary, master, runtime, learning = _prepare_labeled_frame(paths, thresholds, symbols=selected_symbols)
+    readiness_df = build_symbol_readiness(
+        labeled,
+        master,
+        runtime,
+        learning,
+        active_symbols,
+        min_local_rows=thresholds.min_symbol_labeled_rows,
+    )
+    teacher_bundle, global_metrics = _load_global_teacher(paths)
     results = {}
-    for symbol in symbols:
+    for symbol in selected_symbols:
         try:
-            results[symbol] = train_symbol_model(paths, symbol=symbol, export_onnx=export_onnx, thresholds=thresholds)
+            results[symbol] = _train_symbol_model_from_prepared(
+                paths,
+                symbol,
+                export_onnx=export_onnx,
+                thresholds=thresholds,
+                labeled=labeled,
+                master=master,
+                runtime=runtime,
+                learning=learning,
+                readiness_df=readiness_df,
+                teacher_bundle=teacher_bundle,
+                global_metrics=global_metrics,
+            )
         except Exception as exc:
             results[symbol] = {
                 "symbol_alias": symbol,
@@ -957,25 +1039,49 @@ def train_all_symbol_models(
                 "artifacts": {},
             }
 
-    registry = {"schema_version": "1.0", "generated_at_utc": pd.Timestamp.utcnow().isoformat(), "symbols": {}}
-    for symbol, payload in results.items():
+    existing_registry: dict[str, Any] = {}
+    if paths.onnx_symbol_registry_latest.exists():
+        try:
+            existing_registry = json.loads(paths.onnx_symbol_registry_latest.read_text(encoding="utf-8"))
+        except Exception:
+            existing_registry = {}
+
+    existing_symbols = existing_registry.get("symbols", {}) if isinstance(existing_registry, dict) else {}
+    registry = {
+        "schema_version": "1.0",
+        "generated_at_utc": pd.Timestamp.utcnow().isoformat(),
+        "updated_symbols": selected_symbols,
+        "symbols": {},
+    }
+    for symbol in active_symbols:
+        payload = results.get(symbol, {})
+        previous = existing_symbols.get(symbol, {}) if isinstance(existing_symbols, dict) else {}
+        student_artifacts = payload.get("artifacts", {}).get("student_gate", {}) if isinstance(payload, dict) else {}
+        edge_artifacts = payload.get("artifacts", {}).get("edge_model", {}) if isinstance(payload, dict) else {}
+        fill_artifacts = payload.get("artifacts", {}).get("fill_model", {}) if isinstance(payload, dict) else {}
+        slippage_artifacts = payload.get("artifacts", {}).get("slippage_model", {}) if isinstance(payload, dict) else {}
+
         registry["symbols"][symbol] = {
             "symbol_alias": symbol,
-            "training_mode": payload.get("training_mode"),
-            "promotion": payload.get("promotion", {}),
+            "training_mode": payload.get("training_mode") or previous.get("training_mode") or "FALLBACK_ONLY",
+            "promotion": payload.get("promotion", previous.get("promotion", {})),
             "trained_on_broker_net_pln": True,
             "trained_with_server_ping": True,
             "trained_with_server_latency": True,
             "teacher_model_path": str(paths.global_model_dir / "paper_gate_acceptor_latest.onnx"),
-            "student_model_path": payload.get("artifacts", {}).get("student_gate", {}).get("onnx") or payload.get("artifacts", {}).get("student_gate", {}).get("joblib", ""),
-            "edge_model_path": payload.get("artifacts", {}).get("edge_model", {}).get("onnx") or payload.get("artifacts", {}).get("edge_model", {}).get("joblib", ""),
-            "fill_model_path": payload.get("artifacts", {}).get("fill_model", {}).get("onnx") or payload.get("artifacts", {}).get("fill_model", {}).get("joblib", ""),
-            "slippage_model_path": payload.get("artifacts", {}).get("slippage_model", {}).get("onnx") or payload.get("artifacts", {}).get("slippage_model", {}).get("joblib", ""),
+            "student_model_path": student_artifacts.get("onnx") or student_artifacts.get("joblib") or previous.get("student_model_path", ""),
+            "edge_model_path": edge_artifacts.get("onnx") or edge_artifacts.get("joblib") or previous.get("edge_model_path", ""),
+            "fill_model_path": fill_artifacts.get("onnx") or fill_artifacts.get("joblib") or previous.get("fill_model_path", ""),
+            "slippage_model_path": slippage_artifacts.get("onnx") or slippage_artifacts.get("joblib") or previous.get("slippage_model_path", ""),
         }
 
     write_json(paths.onnx_symbol_registry_latest, registry)
     write_json(paths.onnx_symbol_registry_latest_alt, registry)
-    return {"symbols": results, "registry_path": str(paths.onnx_symbol_registry_latest)}
+    return {
+        "symbols": results,
+        "registry_path": str(paths.onnx_symbol_registry_latest),
+        "updated_symbols": selected_symbols,
+    }
 
 
 def write_training_audits(paths: CompatPaths, global_payload: dict[str, Any], symbol_payload: dict[str, Any]) -> dict[str, str]:

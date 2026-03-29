@@ -128,13 +128,7 @@ elseif ($cooldownActive) {
 else {
     $null = & $TrainerScriptPath `
         -ProjectRoot $ProjectRoot `
-        -TrainingReadinessPath (Join-Path $OutputRoot "instrument_training_readiness_latest.json") `
-        -AllowedTrainingStates $allowedTrainingStates `
-        -SymbolAllowList $selectedSymbols `
-        -MaxSymbols @($selectedSymbols).Count `
-        -MinRows $trainerMinRows `
-        -MinPositiveRows $trainerMinPositiveRows `
-        -MinNegativeRows $trainerMinNegativeRows `
+        -Symbols $selectedSymbols `
         -PerfProfile $PerfProfile
 
     & $OnnxReviewScriptPath | Out-Null

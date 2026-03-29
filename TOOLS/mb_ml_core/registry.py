@@ -233,6 +233,18 @@ def load_paper_live_active_symbols(paths: CompatPaths) -> list[str]:
     return load_paper_live_first_wave_symbols(paths)
 
 
+def load_paper_live_second_wave_symbols(paths: CompatPaths) -> list[str]:
+    return list(load_scalping_universe_plan(paths)["paper_live_second_wave"])
+
+
+def load_paper_live_hold_symbols(paths: CompatPaths) -> list[str]:
+    return list(load_scalping_universe_plan(paths)["paper_live_hold"])
+
+
+def load_global_teacher_only_symbols(paths: CompatPaths) -> list[str]:
+    return list(load_scalping_universe_plan(paths)["global_teacher_only"])
+
+
 def load_retired_symbols(paths: CompatPaths) -> list[str]:
     return list(load_scalping_universe_plan(paths)["retired_symbols"])
 
