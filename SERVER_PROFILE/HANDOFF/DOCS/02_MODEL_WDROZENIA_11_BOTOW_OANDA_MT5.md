@@ -1,5 +1,7 @@
 ﻿# Model Wdrozenia 11 Botow W OANDA MT5
 
+> Status 2026-03-29: ten dokument jest historyczna kopia handoffu dla modelu 11 botow FX i nie opisuje juz aktywnej floty. Do biezacej prawdy operacyjnej stosuj aktualne registry, README i runtime package dla floty 13 symboli.
+
 ## Cel
 
 Ten dokument opisuje bardzo szczegolowy model wdrozenia `11` autonomicznych mikro-botow w terminalu `MetaTrader 5` brokera `OANDA`.

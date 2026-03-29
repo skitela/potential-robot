@@ -1,5 +1,7 @@
 ﻿# 104_RIGOROUS_AUDIT_17_MICROBOTS_V1
 
+> Status 2026-03-29: dokument historyczny opisujacy audit dawnej floty 17 microbotow. Nie nalezy traktowac tej liczebnosci jako biezacego source of truth dla aktywnego runtime.
+
 Data: 2026-03-16
 
 ## Sekcja 0 - Jakosc materialu wejsciowego

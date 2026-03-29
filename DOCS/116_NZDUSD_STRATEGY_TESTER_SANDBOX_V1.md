@@ -86,7 +86,7 @@ czyli czyści testera bez ryzyka dla aktywnego runtime.
 ## Ograniczenia
 
 - To nie jest jeszcze tryb testerowy calej floty.
-- To nie rozwiazuje jeszcze problemu wspoldzielonych rodzin i koordynatora dla wszystkich 17 botow naraz.
+- To nie rozwiazuje jeszcze problemu wspoldzielonych rodzin i koordynatora dla calej historycznej floty 17 botow naraz.
 - To jest celowo pierwszy, waski krok dla jednego symbolu.
 
 ## Oczekiwany efekt

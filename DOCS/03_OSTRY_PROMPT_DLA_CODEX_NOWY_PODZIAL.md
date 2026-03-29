@@ -119,7 +119,7 @@ Nie wolno utrwalac zalozen o MT5 lub OANDA "z pamieci", jesli mozna je szybko sp
 Kazdy etap pracy ma prowadzic do tego rezultatu:
 - cienki Core,
 - grube, autonomiczne MicroBots,
-- gotowosc do wdrozenia 11 botow w OANDA MT5,
+- gotowosc do wdrozenia aktualnej aktywnej floty MT5 zgodnie z biezacym registry i parity runtime,
 - mozliwosc dalszego rozszerzania o kolejne pary przez analogie.
 ```
 

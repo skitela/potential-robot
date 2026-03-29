@@ -126,7 +126,7 @@ Pliki:
 - wyjasnia podzial na `Core`, `MicroBots`, `Profiles`, `Strategies`, `Tools`.
 
 `02_MODEL_WDROZENIA_11_BOTOW_OANDA_MT5.md`
-- model wdrozenia `11` botow na `MT5 OANDA`.
+- historyczny model wdrozenia `11` botow na `MT5 OANDA`; nie jest juz source of truth dla aktywnej floty.
 - opisuje model `1 bot = 1 chart = 1 symbol`.
 
 `03_OSTRY_PROMPT_DLA_CODEX_NOWY_PODZIAL.md`
