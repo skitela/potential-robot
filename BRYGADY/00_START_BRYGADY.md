@@ -20,6 +20,7 @@ To nie sa automatycznie tworzone rozmowy w historii czatu. To jest praktyczny pa
 - brygady niewskazane pozostaja w trybie read-only, chyba ze dostana jawny task albo handoff,
 - brygada nadzoru zbiera raporty dla Codexa, rozsyla doprecyzowania routingowe i dopomina brakujace odpowiedzi, jezeli przeplyw informacji sie rozjezdza,
 - dyspozycje inzyniera naczelnego sa broadcastem do wszystkich brygad i Codexa do wiadomosci; dziala tylko adresat wskazany w tej nocie albo w tasku,
+- brygady nie zadaja sobie pytan operacyjnych bezposrednio; pytania, prosby o decyzje i konflikty ida do Codexa,
 - tylko brygada bedaca execution owner moze zlecic dalsza prace innej brygadzie i robi to przez note plus task,
 - po wykonaniu, blokadzie albo delegacji execution owner publikuje krotki wynik dla wszystkich brygad i dla Codexa.
 
@@ -41,6 +42,7 @@ Obowiazkowy rytm startu jednej brygady:
 ## Szybki start
 
 - [00_PANEL_STEROWANIA_BRYGAD.md](00_PANEL_STEROWANIA_BRYGAD.md) - szybkie wejscia, komendy operatorskie i najnowsze wnioski ze wspolnej listy.
+- [09_SPIS_Z_NATURY_BRYGAD_I_NARZEDZI_20260329.md](09_SPIS_Z_NATURY_BRYGAD_I_NARZEDZI_20260329.md) - jednoznaczna instrukcja delegowania, narzedzi i ETA dla wszystkich brygad.
 
 ## Sesje Copilot brygad
 

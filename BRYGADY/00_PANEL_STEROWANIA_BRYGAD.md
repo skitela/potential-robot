@@ -14,6 +14,7 @@ To jest szybki pulpit operatorski dla brygad. Otwieraj ten plik, gdy chcesz szyb
 - [06 BRYGADA NADZOR UCZENIA](06_BRYGADA_NADZOR_UCZENIA__HEALTH_OVERLAY_GONOGO.md)
 - [07 HANDOFF BRYGAD](07_HANDOFF_BRYGAD.md)
 - [08 PLAN BRYGAD 20260329](08_PLAN_BRYGAD_20260329.md)
+- [09 SPIS Z NATURY BRYGAD I NARZEDZI](09_SPIS_Z_NATURY_BRYGAD_I_NARZEDZI_20260329.md)
 
 ## Wejscia Copilot
 
@@ -104,6 +105,7 @@ Otworz ostatni raport:
 - wszystkie brygady czytaja, ale wykonuje tylko adresat tasku albo note,
 - jezeli adresatem jest Codex, Codex ma po review przejsc do wykonania, a nie tylko do odczytu,
 - Codex jest domyslnym koordynatorem i odbiorca raportow zwrotnych z brygad,
+- brygady nie zadaja sobie pytan bezposrednio; pytania, konflikty i prosby o doprecyzowanie ida do Codexa,
 - kazda brygada przed wykonaniem robi review bezpieczenstwa i zgodnosci z kontraktami,
 - jezeli polecenie jest destrukcyjne albo sprzeczne, brygada ma eskalowac zamiast wykonywac slepo.
 

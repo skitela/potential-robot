@@ -18,6 +18,8 @@ Dyspozycje inzyniera naczelnego powinny byc domyslnie rozglaszane do wszystkich 
 
 Brygady niewskazane czytaja, obserwuja i eskaluja tylko wtedy, gdy widza ryzyko albo sprzecznosc. Nie przejmuja samodzielnie wykonania i nie przechwytuja routingu od Codexa.
 
+Brygady nie zadaja sobie pytan operacyjnych bezposrednio. Wszystkie pytania, watpliwosci, konflikty zakresu i prosby o doprecyzowanie ida do Codexa, a Codex decyduje, czy odpowiedziec sam, czy wydac nowy task albo note.
+
 Jesli brygada wykonawcza potrzebuje pracy od innej brygady, zleca to tylko przez note plus task handoff, nigdy nie tylko przez rozmowe.
 
 Po wykonaniu, blokadzie albo delegacji brygada wykonawcza raportuje wynik na wspolna liste dla wszystkich brygad i dla Codexa, a domyslnym odbiorca raportu pozostaje Codex, chyba ze operator wskaze inaczej.
@@ -94,6 +96,10 @@ To jest plik przekazywania pracy miedzy brygadami.
 [Plan brygad](BRYGADY/08_PLAN_BRYGAD_20260329.md)
 
 To jest aktualny plan pracy brygad.
+
+[Spis z natury brygad i narzedzi](BRYGADY/09_SPIS_Z_NATURY_BRYGAD_I_NARZEDZI_20260329.md)
+
+To jest operacyjna instrukcja Codexa: kto od czego jest, jakimi narzedziami pracuje, kiedy ma raportowac i czego nie pytac poza Codexem.
 
 [Manifest spiecia brygad](EVIDENCE/OPS/brigade_sync_manifest_latest.md)
 

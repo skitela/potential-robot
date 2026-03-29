@@ -40,6 +40,10 @@
     "chief_engineer_broadcast_rule": "Chief engineer directives should be broadcast to all brigades and Codex for awareness; only explicitly targeted actors execute or answer.",
     "default_report_to_actor": "codex",
     "default_report_to_brigade_id": "",
+    "all_questions_route_to_actor": "codex",
+    "all_questions_route_to_brigade_id": "",
+    "direct_brigade_to_brigade_questions_allowed": false,
+    "brigades_report_to_codex_by_default": true,
     "information_admin_actor_id": "codex",
     "information_admin_brigade_id": "",
     "information_admin_scope": "ALL_BRIGADES_AND_CODEX",
@@ -55,7 +59,29 @@
     "information_admin_rule": "Codex is the default information administrator and coordination owner for the bridge: brigade reports should return to Codex by default, Codex broadcasts clarifications and keeps routing clean, while the supervision brigade supports readiness synthesis and follow-up.",
     "handoff_rule": "If another brigade is needed, the targeted execution owner should create a note plus task handoff instead of asking informally in chat.",
     "completion_report_rule": "After completing, blocking or delegating work, the execution owner should publish a short result note to all brigades and Codex, preferably through RUN/WRITE_ORCHESTRATOR_EXECUTION_RESULT.ps1, with the result routed back to Codex unless the operator set another report owner explicitly.",
-    "codex_rule": "Codex should read every new note and remains the default coordinator of the bridge; when Codex is targeted or owns the request and it passes safety review, Codex should execute it or delegate through note plus task."
+    "codex_rule": "Codex should read every new note and remains the default coordinator of the bridge; when Codex is targeted or owns the request and it passes safety review, Codex should execute it or delegate through note plus task.",
+    "question_rule": "Brigades should not ask each other operational questions directly. Questions, ambiguities and requests for clarification should go to Codex, and Codex decides whether to answer directly, delegate work or issue a clarified note plus task."
+  },
+  "coordination_contract": {
+    "single_source_of_truth_actor_id": "codex",
+    "single_source_of_truth_kind": "bridge_coordination",
+    "primary_goal_order": [
+      "net profit",
+      "capital protection",
+      "code safety and reduction of unnecessary complexity",
+      "laptop to VPS to OANDA TMS runtime parity",
+      "faster learning and evidence flow"
+    ],
+    "codex_primary_lane": "hardest coding, final integration, adjudication of conflicting brigade outputs",
+    "codex_should_delegate": [
+      "wide audits",
+      "cleanup and residue scans",
+      "rollout packaging and validation",
+      "research synthesis and concept scouting",
+      "readiness aggregation and go-no-go support"
+    ],
+    "brigade_question_funnel_actor_id": "codex",
+    "brigade_cross_question_mode": "CODEX_MEDIATED_ONLY"
   },
   "learning_command": {
     "always_on_brigades": [
@@ -143,7 +169,9 @@
         "brygada_nadzor_uczenia_rolloutu",
         "brygada_wdrozenia_mt5",
         "brygada_rozwoj_kodu"
-      ]
+      ],
+      "expected_first_status_minutes": 15,
+      "status_cadence_minutes": 30
     },
     {
       "brigade_id": "audyt_cleanup",
@@ -181,7 +209,9 @@
         "brygada_rozwoj_kodu",
         "brygada_wdrozenia_mt5",
         "brygada_architektura_innowacje"
-      ]
+      ],
+      "expected_first_status_minutes": 20,
+      "status_cadence_minutes": 45
     },
     {
       "brigade_id": "wdrozenia_mt5",
@@ -218,7 +248,9 @@
         "brygada_audyt_cleanup",
         "brygada_nadzor_uczenia_rolloutu",
         "brygada_architektura_innowacje"
-      ]
+      ],
+      "expected_first_status_minutes": 15,
+      "status_cadence_minutes": 30
     },
     {
       "brigade_id": "rozwoj_kodu",
@@ -255,7 +287,9 @@
         "brygada_wdrozenia_mt5",
         "brygada_audyt_cleanup",
         "brygada_nadzor_uczenia_rolloutu"
-      ]
+      ],
+      "expected_first_status_minutes": 20,
+      "status_cadence_minutes": 45
     },
     {
       "brigade_id": "architektura_innowacje",
@@ -294,7 +328,9 @@
         "brygada_ml_migracja_mt5",
         "brygada_wdrozenia_mt5",
         "brygada_nadzor_uczenia_rolloutu"
-      ]
+      ],
+      "expected_first_status_minutes": 25,
+      "status_cadence_minutes": 60
     },
     {
       "brigade_id": "nadzor_uczenia_rolloutu",
@@ -333,7 +369,9 @@
         "brygada_wdrozenia_mt5",
         "brygada_rozwoj_kodu",
         "brygada_audyt_cleanup"
-      ]
+      ],
+      "expected_first_status_minutes": 15,
+      "status_cadence_minutes": 30
     }
   ]
 }
