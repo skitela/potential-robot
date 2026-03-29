@@ -389,6 +389,10 @@ function New-WatchSnapshot {
             $pretradeRows = [int](Get-OptionalValue -Object $truthSummary -Name "pretrade_rows" -Default 0)
             $executionRows = [int](Get-OptionalValue -Object $truthSummary -Name "execution_rows" -Default 0)
             $mergedRows = [int](Get-OptionalValue -Object $truthSummary -Name "merged_rows" -Default 0)
+            $truthChainRows = [int](Get-OptionalValue -Object $truthSummary -Name "truth_chain_rows" -Default 0)
+            $candidateMatchedRows = [int](Get-OptionalValue -Object $truthSummary -Name "candidate_contract_matched_rows" -Default 0)
+            $onnxMatchedRows = [int](Get-OptionalValue -Object $truthSummary -Name "onnx_contract_matched_rows" -Default 0)
+            $learningMatchedRows = [int](Get-OptionalValue -Object $truthSummary -Name "learning_contract_matched_rows" -Default 0)
             $dormantReason = [string](Get-OptionalValue -Object $truthSummary -Name "dormant_reason" -Default "")
             $notes = @(
                 Get-OptionalValue -Object $payload -Name "notes" -Default @() |
@@ -401,16 +405,25 @@ function New-WatchSnapshot {
             $metrics.pretrade_rows = $pretradeRows
             $metrics.execution_rows = $executionRows
             $metrics.merged_rows = $mergedRows
+            $metrics.truth_chain_rows = $truthChainRows
+            $metrics.candidate_contract_matched_rows = $candidateMatchedRows
+            $metrics.onnx_contract_matched_rows = $onnxMatchedRows
+            $metrics.learning_contract_matched_rows = $learningMatchedRows
 
             if ($operationalState -eq "IMPLANTED_BUT_DORMANT" -or $mergedRows -le 0) {
                 $semanticState = "DORMANT"
                 $semanticSeverity = "CRITICAL"
                 $headline = "Hooki truth sa wpiete, ale spool nadal nie daje rekordow."
             }
-            elseif ($operationalState -match "ACTIVE|LIVE") {
+            elseif ($operationalState -eq "OPERATIONAL_BASE_CONTRACT_ONLY") {
+                $semanticState = "ACTIVE_BASE"
+                $semanticSeverity = "OK"
+                $headline = "Truth pipeline zbiera juz execution + pretrade, ale contract chain nie jest jeszcze zywy."
+            }
+            elseif ($operationalState -eq "OPERATIONAL_WITH_CONTRACT_CHAIN" -or $operationalState -match "ACTIVE|LIVE") {
                 $semanticState = "ACTIVE"
                 $semanticSeverity = "OK"
-                $headline = "Truth pipeline jest aktywny i zbiera rekordy."
+                $headline = "Truth pipeline jest aktywny i ma juz zywy contract chain."
             }
             else {
                 $semanticState = if ([string]::IsNullOrWhiteSpace($operationalState)) { "UNKNOWN" } else { $operationalState }
@@ -420,6 +433,9 @@ function New-WatchSnapshot {
 
             if (-not [string]::IsNullOrWhiteSpace($dormantReason)) {
                 $reasons += "Dormant reason: {0}." -f $dormantReason
+            }
+            if ($truthChainRows -gt 0) {
+                $reasons += "Truth chain rows: {0}; candidate matched: {1}; onnx matched: {2}; learning matched: {3}." -f $truthChainRows, $candidateMatchedRows, $onnxMatchedRows, $learningMatchedRows
             }
             foreach ($note in $notes) {
                 $reasons += $note
