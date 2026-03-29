@@ -1,4 +1,4 @@
-# 87. Post-Open Tuning Language Extension V1
+﻿# 87. Post-Open Tuning Language Extension V1
 
 ## Cel
 
@@ -54,7 +54,6 @@ Nowe pola sa wykonawczo respektowane w:
 - `EURJPY`
 - `GBPJPY`
 - `EURAUD`
-- `GBPAUD`
 - `DE30`
 - `US500`
 

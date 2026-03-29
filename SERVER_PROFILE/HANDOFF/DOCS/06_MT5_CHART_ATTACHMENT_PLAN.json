@@ -1,0 +1,54 @@
+[
+  {
+    "chart_no": 1,
+    "symbol": "AUDUSD",
+    "broker_symbol": "AUDUSD.pro",
+    "expert": "MicroBot_AUDUSD",
+    "preset": "MicroBot_AUDUSD_Live.set",
+    "magic": "910104",
+    "chart_tf": "M5",
+    "session_profile": "FX_ASIA",
+    "status": "compiled_verified",
+    "paper_live_bucket": "FIRST_WAVE",
+    "runtime_scope": "PAPER_LIVE"
+  },
+  {
+    "chart_no": 2,
+    "symbol": "USDCAD",
+    "broker_symbol": "USDCAD.pro",
+    "expert": "MicroBot_USDCAD",
+    "preset": "MicroBot_USDCAD_Live.set",
+    "magic": "910105",
+    "chart_tf": "M5",
+    "session_profile": "FX_MAIN",
+    "status": "compiled_verified",
+    "paper_live_bucket": "FIRST_WAVE",
+    "runtime_scope": "PAPER_LIVE"
+  },
+  {
+    "chart_no": 3,
+    "symbol": "EURJPY",
+    "broker_symbol": "EURJPY.pro",
+    "expert": "MicroBot_EURJPY",
+    "preset": "MicroBot_EURJPY_Live.set",
+    "magic": "910108",
+    "chart_tf": "M5",
+    "session_profile": "FX_CROSS",
+    "status": "compiled_verified",
+    "paper_live_bucket": "FIRST_WAVE",
+    "runtime_scope": "PAPER_LIVE"
+  },
+  {
+    "chart_no": 4,
+    "symbol": "US500",
+    "broker_symbol": "US500.pro",
+    "expert": "MicroBot_US500",
+    "preset": "MicroBot_US500_Live.set",
+    "magic": "930302",
+    "chart_tf": "M5",
+    "session_profile": "INDEX_US",
+    "status": "compiled_verified",
+    "paper_live_bucket": "FIRST_WAVE",
+    "runtime_scope": "PAPER_LIVE"
+  }
+]

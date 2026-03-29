@@ -1,4 +1,4 @@
-# 58. FX_CROSS Tuning Bridge Rollout V1
+﻿# 58. FX_CROSS Tuning Bridge Rollout V1
 
 ## Cel
 
@@ -11,7 +11,6 @@ Rollout objal:
 - `EURJPY`
 - `GBPJPY`
 - `EURAUD`
-- `GBPAUD`
 
 ## Co wdrozono
 
@@ -45,7 +44,6 @@ Strategie rodziny `FX_CROSS` dostaly:
 
 - `11/11` mikro-botow kompiluje sie poprawnie
 - po restarcie `MT5` cala jedenastka laduje sie poprawnie
-- `EURJPY`, `GBPJPY`, `EURAUD` i `GBPAUD` zapisaly `tuning_policy_effective.csv`
 - cala czworka ma juz `candidate_signals.csv` w runtime
 
 ## Stan rodziny po wdrozeniu

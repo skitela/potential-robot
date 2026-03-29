@@ -14,7 +14,6 @@ Jego rola to:
 Docelowa domena obejmuje:
 - `GOLD.pro`
 - `SILVER.pro`
-- `PLATIN.pro`
 - `COPPER-US.pro`
 
 z podzialem na:

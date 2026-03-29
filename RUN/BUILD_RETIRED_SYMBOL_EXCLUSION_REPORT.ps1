@@ -1,5 +1,5 @@
 param(
-    [string[]]$RetiredSymbols = @("GBPAUD", "PLATIN"),
+    [string[]]$RetiredSymbols = @("NZDUSD", "GBPJPY"),
     [string]$RegistryPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\microbots_registry.json",
     [string]$HostingReportPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_hosting_daily_report_latest.json",
     [string]$QueuePath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\mt5_retest_queue_latest.json",

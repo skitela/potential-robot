@@ -1,4 +1,4 @@
-# Raport MT5 Laptop i Live Paper
+﻿# Raport MT5 Laptop i Live Paper
 
 Data raportu: `2026-03-20`
 
@@ -52,13 +52,11 @@ W aktualnym batchu weakest-first najnowszy raport pokazuje:
 - `SILVER`: `timed_out`
 - `NZDUSD`: `successfully_finished`, czas `0:06:23.925`
 - `GBPJPY`: `successfully_finished`, czas `0:42:37.287`
-- `PLATIN`: `successfully_finished`, czas `0:24:23.222`
 - `DE30`: `successfully_finished`, czas `0:04:40.060`
 - `GOLD`: `successfully_finished`, czas `0:25:25.817`
 
 W praktyce oznacza to:
 
-- `NZDUSD`, `GBPJPY`, `PLATIN`, `DE30` i `GOLD` dały domknięte przebiegi testera
 - `SILVER` pozostaje najcięższym instrumentem i dalej wymaga osobnego, cierpliwego traktowania
 
 ### 2.4. Najważniejsze obserwacje z laptopowego weakest-first
@@ -68,7 +66,6 @@ Aktualna kolejka weakest-first wygląda następująco:
 1. `SILVER`
 2. `NZDUSD`
 3. `GBPJPY`
-4. `PLATIN`
 5. `GOLD`
 6. `EURAUD`
 
@@ -77,7 +74,6 @@ Interpretacja tej kolejki:
 - `SILVER` jest teraz głównym problemem i jednocześnie głównym obiektem pracy
 - `NZDUSD` i `GBPJPY` nadal cierpią głównie na małą próbkę i słaby materiał, a nie na prosty błąd wejścia
 - `GOLD` ma aktywny problem z `FOREFIELD_DIRTY` i reprezentatywnością kosztu
-- `PLATIN` i część live/metali nadal są silnie zablokowane na etapie `candidate -> paper`
 
 ### 2.5. Warstwa ML i wskazówki dla instrumentów
 
@@ -92,7 +88,6 @@ Najmocniejsze aktywne podpowiedzi ML:
 - `SILVER`: symbol ma negatywny profil
 - `NZDUSD`: aktualny `SETUP_RANGE` jest negatywny
 - `GBPJPY`: aktualny `SETUP_RANGE` jest negatywny
-- `PLATIN`: symbol ma profil dodatni, ale runtime i konwersja nadal nie potwierdzają przewagi operacyjnej
 
 To oznacza, że lokalna warstwa ML:
 
@@ -238,7 +233,6 @@ W ostatnim dostępnym oknie 24h aktywnie pracowało `5` instrumentów:
    - trust: `PAPER_CONVERSION_BLOCKED`
    - cost: `HIGH`
 
-5. `PLATIN`
    - `opens = 16`
    - `wins = 2`
    - `losses = 12`
@@ -248,7 +242,6 @@ W ostatnim dostępnym oknie 24h aktywnie pracowało `5` instrumentów:
 
 Najbardziej uderzający obraz:
 
-- `SILVER`, `DE30` i `PLATIN` były bardzo słabe
 - `GOLD` i `US500` były mniej złe, ale nadal ujemne
 - metale i indeksy były w tym oknie wyraźnie trudniejsze niż większość instrumentów FX
 
@@ -336,7 +329,6 @@ Laptop dobrze pokazuje:
 
 To właśnie `live paper` jasno pokazało, że:
 
-- `SILVER`, `DE30`, `PLATIN` były bardzo kosztowne i słabe
 - `US500` i `GOLD` generowały ruch, ale nie zysk
 - wiele FX było bardziej blokowane niż aktywne
 
@@ -352,10 +344,8 @@ Najważniejsza zgodność:
 ## 5. Najważniejsze wnioski końcowe
 
 1. Lokalny `MT5` na laptopie działa i faktycznie prowadzi bieżący retest `SILVER`.
-2. Lokalny batch weakest-first dał już zakończone wyniki dla `NZDUSD`, `GBPJPY`, `PLATIN`, `DE30` i `GOLD`.
 3. `SILVER` pozostaje najtrudniejszym instrumentem w całym układzie.
 4. `Live paper` w ostatnim dostępnym oknie 24h było wyraźnie ujemne: `-528.92`.
-5. Największe straty w `live paper` dawały wtedy: `SILVER`, `PLATIN`, `DE30`.
 6. Najważniejsze blokady nie wynikają tylko z kierunku rynku, ale z połączenia:
    - kosztu
    - reprezentatywności

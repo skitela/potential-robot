@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable
 
@@ -50,11 +51,24 @@ def _to_numeric(df: "pd.DataFrame", cols: Iterable[str]) -> "pd.DataFrame":
 
 
 def _to_datetime(df: "pd.DataFrame", cols: Iterable[str]) -> "pd.DataFrame":
+    pd = _import_pandas()
     out = df.copy()
     for col in cols:
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], errors="coerce", utc=True)
     return out
+
+
+def _safe_read_parquet(path: Path, columns: list[str] | None = None) -> "pd.DataFrame":
+    pd = _import_pandas()
+
+    if not path.exists():
+        return pd.DataFrame()
+
+    try:
+        return pd.read_parquet(path, columns=columns)
+    except Exception:
+        return pd.DataFrame()
 
 
 def _normalize_pretrade(df: "pd.DataFrame") -> "pd.DataFrame":
@@ -152,10 +166,234 @@ def _merge_truth(pretrade: "pd.DataFrame", execution: "pd.DataFrame") -> "pd.Dat
     return execution.merge(latest_pretrade, how="left", on=["symbol_alias", "candidate_id"], suffixes=("_exec", "_pre"))
 
 
+def _extract_candidate_ts(candidate_id: object) -> int | None:
+    if candidate_id is None:
+        return None
+
+    token = str(candidate_id).strip()
+    if not token:
+        return None
+
+    match = re.search(r"(\d{9,12})", token)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _normalize_contract_ts(df: "pd.DataFrame") -> "pd.DataFrame":
+    pd = _import_pandas()
+
+    if df.empty:
+        return df
+
+    out = df.copy()
+    if "ts" in out.columns:
+        out["ts"] = pd.to_numeric(out["ts"], errors="coerce").astype("Int64")
+    return out
+
+
+def _load_contract_inputs(contracts_dir: Path) -> dict[str, "pd.DataFrame"]:
+    return {
+        "candidate_signals": _normalize_contract_ts(
+            _safe_read_parquet(
+                contracts_dir / "candidate_signals_norm_latest.parquet",
+                columns=[
+                    "symbol_alias",
+                    "ts",
+                    "accepted",
+                    "feedback_key",
+                    "outcome_key",
+                    "advisory_match_key",
+                ],
+            )
+        ),
+        "onnx_observations": _normalize_contract_ts(
+            _safe_read_parquet(
+                contracts_dir / "onnx_observations_norm_latest.parquet",
+                columns=[
+                    "symbol_alias",
+                    "ts",
+                    "feedback_key",
+                    "runtime_channel",
+                    "available",
+                    "teacher_used",
+                ],
+            )
+        ),
+        "learning_observations": _safe_read_parquet(
+            contracts_dir / "learning_observations_v2_norm_latest.parquet",
+            columns=[
+                "symbol_alias",
+                "advisory_match_key",
+                "pnl",
+                "close_reason",
+            ],
+        ),
+    }
+
+
+def _build_candidate_contract_summary(candidate_signals: "pd.DataFrame") -> "pd.DataFrame":
+    pd = _import_pandas()
+
+    if candidate_signals.empty:
+        return pd.DataFrame()
+
+    work = candidate_signals.copy()
+    if "accepted" in work.columns:
+        work["accepted"] = pd.to_numeric(work["accepted"], errors="coerce").fillna(0)
+
+    grouped = work.groupby(["symbol_alias", "ts"], dropna=False)
+    summary = grouped.agg(
+        candidate_rows_raw=("symbol_alias", "size"),
+        candidate_accept_rows=("accepted", "sum"),
+        candidate_feedback_keys=("feedback_key", "nunique"),
+        candidate_outcome_keys=("outcome_key", "nunique"),
+        candidate_advisory_keys=("advisory_match_key", "nunique"),
+    ).reset_index()
+
+    advisory_primary = (
+        work.loc[work["advisory_match_key"].astype(str).str.len() > 0, ["symbol_alias", "ts", "advisory_match_key"]]
+        .drop_duplicates()
+        .groupby(["symbol_alias", "ts"], dropna=False)
+        .first()
+        .reset_index()
+        .rename(columns={"advisory_match_key": "advisory_match_key_primary"})
+    )
+
+    feedback_primary = (
+        work.loc[work["feedback_key"].astype(str).str.len() > 0, ["symbol_alias", "ts", "feedback_key"]]
+        .drop_duplicates()
+        .groupby(["symbol_alias", "ts"], dropna=False)
+        .first()
+        .reset_index()
+        .rename(columns={"feedback_key": "feedback_key_primary"})
+    )
+
+    out = summary.merge(advisory_primary, how="left", on=["symbol_alias", "ts"])
+    out = out.merge(feedback_primary, how="left", on=["symbol_alias", "ts"])
+    out["candidate_accept_rate"] = out["candidate_accept_rows"] / out["candidate_rows_raw"].where(out["candidate_rows_raw"] > 0, 1)
+    return out
+
+
+def _build_onnx_contract_summary(onnx_observations: "pd.DataFrame") -> "pd.DataFrame":
+    pd = _import_pandas()
+
+    if onnx_observations.empty:
+        return pd.DataFrame()
+
+    work = onnx_observations.copy()
+    for col in ["available", "teacher_used"]:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0)
+
+    grouped = work.groupby(["symbol_alias", "ts"], dropna=False)
+    summary = grouped.agg(
+        onnx_rows=("symbol_alias", "size"),
+        onnx_available_rows=("available", "sum"),
+        onnx_teacher_used_rows=("teacher_used", "sum"),
+        onnx_feedback_keys=("feedback_key", "nunique"),
+        onnx_runtime_channels=("runtime_channel", "nunique"),
+    ).reset_index()
+    summary["onnx_available_rate"] = summary["onnx_available_rows"] / summary["onnx_rows"].where(summary["onnx_rows"] > 0, 1)
+    return summary
+
+
+def _build_learning_contract_summary(learning_observations: "pd.DataFrame") -> "pd.DataFrame":
+    pd = _import_pandas()
+
+    if learning_observations.empty:
+        return pd.DataFrame()
+
+    work = learning_observations.copy()
+    if "pnl" in work.columns:
+        work["pnl"] = pd.to_numeric(work["pnl"], errors="coerce")
+
+    summary = (
+        work.groupby(["symbol_alias", "advisory_match_key"], dropna=False)
+        .agg(
+            learning_rows=("symbol_alias", "size"),
+            learning_pnl_mean=("pnl", "mean"),
+            learning_pnl_sum=("pnl", "sum"),
+            learning_positive_rows=("pnl", lambda s: int((s.fillna(0) > 0).sum())),
+            learning_negative_rows=("pnl", lambda s: int((s.fillna(0) < 0).sum())),
+        )
+        .reset_index()
+    )
+
+    close_reason_primary = (
+        work.loc[work["close_reason"].astype(str).str.len() > 0, ["symbol_alias", "advisory_match_key", "close_reason"]]
+        .drop_duplicates()
+        .groupby(["symbol_alias", "advisory_match_key"], dropna=False)
+        .first()
+        .reset_index()
+        .rename(columns={"close_reason": "close_reason_primary"})
+    )
+
+    return summary.merge(close_reason_primary, how="left", on=["symbol_alias", "advisory_match_key"])
+
+
+def _build_truth_chain(
+    merged_truth: "pd.DataFrame",
+    candidate_summary: "pd.DataFrame",
+    onnx_summary: "pd.DataFrame",
+    learning_summary: "pd.DataFrame",
+) -> "pd.DataFrame":
+    pd = _import_pandas()
+
+    if merged_truth.empty:
+        return pd.DataFrame()
+
+    work = merged_truth.copy()
+    work["candidate_ts"] = work.get("candidate_id", pd.Series(dtype=str)).apply(_extract_candidate_ts).astype("Int64")
+
+    if not candidate_summary.empty:
+        work = work.merge(
+            candidate_summary,
+            how="left",
+            left_on=["symbol_alias", "candidate_ts"],
+            right_on=["symbol_alias", "ts"],
+            suffixes=("", "_candidate"),
+        )
+        if "ts" in work.columns:
+            work = work.drop(columns=["ts"])
+
+    if not onnx_summary.empty:
+        work = work.merge(
+            onnx_summary,
+            how="left",
+            left_on=["symbol_alias", "candidate_ts"],
+            right_on=["symbol_alias", "ts"],
+            suffixes=("", "_onnx"),
+        )
+        if "ts" in work.columns:
+            work = work.drop(columns=["ts"])
+
+    if not learning_summary.empty and "advisory_match_key_primary" in work.columns:
+        work = work.merge(
+            learning_summary,
+            how="left",
+            left_on=["symbol_alias", "advisory_match_key_primary"],
+            right_on=["symbol_alias", "advisory_match_key"],
+            suffixes=("", "_learning"),
+        )
+        if "advisory_match_key" in work.columns:
+            work = work.drop(columns=["advisory_match_key"])
+
+    work["candidate_contract_matched"] = work.get("candidate_rows_raw", pd.Series(dtype=float)).fillna(0) > 0
+    work["onnx_contract_matched"] = work.get("onnx_rows", pd.Series(dtype=float)).fillna(0) > 0
+    work["learning_contract_matched"] = work.get("learning_rows", pd.Series(dtype=float)).fillna(0) > 0
+    return work
+
+
 def _build_symbol_summary(
     pretrade: "pd.DataFrame",
     execution: "pd.DataFrame",
     merged: "pd.DataFrame",
+    truth_chain: "pd.DataFrame",
 ) -> "pd.DataFrame":
     pd = _import_pandas()
 
@@ -168,6 +406,7 @@ def _build_symbol_summary(
         p = pretrade.loc[pretrade.get("symbol_alias") == symbol].copy() if not pretrade.empty else pd.DataFrame()
         e = execution.loc[execution.get("symbol_alias") == symbol].copy() if not execution.empty else pd.DataFrame()
         m = merged.loc[merged.get("symbol_alias") == symbol].copy() if not merged.empty else pd.DataFrame()
+        chain = truth_chain.loc[truth_chain.get("symbol_alias") == symbol].copy() if not truth_chain.empty else pd.DataFrame()
 
         precheck_rows = int(len(p))
         precheck_ok_rows = int(p["check_function_ok"].sum()) if "check_function_ok" in p.columns else 0
@@ -178,6 +417,9 @@ def _build_symbol_summary(
         positive_rows = int((e["net_observed"].fillna(0) > 0).sum()) if "net_observed" in e.columns else 0
         negative_rows = int((e["net_observed"].fillna(0) < 0).sum()) if "net_observed" in e.columns else 0
         merged_rows = int(len(m))
+        candidate_contract_rows = int(chain["candidate_contract_matched"].fillna(False).sum()) if "candidate_contract_matched" in chain.columns else 0
+        onnx_contract_rows = int(chain["onnx_contract_matched"].fillna(False).sum()) if "onnx_contract_matched" in chain.columns else 0
+        learning_contract_rows = int(chain["learning_contract_matched"].fillna(False).sum()) if "learning_contract_matched" in chain.columns else 0
 
         rows.append(
             {
@@ -193,6 +435,9 @@ def _build_symbol_summary(
                 "positive_rows": positive_rows,
                 "negative_rows": negative_rows,
                 "merged_rows": merged_rows,
+                "candidate_contract_rows": candidate_contract_rows,
+                "onnx_contract_rows": onnx_contract_rows,
+                "learning_contract_rows": learning_contract_rows,
                 "avg_spread_pretrade_points": float(p["spread_points"].dropna().mean()) if "spread_points" in p.columns and not p.empty else 0.0,
                 "avg_spread_execution_points": float(e["spread_points"].dropna().mean()) if "spread_points" in e.columns and not e.empty else 0.0,
                 "median_slippage_points": float(e["slippage_points"].dropna().median()) if "slippage_points" in e.columns and not e.empty else 0.0,
@@ -237,6 +482,10 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
             "pretrade_rows": 0,
             "execution_rows": 0,
             "merged_rows": 0,
+            "truth_chain_rows": 0,
+            "candidate_contract_matched_rows": 0,
+            "onnx_contract_matched_rows": 0,
+            "learning_contract_matched_rows": 0,
             "symbols_count": 0,
             "symbols_seen": [],
             "outputs": {},
@@ -250,12 +499,18 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
     pretrade = _normalize_pretrade(_safe_read_csvs(pretrade_folder))
     execution = _normalize_execution(_safe_read_csvs(execution_folder))
     merged = _merge_truth(pretrade, execution)
-    by_symbol = _build_symbol_summary(pretrade, execution, merged)
+    contract_inputs = _load_contract_inputs(compat.contracts_dir)
+    candidate_summary = _build_candidate_contract_summary(contract_inputs["candidate_signals"])
+    onnx_summary = _build_onnx_contract_summary(contract_inputs["onnx_observations"])
+    learning_summary = _build_learning_contract_summary(contract_inputs["learning_observations"])
+    truth_chain = _build_truth_chain(merged, candidate_summary, onnx_summary, learning_summary)
+    by_symbol = _build_symbol_summary(pretrade, execution, merged, truth_chain)
 
     outputs = {
         "pretrade_truth_latest": _write_dataframe(pretrade, output_root / "mt5_pretrade_truth_latest"),
         "execution_truth_latest": _write_dataframe(execution, output_root / "mt5_execution_truth_latest"),
         "execution_truth_merged_latest": _write_dataframe(merged, output_root / "mt5_execution_truth_merged_latest"),
+        "execution_truth_chain_latest": _write_dataframe(truth_chain, output_root / "mt5_execution_truth_chain_latest"),
         "execution_truth_by_symbol_latest": _write_dataframe(by_symbol, output_root / "mt5_execution_truth_by_symbol_latest"),
     }
 
@@ -269,6 +524,10 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
         "pretrade_rows": int(len(pretrade)),
         "execution_rows": int(len(execution)),
         "merged_rows": int(len(merged)),
+        "truth_chain_rows": int(len(truth_chain)),
+        "candidate_contract_matched_rows": int(truth_chain["candidate_contract_matched"].fillna(False).sum()) if not truth_chain.empty and "candidate_contract_matched" in truth_chain.columns else 0,
+        "onnx_contract_matched_rows": int(truth_chain["onnx_contract_matched"].fillna(False).sum()) if not truth_chain.empty and "onnx_contract_matched" in truth_chain.columns else 0,
+        "learning_contract_matched_rows": int(truth_chain["learning_contract_matched"].fillna(False).sum()) if not truth_chain.empty and "learning_contract_matched" in truth_chain.columns else 0,
         "symbols_count": int(len(by_symbol)),
         "symbols_seen": by_symbol.get("symbol_alias", pd.Series(dtype=str)).astype(str).tolist() if not by_symbol.empty else [],
         "outputs": outputs,

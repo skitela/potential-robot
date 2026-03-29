@@ -21,6 +21,15 @@
     "responses_ready": "responses/ready",
     "responses_consumed": "responses/consumed",
     "responses_extracted": "responses/extracted",
+    "coordination_claims_active": "coordination/claims/active",
+    "coordination_claims_released": "coordination/claims/released",
+    "coordination_tasks_pending": "coordination/tasks/pending",
+    "coordination_tasks_active": "coordination/tasks/active",
+    "coordination_tasks_blocked": "coordination/tasks/blocked",
+    "coordination_tasks_done": "coordination/tasks/done",
+    "coordination_activity": "coordination/activity",
+    "notes_inbox": "notes/inbox",
+    "notes_archive": "notes/archive",
     "ack_executor": "ack/executor",
     "ack_reviewer": "ack/reviewer",
     "status": "status",
@@ -60,7 +69,24 @@
     "optional": [
       "request_meta",
       "html_snapshot_saved",
-      "html_path"
+      "html_path",
+      "published_notes"
+    ]
+  },
+  "note_fields": {
+    "required": [
+      "note_id",
+      "title",
+      "author",
+      "source",
+      "note_path",
+      "written_at_local"
+    ],
+    "optional": [
+      "request_id",
+      "request_title",
+      "relative_path",
+      "tags"
     ]
   },
   "ack_fields": {
@@ -73,6 +99,67 @@
     "optional": [
       "notes",
       "source_response_path"
+    ]
+  },
+  "claim_fields": {
+    "required": [
+      "claim_id",
+      "actor",
+      "work_title",
+      "created_at_local",
+      "expires_at_local",
+      "state"
+    ],
+    "optional": [
+      "actor_session",
+      "report_path",
+      "scope_paths",
+      "notes",
+      "conflicts_with",
+      "released_at_local",
+      "release_notes",
+      "outcome"
+    ]
+  },
+  "task_fields": {
+    "required": [
+      "task_id",
+      "title",
+      "assigned_to",
+      "source_actor",
+      "created_at_local",
+      "status"
+    ],
+    "optional": [
+      "request_id",
+      "parent_claim_id",
+      "report_path",
+      "scope_paths",
+      "instructions",
+      "priority",
+      "started_at_local",
+      "completed_at_local",
+      "blocked_at_local",
+      "updated_at_local",
+      "last_activity_at_local",
+      "last_activity_title",
+      "last_activity_notes",
+      "outcome"
+    ]
+  },
+  "activity_fields": {
+    "required": [
+      "activity_id",
+      "actor",
+      "title",
+      "written_at_local"
+    ],
+    "optional": [
+      "task_id",
+      "claim_id",
+      "report_path",
+      "scope_paths",
+      "notes"
     ]
   }
 }

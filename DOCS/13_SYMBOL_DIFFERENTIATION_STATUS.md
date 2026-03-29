@@ -1,4 +1,4 @@
-# Symbol Differentiation Status
+﻿# Symbol Differentiation Status
 
 ## Cel
 
@@ -53,7 +53,6 @@ Lokalne roznice:
 - `EURJPY`
 - `GBPJPY`
 - `EURAUD`
-- `GBPAUD`
 
 Wspolne cechy:
 
@@ -66,7 +65,6 @@ Lokalne roznice:
 
 - `EURAUD` ma `range`
 - `GBPJPY` i `EURJPY` sa bardziej trend/pullback
-- `GBPAUD` ma mocniejszy trailing i ostrzejszy trigger
 
 ## Co jest juz naprawde lokalne
 

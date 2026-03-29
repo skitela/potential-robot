@@ -1,4 +1,4 @@
-# Broker Symbol Unification V1
+﻿# Broker Symbol Unification V1
 
 Data: `2026-03-20`
 
@@ -83,7 +83,6 @@ To nie jest juz problem unifikacji `.pro`, tylko warstwa operacyjna kluczy:
 
 - `VALIDATE_DEPLOYMENT_READINESS.ps1` nadal pokazuje:
   - stale tokeny FX,
-  - missing tokeny dla `GOLD`, `SILVER`, `PLATIN`, `COPPER-US`, `DE30`, `US500`
 
 Czyli:
 

@@ -1,4 +1,4 @@
-# 91. Tuning Agent Parity Audit - 2026-03-16
+﻿# 91. Tuning Agent Parity Audit - 2026-03-16
 
 ## Odpowiedz krotka
 
@@ -66,8 +66,6 @@ Tutaj rownosci nadal nie ma i to jest normalne. To nie jest juz problem architek
 
 - `NZDUSD`
 - `GBPJPY`
-- `GBPAUD`
-- `PLATIN`
 - `DE30`
 
 ### Nadal za malo czystych obserwacji

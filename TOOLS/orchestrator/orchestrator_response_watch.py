@@ -92,6 +92,7 @@ def process_once(paths: dict[str, Path], log_path: Path) -> bool:
         "response_markdown": str(response_path),
         "extracted_root": payload.get("extracted_root", ""),
         "extracted_files_count": len(payload.get("extracted_files", []) or []),
+        "published_notes_count": len(payload.get("published_notes", []) or []),
         "html_snapshot_saved": bool(payload.get("html_snapshot_saved", False)),
         "assistant_excerpt": read_markdown_excerpt(response_path),
     }

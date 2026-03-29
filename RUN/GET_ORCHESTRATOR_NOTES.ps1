@@ -57,6 +57,10 @@ $rows = foreach ($item in $notes) {
     if ($meta.PSObject.Properties.Name -contains "target_actor") {
         $targetActor = [string]$meta.target_actor
     }
+    $requestOwnerActor = ""
+    if ($meta.PSObject.Properties.Name -contains "request_owner_actor") {
+        $requestOwnerActor = [string]$meta.request_owner_actor
+    }
     $executionIntent = ""
     if ($meta.PSObject.Properties.Name -contains "execution_intent") {
         $executionIntent = [string]$meta.execution_intent
@@ -65,11 +69,22 @@ $rows = foreach ($item in $notes) {
     if ($meta.PSObject.Properties.Name -contains "execution_policy") {
         $executionPolicy = [string]$meta.execution_policy
     }
+    $reportToActor = ""
+    if ($meta.PSObject.Properties.Name -contains "report_to_actor") {
+        $reportToActor = [string]$meta.report_to_actor
+    }
+    $reportToBrigadeId = ""
+    if ($meta.PSObject.Properties.Name -contains "report_to_brigade_id") {
+        $reportToBrigadeId = [string]$meta.report_to_brigade_id
+    }
     [pscustomobject]@{
         written_at_local = [string]$meta.written_at_local
         author = [string]$meta.author
         title = [string]$meta.title
+        request_owner_actor = $requestOwnerActor
         target_actor = $targetActor
+        report_to_actor = $reportToActor
+        report_to_brigade_id = $reportToBrigadeId
         execution_intent = $executionIntent
         execution_policy = $executionPolicy
         request_id = $requestId
@@ -77,7 +92,7 @@ $rows = foreach ($item in $notes) {
     }
 }
 
-$rows | Format-Table -AutoSize
+$rows | Select-Object written_at_local, author, title, request_owner_actor, target_actor, report_to_actor, execution_intent, execution_policy, request_id, note_path | Format-Table -AutoSize
 
 if ($ShowContent -and @($rows).Count -gt 0) {
     $first = $rows[0].note_path

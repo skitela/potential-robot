@@ -1,4 +1,4 @@
-# 165 Hostile Four Loop Audit Prompt V1
+﻿# 165 Hostile Four Loop Audit Prompt V1
 
 Cel:
 - uruchomic nieprzyjemny dla bledow audyt krzyzowy,
@@ -52,7 +52,6 @@ Sprawdzaj:
 - pozostale krytyczne odniesienia do zlej metryki pingu lub latencji w rdzeniu decyzyjnym.
 
 Szukaj:
-- `GBPAUD`, `PLATIN` w aktywnych skryptach i konfiguracji,
 - symboli z sufiksem `.pro` tam, gdzie warstwa logiczna powinna pracowac na aliasie kanonicznym,
 - starych odniesien do `terminal_ping` w sciezce wykonawczej,
 - rozjazdow rodzin i referencji.

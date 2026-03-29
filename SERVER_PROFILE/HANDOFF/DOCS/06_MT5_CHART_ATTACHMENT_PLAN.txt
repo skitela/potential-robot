@@ -1,0 +1,6 @@
+MT5 CHART ATTACHMENT PLAN
+
+Chart 1: AUDUSD [AUDUSD.pro] -> MicroBot_AUDUSD -> MicroBot_AUDUSD_Live.set -> Magic=910104 -> TF=M5 -> Session=FX_ASIA -> Status=compiled_verified
+Chart 2: USDCAD [USDCAD.pro] -> MicroBot_USDCAD -> MicroBot_USDCAD_Live.set -> Magic=910105 -> TF=M5 -> Session=FX_MAIN -> Status=compiled_verified
+Chart 3: EURJPY [EURJPY.pro] -> MicroBot_EURJPY -> MicroBot_EURJPY_Live.set -> Magic=910108 -> TF=M5 -> Session=FX_CROSS -> Status=compiled_verified
+Chart 4: US500 [US500.pro] -> MicroBot_US500 -> MicroBot_US500_Live.set -> Magic=930302 -> TF=M5 -> Session=INDEX_US -> Status=compiled_verified

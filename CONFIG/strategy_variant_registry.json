@@ -373,61 +373,6 @@
                                    }
                      },
                      {
-                         "symbol":  "GBPAUD",
-                         "alias_symbol":  "GBPAUD",
-                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GBPAUD.mqh",
-                         "profile":  {
-                                         "alias_symbol":  "GBPAUD",
-                                         "symbol":  "GBPAUD",
-                                         "trade_tf":  "PERIOD_M5",
-                                         "session_profile":  "FX_CROSS",
-                                         "trade_window_start_hour":  7,
-                                         "trade_window_end_hour":  11,
-                                         "max_spread_points":  52,
-                                         "caution_spread_points":  40,
-                                         "hard_daily_loss_pct":  2,
-                                         "hard_session_loss_pct":  1,
-                                         "min_seconds_between_entries":  60,
-                                         "kill_switch_token_name":  "oandakey_gbpaud.token",
-                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_GBPAUD.mqh"
-                                     },
-                         "indicators":  {
-                                            "ema_fast":  13,
-                                            "ema_slow":  36,
-                                            "atr_period":  14,
-                                            "rsi_period":  14
-                                        },
-                         "risk":  {
-                                      "base_risk_pct":  0.29,
-                                      "execution_floor":  0.7,
-                                      "execution_decay":  0.5,
-                                      "min_risk_pct":  0.17,
-                                      "max_risk_pct":  0.42,
-                                      "sl_atr_multiplier":  1.9,
-                                      "sl_min_points":  44,
-                                      "tp_atr_multiplier":  2.4,
-                                      "tp_min_points":  72,
-                                      "trail_atr_multiplier":  1.32
-                                  },
-                         "decision":  {
-                                          "caution_trigger_abs":  1,
-                                          "ready_trigger_abs":  0.84,
-                                          "setup_labels":  [
-                                                               "SETUP_BREAKOUT",
-                                                               "SETUP_PULLBACK",
-                                                               "SETUP_RANGE",
-                                                               "SETUP_TREND"
-                                                           ]
-                                      },
-                         "model":  {
-                                       "has_rejection":  false,
-                                       "has_range":  true,
-                                       "has_reversal":  false,
-                                       "uses_new_bar_gate":  true,
-                                       "has_live_manage_position":  true
-                                   }
-                     },
-                     {
                          "symbol":  "GBPUSD",
                          "alias_symbol":  "GBPUSD",
                          "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_GBPUSD.mqh",
@@ -532,61 +477,6 @@
                          "model":  {
                                        "has_rejection":  true,
                                        "has_range":  false,
-                                       "has_reversal":  false,
-                                       "uses_new_bar_gate":  true,
-                                       "has_live_manage_position":  true
-                                   }
-                     },
-                     {
-                         "symbol":  "PLATIN.pro",
-                         "alias_symbol":  "PLATIN",
-                         "strategy_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Strategies\\Strategy_PLATIN.mqh",
-                         "profile":  {
-                                         "alias_symbol":  "PLATIN",
-                                         "symbol":  "PLATIN.pro",
-                                         "trade_tf":  "PERIOD_M5",
-                                         "session_profile":  "METALS_FUTURES",
-                                         "trade_window_start_hour":  14,
-                                         "trade_window_end_hour":  17,
-                                         "max_spread_points":  190,
-                                         "caution_spread_points":  125,
-                                         "hard_daily_loss_pct":  2,
-                                         "hard_session_loss_pct":  1,
-                                         "min_seconds_between_entries":  120,
-                                         "kill_switch_token_name":  "oandakey_platin.token",
-                                         "profile_file":  "C:\\MAKRO_I_MIKRO_BOT\\MQL5\\Include\\Profiles\\Profile_PLATIN.mqh"
-                                     },
-                         "indicators":  {
-                                            "ema_fast":  13,
-                                            "ema_slow":  37,
-                                            "atr_period":  14,
-                                            "rsi_period":  14
-                                        },
-                         "risk":  {
-                                      "base_risk_pct":  0.18,
-                                      "execution_floor":  0.73,
-                                      "execution_decay":  0.5,
-                                      "min_risk_pct":  0.08,
-                                      "max_risk_pct":  0.24,
-                                      "sl_atr_multiplier":  2.2,
-                                      "sl_min_points":  220,
-                                      "tp_atr_multiplier":  2.8,
-                                      "tp_min_points":  330,
-                                      "trail_atr_multiplier":  1.22
-                                  },
-                         "decision":  {
-                                          "caution_trigger_abs":  1.04,
-                                          "ready_trigger_abs":  0.86,
-                                          "setup_labels":  [
-                                                               "SETUP_BREAKOUT",
-                                                               "SETUP_PULLBACK",
-                                                               "SETUP_RANGE",
-                                                               "SETUP_TREND"
-                                                           ]
-                                      },
-                         "model":  {
-                                       "has_rejection":  false,
-                                       "has_range":  true,
                                        "has_reversal":  false,
                                        "uses_new_bar_gate":  true,
                                        "has_live_manage_position":  true

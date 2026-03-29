@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$SimRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\REMOTE_SIM"
+    [string]$SimRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\REMOTE_SIM",
+    [switch]$AllowBlockedAuditGate
 )
 
 Set-StrictMode -Version Latest
@@ -22,6 +23,7 @@ New-Item -ItemType Directory -Force -Path $commonFiles | Out-Null
     -ProjectRoot $projectPath `
     -TargetTerminalDataDir $terminalData `
     -TargetCommonFilesDir $commonFiles `
+    -AllowBlockedAuditGate:$AllowBlockedAuditGate `
     -CreateRuntimeFolders | Out-Null
 
 & (Join-Path $projectPath "TOOLS\VALIDATE_MT5_SERVER_INSTALL.ps1") `

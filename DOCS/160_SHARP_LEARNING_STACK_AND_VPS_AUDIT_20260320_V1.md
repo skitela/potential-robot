@@ -1,4 +1,4 @@
-# 160 Sharp Learning Stack And VPS Audit 2026-03-20 V1
+﻿# 160 Sharp Learning Stack And VPS Audit 2026-03-20 V1
 
 ## Cel
 
@@ -139,7 +139,6 @@ Jego rola:
 ### Naprawa D: rotacja ciezkich logow runtime
 
 Zrotowany zostal ciezki journal:
-- `PLATIN incident_journal.jsonl`
 - rozmiar: `555.518 MB`
 
 To zmniejsza brud operacyjny i odciaza pętlę audytowa.
@@ -294,11 +293,9 @@ Uwaga:
 | `NZDUSD` | `NEGATIVE` | 0 | 0.00 | -9.03 | powiekszyc probke i dane historyczne, bez strojenia sygnalu |
 | `GBPJPY` | `NEGATIVE` | 0 | 0.00 | -12.88 | powiekszyc probke i dane historyczne, bez strojenia sygnalu |
 | `SILVER` | `NEGATIVE` | 96 | -169.47 | 0.00 | uderzyc jednoczesnie w live runtime i candidate-to-paper contract |
-| `PLATIN` | `NEGATIVE` | 0 | -149.35 | 0.00 | powiekszyc probke i dane historyczne, bez strojenia sygnalu |
 | `DE30` | `NEGATIVE` | 0 | -135.07 | 0.00 | naprawic reprezentatywnosc kosztu i zrodlo danych |
 | `GOLD` | `NEGATIVE` | 138 | -35.95 | -31.81 | naprawic reprezentatywnosc kosztu i zrodlo danych |
 | `COPPER-US` | `NEAR_PROFIT` | 0 | 0.00 | -0.01 | naprawic reprezentatywnosc kosztu i zrodlo danych |
-| `GBPAUD` | `NEGATIVE` | 0 | 0.00 | 0.00 | naprawic reprezentatywnosc kosztu i zrodlo danych |
 | `EURAUD` | `NEGATIVE` | 0 | 0.00 | 0.00 | utrzymac obserwacje i przygotowac kolejny tester batch |
 | `GBPUSD` | `NEGATIVE` | 0 | 0.00 | -13.22 | utrzymac obserwacje i przygotowac kolejny tester batch |
 | `USDJPY` | `NEAR_PROFIT` | 0 | 0.00 | -4.90 | naprawic reprezentatywnosc kosztu i zrodlo danych |
@@ -313,7 +310,6 @@ Uwaga:
 
 Najslabsze:
 - `SILVER`
-- `PLATIN`
 - `DE30`
 - `GOLD`
 
@@ -337,7 +333,6 @@ Najbardziej aktywne na `live paper` w ostatnim dostepnym oknie:
 5. Najwiekszy blocker po stronie serwera to nadal `WinRM AccessDenied`.
 6. Najwiekszy problem runtime nadal siedzi w:
 - `SILVER`
-- `PLATIN`
 - `DE30`
 - `GOLD`
 7. Najwiekszy potencjal lokalny nadal maja:

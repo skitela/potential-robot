@@ -1,4 +1,4 @@
-# 104_RIGOROUS_AUDIT_17_MICROBOTS_V1
+﻿# 104_RIGOROUS_AUDIT_17_MICROBOTS_V1
 
 Data: 2026-03-16
 
@@ -26,12 +26,10 @@ Mocne wnioski mozna opierac przede wszystkim na:
 - `USDCAD`
 - `USDCHF`
 - `EURAUD`
-- `GBPAUD`
 - `DE30`
 - `US500`
 - `GOLD`
 - `SILVER`
-- `PLATIN`
 - `COPPER-US`
 
 Wnioski warunkowe:
@@ -66,10 +64,8 @@ Powod:
 | EURJPY | WARUNKOWY | historycznie `OBSERVATIONS_MISSING`, teraz probka rosnie ale slabo |
 | GBPJPY | PROBKA_ZA_MALA | spread `BAD`, bardzo malo lekcji |
 | EURAUD | WYSTARCZAJACY_WARUNKOWO | range ruszyl dopiero po odetkaniu heat/risk bypass |
-| GBPAUD | WYSTARCZAJACY | aktywny runtime, ale bardzo slaby wynik breakout/trend |
 | GOLD | WYSTARCZAJACY_WARUNKOWO | probka juz rosnie, ale koszt i breakout noise nadal wysokie |
 | SILVER | WYSTARCZAJACY_WARUNKOWO | rosnie probka, ale koszt i chaos mocno psuja wynik |
-| PLATIN | PROBKA_ZA_MALA | bardzo drogi instrument, malo czystych lekcji |
 | COPPER-US | DANE_SLABO_REPREZENTATYWNE | spread tak wysoki, ze paper traci reprezentatywnosc |
 | DE30 | WYSTARCZAJACY | aktywny, ale breakouty sa trwale stratne |
 | US500 | WYSTARCZAJACY | najlepsza operacyjnosc, ale nadal lekko ujemna alfa po kosztach |
@@ -275,7 +271,6 @@ Nie ruszac online:
 Na dzis nie ruszac bez dodatkowej proby:
 - `NZDUSD` - za mala probka
 - `GBPJPY` - za mala probka i zly koszt
-- `PLATIN` - probka mala, koszt wysoki
 - `COPPER-US` - koszt ekstremalny, paper slabo reprezentatywny
 - `global priority_formula` - brak dowodu, ze obecnie to ona jest glownym waskim gardlem
 

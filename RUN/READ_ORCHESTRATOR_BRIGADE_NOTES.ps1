@@ -165,8 +165,12 @@ $allRows = @(
                 title = [string](Get-OptionalValue -Object $meta -Name "title" -Default "")
                 relevance = $relevance
                 unread = [bool]$isUnread
+                request_owner_actor = [string](Get-OptionalValue -Object $meta -Name "request_owner_actor" -Default "")
+                request_owner_brigade_id = [string](Get-OptionalValue -Object $meta -Name "request_owner_brigade_id" -Default "")
                 target_actor = [string](Get-OptionalValue -Object $meta -Name "target_actor" -Default "")
                 target_brigade_id = [string](Get-OptionalValue -Object $meta -Name "target_brigade_id" -Default "")
+                report_to_actor = [string](Get-OptionalValue -Object $meta -Name "report_to_actor" -Default "")
+                report_to_brigade_id = [string](Get-OptionalValue -Object $meta -Name "report_to_brigade_id" -Default "")
                 execution_intent = [string](Get-OptionalValue -Object $meta -Name "execution_intent" -Default "")
                 execution_policy = [string](Get-OptionalValue -Object $meta -Name "execution_policy" -Default "")
                 note_path = $notePath
@@ -261,7 +265,7 @@ if ($AsJson) {
 [pscustomobject]$payload.inbox | Format-List
 
 "LATEST NOTES"
-@($payload.notes) | Select-Object unread, relevance, written_at_local, author, title, execution_intent, execution_policy | Format-Table -AutoSize
+@($payload.notes) | Select-Object unread, relevance, written_at_local, author, title, request_owner_actor, target_actor, report_to_actor, execution_intent, execution_policy | Format-Table -AutoSize
 
 if ($ShowContent) {
     foreach ($row in @($payload.notes)) {

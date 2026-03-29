@@ -9,6 +9,92 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Convert-ToTerminalProcessRef {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Process
+    )
+
+    $processId = $null
+    if ($Process.PSObject.Properties.Name -contains "ProcessId") {
+        $processId = [int]$Process.ProcessId
+    }
+    elseif ($Process.PSObject.Properties.Name -contains "Id") {
+        $processId = [int]$Process.Id
+    }
+
+    if ($null -eq $processId -or $processId -le 0) {
+        throw "Nie udalo sie ustalic identyfikatora procesu terminala MT5."
+    }
+
+    $path = ""
+    if ($Process.PSObject.Properties.Name -contains "ExecutablePath") {
+        $path = [string]$Process.ExecutablePath
+    }
+    elseif ($Process.PSObject.Properties.Name -contains "Path") {
+        $path = [string]$Process.Path
+    }
+
+    $commandLine = ""
+    if ($Process.PSObject.Properties.Name -contains "CommandLine") {
+        $commandLine = [string]$Process.CommandLine
+    }
+
+    $title = ""
+    if ($Process.PSObject.Properties.Name -contains "MainWindowTitle") {
+        $title = [string]$Process.MainWindowTitle
+    }
+
+    return [pscustomobject]@{
+        ProcessId = $processId
+        Path = $path
+        CommandLine = $commandLine
+        MainWindowTitle = $title
+    }
+}
+
+function Stop-AllOandaTerminalProcesses {
+    param(
+        [int]$WaitSeconds = 8
+    )
+
+    $targets = @(Get-Process terminal64 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Path -eq $Mt5Exe -and
+            $_.MainWindowTitle -like "*OANDA TMS Brokers S.A.*"
+        })
+
+    if (@($targets).Count -eq 0) {
+        return
+    }
+
+    foreach ($process in $targets) {
+        try {
+            [void]$process.CloseMainWindow()
+        }
+        catch {
+        }
+    }
+
+    Start-Sleep -Seconds ([Math]::Max(2, $WaitSeconds))
+
+    $stillRunning = @(Get-Process terminal64 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Path -eq $Mt5Exe -and
+            $_.MainWindowTitle -like "*OANDA TMS Brokers S.A.*"
+        })
+
+    foreach ($process in $stillRunning) {
+        try {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        }
+        catch {
+        }
+    }
+
+    Start-Sleep -Seconds 2
+}
+
 function Get-OandaTerminalProcess {
     param([string]$ExpectedProfile)
 
@@ -19,7 +105,7 @@ function Get-OandaTerminalProcess {
         } |
         Sort-Object ProcessId -Descending
     if ($cimProcesses) {
-        return $cimProcesses | Select-Object -First 1
+        return Convert-ToTerminalProcessRef -Process ($cimProcesses | Select-Object -First 1)
     }
 
     $windowed = Get-Process terminal64 -ErrorAction SilentlyContinue |
@@ -29,7 +115,12 @@ function Get-OandaTerminalProcess {
         } |
         Sort-Object StartTime -Descending
 
-    return $windowed | Select-Object -First 1
+    $selected = $windowed | Select-Object -First 1
+    if ($null -ne $selected) {
+        return Convert-ToTerminalProcessRef -Process $selected
+    }
+
+    return $null
 }
 
 function Wait-OandaTerminalProcess {
@@ -50,7 +141,7 @@ function Wait-OandaTerminalProcess {
             Sort-Object ProcessId -Descending |
             Select-Object -First 1
         if ($null -ne $fallback) {
-            return $fallback
+            return Convert-ToTerminalProcessRef -Process $fallback
         }
 
         Start-Sleep -Seconds 2
@@ -99,6 +190,7 @@ try {
     $report.local_validate = (($validateRaw -join [Environment]::NewLine).Trim() | ConvertFrom-Json)
 
     $report.stage = "clear_profile"
+    Stop-AllOandaTerminalProcesses
     & (Join-Path $projectRootResolved "RUN\OPEN_OANDA_MT5_WITH_VPS_CLEAR_PROFILE.ps1") `
         -Mt5Exe $Mt5Exe `
         -TerminalDataDir $TerminalDataDir | Out-Null
@@ -120,6 +212,7 @@ try {
     $report.clear_sync = Get-Content -Raw -LiteralPath $clearJson | ConvertFrom-Json
 
     $report.stage = "main_profile"
+    Stop-AllOandaTerminalProcesses
     & (Join-Path $projectRootResolved "RUN\RUN_AUDIT_SUPERVISOR.ps1") `
         -ProjectRoot $projectRootResolved `
         -Mode Once `

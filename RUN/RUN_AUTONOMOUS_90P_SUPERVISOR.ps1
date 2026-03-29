@@ -72,8 +72,6 @@ $mt5StatusPath = Join-Path $statusDir "mt5_tester_status_latest.json"
 $mt5QueuePath = Join-Path $statusDir "mt5_retest_queue_latest.json"
 $nearProfitQueuePath = Join-Path $statusDir "near_profit_optimization_queue_latest.json"
 $dailySystemReportPath = Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json"
-$secondaryMt5Exe = "C:\Program Files\MetaTrader 5\terminal64.exe"
-
 foreach ($path in @(
     $priorityScript,
     $qdmProfileScript,
@@ -149,7 +147,7 @@ function Get-WrapperCount {
     ).Count
 }
 
-function Ensure-BackgroundTask {
+function Start-BackgroundTaskIfNeeded {
     param(
         [string]$Label,
         [scriptblock]$IsRunning,
@@ -292,6 +290,25 @@ function Test-ObjectHasProperty {
     }
 }
 
+function Get-OptionalValue {
+    param(
+        $Object,
+        [string]$Name,
+        $Default = $null
+    )
+
+    if (-not (Test-ObjectHasProperty -Object $Object -Name $Name)) {
+        return $Default
+    }
+
+    $value = $Object.$Name
+    if ($null -eq $value) {
+        return $Default
+    }
+
+    return $value
+}
+
 function Invoke-SupervisorAction {
     param(
         [System.Collections.IDictionary]$Actions,
@@ -380,10 +397,10 @@ function Resolve-LearningPerfProfile {
 
     $bootAgeMinutes = Get-SystemBootAgeMinutes
     $startupTurboActive = ($bootAgeMinutes -ge 0 -and $bootAgeMinutes -le $StartupTurboMinutes)
-    $profile = if ($startupTurboActive) { "OfflineMax" } else { "ConcurrentLab" }
+    $perfProfile = if ($startupTurboActive) { "OfflineMax" } else { "ConcurrentLab" }
 
     return [pscustomobject]@{
-        profile = $profile
+        profile = $perfProfile
         boot_age_minutes = $bootAgeMinutes
         startup_turbo_active = $startupTurboActive
     }
@@ -1262,30 +1279,52 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_training_readiness" -Operation {
         $report = (& $trainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
-        "shadow_ready=$($report.summary.training_shadow_ready_count); limited=$($report.summary.local_training_limited_count); ready=$($report.summary.local_training_ready_count)"
+        $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null
+        $shadowReady = [int](Get-OptionalValue -Object $summary -Name "training_shadow_ready_count" -Default 0)
+        $limited = [int](Get-OptionalValue -Object $summary -Name "local_training_limited_count" -Default 0)
+        $ready = [int](Get-OptionalValue -Object $summary -Name "local_training_ready_count" -Default 0)
+        "shadow_ready=$shadowReady; limited=$limited; ready=$ready"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "outcome_closure_audit" -Operation {
         $report = (& $outcomeClosureAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
-        "outcome_ready=$($report.summary.symbols_with_outcome_count); gaps=$($report.summary.outcome_gap_count); pending_paper_truth=$($report.summary.pending_paper_truth_count); broker_net=$($report.summary.broker_net_pln_ready)"
+        $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null
+        $outcomeReady = [int](Get-OptionalValue -Object $summary -Name "symbols_with_outcome_count" -Default 0)
+        $outcomeGap = [int](Get-OptionalValue -Object $summary -Name "outcome_gap_count" -Default 0)
+        $pendingPaperTruth = [int](Get-OptionalValue -Object $summary -Name "pending_paper_truth_count" -Default 0)
+        $brokerNetReady = [bool](Get-OptionalValue -Object $summary -Name "broker_net_pln_ready" -Default $false)
+        "outcome_ready=$outcomeReady; gaps=$outcomeGap; pending_paper_truth=$pendingPaperTruth; broker_net=$brokerNetReady"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "candidate_gap_audit" -Operation {
         $report = (& $candidateGapAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython | ConvertFrom-Json)
-        "final_zero=$($report.summary.final_zero_count); strategy_zero=$($report.summary.strategy_zero_count); risk_zero=$($report.summary.risk_zero_count)"
+        $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null
+        $finalZero = [int](Get-OptionalValue -Object $summary -Name "final_zero_count" -Default 0)
+        $strategyZero = [int](Get-OptionalValue -Object $summary -Name "strategy_zero_count" -Default 0)
+        $riskZero = [int](Get-OptionalValue -Object $summary -Name "risk_zero_count" -Default 0)
+        "final_zero=$finalZero; strategy_zero=$strategyZero; risk_zero=$riskZero"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "local_model_readiness" -Operation {
         $report = (& $localModelReadinessScript -ProjectRoot $ProjectRoot -ResearchRoot $researchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
-        $reasonCounts = if ($null -ne $report.summary) { $report.summary.reason_counts } else { $null }
-        $localModelMissing = if ($null -ne $reasonCounts -and $null -ne $reasonCounts.LOCAL_MODEL_MISSING) { [int]$reasonCounts.LOCAL_MODEL_MISSING } else { 0 }
-        $packageMismatch = if ($null -ne $reasonCounts -and $null -ne $reasonCounts.PACKAGE_RUNTIME_MISMATCH) { [int]$reasonCounts.PACKAGE_RUNTIME_MISMATCH } else { 0 }
-        "ranking_pass=$($report.summary.ranking_pass_count); deployment_pass=$($report.summary.deployment_pass_count); runtime_ready=$($report.summary.runtime_ready_count); local_model_missing=$localModelMissing; package_mismatch=$packageMismatch; global_only=$($report.summary.runtime_global_only_count)"
+        $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null
+        $reasonCounts = Get-OptionalValue -Object $summary -Name "reason_counts" -Default $null
+        $rankingPass = [int](Get-OptionalValue -Object $summary -Name "ranking_pass_count" -Default 0)
+        $deploymentPass = [int](Get-OptionalValue -Object $summary -Name "deployment_pass_count" -Default 0)
+        $runtimeReady = [int](Get-OptionalValue -Object $summary -Name "runtime_ready_count" -Default 0)
+        $localModelMissing = [int](Get-OptionalValue -Object $reasonCounts -Name "LOCAL_MODEL_MISSING" -Default 0)
+        $packageMismatch = [int](Get-OptionalValue -Object $reasonCounts -Name "PACKAGE_RUNTIME_MISMATCH" -Default 0)
+        $globalOnly = [int](Get-OptionalValue -Object $summary -Name "runtime_global_only_count" -Default 0)
+        "ranking_pass=$rankingPass; deployment_pass=$deploymentPass; runtime_ready=$runtimeReady; local_model_missing=$localModelMissing; package_mismatch=$packageMismatch; global_only=$globalOnly"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_plan" -Operation {
         $report = (& $localTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
-        "next=$($report.next_action); start_group=$($report.summary.start_group_count); ready_candidates=$($report.summary.ready_candidates_count)"
+        $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null
+        $nextAction = [string](Get-OptionalValue -Object $report -Name "next_action" -Default "")
+        $startGroup = [int](Get-OptionalValue -Object $summary -Name "start_group_count" -Default 0)
+        $readyCandidates = [int](Get-OptionalValue -Object $summary -Name "ready_candidates_count" -Default 0)
+        "next=$nextAction; start_group=$startGroup; ready_candidates=$readyCandidates"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "instrument_local_training_lane" -Operation {
@@ -1356,35 +1395,35 @@ while ($true) {
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "archiver" -Operation {
-        Ensure-BackgroundTask `
+        Start-BackgroundTaskIfNeeded `
             -Label "archiver" `
             -IsRunning { (Get-WrapperCount -Pattern "*local_operator_archiver_*") -gt 0 } `
             -StarterPath $archiverScript
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "mt5_status_watcher" -Operation {
-        Ensure-BackgroundTask `
+        Start-BackgroundTaskIfNeeded `
             -Label "mt5_status_watcher" `
             -IsRunning { (Get-WrapperCount -Pattern "*mt5_tester_status_watcher_wrapper_*") -gt 0 } `
             -StarterPath $mt5WatcherScript
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "mt5_risk_guard" -Operation {
-        Ensure-BackgroundTask `
+        Start-BackgroundTaskIfNeeded `
             -Label "mt5_risk_guard" `
             -IsRunning { (Get-WrapperCount -Pattern "*mt5_risk_popup_guard_wrapper_*") -gt 0 } `
             -StarterPath $mt5RiskGuardScript
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "qdm" -Operation {
-        Ensure-BackgroundTask `
+        Start-BackgroundTaskIfNeeded `
             -Label "qdm" `
             -IsRunning { (Get-Process -Name qdmcli -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0 } `
             -StarterPath $qdmWeakestScript
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "ml" -Operation {
-        Ensure-BackgroundTask `
+        Start-BackgroundTaskIfNeeded `
             -Label "ml" `
             -IsRunning { (Get-WrapperCount -Pattern "*refresh_and_train_ml_wrapper_*") -gt 0 } `
             -StarterOperation { & $mlScript -ProjectRoot $ProjectRoot -PerfProfile $learningPerf.profile }
@@ -1402,12 +1441,12 @@ while ($true) {
             return ("restarted reason={0} stopped={1}" -f (($assessment.reasons -join ",")), $stopped)
         }
 
-        $weakestState = Ensure-BackgroundTask `
+        $weakestState = Start-BackgroundTaskIfNeeded `
             -Label "weakest_mt5" `
             -IsRunning { (Get-WeakestMt5ActivityCount -Mt5StatusPath $mt5StatusPath) -gt 0 } `
             -StarterPath $weakestBatchScript
 
-        $queueState = Ensure-BackgroundTask `
+        $queueState = Start-BackgroundTaskIfNeeded `
             -Label "mt5_retest_queue" `
             -IsRunning { (Get-WrapperCount -Pattern "*mt5_retest_queue_wrapper_*") -gt 0 } `
             -StarterPath $retestQueueScript
@@ -1426,7 +1465,7 @@ while ($true) {
             return ("restarted reason={0} stopped={1}" -f (($assessment.reasons -join ",")), $stopped)
         }
 
-        Ensure-BackgroundTask `
+        Start-BackgroundTaskIfNeeded `
             -Label "near_profit_optimization" `
             -IsRunning { (Get-WrapperCount -Pattern "*near_profit_optimization_after_idle_wrapper_*") -gt 0 } `
             -StarterPath $nearProfitBatchScript

@@ -1,4 +1,4 @@
-# 149 Parallel 90P Lab V1
+﻿# 149 Parallel 90P Lab V1
 
 ## Cel
 
@@ -34,7 +34,6 @@ OANDA MT5, walidacja brokerska i najwazniejsze FX:
 - `AUDUSD`
 - `NZDUSD`
 - `EURAUD`
-- `GBPAUD`
 
 ### Pas 2
 

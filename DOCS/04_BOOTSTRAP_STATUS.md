@@ -1,4 +1,4 @@
-# Bootstrap Status
+﻿# Bootstrap Status
 
 ## 2026-03-14 - dashboardy bardziej po polsku i wyraznie podzielone na trzy swiaty
 
@@ -379,8 +379,6 @@
 - upgraded `GBPJPY` to controlled local live-send and first local trailing layer
 - upgraded `EURAUD` to third cross-session local strategy with dry-run entry path
 - upgraded `EURAUD` to controlled local live-send and first local trailing layer
-- upgraded `GBPAUD` to fourth cross-session local strategy with dry-run entry path
-- upgraded `GBPAUD` to controlled local live-send and first local trailing layer
 - rebuilt generated experts with the new guard layer and recompiled the full batch successfully again
 - completed the first `11/11` pass with no pure scaffold-only strategy left in the park
 - assigned unique `magic numbers` to the whole `11` bot batch and regenerated the MT5 chart attachment plan
@@ -834,14 +832,12 @@ Najuczciwszy wniosek:
 - kazda z tych par dostala lokalne strojenie pod swoj genotyp
 - etap zostal domkniety technicznie, ale wymaga spokojnej obserwacji runtime przed kolejna ingerencja
 
-## 2026-03-13 - indywidualne strojenie EURJPY, GBPJPY, EURAUD i GBPAUD
 
 - Domknieto ostatnia czworke par w modelu pojedynczego strojenia bez ruszania `EURUSD`.
 - Kazda para zostala potraktowana osobno:
   - `EURJPY`
   - `GBPJPY`
   - `EURAUD`
-  - `GBPAUD`
 - Wspolna zasada pozostala taka sama:
   - zachowac genotyp
   - wdrozyc nowa sciezke context/paper/learning
@@ -878,7 +874,6 @@ Najuczciwszy wniosek:
   - `signal_confidence=0.4545`
   - `signal_risk_multiplier=0.5733`
 
-### GBPAUD
 - dostal najmocniejsze defensywne filtrowanie z calej czworki
 - szczegolnie przy:
   - `BAD spread`
@@ -1129,7 +1124,6 @@ Najważniejsze obszary do dalszej regulacji:
   - `EURJPY`
   - `GBPJPY`
   - `EURAUD`
-  - `GBPAUD`
 - Mikro-boty tej rodziny dostaly:
   - lokalna polityke strojenia,
   - polityke skuteczna `tuning_policy_effective.csv`,
@@ -1217,13 +1211,11 @@ Najważniejsze obszary do dalszej regulacji:
 - Potwierdzono brokerowo i lokalnie:
   - `GOLD.pro`
   - `SILVER.pro`
-  - `PLATIN.pro`
   - `PALLAD.pro`
   - `COPPER-US.pro / XCUUSD`
 - Rekomendowana pierwsza czworka do wdrozenia:
   - `GOLD.pro`
   - `SILVER.pro`
-  - `PLATIN.pro`
   - `COPPER-US.pro / XCUUSD`
 - Rekomendowana architektura:
   - nadrzedna rodzina `METALS`
@@ -1536,7 +1528,6 @@ Najważniejsze obszary do dalszej regulacji:
   - filtry swiecy/Renko dla `RANGE`
   - filtr swiecy dla breakoutu
   - lekkie podatki indeksowe dla startu i konca okna
-- strategie `AUDUSD`, `USDJPY`, `NZDUSD`, `EURJPY`, `GBPJPY`, `EURAUD`, `GBPAUD`, `DE30`, `US500` zostaly dopiete do tych nowych sygnalow polityki
 - kompilacja floty po zmianie: `17/17 compile_ok=true`
 
 ## 2026-03-16 - Deckhand czyści przedpole strojenia semantycznie
@@ -1580,18 +1571,14 @@ Najważniejsze obszary do dalszej regulacji:
 - Dodano raport:
   - [TUNING_AGENT_PARITY_NORMALIZATION_20260316.md](C:\MAKRO_I_MIKRO_BOT\EVIDENCE\TUNING_AGENT_PARITY_NORMALIZATION_20260316.md)
 
-## 2026-03-16 - Chirurgiczne wsparcie GBPUSD, USDCHF, DE30 i PLATIN
 
 - `GBPUSD` dostal ostrzejsze sito dla breakoutow w chaosie i papierowy ratunek tylko dla mocnych, czystych sygnalow trend/pullback.
 - `USDCHF` dostal brakujace odblokowanie papierowe dla minimalnego lota oraz selektywny ratunek dla mocnego trendu po blokadzie ryzyka.
 - `DE30` zostal doszczelniony przeciw slabym `pullback` i `range` w chaosie/trendzie, a papierowe timeouty zostaly skrocone.
-- `PLATIN` dostal twardsza blokade dla breakoutow i `range` o slabej swiecy i niskiej pewnosci.
 - Kompilacja po zmianie:
   - `17/17 compile_ok=true`
 - Dodano dokument:
-  - [92_SURGICAL_RUNTIME_SUPPORT_GBPUSD_USDCHF_DE30_PLATIN_V1.md](C:\MAKRO_I_MIKRO_BOT\DOCS\92_SURGICAL_RUNTIME_SUPPORT_GBPUSD_USDCHF_DE30_PLATIN_V1.md)
 - Dodano raport:
-  - [SURGICAL_RUNTIME_SUPPORT_GBPUSD_USDCHF_DE30_PLATIN_20260316.md](C:\MAKRO_I_MIKRO_BOT\EVIDENCE\SURGICAL_RUNTIME_SUPPORT_GBPUSD_USDCHF_DE30_PLATIN_20260316.md)
 
 ## 2026-03-16 - Dodatkowe wsparcie konwersji breakoutow dla GBPUSD
 
@@ -1682,9 +1669,7 @@ Najważniejsze obszary do dalszej regulacji:
 ## 2026-03-16 - Chirurgia najslabszych instrumentow poza EURUSD
 
 - Wzmocniono logike agenta strojenia dla:
-  - `PLATIN`
   - `USDJPY`
-  - `GBPAUD`
   - `USDCHF`
 - Jalowy eksperyment nie wisi juz bez konca: po serii przegladow bez nowych lekcji agent robi cofniecie.
 - Po rollbacku agent moze dobrac nowa sciezke alternatywna zaleznosc od symbolu i genotypu, zamiast wracac do tej samej porazki.

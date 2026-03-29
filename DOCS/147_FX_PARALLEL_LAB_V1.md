@@ -1,4 +1,4 @@
-# 147 FX Parallel Lab V1
+﻿# 147 FX Parallel Lab V1
 
 ## Cel
 - domknac `FX` jako osobne okno robocze
@@ -24,7 +24,6 @@ Uruchamia tester `MT5/OANDA` dla:
 - `EURJPY`
 - `GBPJPY`
 - `EURAUD`
-- `GBPAUD`
 
 ### Okno 2 - FX data lane
 - [qdm_fx_focus_pack.csv](C:\MAKRO_I_MIKRO_BOT\TOOLS\qdm_fx_focus_pack.csv)

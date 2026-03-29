@@ -1,4 +1,4 @@
-# EURUSD Module Mapping To Core / Profile / Strategy
+﻿# EURUSD Module Mapping To Core / Profile / Strategy
 
 ## Cel
 
@@ -36,7 +36,6 @@ Nowy stan:
 
 - lokalny management pozycji i trailing zostaly juz czesciowo odtworzone dla `EURUSD`,
 - pozostaly po stronie wzorca i nie trafily do `Core`,
-- ta sama zasada zostala juz potwierdzona analogiami `GBPUSD`, `USDJPY`, `NZDUSD`, `USDCAD`, `USDCHF`, `AUDUSD`, `EURJPY`, `GBPJPY`, `EURAUD` i `GBPAUD`.
 
 #### `EURUSD_Learning.mqh`
 
@@ -65,7 +64,6 @@ Nowy stan:
 - `Strategy_EURUSD.mqh` dostala juz pierwszy lokalny scoring oparty o `EMA/ATR/RSI`,
 - logika triggera nowego bara i lokalny setup ranking zostaly zachowane po stronie strategii,
 - to nie trafilo do `Core`,
-- analogicznie lokalne scoringi pozostaly juz w `Strategy_GBPUSD`, `Strategy_USDJPY`, `Strategy_NZDUSD`, `Strategy_USDCAD`, `Strategy_USDCHF`, `Strategy_AUDUSD`, `Strategy_EURJPY`, `Strategy_GBPJPY`, `Strategy_EURAUD` i `Strategy_GBPAUD`.
 
 #### `black_swan_guard.mqh`
 
@@ -98,7 +96,6 @@ Nowy stan:
 - pierwszy lokalny sizing dla `EURUSD` zostal juz odtworzony po stronie `Strategy_EURUSD` i `MicroBot_EURUSD`,
 - nie zostal wyniesiony do `Core`,
 - `Core` dostarcza tylko wspolny precheck wykonania,
-- ta sama zasada zostala juz utrzymana dla `GBPUSD`, `USDJPY`, `NZDUSD`, `USDCAD`, `USDCHF`, `AUDUSD`, `EURJPY`, `GBPJPY`, `EURAUD` i `GBPAUD`.
 
 #### `EURUSD_Guards.mqh`
 
@@ -143,7 +140,6 @@ Nowy stan:
 - `MbExecutionSend.mqh` trzyma juz wspolny lokalny wrapper `send/retry`,
 - `MbExecutionFeedback.mqh` trzyma juz wspolny lokalny update execution pressure / telemetry / incident note,
 - finalne wyslanie zlecenia nadal pozostaje lokalne dla mikro-bota,
-- finalny live-send zostal juz potwierdzony lokalnie w calej partii `11`: `EURUSD`, `GBPUSD`, `USDJPY`, `NZDUSD`, `USDCAD`, `USDCHF`, `AUDUSD`, `EURJPY`, `GBPJPY`, `EURAUD`, `GBPAUD`.
 
 #### `OnTradeTransaction` flow z `GH_EURUSD_MQL5_Only.mq5`
 
@@ -406,7 +402,6 @@ To potwierdza, ze architektura skaluje sie takze na crossy bez dorabiania centra
 
 ## Dalsze Potwierdzone Wzorce Crossowe
 
-`GBPJPY`, `EURAUD` i `GBPAUD` otrzymaly juz:
 
 - lokalne profile `FX_CROSS`,
 - lokalne scoringi dopasowane do crossow,

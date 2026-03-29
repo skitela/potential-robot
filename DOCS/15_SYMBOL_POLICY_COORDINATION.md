@@ -1,4 +1,4 @@
-# Symbol Policy Coordination
+﻿# Symbol Policy Coordination
 
 ## Cel
 
@@ -30,7 +30,6 @@ Aktualny podzial rodzin:
 
 - `FX_MAIN`: `EURUSD`, `GBPUSD`, `USDCAD`, `USDCHF`
 - `FX_ASIA`: `USDJPY`, `NZDUSD`, `AUDUSD`
-- `FX_CROSS`: `EURJPY`, `GBPJPY`, `EURAUD`, `GBPAUD`
 
 ## Wspolna koordynacja
 

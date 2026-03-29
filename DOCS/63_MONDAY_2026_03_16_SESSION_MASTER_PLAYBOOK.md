@@ -1,4 +1,4 @@
-# 63. Monday 2026-03-16 Session Master Playbook
+﻿# 63. Monday 2026-03-16 Session Master Playbook
 
 ## Cel
 
@@ -168,7 +168,6 @@ To jest rodzina najtrudniejsza kosztowo i najbardziej zdradliwa.
 Patrzymy glownie na:
 
 - czy `GBPJPY` nie wraca natychmiast do rany `SETUP_RANGE/CHAOS`,
-- czy `EURJPY`, `EURAUD` i `GBPAUD` zaczynaja dostarczac w ogole nowy material,
 - czy crossy pozostaja mierzalne, a nie rozjezdzaja sie natychmiast we wlasne skrajne zachowania.
 
 Tu najwazniejszy sygnal sukcesu to nie eksplozja zyskow, tylko brak regresji i wzrost czytelnosci.

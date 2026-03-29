@@ -247,9 +247,6 @@ function Should-IgnoreRetiredReferencePath {
 
     $normalized = $Path.Replace('/','\')
     return (
-        $normalized -match '\\MQL5\\Include\\Strategies\\Strategy_(GBPAUD|PLATIN)\.mqh$' -or
-        $normalized -match '\\MQL5\\Include\\Profiles\\Profile_(GBPAUD|PLATIN)\.mqh$' -or
-        $normalized -match '\\MQL5\\Experts\\MicroBots\\MicroBot_(GBPAUD|PLATIN)\.mq5$' -or
         $normalized -match '\\CONFIG\\strategy_variant_registry\.json$' -or
         $normalized -match '\\SERVER_PROFILE\\HANDOFF\\DOCS\\' -or
         $normalized -match '\\TOOLS\\VALIDATE_PROJECT_LAYOUT\.ps1$' -or
@@ -558,10 +555,20 @@ $activeSearchRoots = @(
     $chartPlanPath
 )
 
-$retiredHits = Search-TextMatches -Pattern "GBPAUD|PLATIN" -Paths $activeSearchRoots
-$retiredHits = @($retiredHits | Where-Object {
-    $_.path -ne $PSCommandPath -and -not (Should-IgnoreRetiredReferencePath -Path $_.path)
-})
+$retiredPatternParts = @(
+    $retiredSymbols |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { [regex]::Escape($_) }
+)
+
+$retiredHits = @()
+if ($retiredPatternParts.Count -gt 0) {
+    $retiredHits = Search-TextMatches -Pattern ($retiredPatternParts -join '|') -Paths $activeSearchRoots
+    $retiredHits = @($retiredHits | Where-Object {
+        $_.path -ne $PSCommandPath -and -not (Should-IgnoreRetiredReferencePath -Path $_.path)
+    })
+}
+
 if (@($retiredHits).Count -gt 0) {
     Add-Finding -Collection $findings -Loop $loop -Severity "high" -Component "retired_symbol_references" -Message "Aktywna orkiestracja nadal zawiera odniesienia do wycofanych symboli." -Context @{
         hit_count = $retiredHits.Count

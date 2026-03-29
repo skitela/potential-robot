@@ -24,8 +24,10 @@ input double InpTesterTimeStopScale = 1.00;
 #include "..\\..\\Include\\Core\\MbTesterTelemetry.mqh"
 #include "..\\..\\Include\\Core\\MbInformationalPolicyPlane.mqh"
 #include "..\\..\\Include\\Core\\MbExecutionPrecheck.mqh"
+#include "..\\..\\Include\\Core\\MbPreTradeTruth.mqh"
 #include "..\\..\\Include\\Core\\MbExecutionSend.mqh"
 #include "..\\..\\Include\\Core\\MbExecutionFeedback.mqh"
+#include "..\\..\\Include\\Core\\MbExecutionTruthFeed.mqh"
 #include "..\\..\\Include\\Core\\MbExecutionQualityGuard.mqh"
 #include "..\\..\\Include\\Core\\MbContextPolicy.mqh"
 #include "..\\..\\Include\\Core\\MbCandleAdvisory.mqh"
@@ -966,6 +968,22 @@ void OnTick()
         }
       else
         {
+         string pretrade_candidate_id = MbPreTradeTruthBuildCandidateId(g_state.symbol,now,signal);
+         string pretrade_comment = MbPreTradeTruthBuildRequestComment(pretrade_candidate_id);
+         MqlTradeRequest pretrade_request;
+         MbPreTradeTruthPrepareMarketRequest(
+            g_profile,
+            g_state.magic,
+            signal.side,
+            risk_plan.lots,
+            entry_price,
+            sl_price,
+            tp_price,
+            pretrade_comment,
+            pretrade_request
+         );
+         MbPreTradeTruthRecord pretrade_record;
+         MbPreTradeTruthEvaluateAndWrite("MICROBOT",g_state.symbol,pretrade_candidate_id,pretrade_request,pretrade_record);
          MbMarkOrderSend(g_state);
          MbExecutionResult exec_result = MbExecuteMarketOrder(
             g_trade,
@@ -975,7 +993,7 @@ void OnTick()
             entry_price,
             sl_price,
             tp_price,
-            InpTradeComment
+            pretrade_comment
          );
          MbFinalizeExecutionAttempt(
             g_execution_telemetry_path,
@@ -1014,6 +1032,8 @@ void OnTradeTransaction(
   {
    if(!MbTransactionMatchesLocalBot(g_state.symbol,g_state.magic,trans,request))
       return;
+
+   MbExecutionTruthCapture("MICROBOT",g_state.symbol,trans,request,result);
 
    MbAppendTradeTransactionEvent(
       g_trade_transaction_log_path,

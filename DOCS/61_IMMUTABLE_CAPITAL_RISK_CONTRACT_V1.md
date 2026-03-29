@@ -1,4 +1,4 @@
-# 61. Immutable Capital Risk Contract V1
+﻿# 61. Immutable Capital Risk Contract V1
 
 ## Cel
 
@@ -254,7 +254,6 @@ To nie jest atak na lokalne geny:
 - `EURUSD`
 - `USDJPY`
 - `GBPJPY`
-- `GBPAUD`
 
 dalej maja zachowac wlasne modele wejscia, filtry i tempo.
 

@@ -41,6 +41,7 @@ function Get-CodeSymbolFromRegistryRow {
 & (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
     -ProjectRoot $projectPath `
     -GateType ROLLOUT `
+    -AllowStale:$AllowBlockedAuditGate `
     -AllowBlocked:$AllowBlockedAuditGate | Out-Null
 
 $targetExperts = Join-Path $targetTerminal "MQL5\Experts\MicroBots"
@@ -71,7 +72,9 @@ if ($CreateRuntimeFolders) {
         (Join-Path $targetCommonRoot "spool"),
         (Join-Path $targetCommonRoot "spool\onnx_observations"),
         (Join-Path $targetCommonRoot "spool\candidate_signals"),
-        (Join-Path $targetCommonRoot "spool\learning_observations_v2")
+        (Join-Path $targetCommonRoot "spool\learning_observations_v2"),
+        (Join-Path $targetCommonRoot "spool\pretrade_truth"),
+        (Join-Path $targetCommonRoot "spool\execution_truth")
     )
 }
 

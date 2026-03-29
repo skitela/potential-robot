@@ -1,4 +1,4 @@
-# OANDA MT5 Metals And Indices Terminal Rollout v1
+﻿# OANDA MT5 Metals And Indices Terminal Rollout v1
 
 ## Cel
 
@@ -68,7 +68,6 @@ Do profilu weszly:
 - cztery metale:
   - `GOLD`
   - `SILVER`
-  - `PLATIN`
   - `COPPER-US`
 - dwa indeksy:
   - `DE30`

@@ -61,6 +61,9 @@ def ensure_mailbox(cfg: Config) -> dict[str, Path]:
         "responses_archive": root / "responses" / "archive",
         "responses_consumed": root / "responses" / "consumed",
         "responses_extracted": root / "responses" / "extracted",
+        "notes_root": root / "notes",
+        "notes_inbox": root / "notes" / "inbox",
+        "notes_archive": root / "notes" / "archive",
         "diagnostics": root / "diagnostics",
         "status": root / "status",
         "logs": root / "logs",
@@ -629,6 +632,14 @@ FILE_BLOCK_RE = re.compile(
     r"(?ms)^FILE:\s*(?P<path>[^\r\n]+)\r?\n```[^\n]*\n(?P<content>.*?)\n```"
 )
 
+NOTE_BLOCK_PREFIXES = {"notes", "shared_notes", "bridge_notes"}
+
+
+def safe_slug(text: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", text.strip())
+    slug = slug.strip("._-")
+    return slug or "note"
+
 
 def extract_file_blocks(text: str, target_root: Path) -> list[dict[str, Any]]:
     extracted: list[dict[str, Any]] = []
@@ -643,6 +654,62 @@ def extract_file_blocks(text: str, target_root: Path) -> list[dict[str, Any]]:
         full_path.write_text(content, encoding="utf-8")
         extracted.append({"path": str(full_path), "relative_path": str(safe_relative)})
     return extracted
+
+
+def publish_extracted_notes(
+    paths: dict[str, Path],
+    request_id: str,
+    request_meta: dict[str, Any],
+    extracted: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    published: list[dict[str, Any]] = []
+    notes_inbox = paths["notes_inbox"]
+    request_title = str(request_meta.get("title", "")).strip()
+    source_title = safe_slug(request_title or request_id)
+
+    for index, item in enumerate(extracted, start=1):
+        relative_path = Path(str(item.get("relative_path", "")))
+        if not relative_path.parts:
+            continue
+        if relative_path.parts[0].lower() not in NOTE_BLOCK_PREFIXES:
+            continue
+
+        source_path = Path(str(item.get("path", "")))
+        if not source_path.exists() or not source_path.is_file():
+            continue
+
+        note_name = safe_slug(relative_path.stem or source_path.stem)
+        suffix = source_path.suffix or ".md"
+        note_id = f"{request_id}_{index:02d}_{note_name}"
+        target_path = notes_inbox / f"{note_id}{suffix}"
+        shutil.copy2(source_path, target_path)
+
+        meta_path = notes_inbox / f"{note_id}.json"
+        payload = {
+            "note_id": note_id,
+            "request_id": request_id,
+            "request_title": request_title,
+            "source": "gpt54_pro_response",
+            "author": "gpt54_pro",
+            "title": relative_path.stem or source_title,
+            "relative_path": str(relative_path),
+            "note_path": str(target_path),
+            "written_at_local": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        published.append({"note_path": str(target_path), "meta_path": str(meta_path), "title": payload["title"]})
+
+    if published:
+        write_status(
+            paths["status"],
+            "gpt_notes_latest",
+            {
+                "request_id": request_id,
+                "request_title": request_title,
+                "published_notes": published,
+            },
+        )
+    return published
 
 
 def next_request(requests_pending: Path) -> Path | None:
@@ -684,6 +751,7 @@ def write_response_files(
     response_json = paths["responses_ready"] / f"{request_id}_response.json"
     extracted_root = paths["responses_extracted"] / request_id
     extracted = extract_file_blocks(str(response["text"]), extracted_root)
+    published_notes = publish_extracted_notes(paths, request_id, request_meta, extracted)
 
     response_md.write_text(str(response["text"]), encoding="utf-8")
     response_payload = {
@@ -693,6 +761,7 @@ def write_response_files(
         "response_path": str(response_md),
         "extracted_root": str(extracted_root),
         "extracted_files": extracted,
+        "published_notes": published_notes,
         "status": response.get("status", {}),
         "html_snapshot_saved": cfg.save_html_snapshot,
         "recovered_after_timeout": bool(response.get("recovered_after_timeout", False)),

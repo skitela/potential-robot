@@ -1,4 +1,4 @@
-# 59. First Hour Reopen Playbook FX_CROSS
+﻿# 59. First Hour Reopen Playbook FX_CROSS
 
 ## Cel
 
@@ -29,7 +29,6 @@ W pierwszej godzinie po otwarciu rynku obserwujemy:
 - skuteczna polityke `tuning_policy_effective.csv`,
 - to, czy lokalne `LOW_SAMPLE` zaczyna schodzic do bardziej wiarygodnego stanu,
 - to, czy `GBPJPY` znow wpada w `SETUP_RANGE/CHAOS`,
-- czy `EURJPY`, `EURAUD` i `GBPAUD` zaczynaja w ogole dostarczac nowy material zamiast tylko stac w ciszy.
 
 ## Jak interpretujemy pierwsza godzine
 
@@ -66,4 +65,3 @@ Ten playbook dotyczy:
 - `EURJPY`
 - `GBPJPY`
 - `EURAUD`
-- `GBPAUD`

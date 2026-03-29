@@ -1,4 +1,4 @@
-# 98. Weak Instrument Surgical Agent Recovery v1
+﻿# 98. Weak Instrument Surgical Agent Recovery v1
 
 ## Cel
 Domknac cztery najslabsze instrumenty poza `EURUSD` tak, aby agent strojenia:
@@ -7,15 +7,11 @@ Domknac cztery najslabsze instrumenty poza `EURUSD` tak, aby agent strojenia:
 - dobieral alternatywna regulacje zgodna z genotypem symbolu.
 
 ## Instrumenty
-- `PLATIN`
 - `USDJPY`
-- `GBPAUD`
 - `USDCHF`
 
 ## Co znaleziono
-- `PLATIN`: breakoutowy metal z bardzo mala probka, duza strata dnia i eksperymentem `REBALANCE`, ktory pozostawal w stanie oczekiwania bez nowych lekcji.
 - `USDJPY`: para azjatycka z nadmiarem kupien, slabym bilansem `wygrane / przegrane` i powtarzaniem fiaska `FLOOR_RANGE_CONFIDENCE` na sciezce `SETUP_BREAKOUT / TREND`, mimo ze biezacy rynek byl bardziej zakresowy.
-- `GBPAUD`: cross z duza liczba kandydatow blokowanych przez ryzyko i score gate; eksperyment `FLOOR_RANGE_CONFIDENCE` wisial bez nowych probek.
 - `USDCHF`: glowna para z wysoka strata, seria porazek i powtarzajacym sie fiaskiem breakoutow w warunkach `spread_regime = CAUTION`.
 
 ## Wdrozone zmiany
@@ -44,7 +40,6 @@ Dodano budowanie alternatywnej regulacji zalezne od instrumentu:
     - utrzymuje wyzszy prog pewnosci,
     - doklada podatek `range_trend`.
 
-- `GBPAUD`
   - po fiasku `FLOOR_RANGE_CONFIDENCE / SETUP_BREAKOUT / BREAKOUT`
   - agent przechodzi do breakoutu z czystym Renko i ciasniejsza pewnoscia.
 
@@ -53,12 +48,10 @@ Dodano budowanie alternatywnej regulacji zalezne od instrumentu:
   - agent przechodzi do breakoutu wymagajacego dobrej swiecy i Renko
   - oraz doklada podatek konfliktu breakout/tlo.
 
-- `PLATIN`
   - po fiasku `REBALANCE / SETUP_BREAKOUT / BREAKOUT`
   - agent przechodzi do breakoutu tylko z dobra swieca i ciasniejszym `risk_cap`.
 
 ## Oczekiwany efekt
-- `PLATIN` i `GBPAUD` nie beda juz wisialy w eksperymencie bez ruchu.
 - `USDJPY` przestanie wracac do zbyt podobnej sciezki breakoutowej i dostanie regulacje zgodna z genotypem range/asian.
 - `USDCHF` przestanie stroic breakout zbyt latwo przy slabszym tle spreadowym.
 

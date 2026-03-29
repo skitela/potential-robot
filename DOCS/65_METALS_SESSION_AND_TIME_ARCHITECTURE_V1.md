@@ -1,4 +1,4 @@
-# 65. Metals Session And Time Architecture V1
+﻿# 65. Metals Session And Time Architecture V1
 
 ## Cel
 
@@ -12,7 +12,6 @@ Zamknac w jednym miejscu trzy rzeczy:
 Do pierwszego rollout-u rodziny metali zostaja tylko cztery instrumenty:
 - `GOLD.pro`
 - `SILVER.pro`
-- `PLATIN.pro`
 - `COPPER-US.pro`
 
 `PALLAD.pro` zostaje odrzucony na ten etap.
@@ -39,7 +38,6 @@ Z punktu widzenia godzin handlu:
 - `SILVER.pro`
   - pon-czw `00:05-22:59`
   - pt `00:05-21:59`
-- `PLATIN.pro`
   - pon-czw `00:01-22:59`
   - pt `00:01-21:59`
 - `COPPER-US.pro`
@@ -198,7 +196,6 @@ Najbardziej sensowna architektura na start:
 ### Podrodzina 2
 
 - `METALS_FUTURES`
-- `PLATIN.pro`
 - `COPPER-US.pro`
 
 To jest czystsze niz wrzucenie wszystkiego do jednego worka, bo:
@@ -231,7 +228,6 @@ Na dzis:
 - rodzina metali ma startowac w czworke:
   - `GOLD.pro`
   - `SILVER.pro`
-  - `PLATIN.pro`
   - `COPPER-US.pro`
 - architektura ma byc:
   - jedna rodzina `METALS`

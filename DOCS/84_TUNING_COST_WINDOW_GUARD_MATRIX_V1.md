@@ -1,4 +1,4 @@
-# 84. Tuning Cost Window Guard Matrix V1
+﻿# 84. Tuning Cost Window Guard Matrix V1
 
 ## Cel
 
@@ -113,7 +113,6 @@ Moze tylko pomagac go respektowac szybciej i madrzej.
   - `EURJPY`
   - `GBPJPY`
   - `EURAUD`
-  - `GBPAUD`
 - glowne okno:
   - rodzina aktywna we wlasnym rdzeniu poranka europejskiego
 - presja_kosztu:
@@ -160,7 +159,6 @@ Moze tylko pomagac go respektowac szybciej i madrzej.
 ### METALS_FUTURES
 
 - rodzina:
-  - `PLATIN`
   - `COPPERUS`
 - glowne okno:
   - `14:00-17:00` PL

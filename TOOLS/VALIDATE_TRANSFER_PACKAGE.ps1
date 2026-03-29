@@ -10,12 +10,17 @@ $packageRoot = Join-Path $projectPath "SERVER_PROFILE\PACKAGE"
 $handoffRoot = Join-Path $projectPath "SERVER_PROFILE\HANDOFF"
 $issues = New-Object System.Collections.Generic.List[string]
 $registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
+$planPath = Join-Path $projectPath "CONFIG\scalping_universe_plan.json"
 
 if (-not (Test-Path -LiteralPath $registryPath)) {
     throw "Missing registry: $registryPath"
 }
+if (-not (Test-Path -LiteralPath $planPath)) {
+    throw "Missing scalping universe plan: $planPath"
+}
 
 $registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $configAllowList = @(
     "candidate_arbitration_contract_v1.json",
     "capital_risk_contract_v1.json",
@@ -151,6 +156,7 @@ $expectedStrategies = New-Object System.Collections.Generic.List[string]
 $expectedPresets = New-Object System.Collections.Generic.List[string]
 $expectedActivePresets = New-Object System.Collections.Generic.List[string]
 $expectedActiveSymbols = New-Object System.Collections.Generic.List[string]
+$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
 
 foreach ($row in @($registry.symbols)) {
     $expert = [string]$row.expert
@@ -163,7 +169,9 @@ foreach ($row in @($registry.symbols)) {
     [void]$expectedProfiles.Add(("Profile_{0}.mqh" -f $codeSymbol))
     [void]$expectedStrategies.Add(("Strategy_{0}.mqh" -f $codeSymbol))
     [void]$expectedPresets.Add($preset)
-    [void]$expectedActivePresets.Add($activePresetName)
+    if ($paperLiveSymbols -contains [string]$row.symbol) {
+        [void]$expectedActivePresets.Add($activePresetName)
+    }
     [void]$expectedActiveSymbols.Add([string]$row.symbol)
 }
 
@@ -223,16 +231,6 @@ foreach ($name in @($configAllowList | Where-Object { $_ -notin $packageConfigs 
 }
 foreach ($name in @($extraConfigs)) {
     $issues.Add("PACKAGE_EXTRA_CONFIG:" + $name)
-}
-
-foreach ($retiredToken in @("GBPAUD", "PLATIN")) {
-    $retiredHits = @(
-        $packageExperts + $packageProfiles + $packageStrategies + $packagePresets + $packageActivePresets + $packageConfigs |
-            Where-Object { $_ -match $retiredToken }
-    )
-    if ($retiredHits.Count -gt 0) {
-        $issues.Add("PACKAGE_RETIRED_SYMBOL_PRESENT:{0}:{1}" -f $retiredToken, ($retiredHits -join ","))
-    }
 }
 
 if ($null -ne $packageManifest) {

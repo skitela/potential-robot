@@ -137,6 +137,15 @@ $paperLiveSyncOk = [bool](Get-OptionalValue -Object $paperLiveSyncReport -Name "
 $paperLiveSyncStatus = [string](Get-OptionalValue -Object $paperLiveSyncReport -Name "status" -Default "")
 $paperLiveSyncStatusNormalized = $paperLiveSyncStatus.Trim()
 $migrationConfirmed = ($migrationOk -or $paperLiveSyncOk)
+$migrationStageEffective = if ($migrationOk) {
+    if ([string]::IsNullOrWhiteSpace($migrationStage)) { "done" } else { $migrationStage }
+}
+elseif ($paperLiveSyncOk) {
+    "paper_live_sync_confirmed"
+}
+else {
+    $migrationStage
+}
 $serverPingEnabled = ([string](Get-OptionalValue -Object $pingContract -Name "enabled" -Default "0") -eq "1")
 $serverPingSource = [string](Get-OptionalValue -Object $pingContract -Name "source" -Default "")
 $trainerUsesRuntimeLatency = (($trainerText -match 'runtime_latency_us') -or ($featureContractText -match 'runtime_latency_us'))
@@ -225,8 +234,8 @@ $summary = [ordered]@{
     profile_chart_count = @($profileCharts).Count
     profile_active_chart_count = @($activeCharts).Count
     profile_safe_chart_count = @($safeCharts).Count
-    migration_ok = $migrationOk
-    migration_stage = $migrationStage
+    migration_ok = $migrationConfirmed
+    migration_stage = $migrationStageEffective
     paper_live_sync_ok = $paperLiveSyncOk
     paper_live_sync_status = $paperLiveSyncStatus
     migration_confirmed = $migrationConfirmed

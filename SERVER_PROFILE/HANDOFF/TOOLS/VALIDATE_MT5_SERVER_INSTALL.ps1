@@ -27,7 +27,9 @@ $required = @(
     (Join-Path $targetCommon "spool"),
     (Join-Path $targetCommon "spool\onnx_observations"),
     (Join-Path $targetCommon "spool\candidate_signals"),
-    (Join-Path $targetCommon "spool\learning_observations_v2")
+    (Join-Path $targetCommon "spool\learning_observations_v2"),
+    (Join-Path $targetCommon "spool\pretrade_truth"),
+    (Join-Path $targetCommon "spool\execution_truth")
 )
 
 foreach ($item in $registry.symbols) {

@@ -22,14 +22,30 @@ Nie klikamy chaotycznie po dwoch interfejsach. Zamiast tego kazda wymiana ma:
 - `requests\in_progress`
 - `requests\done`
 - `requests\failed`
+- `coordination\claims\active`
+- `coordination\claims\released`
+- `coordination\activity`
 - `ack\executor`
 - `ack\reviewer`
 - `responses\ready`
 - `responses\consumed`
 - `responses\archive`
 - `responses\extracted`
+- `notes\inbox`
+- `notes\archive`
 - `status`
 - `logs`
+
+## Ograniczenie produktu GPT-5.4 Pro
+
+Produkt przegladarkowy GPT-5.4 Pro nie ma bezposredniego dostepu do lokalnego systemu plikow operatora.
+W praktyce oznacza to, ze sam z siebie nie zapisze pliku do `orchestrator_mailbox` i nie uruchomi lokalnego PowerShella.
+
+Dlatego zapis do mostu moze nastapic tylko przez:
+
+- warstwe automatyczna Orchestratora Chrome DevTools,
+- lokalny import reczny odpowiedzi z clipboard albo pliku,
+- albo manualne pobranie tresci i wstrzykniecie jej do mailboxa przez lokalny skrypt.
 
 ## Jednostka pracy
 
@@ -73,6 +89,56 @@ Plik `.json` zawiera metadane:
 7. `ack`
    Strony moga zostawic jawny sygnal, ze odpowiedz zostala przeczytana albo krok zostal wykonany.
 
+8. `notes`
+   Wspolne notatki robocze z obu stron, publikowane recznie albo automatycznie z blokow FILE.
+
+9. `coordination\claims`
+   Jawne zajecie zakresu pracy z TTL, zeby dwa strumienie pracy nie wchodzily sobie na te same pliki albo ten sam raport.
+
+## Koordynacja pracy rownoleglej
+
+Jesli Codex i drugi strumien pracy maja dzialac rownolegle na tym samym repo, nie polegamy na "pamieci rozmowy". Polegamy na lokalnych claimach i notatkach.
+
+Jezeli chcesz zrobic z tego staly model wielobrygadowy, to role musza byc zdefiniowane jawnie w rejestrze brygad, a nie wymyslane za kazdym razem od nowa:
+
+- `CONFIG\orchestrator_brigades_registry_v1.json`
+- `TOOLS\orchestrator\ORCHESTRATOR_BRIGADES_PL.md`
+
+W takim trybie `Actor` i `AssignedTo` dla prac lane'owych powinny uzywac `actor_id` z tego rejestru.
+
+Minimalny rytm bezkolizyjny:
+
+1. Strona bioraca zadanie robi claim przez `CLAIM_ORCHESTRATOR_WORK.ps1`.
+2. Druga strona sprawdza `GET_ORCHESTRATOR_WORKBOARD.ps1` zanim wejdzie w ten sam raport albo te same pliki.
+3. Postep i handoff ida przez `WRITE_ORCHESTRATOR_NOTE.ps1` albo przez odpowiedzi z blokami `notes\...`.
+4. Po zakonczeniu zakresu claim jest zwalniany przez `RELEASE_ORCHESTRATOR_WORK.ps1`.
+
+To nie daje wspolnej swiadomosci w czasie rzeczywistym, ale daje szybka i audytowalna koordynacje lokalna.
+
+## Podzial jednej duzej roboty na dwa tory
+
+To jest wariant pod twoj scenariusz: jedna strona robi koncept / implementacje, druga w tym samym czasie robi audyt, test albo monitoring.
+
+Przyklad rytmu:
+
+1. Strona prowadzaca bierze claim przez `CLAIM_ORCHESTRATOR_WORK.ps1` na glowny raport i glowny zakres plikow.
+2. Ta sama strona tworzy task rownolegly przez `ASSIGN_ORCHESTRATOR_PARALLEL_TASK.ps1` dla drugiego toru, np. `audit`, `runtime-check`, `regression-review`.
+3. Drugi tor startuje swoje zadanie przez `START_ORCHESTRATOR_PARALLEL_TASK.ps1`.
+4. W trakcie dluzszego przebiegu zapisuje heartbeat lub status przez `WRITE_ORCHESTRATOR_ACTIVITY.ps1`.
+5. `GET_ORCHESTRATOR_TASKBOARD.ps1` pokazuje, czy zadanie jest aktywne, zablokowane albo stale.
+6. Po zakonczeniu zadanie jest domykane przez `COMPLETE_ORCHESTRATOR_PARALLEL_TASK.ps1`.
+
+Tak da sie zrobic model: `chat robi koncept / zmiany`, a `codex robi audit`, albo odwrotnie.
+
+Tak samo da sie zrobic model wielu brygad, np. osobny lane dla `brygada_ml_migracja_mt5`, `brygada_audyt_cleanup`, `brygada_wdrozenia_mt5`, `brygada_rozwoj_kodu`, `brygada_architektura_innowacje`, `brygada_nadzor_uczenia_rolloutu`.
+
+Zasada operacyjna jest prosta:
+
+1. Jedna rozmowa albo agent bierze jedna brygade na sesje.
+2. Brygada publikuje claimy, taski i heartbeat pod swoim `actor_id`.
+3. Handoff do innej brygady musi zostawic note plus task.
+4. Globalne veto nadal nalezy do warstw kapitalowo-sesyjnych, a nie do pojedynczej brygady.
+
 ## Zasady operacyjne
 
 ### 1. Nie kasujemy requestow ani odpowiedzi bez sladu
@@ -87,16 +153,18 @@ Kazda operacja ma zostawic:
 
 Jezeli GPT zwroci odpowiedz w formacie:
 
-```text
+````text
 FILE: relative/path.ext
 ```lang
 ...
 ```
-```
+````
 
 to Orchestrator rozbija to do:
 
 - `responses\extracted\<request_id>\...`
+
+Jesli prefiks pliku to `notes\`, `shared_notes\` albo `bridge_notes\`, tresc jest dodatkowo publikowana do `notes\inbox` jako wspolna notatka.
 
 ### 3. Nie laczymy warstwy transportu z warstwa wdrozenia
 
@@ -149,9 +217,16 @@ Ten profil jest oddzielony od zwyklych okien Chrome, zeby nie mieszac sesji oper
 5. Codex wdraza zmiany albo generuje kolejny request.
 6. `RUN_ORCHESTRATOR_SMOKE_TEST.ps1` daje szybka walidacje end-to-end po zmianach w moscie.
 
+Sciezka reczna, gdy GPT-5.4 Pro odpowiedzial tylko w przegladarce:
+
+1. Operator kopiuje odpowiedz albo pobiera ja do pliku.
+2. `IMPORT_GPT54_MANUAL_RESPONSE.ps1` zapisuje odpowiedz do `responses\ready`.
+3. Ten sam skrypt publikuje ewentualne `notes\...` do `notes\inbox`.
+4. Status `gpt_last_response.json` i `gpt_inbox_latest.json` zostaje odswiezony tak samo jak w trybie automatycznym.
+
 W bardziej dojrzalej wersji:
 
-6. `executor` i / lub `reviewer` zostawiaja pliki ACK w `ack\...`
+1. `executor` i / lub `reviewer` zostawiaja pliki ACK w `ack\...`
 
 ## Co uwazamy za sukces
 

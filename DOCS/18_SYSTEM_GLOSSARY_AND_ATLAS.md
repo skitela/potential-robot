@@ -1,4 +1,4 @@
-# MAKRO_I_MIKRO_BOT System Glossary And Atlas
+﻿# MAKRO_I_MIKRO_BOT System Glossary And Atlas
 
 Version: 1.0  
 Scope: `C:\MAKRO_I_MIKRO_BOT`  
@@ -235,8 +235,6 @@ Pliki:
 - mikro-bot `FX_CROSS` dla `EURAUD`.
 - lokalnie zawiera wariant `range`.
 
-`MicroBot_GBPAUD.mq5`
-- mikro-bot `FX_CROSS` dla `GBPAUD`.
 
 ### 4. `MQL5/Include/Core`
 
@@ -400,8 +398,6 @@ Pliki:
 - polityka `EURAUD`.
 - rodzina `FX_CROSS`, okno `7-11`.
 
-`Profile_GBPAUD.mqh`
-- polityka `GBPAUD`.
 - rodzina `FX_CROSS`, okno `7-11`.
 
 ### 6. `MQL5/Include/Strategies`
@@ -466,8 +462,6 @@ Pliki:
 - strategia `EURAUD`.
 - lokalny cross z `range`.
 
-`Strategy_GBPAUD.mqh`
-- strategia `GBPAUD`.
 - lokalny cross z mocniejszym profilem triggera i trailingu.
 
 ### 7. `MQL5/Presets`
