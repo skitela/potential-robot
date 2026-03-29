@@ -95,6 +95,21 @@ function Convert-ToSandboxToken {
     return $out
 }
 
+function Convert-ToMtCanonicalSymbol {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    $out = $Value.Trim().ToUpperInvariant()
+    $dotPos = $out.IndexOf('.')
+    if ($dotPos -gt 0) {
+        $out = $out.Substring(0, $dotPos)
+    }
+    return $out
+}
+
 function Resolve-EvidenceDir {
     param(
         [string]$ProjectRootPath,
@@ -463,7 +478,9 @@ function Initialize-StrategyTesterSandboxContract {
         [Parameter(Mandatory = $true)]
         [string]$SandboxRoot,
         [Parameter(Mandatory = $true)]
-        [string]$StorageAlias
+        [string]$StorageAlias,
+        [Parameter(Mandatory = $true)]
+        [string]$RuntimeSymbol
     )
 
     $paths = @(
@@ -483,6 +500,105 @@ function Initialize-StrategyTesterSandboxContract {
     foreach ($path in $paths) {
         New-Item -ItemType Directory -Force -Path $path | Out-Null
     }
+
+    $commonFilesRoot = Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Files"
+    $sourceRoot = Join-Path $commonFilesRoot "MAKRO_I_MIKRO_BOT"
+    if (-not (Test-Path -LiteralPath $sourceRoot)) {
+        return
+    }
+
+    $runtimeAlias = Convert-ToMtCanonicalSymbol $RuntimeSymbol
+    $storageAliasCanonical = Convert-ToMtCanonicalSymbol $StorageAlias
+
+    $keyArtifactNames = @(
+        "paper_gate_acceptor_runtime_latest.onnx",
+        "paper_gate_acceptor_runtime_manifest_latest.json",
+        "paper_gate_acceptor_runtime_metrics_latest.json",
+        "paper_gate_acceptor_runtime_contract_latest.csv"
+    )
+
+    $sourceGlobalKeyDir = Join-Path $sourceRoot "key\_GLOBAL"
+    $targetGlobalKeyDir = Join-Path $SandboxRoot "key\_GLOBAL"
+    if (Test-Path -LiteralPath $sourceGlobalKeyDir) {
+        New-Item -ItemType Directory -Force -Path $targetGlobalKeyDir | Out-Null
+        foreach ($artifactName in $keyArtifactNames) {
+            $sourceArtifact = Join-Path $sourceGlobalKeyDir $artifactName
+            if (-not (Test-Path -LiteralPath $sourceArtifact)) {
+                continue
+            }
+            Copy-Item -LiteralPath $sourceArtifact -Destination (Join-Path $targetGlobalKeyDir $artifactName) -Force
+        }
+    }
+
+    $symbolSourceCandidates = @()
+    foreach ($candidate in @($runtimeAlias, $storageAliasCanonical)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        if ($candidate -notin $symbolSourceCandidates) {
+            $symbolSourceCandidates += $candidate
+        }
+    }
+
+    $symbolTargetAliases = @()
+    foreach ($candidate in @($runtimeAlias, $storageAliasCanonical)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        if ($candidate -notin $symbolTargetAliases) {
+            $symbolTargetAliases += $candidate
+        }
+    }
+
+    $resolvedSymbolSourceDir = $null
+    foreach ($candidate in $symbolSourceCandidates) {
+        $candidateDir = Join-Path $sourceRoot ("key\{0}" -f $candidate)
+        if (Test-Path -LiteralPath $candidateDir) {
+            $resolvedSymbolSourceDir = $candidateDir
+            break
+        }
+    }
+
+    if ($null -ne $resolvedSymbolSourceDir) {
+        foreach ($targetAlias in $symbolTargetAliases) {
+            $targetKeyDir = Join-Path $SandboxRoot ("key\{0}" -f $targetAlias)
+            New-Item -ItemType Directory -Force -Path $targetKeyDir | Out-Null
+            foreach ($artifactName in $keyArtifactNames) {
+                $sourceArtifact = Join-Path $resolvedSymbolSourceDir $artifactName
+                if (-not (Test-Path -LiteralPath $sourceArtifact)) {
+                    continue
+                }
+                Copy-Item -LiteralPath $sourceArtifact -Destination (Join-Path $targetKeyDir $artifactName) -Force
+            }
+        }
+    }
+
+    $sourceStateCandidates = @()
+    foreach ($candidate in @($runtimeAlias, $storageAliasCanonical)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        if ($candidate -notin $sourceStateCandidates) {
+            $sourceStateCandidates += $candidate
+        }
+    }
+
+    $studentGateContractSource = $null
+    foreach ($candidate in $sourceStateCandidates) {
+        $candidatePath = Join-Path $sourceRoot ("state\{0}\student_gate_contract.csv" -f $candidate)
+        if (Test-Path -LiteralPath $candidatePath) {
+            $studentGateContractSource = $candidatePath
+            break
+        }
+    }
+
+    if ($null -ne $studentGateContractSource) {
+        foreach ($targetAlias in $symbolTargetAliases) {
+            $targetStateDir = Join-Path $SandboxRoot ("state\{0}" -f $targetAlias)
+            New-Item -ItemType Directory -Force -Path $targetStateDir | Out-Null
+            Copy-Item -LiteralPath $studentGateContractSource -Destination (Join-Path $targetStateDir "student_gate_contract.csv") -Force
+        }
+    }
 }
 
 $canonicalAlias = Get-RegistryCanonicalSymbol -RegistryItem $entry
@@ -491,6 +607,11 @@ $resolvedAlias = Convert-ToSandboxToken $(if (-not [string]::IsNullOrWhiteSpace(
 $storageAlias = Convert-ToSandboxToken (Get-RegistryCanonicalSymbol -RegistryItem $entry)
 if ([string]::IsNullOrWhiteSpace($storageAlias)) {
     $storageAlias = $resolvedAlias
+}
+$sandboxSymbolAlias = if ($Symbol -like "*_QDM_*") {
+    Convert-ToMtCanonicalSymbol $Symbol
+} else {
+    $storageAlias
 }
 $workerToken = Convert-ToSandboxToken $WorkerName
 if ([string]::IsNullOrWhiteSpace($SandboxTag)) {
@@ -545,7 +666,7 @@ $testerLogDir = Join-Path $TerminalDataDir "Tester\logs"
 $terminalLogDir = Join-Path $TerminalDataDir "logs"
 $testerProfilesDir = Join-Path $TerminalDataDir "MQL5\Profiles\Tester"
 $reportBaseRel = "reports\" + $runId
-$sandboxName = "MAKRO_I_MIKRO_BOT_TESTER_${storageAlias}_${sanitizedTag}"
+$sandboxName = "MAKRO_I_MIKRO_BOT_TESTER_${sandboxSymbolAlias}_${sanitizedTag}"
 $sandboxRoot = Join-Path (Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Files") $sandboxName
 New-Item -ItemType Directory -Force -Path $testerProfilesDir | Out-Null
 
@@ -557,6 +678,12 @@ if (-not [string]::IsNullOrWhiteSpace($expertParametersSourcePath)) {
     Copy-Item -LiteralPath $expertParametersSourcePath -Destination $expertParametersTargetPath -Force
     Set-PresetKeyValue -PresetPath $expertParametersTargetPath -Key "InpEnableStrategyTesterSandbox" -Value "true"
     Set-PresetKeyValue -PresetPath $expertParametersTargetPath -Key "InpStrategyTesterSandboxTag" -Value $sanitizedTag
+    if ($Symbol -like "*_QDM_*") {
+        # QDM custom-symbol smoke is an integration check, not a fidelity benchmark.
+        # A 5-second timer across multi-day M1 tests creates tens of thousands of cycles
+        # and needlessly pushes the tester into timeout before the run can close.
+        Set-PresetKeyValue -PresetPath $expertParametersTargetPath -Key "InpTimerSec" -Value "60"
+    }
     if ($Optimization -ne 0) {
         Set-OptimizationRangesInPreset -PresetPath $expertParametersTargetPath
     }
@@ -566,8 +693,8 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
 New-Item -ItemType Directory -Force -Path $mt5ReportsDir | Out-Null
 
-& (Join-Path $ProjectRoot "TOOLS\RESET_MICROBOT_STRATEGY_TESTER_SANDBOX.ps1") -ProjectRoot $ProjectRoot -SymbolAlias $storageAlias -SandboxTag $sanitizedTag | Out-Null
-Initialize-StrategyTesterSandboxContract -SandboxRoot $sandboxRoot -StorageAlias $storageAlias
+& (Join-Path $ProjectRoot "TOOLS\RESET_MICROBOT_STRATEGY_TESTER_SANDBOX.ps1") -ProjectRoot $ProjectRoot -SymbolAlias $sandboxSymbolAlias -SandboxTag $sanitizedTag | Out-Null
+Initialize-StrategyTesterSandboxContract -SandboxRoot $sandboxRoot -StorageAlias $storageAlias -RuntimeSymbol $Symbol
 & (Join-Path $ProjectRoot "TOOLS\COMPILE_MICROBOT.ps1") -ExpertName $ExpertName | Out-Null
 
 $config = @"
@@ -723,15 +850,15 @@ if ($Optimization -ne 0) {
     $optimizationResultRows = Get-OptimizationReportRowCount -ReportPaths $copiedReports
 }
 
-$executionSummaryPath = Join-Path $sandboxRoot ("state\{0}\execution_summary.json" -f $storageAlias)
-$runtimeStatePath = Join-Path $sandboxRoot ("state\{0}\runtime_state.csv" -f $storageAlias)
-$candidateSignalsPath = Join-Path $sandboxRoot ("logs\{0}\candidate_signals.csv" -f $storageAlias)
-$bucketSummaryPath = Join-Path $sandboxRoot ("logs\{0}\learning_bucket_summary_v1.csv" -f $storageAlias)
-$learningObservationsPath = Join-Path $sandboxRoot ("logs\{0}\learning_observations_v2.csv" -f $storageAlias)
-$tuningDeckhandPath = Join-Path $sandboxRoot ("logs\{0}\tuning_deckhand.csv" -f $storageAlias)
-$testerTelemetryPath = Join-Path $sandboxRoot ("state\{0}\tester_telemetry_latest.json" -f $storageAlias)
-$testerTelemetrySessionPath = Join-Path $sandboxRoot ("run\{0}\tester_telemetry_session.json" -f $storageAlias)
-$testerOptimizationPassesPath = Join-Path $sandboxRoot ("run\{0}\tester_optimization_passes.jsonl" -f $storageAlias)
+$executionSummaryPath = Join-Path $sandboxRoot ("state\{0}\execution_summary.json" -f $sandboxSymbolAlias)
+$runtimeStatePath = Join-Path $sandboxRoot ("state\{0}\runtime_state.csv" -f $sandboxSymbolAlias)
+$candidateSignalsPath = Join-Path $sandboxRoot ("logs\{0}\candidate_signals.csv" -f $sandboxSymbolAlias)
+$bucketSummaryPath = Join-Path $sandboxRoot ("logs\{0}\learning_bucket_summary_v1.csv" -f $sandboxSymbolAlias)
+$learningObservationsPath = Join-Path $sandboxRoot ("logs\{0}\learning_observations_v2.csv" -f $sandboxSymbolAlias)
+$tuningDeckhandPath = Join-Path $sandboxRoot ("logs\{0}\tuning_deckhand.csv" -f $sandboxSymbolAlias)
+$testerTelemetryPath = Join-Path $sandboxRoot ("state\{0}\tester_telemetry_latest.json" -f $sandboxSymbolAlias)
+$testerTelemetrySessionPath = Join-Path $sandboxRoot ("run\{0}\tester_telemetry_session.json" -f $sandboxSymbolAlias)
+$testerOptimizationPassesPath = Join-Path $sandboxRoot ("run\{0}\tester_optimization_passes.jsonl" -f $sandboxSymbolAlias)
 
 $executionSummary = $null
 if (Test-Path -LiteralPath $executionSummaryPath) {
