@@ -10,6 +10,9 @@ param(
     [string[]]$Checked = @(),
     [string[]]$Confirmed = @(),
     [string[]]$Blockers = @(),
+    [string[]]$ChangedFiles = @(),
+    [string[]]$OutputArtifacts = @(),
+    [string]$SaveStatus = "",
     [string[]]$DelegateWork = @(),
     [string]$CodexAction = "",
     [string]$NextAction = "",
@@ -77,6 +80,9 @@ if (-not (Test-Path -LiteralPath $writerScriptPath)) {
     -Checked $Checked `
     -Confirmed $Confirmed `
     -Blockers $Blockers `
+    -ChangedFiles $ChangedFiles `
+    -OutputArtifacts $OutputArtifacts `
+    -SaveStatus $SaveStatus `
     -DelegateWork $DelegateWork `
     -CodexAction $CodexAction `
     -NextAction $NextAction `

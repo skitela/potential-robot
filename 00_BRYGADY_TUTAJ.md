@@ -137,6 +137,7 @@ Ten raport pokazuje czy latest note z mostu zostala odebrana przez kazda brygade
 - taski active: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\tasks\active`
 - claimy: `C:\Users\skite\Desktop\strojenie agenta\orchestrator_mailbox\coordination\claims\active`
 - raport wyniku brygady wraca znow do `notes\inbox` przez `RUN/WRITE_BRIGADE_REPLY_TO_CODEX.ps1`
+- raport wyniku brygady ma obowiazkowo zawierac `Changed files`, `Output artifacts` i `Save status`, zeby Codex widzial co zostalo zmienione i czy wynik jest juz zapisany
 - starsza wiedza z pulpitu jest archiwizowana przez `RUN/ARCHIVE_DESKTOP_KNOWLEDGE_EXCHANGE.ps1`, ale zywy `orchestrator_mailbox` zostaje na miejscu
 
 ## SESJE COPILOT DLA BRYGAD
@@ -144,6 +145,14 @@ Ten raport pokazuje czy latest note z mostu zostala odebrana przez kazda brygade
 Te wejscia startuja sesje Copilot dla konkretnej brygady i dziedzicza wspolne zasady pracy z [.github/copilot-instructions.md](.github/copilot-instructions.md).
 
 Najprostszy tryb pracy jest taki: kliknij prompt brygady, wejdz do sesji, a potem w razie potrzeby otworz jej karte operacyjna z katalogu BRYGADY.
+
+Jesli chcesz najpierw zalozyc w VS Code osobne czaty dla wszystkich brygad i jednej dyspozytorni, uruchom:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\ENSURE_BRIGADE_COPILOT_CHAT_SESSIONS.ps1
+```
+
+Ta komenda tworzy osobne sesje Copilot dla kazdej brygady, ustawia je jako `agent + GPT-5.4`, probuje zachowac domyslny `xhigh` na poziomie metadanych sesji i zapisuje raport do `EVIDENCE/OPS/brigade_copilot_chat_sessions_latest.*`.
 
 [Wejdz: BRYGADA ML I MIGRACJA MT5](.github/prompts/wejdz-brygada-ml-migracja-mt5.prompt.md)
 

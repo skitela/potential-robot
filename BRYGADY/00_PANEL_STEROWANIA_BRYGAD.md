@@ -28,6 +28,17 @@ To jest szybki pulpit operatorski dla brygad. Otwieraj ten plik, gdy chcesz szyb
 
 Te prompt files otwieraja start sesji dla konkretnej brygady. Najpierw wybierasz brygade, potem pracujesz juz w jednym lane.
 
+Automatyczne utworzenie osobnych sesji Copilot dla wszystkich brygad i jednej dyspozytorni:
+
+```powershell
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\ENSURE_BRIGADE_COPILOT_CHAT_SESSIONS.ps1
+```
+
+Raport ostatniego utworzenia sesji:
+
+- [../EVIDENCE/OPS/brigade_copilot_chat_sessions_latest.md](../EVIDENCE/OPS/brigade_copilot_chat_sessions_latest.md)
+- [../EVIDENCE/OPS/brigade_copilot_chat_sessions_latest.json](../EVIDENCE/OPS/brigade_copilot_chat_sessions_latest.json)
+
 ## Sterowanie runtime
 
 Szybki start kontekstu jednej brygady:
@@ -51,7 +62,7 @@ pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\FORCE_BRIGADE_NOTE_SYNC.ps1
 Standardowa odpowiedz brygady do Codexa:
 
 ```powershell
-pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_BRIGADE_REPLY_TO_CODEX.ps1 -TaskId <task_id> -BrigadeId rozwoj_kodu -Outcome STATUS -Summary "Krotki status brygady." -NextAction "Co dalej."
+pwsh -File C:\MAKRO_I_MIKRO_BOT\RUN\WRITE_BRIGADE_REPLY_TO_CODEX.ps1 -TaskId <task_id> -BrigadeId rozwoj_kodu -Outcome STATUS -Summary "Krotki status brygady." -ChangedFiles "TOOLS/foo.py","MQL5/Include/Core/bar.mqh" -OutputArtifacts "EVIDENCE/OPS/foo_latest.json" -SaveStatus "zmiany lokalne gotowe do commita" -NextAction "Co dalej."
 ```
 
 Archiwizacja starszej wiedzy z pulpitu z pozostawieniem ostatniego dnia i zywego mailboxa:
@@ -163,7 +174,8 @@ Zasada pracy z notatkami:
 - system powinien cyklicznie sprawdzac czy latest note z mostu ma receipt dla kazdej brygady,
 - wykonuje tylko brygada wskazana jako target po safety review,
 - jesli execution owner potrzebuje innej brygady, robi handoff przez note plus task,
-- wynik wykonania albo blokady wraca note do wszystkich brygad i do Codexa, a Codex pozostaje domyslnym report ownerem i koordynatorem mostu.
+- wynik wykonania albo blokady wraca note do wszystkich brygad i do Codexa, a Codex pozostaje domyslnym report ownerem i koordynatorem mostu,
+- kazdy raport wyniku ma podac nie tylko status, ale tez `Changed files`, `Output artifacts` i `Save status`, zeby przy pracy rownoleglej bylo widac co faktycznie zostalo dotkniete i czy wynik jest juz zapisany.
 
 Publikacja wyniku execution ownera:
 

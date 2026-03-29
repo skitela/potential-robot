@@ -36,6 +36,9 @@
       "Checked",
       "Confirmed",
       "Blockers",
+      "Changed files",
+      "Output artifacts",
+      "Save status",
       "Delegate further work",
       "Codex action",
       "Next action"
@@ -160,7 +163,7 @@
     {
       "brigade_id": "ml_migracja_mt5",
       "actor_id": "brygada_ml_migracja_mt5",
-      "chat_name": "Rozwoj systemu - ML i migracja MT5",
+      "chat_name": "BRYGADA ML I MIGRACJA MT5 [GPT-5.4 XHIGH]",
       "primary_focus": "trening microbotow, ONNX, QDM i migracja state/model do terminali MT5",
       "specialization_summary": "zawsze aktywne uczenie modeli i przygotowanie materialu modelowego dla aktywnych instrumentow",
       "can_execute_cross_domain_tasks": true,
@@ -200,7 +203,7 @@
     {
       "brigade_id": "audyt_cleanup",
       "actor_id": "brygada_audyt_cleanup",
-      "chat_name": "Rozwoj systemu - Audyt i cleanup",
+      "chat_name": "BRYGADA AUDYT I CLEANUP [GPT-5.4 XHIGH]",
       "primary_focus": "ciagly audit, sprzatanie residue, wyszukiwanie starych bledow i higiena repo/runtime",
       "specialization_summary": "higiena repo i runtime oraz usuwanie wszystkiego, co zagraza czytelnosci, parity albo bezpieczenstwu aktywnych instrumentow",
       "can_execute_cross_domain_tasks": true,
@@ -240,7 +243,7 @@
     {
       "brigade_id": "wdrozenia_mt5",
       "actor_id": "brygada_wdrozenia_mt5",
-      "chat_name": "Rozwoj systemu - Wdrozenia MT5",
+      "chat_name": "BRYGADA WDROZENIA MT5 [GPT-5.4 XHIGH]",
       "primary_focus": "pakowanie, instalacja, handoff i walidacja rolloutow MT5",
       "specialization_summary": "kontrolowane wejscie zmian do MT5, z naciskiem na parity laptop-vps i bezpieczny rollout dla aktywnych instrumentow",
       "can_execute_cross_domain_tasks": true,
@@ -279,7 +282,7 @@
     {
       "brigade_id": "rozwoj_kodu",
       "actor_id": "brygada_rozwoj_kodu",
-      "chat_name": "Rozwoj systemu - Rozwoj kodu",
+      "chat_name": "BRYGADA ROZWOJ KODU [GPT-5.4 XHIGH]",
       "primary_focus": "implementacja funkcji, naprawy kodu, kompilacja i wykonywanie zmian technicznych",
       "specialization_summary": "glowny lane implementacyjny dla zmian technicznych, ktore poprawiaja ochrone kapitalu i wynik aktywnych instrumentow",
       "can_execute_cross_domain_tasks": true,
@@ -318,7 +321,7 @@
     {
       "brigade_id": "architektura_innowacje",
       "actor_id": "brygada_architektura_innowacje",
-      "chat_name": "Rozwoj systemu - Architektura i innowacje",
+      "chat_name": "BRYGADA ARCHITEKTURA I INNOWACJE [GPT-5.4 XHIGH]",
       "primary_focus": "projektowanie nowych koncepcji, badanie MT5 i OANDA, oraz koordynacja usprawnien miedzy brygadami",
       "specialization_summary": "badanie parametrow, kontraktow i innowacji tylko wtedy, gdy wzmacniaja kapital, parity i skutecznosc scalpingu",
       "can_execute_cross_domain_tasks": true,
@@ -359,7 +362,7 @@
     {
       "brigade_id": "nadzor_uczenia_rolloutu",
       "actor_id": "brygada_nadzor_uczenia_rolloutu",
-      "chat_name": "Rozwoj systemu - Nadzor uczenia i rolloutow",
+      "chat_name": "BRYGADA NADZOR UCZENIA I GO-NO-GO [GPT-5.4 XHIGH]",
       "primary_focus": "go-no-go, readiness, audyty uczenia, kontrola czy lane ML i rollout sa bezpieczne",
       "specialization_summary": "zawsze aktywny nadzor uczenia, gotowosci, ryzyka wdrozen oraz porzadku informacyjnego miedzy brygadami i Codexem",
       "can_execute_cross_domain_tasks": true,
