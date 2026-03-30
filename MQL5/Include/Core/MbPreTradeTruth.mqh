@@ -97,6 +97,22 @@ string MbPreTradeTruthSpoolDir()
    return MbRootPath() + "\\spool\\pretrade_truth";
   }
 
+void MbPreTradeTruthDebugLog(const string stage,const string detail)
+  {
+   MbEnsureDir(MbRootPath());
+   MbEnsureDir(MbRootPath() + "\\run");
+   string path = MbRootPath() + "\\run\\mt5_truth_debug.csv";
+   int handle = FileOpen(path,FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE,';');
+   if(handle == INVALID_HANDLE)
+      return;
+   if(FileSize(handle) == 0)
+      FileWrite(handle,"ts","stage","detail");
+   FileSeek(handle,0,SEEK_END);
+   FileWrite(handle,TimeToString(TimeCurrent(),TIME_DATE | TIME_SECONDS),stage,MbPreTradeTruthNormalizeText(detail));
+   FileFlush(handle);
+   FileClose(handle);
+  }
+
 void MbPreTradeTruthEnsureDirs()
   {
    MbEnsureDir(MbRootPath());
@@ -342,6 +358,47 @@ bool MbPreTradeTruthEvaluateAndWrite(
    if(!MbPreTradeTruthEvaluate(source,symbol_alias,candidate_id,request,out_record))
       return false;
    return MbPreTradeTruthWriteRecord(out_record);
+  }
+
+bool MbPreTradeTruthWritePaperOpen(
+   const string source,
+   const string symbol_alias,
+   const MbSymbolProfile &profile,
+   const string runtime_symbol,
+   const ulong magic,
+   const datetime now_ts,
+   const MbSignalDecision &signal,
+   const double lots,
+   const double entry_price,
+   const double sl_price,
+   const double tp_price,
+   string &out_candidate_id,
+   MbPreTradeTruthRecord &out_record
+)
+  {
+   out_candidate_id = MbPreTradeTruthBuildCandidateId(symbol_alias,now_ts,signal);
+   string request_comment = MbPreTradeTruthBuildRequestComment(out_candidate_id);
+   MqlTradeRequest request;
+   MbPreTradeTruthPrepareMarketRequest(
+      profile,
+      magic,
+      signal.side,
+      lots,
+      entry_price,
+      sl_price,
+      tp_price,
+      request_comment,
+      request
+   );
+   if(StringLen(runtime_symbol) > 0)
+      request.symbol = runtime_symbol;
+   bool ok = MbPreTradeTruthEvaluateAndWrite(source,symbol_alias,out_candidate_id,request,out_record);
+   if(!ok)
+      MbPreTradeTruthDebugLog(
+         "PRETRADE_PAPER_FAIL",
+         "symbol_alias=" + symbol_alias + ";runtime_symbol=" + runtime_symbol + ";request_symbol=" + request.symbol + ";candidate_id=" + out_candidate_id
+      );
+   return ok;
   }
 
 #endif

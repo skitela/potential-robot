@@ -927,9 +927,26 @@ void OnTick()
         {
          if(IsLocalPaperModeActive())
            {
+            string pretrade_candidate_id = "";
+            MbPreTradeTruthRecord pretrade_record;
+            MbPreTradeTruthWritePaperOpen(
+               "MICROBOT_PAPER",
+               g_state.symbol,
+               g_profile,
+               Symbol(),
+               g_state.magic,
+               now,
+               signal,
+               risk_plan.lots,
+               entry_price,
+               sl_price,
+               tp_price,
+               pretrade_candidate_id,
+               pretrade_record
+            );
             MbMarkOrderSend(g_state);
             MbLatencyProfileRecordExecution(g_latency,true,0,0.0);
-            MbPaperOpenPosition(
+            bool paper_opened = MbPaperOpenPosition(
                g_paper_position,
                signal.side,
                risk_plan.lots,
@@ -959,6 +976,21 @@ void OnTick()
                exec_check.modeled_commission_points,
                InpEnableLiveEntries
             );
+            if(paper_opened)
+               MbExecutionTruthWritePaperOpen(
+                  "MICROBOT_PAPER",
+                  g_state.symbol,
+                  Symbol(),
+                  pretrade_candidate_id,
+                  signal.side,
+                  risk_plan.lots,
+                  entry_price,
+                  g_paper_position.entry_price,
+                  g_market.bid,
+                  g_market.ask,
+                  now,
+                  MbPreTradeTruthBuildRequestComment(pretrade_candidate_id)
+               );
             MbSavePaperPosition(g_profile.symbol,g_paper_position);
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
             AppendAUDUSDCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
@@ -1051,4 +1083,3 @@ void OnTradeTransaction(
       MbMlRuntimeBridgeAppendLiveDealLedger(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal);
      }
   }
-
