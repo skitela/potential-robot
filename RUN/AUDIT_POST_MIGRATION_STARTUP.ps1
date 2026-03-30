@@ -436,7 +436,9 @@ function Evaluate-StartupState {
 
     $pendingSyncCount = [int](Get-OptionalNumber -Object (Get-OptionalValue -Object $vpsSpoolWellbeing -Name "summary" -Default $null) -Name "pending_sync_count" -Default 0)
     $pendingSyncOldestAge = [int](Get-OptionalNumber -Object (Get-OptionalValue -Object $vpsSpoolWellbeing -Name "summary" -Default $null) -Name "pending_sync_oldest_age_seconds" -Default 0)
-    if ($pendingSyncCount -gt 0 -and $pendingSyncOldestAge -gt 120) {
+    $pendingSyncIsMovingTail = [bool](Get-OptionalValue -Object (Get-OptionalValue -Object $vpsSpoolWellbeing -Name "summary" -Default $null) -Name "pending_sync_is_moving_tail" -Default $false)
+    $exportLagIsMovingTail = [bool](Get-OptionalValue -Object (Get-OptionalValue -Object $vpsSpoolWellbeing -Name "summary" -Default $null) -Name "export_lag_is_moving_tail" -Default $false)
+    if ($pendingSyncCount -gt 0 -and $pendingSyncOldestAge -gt 120 -and -not $pendingSyncIsMovingTail) {
         $findings.Add([pscustomobject]@{
             severity = "high"
             component = "vps_spool_wellbeing"
@@ -598,6 +600,8 @@ function Evaluate-StartupState {
             truth_flow_state = $truthFlowState
             pending_vps_sync_count = $pendingSyncCount
             pending_vps_sync_oldest_age_seconds = $pendingSyncOldestAge
+            pending_vps_sync_is_moving_tail = $pendingSyncIsMovingTail
+            export_lag_is_moving_tail = $exportLagIsMovingTail
         }
         target_symbols = @($TargetSymbols)
         symbol_results = @($symbolResults.ToArray())
@@ -719,6 +723,8 @@ $lines.Add(("- fresh_paper_open_count: {0}" -f $report.final.summary.fresh_paper
 $lines.Add(("- truth_live_symbol_count: {0}" -f $report.final.summary.truth_live_symbol_count))
 $lines.Add(("- truth_flow_state: {0}" -f $report.final.summary.truth_flow_state))
 $lines.Add(("- pending_vps_sync_count: {0}" -f $report.final.summary.pending_vps_sync_count))
+$lines.Add(("- pending_vps_sync_is_moving_tail: {0}" -f ([string]$report.final.summary.pending_vps_sync_is_moving_tail).ToLowerInvariant()))
+$lines.Add(("- export_lag_is_moving_tail: {0}" -f ([string]$report.final.summary.export_lag_is_moving_tail).ToLowerInvariant()))
 $lines.Add("")
 $lines.Add("## Findings")
 $lines.Add("")

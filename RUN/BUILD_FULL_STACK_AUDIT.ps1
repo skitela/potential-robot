@@ -360,6 +360,12 @@ $learningArtifactCriticalMissingCount = if ($null -ne $learningArtifactInventory
 $learningArtifactCriticalStaleCount = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'critical_stale_count' -Default 0) } else { 0 }
 $learningArtifactRetentionPendingCount = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'retention_pending_count' -Default 0) } else { 0 }
 $learningArtifactLiveLogStaleSymbolCount = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'live_log_stale_symbol_count' -Default 0) } else { 0 }
+$learningProgressVerdict = if ($null -ne $learningArtifactInventory) { [string](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_verdict' -Default "") } else { "" }
+$learningProgressFleetAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_fleet_alert_30m' -Default $false) } else { $false }
+$learningProgressFirstWaveAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_first_wave_alert_30m' -Default $false) } else { $false }
+$learningProgressFirstWaveLessonAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_first_wave_lesson_alert_30m' -Default $false) } else { $false }
+$learningProgressObservationActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_observation_active_count_30m' -Default 0) } else { 0 }
+$learningProgressLessonActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_lesson_active_count_30m' -Default 0) } else { 0 }
 
 $mt5QueueFresh = @($freshness | Where-Object { $_.label -eq "mt5_retest_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "mt5_retest_queue" })[0].fresh)
 $nearProfitQueueFresh = @($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" })[0].fresh)
@@ -426,6 +432,9 @@ elseif ($gitSystemDirtyCount -gt 0) {
 }
 elseif ($learningArtifactCriticalMissingCount -gt 0 -or $learningArtifactCriticalStaleCount -gt 0) {
     $releaseVerdict = "REFRESH_LEARNING_ARTIFACTS_FIRST"
+}
+elseif ($learningProgressFleetAlert30m -or $learningProgressFirstWaveAlert30m -or $learningProgressFirstWaveLessonAlert30m) {
+    $releaseVerdict = "ODSWIEZ_POSTEP_NAUKI_FIRST"
 }
 elseif (-not $systemBoundaryClean) {
     $releaseVerdict = "SEPARATE_SYSTEM_AND_BRIDGE_FIRST"
@@ -673,6 +682,12 @@ $report = [ordered]@{
                 critical_stale_count = $learningArtifactCriticalStaleCount
                 retention_pending_count = $learningArtifactRetentionPendingCount
                 live_log_stale_symbol_count = $learningArtifactLiveLogStaleSymbolCount
+                learning_progress_verdict = $learningProgressVerdict
+                learning_progress_fleet_alert_30m = $learningProgressFleetAlert30m
+                learning_progress_first_wave_alert_30m = $learningProgressFirstWaveAlert30m
+                learning_progress_first_wave_lesson_alert_30m = $learningProgressFirstWaveLessonAlert30m
+                learning_progress_observation_active_count_30m = $learningProgressObservationActiveCount30m
+                learning_progress_lesson_active_count_30m = $learningProgressLessonActiveCount30m
             }
         } else { $null }
     }
@@ -700,6 +715,12 @@ $report = [ordered]@{
         learning_artifact_critical_stale_count = $learningArtifactCriticalStaleCount
         learning_artifact_retention_pending_count = $learningArtifactRetentionPendingCount
         learning_artifact_live_log_stale_symbol_count = $learningArtifactLiveLogStaleSymbolCount
+        learning_progress_verdict = $learningProgressVerdict
+        learning_progress_fleet_alert_30m = $learningProgressFleetAlert30m
+        learning_progress_first_wave_alert_30m = $learningProgressFirstWaveAlert30m
+        learning_progress_first_wave_lesson_alert_30m = $learningProgressFirstWaveLessonAlert30m
+        learning_progress_observation_active_count_30m = $learningProgressObservationActiveCount30m
+        learning_progress_lesson_active_count_30m = $learningProgressLessonActiveCount30m
         supervisor_scope_verdict = $(if ($null -ne $supervisorScopeAudit) { $supervisorScopeAudit.verdict } else { $null })
         supervisor_scope_contaminated_count = $(if ($null -ne $supervisorScopeAudit) { [int](Get-SafeObjectValue -Object $supervisorScopeAudit.summary -PropertyName 'contaminated_count' -Default 0) } else { 0 })
     }
@@ -792,6 +813,12 @@ $lines.Add(("- learning_artifact_critical_missing_count: {0}" -f $report.cleanli
 $lines.Add(("- learning_artifact_critical_stale_count: {0}" -f $report.cleanliness.learning_artifact_critical_stale_count))
 $lines.Add(("- learning_artifact_retention_pending_count: {0}" -f $report.cleanliness.learning_artifact_retention_pending_count))
 $lines.Add(("- learning_artifact_live_log_stale_symbol_count: {0}" -f $report.cleanliness.learning_artifact_live_log_stale_symbol_count))
+$lines.Add(("- learning_progress_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.cleanliness.learning_progress_verdict)) { "BRAK" } else { $report.cleanliness.learning_progress_verdict })))
+$lines.Add(("- learning_progress_fleet_alert_30m: {0}" -f ([string]$report.cleanliness.learning_progress_fleet_alert_30m).ToLowerInvariant()))
+$lines.Add(("- learning_progress_first_wave_alert_30m: {0}" -f ([string]$report.cleanliness.learning_progress_first_wave_alert_30m).ToLowerInvariant()))
+$lines.Add(("- learning_progress_first_wave_lesson_alert_30m: {0}" -f ([string]$report.cleanliness.learning_progress_first_wave_lesson_alert_30m).ToLowerInvariant()))
+$lines.Add(("- learning_progress_observation_active_count_30m: {0}" -f $report.cleanliness.learning_progress_observation_active_count_30m))
+$lines.Add(("- learning_progress_lesson_active_count_30m: {0}" -f $report.cleanliness.learning_progress_lesson_active_count_30m))
 $lines.Add(("- supervisor_scope_verdict: {0}" -f $report.cleanliness.supervisor_scope_verdict))
 $lines.Add(("- supervisor_scope_contaminated_count: {0}" -f $report.cleanliness.supervisor_scope_contaminated_count))
 $lines.Add(("- runtime_unexpected_dir_count: {0}" -f $report.cleanliness.runtime_unexpected_dir_count))
@@ -981,6 +1008,12 @@ if ($null -ne $report.lab_health.learning_artifact_inventory) {
     $lines.Add(("- critical_stale_count: {0}" -f $report.lab_health.learning_artifact_inventory.critical_stale_count))
     $lines.Add(("- retention_pending_count: {0}" -f $report.lab_health.learning_artifact_inventory.retention_pending_count))
     $lines.Add(("- live_log_stale_symbol_count: {0}" -f $report.lab_health.learning_artifact_inventory.live_log_stale_symbol_count))
+    $lines.Add(("- learning_progress_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.lab_health.learning_artifact_inventory.learning_progress_verdict)) { "BRAK" } else { $report.lab_health.learning_artifact_inventory.learning_progress_verdict })))
+    $lines.Add(("- learning_progress_fleet_alert_30m: {0}" -f ([string]$report.lab_health.learning_artifact_inventory.learning_progress_fleet_alert_30m).ToLowerInvariant()))
+    $lines.Add(("- learning_progress_first_wave_alert_30m: {0}" -f ([string]$report.lab_health.learning_artifact_inventory.learning_progress_first_wave_alert_30m).ToLowerInvariant()))
+    $lines.Add(("- learning_progress_first_wave_lesson_alert_30m: {0}" -f ([string]$report.lab_health.learning_artifact_inventory.learning_progress_first_wave_lesson_alert_30m).ToLowerInvariant()))
+    $lines.Add(("- learning_progress_observation_active_count_30m: {0}" -f $report.lab_health.learning_artifact_inventory.learning_progress_observation_active_count_30m))
+    $lines.Add(("- learning_progress_lesson_active_count_30m: {0}" -f $report.lab_health.learning_artifact_inventory.learning_progress_lesson_active_count_30m))
 }
 else {
     $lines.Add("- learning artifact inventory not available")

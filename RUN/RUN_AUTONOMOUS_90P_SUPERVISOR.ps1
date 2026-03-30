@@ -1062,6 +1062,10 @@ function Write-SupervisorStatus {
         $lines.Add(("- ops_deleted_count: {0}" -f $learningWellbeing.summary.ops_deleted_count))
         $lines.Add(("- runtime_archive_deleted_count: {0}" -f $learningWellbeing.summary.runtime_archive_deleted_count))
         $lines.Add(("- runtime_empty_dirs_removed: {0}" -f $learningWellbeing.summary.runtime_empty_dirs_removed))
+        $lines.Add(("- learning_progress_verdict: {0}" -f $learningWellbeing.summary.learning_progress_verdict))
+        $lines.Add(("- learning_progress_alarm_30m: {0}" -f ([string]$learningWellbeing.summary.learning_progress_alarm_30m).ToLowerInvariant()))
+        $lines.Add(("- learning_progress_observation_active_count_30m: {0}" -f $learningWellbeing.summary.learning_progress_observation_active_count_30m))
+        $lines.Add(("- learning_progress_lesson_active_count_30m: {0}" -f $learningWellbeing.summary.learning_progress_lesson_active_count_30m))
         if ($null -ne $learningWellbeing.vps_spool_bridge) {
             $lines.Add(("- vps_spool_bridge: {0}" -f $learningWellbeing.vps_spool_bridge.verdict))
             $lines.Add(("- vps_bridge_pending_sync_count: {0}" -f $learningWellbeing.summary.vps_bridge_pending_sync_count))

@@ -4,6 +4,7 @@
 #include "MbRuntimeTypes.mqh"
 #include "MbCapitalRiskContract.mqh"
 #include "MbSessionGuard.mqh"
+#include "MbFirstWaveTruthDiagnostic.mqh"
 
 enum MbGuardVerdict
   {
@@ -25,9 +26,25 @@ bool MbShouldBypassMarketGuardInPaper(const bool paper_mode_active,const string 
    );
   }
 
+bool MbShouldBypassMarketGuardInPaperForSymbol(const string symbol,const bool paper_mode_active,const string reason_code)
+  {
+   if(MbShouldBypassMarketGuardInPaper(paper_mode_active,reason_code))
+      return true;
+
+   return MbShouldBypassFirstWaveTruthDiagnosticGuard(symbol,paper_mode_active,reason_code);
+  }
+
 bool MbPaperMarketGuardClearsHalt(const string reason_code)
   {
    return (reason_code == "MARGIN_FREE_LOW" || reason_code == "TRADE_DISABLED");
+  }
+
+bool MbPaperMarketGuardClearsHaltForSymbol(const string symbol,const bool paper_mode_active,const string reason_code)
+  {
+   if(MbPaperMarketGuardClearsHalt(reason_code))
+      return true;
+
+   return MbShouldBypassFirstWaveTruthDiagnosticGuard(symbol,paper_mode_active,reason_code);
   }
 
 bool MbEntryFrequencyOk(const MbSymbolProfile &profile,const MbRuntimeState &state,string &reason_code)

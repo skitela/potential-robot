@@ -1,7 +1,8 @@
 param(
     [ValidateSet("Enable","Disable")]
     [string]$Mode = "Enable",
-    [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT"
+    [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
+    [int]$DurationMinutes = 30
 )
 
 Set-StrictMode -Version Latest
@@ -13,6 +14,9 @@ $backupRoot = Join-Path $projectPath "CONFIG\backups"
 $applyRuntimeScript = Join-Path $projectPath "RUN\APPLY_FIRST_WAVE_BROKER_PARITY_RUNTIME.ps1"
 $validateScript = Join-Path $projectPath "TOOLS\VALIDATE_SESSION_CAPITAL_COORDINATOR.ps1"
 $targetDomains = @("FX","INDICES")
+$commonRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT"
+$diagnosticDir = Join-Path $commonRoot "run"
+$diagnosticPath = Join-Path $diagnosticDir "first_wave_truth_diagnostic.csv"
 
 if (-not (Test-Path -LiteralPath $configPath)) {
     throw "Missing config: $configPath"
@@ -50,6 +54,24 @@ foreach ($domain in $config.domains) {
 $json = $config | ConvertTo-Json -Depth 20
 $json | Set-Content -LiteralPath $configPath -Encoding UTF8
 
+New-Item -ItemType Directory -Force -Path $diagnosticDir | Out-Null
+if ($Mode -eq "Enable") {
+    $maxAgeSeconds = [Math]::Max(300, $DurationMinutes * 60)
+    @(
+        "key,value"
+        "enabled,1"
+        "max_age_sec,$maxAgeSeconds"
+        "allow_symbol_daily_loss_hard,1"
+        "breakout_gate_abs,0.28"
+        "trend_gate_abs,0.24"
+        "range_gate_abs,0.16"
+        "rejection_gate_abs,0.16"
+    ) | Set-Content -LiteralPath $diagnosticPath -Encoding ASCII
+}
+elseif (Test-Path -LiteralPath $diagnosticPath) {
+    Remove-Item -LiteralPath $diagnosticPath -Force
+}
+
 $applyResult = & $applyRuntimeScript
 $validation = & $validateScript | ConvertFrom-Json
 $updatedArray = @($updated.ToArray())
@@ -64,6 +86,8 @@ $runtimeApplyText = (@($applyResult) | ForEach-Object { [string]$_ }) -join [Env
     target_domains = $targetDomains
     backup_path = $backupPath
     config_path = $configPath
+    diagnostic_file_path = $diagnosticPath
+    diagnostic_file_exists = (Test-Path -LiteralPath $diagnosticPath)
     updated_domains = $updatedArray
     runtime_apply_invoked = $true
     validation_ok = [bool]$validation.ok

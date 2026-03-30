@@ -580,13 +580,13 @@ void OnTick()
 
    string guard_reason = "OK";
    MbGuardVerdict market_guard = MbEvaluateMarketEntryGuards(g_profile,g_market,g_state,guard_reason);
-   if(MbShouldBypassMarketGuardInPaper(IsLocalPaperModeActive(),guard_reason))
+   if(MbShouldBypassMarketGuardInPaperForSymbol(g_profile.symbol,IsLocalPaperModeActive(),guard_reason))
      {
       int market_bypass_throttle = 180;
       if(guard_reason == "OUTSIDE_TRADE_WINDOW" || guard_reason == "TRADE_DISABLED")
          market_bypass_throttle = 300;
       AppendUS500DecisionEvent(now,"MARKET","BYPASS",("PAPER_IGNORE_" + guard_reason),g_market.spread_points,0.0,0.0,0,true,market_bypass_throttle);
-      if(MbPaperMarketGuardClearsHalt(guard_reason))
+      if(MbPaperMarketGuardClearsHaltForSymbol(g_profile.symbol,IsLocalPaperModeActive(),guard_reason))
          g_state.halt = false;
       market_guard = MB_GUARD_OK;
       guard_reason = "OK";
@@ -672,6 +672,8 @@ void OnTick()
         }
       else if(signal.setup_type == "SETUP_REJECTION")
          paper_gate_abs = 0.18;
+
+      paper_gate_abs = MbResolveFirstWaveTruthDiagnosticGateAbs(g_profile.symbol,signal.setup_type,IsLocalPaperModeActive(),paper_gate_abs);
 
       if(!blocked_by_tuning_gate && MathAbs(signal.score) >= paper_gate_abs)
         {

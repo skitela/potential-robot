@@ -572,10 +572,10 @@ void OnTick()
 
    string guard_reason = "OK";
    MbGuardVerdict market_guard = MbEvaluateMarketEntryGuards(g_profile,g_market,g_state,guard_reason);
-   if(MbShouldBypassMarketGuardInPaper(IsLocalPaperModeActive(),guard_reason))
+   if(MbShouldBypassMarketGuardInPaperForSymbol(g_profile.symbol,IsLocalPaperModeActive(),guard_reason))
      {
       AppendEURJPYDecisionEvent(now,"MARKET","BYPASS",("PAPER_IGNORE_" + guard_reason),g_market.spread_points,0.0,0.0,0,true,60);
-      if(MbPaperMarketGuardClearsHalt(guard_reason))
+      if(MbPaperMarketGuardClearsHaltForSymbol(g_profile.symbol,IsLocalPaperModeActive(),guard_reason))
          g_state.halt = false;
       market_guard = MB_GUARD_OK;
       guard_reason = "OK";
@@ -715,6 +715,8 @@ void OnTick()
          else if(signal.market_regime == "CHAOS")
             paper_gate_abs = 0.30;
         }
+
+      paper_gate_abs = MbResolveFirstWaveTruthDiagnosticGateAbs(g_profile.symbol,signal.setup_type,IsLocalPaperModeActive(),paper_gate_abs);
 
       if(
          !blocked_by_tuning_gate &&

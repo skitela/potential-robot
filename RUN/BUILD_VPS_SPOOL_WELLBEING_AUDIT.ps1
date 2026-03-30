@@ -193,6 +193,109 @@ function Get-ManifestDatasetSpoolCounts {
     return $counts
 }
 
+function Get-CountFromObject {
+    param(
+        [object]$Object,
+        [string]$Name
+    )
+
+    if ($null -eq $Object) {
+        return 0
+    }
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) {
+            return [int]$Object[$Name]
+        }
+        return 0
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return 0
+    }
+
+    return [int]$property.Value
+}
+
+function Test-PendingSyncIsMovingTail {
+    param(
+        [object]$Snapshot,
+        [int]$SyncReportMaxAgeSeconds
+    )
+
+    if ($null -eq $Snapshot) {
+        return $false
+    }
+
+    if ($Snapshot.pending_sync_count -le 0) {
+        return $false
+    }
+
+    if ($Snapshot.pending_sync_count -gt 24) {
+        return $false
+    }
+
+    if ($Snapshot.source_incomplete_count -gt 0 -or
+        $Snapshot.inbox_incomplete_count -gt 0 -or
+        $Snapshot.state_orphan_count -gt 0 -or
+        $Snapshot.state_missing_inbox_count -gt 0) {
+        return $false
+    }
+
+    if (-not $Snapshot.sync_report_exists -or $null -eq $Snapshot.sync_report_age_seconds) {
+        return $false
+    }
+
+    if ($Snapshot.sync_report_age_seconds -gt [Math]::Max($SyncReportMaxAgeSeconds, 900)) {
+        return $false
+    }
+
+    if ($null -eq $Snapshot.pending_sync_oldest_age_seconds -or $Snapshot.pending_sync_oldest_age_seconds -gt 1200) {
+        return $false
+    }
+
+    if ($Snapshot.sync_report_copied_chunk_count -le 0) {
+        return $false
+    }
+
+    return $true
+}
+
+function Test-ExportLagIsMovingTail {
+    param(
+        [object]$Snapshot
+    )
+
+    if ($null -eq $Snapshot) {
+        return $false
+    }
+
+    if ($Snapshot.export_spool_lag_total -le 0) {
+        return $false
+    }
+
+    if (-not $Snapshot.pending_sync_is_moving_tail) {
+        return $false
+    }
+
+    if ($null -eq $Snapshot.export_manifest_age_seconds -or $Snapshot.export_manifest_age_seconds -gt 3600) {
+        return $false
+    }
+
+    if ($Snapshot.export_spool_lag_total -gt 256) {
+        return $false
+    }
+
+    $onnxLag = Get-CountFromObject -Object $Snapshot.export_spool_lag_by_stream -Name "onnx_observations"
+    $nonOnnxLag = [Math]::Max(0, $Snapshot.export_spool_lag_total - $onnxLag)
+    if ($onnxLag -le 0) {
+        return $false
+    }
+
+    return ($nonOnnxLag -le 2)
+}
+
 function Get-BridgeSnapshot {
     param(
         [string]$SourceRoot,
@@ -260,6 +363,8 @@ function Get-BridgeSnapshot {
         inbox_root_exists = (Test-Path -LiteralPath $InboxRoot)
         sync_report_exists = (Test-Path -LiteralPath $SyncReportPath)
         sync_report_age_seconds = Get-FileAgeSecondsOrNull -Path $SyncReportPath
+        sync_report_copied_chunk_count = if ($null -ne $syncReport) { [int]$syncReport.copied_chunk_count } else { 0 }
+        sync_report_reused_chunk_count = if ($null -ne $syncReport) { [int]$syncReport.reused_chunk_count } else { 0 }
         export_manifest_exists = (Test-Path -LiteralPath $ExportManifestPath)
         export_manifest_age_seconds = Get-FileAgeSecondsOrNull -Path $ExportManifestPath
         sync_report_missing_data_count = if ($null -ne $syncReport) { [int]$syncReport.missing_data_count } else { 0 }
@@ -452,6 +557,9 @@ $finalSnapshot = Get-BridgeSnapshot `
     -StatePath $statePath `
     -ExportManifestPath $exportManifestPath
 
+$finalSnapshot | Add-Member -NotePropertyName pending_sync_is_moving_tail -NotePropertyValue (Test-PendingSyncIsMovingTail -Snapshot $finalSnapshot -SyncReportMaxAgeSeconds $SyncReportMaxAgeSeconds)
+$finalSnapshot | Add-Member -NotePropertyName export_lag_is_moving_tail -NotePropertyValue (Test-ExportLagIsMovingTail -Snapshot $finalSnapshot)
+
 $findings = New-Object System.Collections.Generic.List[object]
 
 if (-not $finalSnapshot.source_root_exists) {
@@ -510,7 +618,8 @@ if ($finalSnapshot.inbox_incomplete_count -gt 0) {
 if (
     $finalSnapshot.pending_sync_count -gt 0 -and
     $null -ne $finalSnapshot.pending_sync_oldest_age_seconds -and
-    $finalSnapshot.pending_sync_oldest_age_seconds -gt $PendingSyncGraceSeconds
+    $finalSnapshot.pending_sync_oldest_age_seconds -gt $PendingSyncGraceSeconds -and
+    -not $finalSnapshot.pending_sync_is_moving_tail
 ) {
     $findings.Add([pscustomobject]@{
             severity = "medium"
@@ -548,7 +657,12 @@ if ($finalSnapshot.state_missing_inbox_count -gt 0) {
         }) | Out-Null
 }
 
-if ($finalSnapshot.export_spool_lag_total -gt 0 -and $null -ne $finalSnapshot.export_manifest_age_seconds -and $finalSnapshot.export_manifest_age_seconds -gt $ExportLagMaxAgeSeconds) {
+if (
+    $finalSnapshot.export_spool_lag_total -gt 0 -and
+    $null -ne $finalSnapshot.export_manifest_age_seconds -and
+    $finalSnapshot.export_manifest_age_seconds -gt $ExportLagMaxAgeSeconds -and
+    -not $finalSnapshot.export_lag_is_moving_tail
+) {
     $findings.Add([pscustomobject]@{
             severity = "medium"
             component = "vps_spool_export_lag"
@@ -590,12 +704,16 @@ $report = [ordered]@{
         state_chunk_count = $finalSnapshot.state_chunk_count
         pending_sync_count = $finalSnapshot.pending_sync_count
         pending_sync_oldest_age_seconds = $finalSnapshot.pending_sync_oldest_age_seconds
+        pending_sync_is_moving_tail = [bool]$finalSnapshot.pending_sync_is_moving_tail
         source_incomplete_count = $finalSnapshot.source_incomplete_count
         inbox_incomplete_count = $finalSnapshot.inbox_incomplete_count
         state_orphan_count = $finalSnapshot.state_orphan_count
         state_missing_inbox_count = $finalSnapshot.state_missing_inbox_count
         export_spool_lag_total = $finalSnapshot.export_spool_lag_total
+        export_lag_is_moving_tail = [bool]$finalSnapshot.export_lag_is_moving_tail
         sync_report_age_seconds = $finalSnapshot.sync_report_age_seconds
+        sync_report_copied_chunk_count = $finalSnapshot.sync_report_copied_chunk_count
+        sync_report_reused_chunk_count = $finalSnapshot.sync_report_reused_chunk_count
         export_manifest_age_seconds = $finalSnapshot.export_manifest_age_seconds
         repair_actions_count = $repairActions.Count
         findings_total = $findings.Count

@@ -20,11 +20,11 @@
     "manual_paper_requested_mode": "PAPER_ONLY",
     "manual_close_only_requested_mode": "CLOSE_ONLY",
     "manual_halt_requested_mode": "HALT",
-    "reentry_recover_fraction": 0.60,
-    "defensive_family_loss_fraction": 0.50,
+    "reentry_recover_fraction": 0.6,
+    "defensive_family_loss_fraction": 0.5,
     "paper_defensive_risk_cap": 0.35,
     "reentry_probation_risk_cap": 0.35,
-    "reserve_takeover_risk_cap": 0.50
+    "reserve_takeover_risk_cap": 0.5
   },
   "runtime_profiles": {
     "DEFAULT": {
@@ -78,7 +78,7 @@
     {
       "domain": "FX",
       "active_runtime": true,
-      "manual_override": "AUTO",
+      "manual_override": "PAPER_ONLY",
       "wake_priority": 1
     },
     {
@@ -90,7 +90,7 @@
     {
       "domain": "INDICES",
       "active_runtime": true,
-      "manual_override": "AUTO",
+      "manual_override": "PAPER_ONLY",
       "wake_priority": 3
     }
   ],
@@ -125,7 +125,7 @@
       "group": "METALS",
       "domain": "METALS",
       "family_hint": "METALS_SPOT_PM+METALS_FUTURES",
-      "budget_share_of_day": 0.20,
+      "budget_share_of_day": 0.2,
       "reserve_domains": [
         "INDICES"
       ]
@@ -134,7 +134,7 @@
       "group": "INDEX_US",
       "domain": "INDICES",
       "family_hint": "INDEX_US",
-      "budget_share_of_day": 0.20,
+      "budget_share_of_day": 0.2,
       "reserve_domains": [
         "METALS"
       ]

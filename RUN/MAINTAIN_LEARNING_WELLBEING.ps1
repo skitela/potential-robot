@@ -594,6 +594,16 @@ $learningArtifactRetentionPendingCount = if ($null -ne $learningArtifactInventor
 $learningArtifactRetentionArchivedCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "retention_archived_count" -Default 0) } else { 0 }
 $learningArtifactLiveLogStaleSymbolCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "live_log_stale_symbol_count" -Default 0) } else { 0 }
 $learningArtifactSpoolEmptyCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "spool_empty_count" -Default 0) } else { 0 }
+$learningProgressAlertMinutes = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_alert_minutes" -Default 30) } else { 30 }
+$learningProgressVerdict = if ($null -ne $learningArtifactInventory) { [string](Get-OptionalValue -Object $learningArtifactInventory.summary -Name "learning_progress_verdict" -Default "") } else { "" }
+$learningProgressFleetAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-OptionalValue -Object $learningArtifactInventory.summary -Name "learning_progress_fleet_alert_30m" -Default $false) } else { $false }
+$learningProgressFleetLessonAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-OptionalValue -Object $learningArtifactInventory.summary -Name "learning_progress_fleet_lesson_alert_30m" -Default $false) } else { $false }
+$learningProgressFirstWaveAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-OptionalValue -Object $learningArtifactInventory.summary -Name "learning_progress_first_wave_alert_30m" -Default $false) } else { $false }
+$learningProgressFirstWaveLessonAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-OptionalValue -Object $learningArtifactInventory.summary -Name "learning_progress_first_wave_lesson_alert_30m" -Default $false) } else { $false }
+$learningProgressObservationActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_observation_active_count_30m" -Default 0) } else { 0 }
+$learningProgressLessonActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_lesson_active_count_30m" -Default 0) } else { 0 }
+$learningProgressFirstWaveObservationActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_first_wave_observation_active_count_30m" -Default 0) } else { 0 }
+$learningProgressFirstWaveLessonActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_first_wave_lesson_active_count_30m" -Default 0) } else { 0 }
 $postMigrationStartupVerdict = if ($null -ne $postMigrationStartupAudit) { [string](Get-OptionalValue -Object $postMigrationStartupAudit -Name "verdict" -Default "") } else { "" }
 $postMigrationStartupOk = ($null -ne $postMigrationStartupAudit -and [bool](Get-OptionalValue -Object $postMigrationStartupAudit -Name "ok" -Default $false))
 $postMigrationContinuityCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "continuity_fresh_count" -Default 0) } else { 0 }
@@ -601,7 +611,19 @@ $postMigrationWatchdogMissingCount = if ($null -ne $postMigrationStartupAudit) {
 $postMigrationWatchdogStaleCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "watchdog_stale_target_count" -Default 0) } else { 0 }
 $postMigrationPendingSyncCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "pending_vps_sync_count" -Default 0) } else { 0 }
 $postMigrationTruthFlowState = if ($null -ne $postMigrationStartupAudit) { [string](Get-OptionalValue -Object $postMigrationStartupAudit.final.summary -Name "truth_flow_state" -Default "") } else { "" }
+$learningProgressAlarm30m = ($learningProgressFleetAlert30m -or $learningProgressFirstWaveAlert30m -or $learningProgressFirstWaveLessonAlert30m)
+$learningProgressKnownCause = ($firstWaveRuntimeOutsideWindowCount -gt 0 -or $firstWaveRuntimeFreezeCount -gt 0 -or $paperLiveIdleCount -gt 0)
 $verdict = if (
+    $learningProgressAlarm30m
+) {
+    if ($learningProgressKnownCause) {
+        "ALARM_POSTEPU_NAUKI_30M_ZNANA_PRZYCZYNA"
+    }
+    else {
+        "ALARM_POSTEPU_NAUKI_30M"
+    }
+}
+elseif (
     ($pathHygiene -ne $null -and [string]$pathHygiene.verdict -eq "CZYSTO") -and
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
     $learningArtifactCriticalMissingCount -eq 0 -and
@@ -786,6 +808,18 @@ $report = [ordered]@{
         learning_artifact_retention_archived_count = $learningArtifactRetentionArchivedCount
         learning_artifact_live_log_stale_symbol_count = $learningArtifactLiveLogStaleSymbolCount
         learning_artifact_spool_empty_count = $learningArtifactSpoolEmptyCount
+        learning_progress_alert_minutes = $learningProgressAlertMinutes
+        learning_progress_verdict = $learningProgressVerdict
+        learning_progress_alarm_30m = $learningProgressAlarm30m
+        learning_progress_known_cause = $learningProgressKnownCause
+        learning_progress_fleet_alert_30m = $learningProgressFleetAlert30m
+        learning_progress_fleet_lesson_alert_30m = $learningProgressFleetLessonAlert30m
+        learning_progress_first_wave_alert_30m = $learningProgressFirstWaveAlert30m
+        learning_progress_first_wave_lesson_alert_30m = $learningProgressFirstWaveLessonAlert30m
+        learning_progress_observation_active_count_30m = $learningProgressObservationActiveCount30m
+        learning_progress_lesson_active_count_30m = $learningProgressLessonActiveCount30m
+        learning_progress_first_wave_observation_active_count_30m = $learningProgressFirstWaveObservationActiveCount30m
+        learning_progress_first_wave_lesson_active_count_30m = $learningProgressFirstWaveLessonActiveCount30m
         post_migration_startup_verdict = $postMigrationStartupVerdict
         post_migration_startup_ok = $postMigrationStartupOk
         post_migration_continuity_fresh_count = $postMigrationContinuityCount
@@ -832,6 +866,17 @@ $lines.Add(("- learning_artifact_retention_pending_count: {0}" -f $report.summar
 $lines.Add(("- learning_artifact_retention_archived_count: {0}" -f $report.summary.learning_artifact_retention_archived_count))
 $lines.Add(("- learning_artifact_live_log_stale_symbol_count: {0}" -f $report.summary.learning_artifact_live_log_stale_symbol_count))
 $lines.Add(("- learning_artifact_spool_empty_count: {0}" -f $report.summary.learning_artifact_spool_empty_count))
+$lines.Add(("- learning_progress_alert_minutes: {0}" -f $report.summary.learning_progress_alert_minutes))
+$lines.Add(("- learning_progress_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.learning_progress_verdict)) { "BRAK" } else { $report.summary.learning_progress_verdict })))
+$lines.Add(("- learning_progress_alarm_30m: {0}" -f ([string]$report.summary.learning_progress_alarm_30m).ToLowerInvariant()))
+$lines.Add(("- learning_progress_known_cause: {0}" -f ([string]$report.summary.learning_progress_known_cause).ToLowerInvariant()))
+$lines.Add(("- learning_progress_fleet_alert_30m: {0}" -f ([string]$report.summary.learning_progress_fleet_alert_30m).ToLowerInvariant()))
+$lines.Add(("- learning_progress_first_wave_alert_30m: {0}" -f ([string]$report.summary.learning_progress_first_wave_alert_30m).ToLowerInvariant()))
+$lines.Add(("- learning_progress_first_wave_lesson_alert_30m: {0}" -f ([string]$report.summary.learning_progress_first_wave_lesson_alert_30m).ToLowerInvariant()))
+$lines.Add(("- learning_progress_observation_active_count_30m: {0}" -f $report.summary.learning_progress_observation_active_count_30m))
+$lines.Add(("- learning_progress_lesson_active_count_30m: {0}" -f $report.summary.learning_progress_lesson_active_count_30m))
+$lines.Add(("- learning_progress_first_wave_observation_active_count_30m: {0}" -f $report.summary.learning_progress_first_wave_observation_active_count_30m))
+$lines.Add(("- learning_progress_first_wave_lesson_active_count_30m: {0}" -f $report.summary.learning_progress_first_wave_lesson_active_count_30m))
 $lines.Add(("- post_migration_startup_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.post_migration_startup_verdict)) { "BRAK" } else { $report.summary.post_migration_startup_verdict })))
 $lines.Add(("- post_migration_startup_ok: {0}" -f ([string]$report.summary.post_migration_startup_ok).ToLowerInvariant()))
 $lines.Add(("- post_migration_continuity_fresh_count: {0}" -f $report.summary.post_migration_continuity_fresh_count))

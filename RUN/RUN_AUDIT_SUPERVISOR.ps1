@@ -814,6 +814,12 @@ function Invoke-AuditCycle {
         $runtimeArchivePendingCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "runtime_archive_pending_count" -Default 0)
         $runtimeArchiveDeletedCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "runtime_archive_deleted_count" -Default 0)
         $opsDeletedCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "ops_deleted_count" -Default 0)
+        $learningProgressAlarm30m = [bool](Get-OptionalValue -Object $wellbeingSummary -Name "learning_progress_alarm_30m" -Default $false)
+        $learningProgressKnownCause = [bool](Get-OptionalValue -Object $wellbeingSummary -Name "learning_progress_known_cause" -Default $false)
+        $learningProgressAlertMinutes = [int](Get-OptionalValue -Object $wellbeingSummary -Name "learning_progress_alert_minutes" -Default 30)
+        $learningProgressVerdict = [string](Get-OptionalValue -Object $wellbeingSummary -Name "learning_progress_verdict" -Default "")
+        $learningProgressObservationActiveCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "learning_progress_observation_active_count_30m" -Default 0)
+        $learningProgressLessonActiveCount = [int](Get-OptionalValue -Object $wellbeingSummary -Name "learning_progress_lesson_active_count_30m" -Default 0)
 
         if ($opsPendingCount -gt 0 -or $runtimeArchivePendingCount -gt 0) {
             $learningHygieneEvidence.Add([pscustomobject]@{
@@ -823,6 +829,20 @@ function Invoke-AuditCycle {
                 context = @{
                     ops_pending_count = $opsPendingCount
                     runtime_archive_pending_count = $runtimeArchivePendingCount
+                }
+            }) | Out-Null
+        }
+        if ($learningProgressAlarm30m) {
+            $learningHygieneEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "learning_progress"
+                message = "Dobrostan wykryl brak postepu nauki przez co najmniej 30 minut."
+                context = @{
+                    alert_minutes = $learningProgressAlertMinutes
+                    verdict = $learningProgressVerdict
+                    known_cause = $learningProgressKnownCause
+                    observation_active_count_30m = $learningProgressObservationActiveCount
+                    lesson_active_count_30m = $learningProgressLessonActiveCount
                 }
             }) | Out-Null
         }
