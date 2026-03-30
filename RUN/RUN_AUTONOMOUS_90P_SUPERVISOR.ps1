@@ -31,6 +31,8 @@ $researchPlanScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_INTENSIVE_RESEARCH_P
 $learningHygieneScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1"
 $learningHotPathScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1"
 $learningWellbeingScript = Join-Path $ProjectRoot "RUN\MAINTAIN_LEARNING_WELLBEING.ps1"
+$repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
+$supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
 $mt5QueueSyncScript = Join-Path $ProjectRoot "RUN\SYNC_MT5_RETEST_QUEUE_FROM_RESEARCH_PLAN.ps1"
 $retestQueueScript = Join-Path $ProjectRoot "RUN\START_MICROBOT_RETEST_QUEUE_AFTER_IDLE_BACKGROUND.ps1"
 $applyLaptopRuntimeScript = Join-Path $ProjectRoot "RUN\APPLY_LAPTOP_RESEARCH_RUNTIME.ps1"
@@ -71,6 +73,7 @@ $researchContractManifestPath = "C:\TRADING_DATA\RESEARCH\reports\research_contr
 $mt5StatusPath = Join-Path $statusDir "mt5_tester_status_latest.json"
 $mt5QueuePath = Join-Path $statusDir "mt5_retest_queue_latest.json"
 $nearProfitQueuePath = Join-Path $statusDir "near_profit_optimization_queue_latest.json"
+$fullStackReportPath = Join-Path $statusDir "full_stack_audit_latest.json"
 $dailySystemReportPath = Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json"
 foreach ($path in @(
     $priorityScript,
@@ -95,6 +98,8 @@ foreach ($path in @(
     $learningHygieneScript,
     $learningHotPathScript,
     $learningWellbeingScript,
+    $repoHygieneScript,
+    $supervisorScopeAuditScript,
     $mt5QueueSyncScript,
     $retestQueueScript,
     $applyLaptopRuntimeScript,
@@ -584,6 +589,18 @@ function Write-SupervisorStatus {
         $learningWellbeing = Get-Content -LiteralPath $learningWellbeingPath -Raw -Encoding UTF8 | ConvertFrom-Json
     }
 
+    $repoHygienePath = Join-Path $statusDir "repo_hygiene_latest.json"
+    $repoHygiene = $null
+    if (Test-Path -LiteralPath $repoHygienePath) {
+        $repoHygiene = Get-Content -LiteralPath $repoHygienePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
+    $supervisorScopeAuditPath = Join-Path $statusDir "supervisor_scope_audit_latest.json"
+    $supervisorScopeAudit = $null
+    if (Test-Path -LiteralPath $supervisorScopeAuditPath) {
+        $supervisorScopeAudit = Get-Content -LiteralPath $supervisorScopeAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+
     $dataReadinessPath = Join-Path $statusDir "instrument_data_readiness_latest.json"
     $dataReadiness = $null
     $dataReadinessHead = @()
@@ -761,6 +778,8 @@ function Write-SupervisorStatus {
         learning_paper_runtime = $learningPaperRuntime
         top_learning_paper_runtime = $learningPaperRuntimeHead
         learning_wellbeing = $learningWellbeing
+        repo_hygiene = $repoHygiene
+        supervisor_scope_audit = $supervisorScopeAudit
         instrument_data_readiness = $dataReadiness
         top_instrument_data_readiness = $dataReadinessHead
         instrument_shadow_datasets = $shadowDatasets
@@ -1053,6 +1072,30 @@ function Write-SupervisorStatus {
         $lines.Add("- learning wellbeing report not available")
     }
     $lines.Add("")
+    $lines.Add("## System Boundary And Repo Hygiene")
+    $lines.Add("")
+    if ($null -ne $repoHygiene) {
+        $repoCounts = if (Test-ObjectHasProperty -Object $repoHygiene -Name "counts") { $repoHygiene.counts } else { $null }
+        $lines.Add(("- repo_hygiene_verdict: {0}" -f $repoHygiene.verdict))
+        $lines.Add(("- git_dirty_total: {0}" -f (Get-OptionalValue -Object $repoCounts -Name "dirty_total" -Default 0)))
+        $lines.Add(("- git_system_core_dirty_count: {0}" -f (Get-OptionalValue -Object $repoCounts -Name "system_core" -Default 0)))
+        $lines.Add(("- git_auxiliary_bridge_dirty_count: {0}" -f (Get-OptionalValue -Object $repoCounts -Name "auxiliary_bridge" -Default 0)))
+        $lines.Add(("- git_generated_timestamp_only_count: {0}" -f (Get-OptionalValue -Object $repoCounts -Name "generated_timestamp_only" -Default 0)))
+    }
+    else {
+        $lines.Add("- repo hygiene report not available")
+    }
+    if ($null -ne $supervisorScopeAudit) {
+        $scopeSummary = if (Test-ObjectHasProperty -Object $supervisorScopeAudit -Name "summary") { $supervisorScopeAudit.summary } else { $null }
+        $lines.Add(("- supervisor_scope_verdict: {0}" -f $supervisorScopeAudit.verdict))
+        $lines.Add(("- supervisor_boundary_clean_count: {0}" -f (Get-OptionalValue -Object $scopeSummary -Name "clean_boundary_count" -Default 0)))
+        $lines.Add(("- supervisor_boundary_contaminated_count: {0}" -f (Get-OptionalValue -Object $scopeSummary -Name "contaminated_count" -Default 0)))
+        $lines.Add(("- supervisor_scope_missing_count: {0}" -f (Get-OptionalValue -Object $scopeSummary -Name "missing_count" -Default 0)))
+    }
+    else {
+        $lines.Add("- supervisor scope audit report not available")
+    }
+    $lines.Add("")
     $lines.Add("## Trust But Verify")
     $lines.Add("")
     if ($null -ne $trustButVerify) {
@@ -1197,9 +1240,39 @@ while ($true) {
         "verdict=$($report.verdict); rotated=$($report.summary.rotated_count); waiting_hot=$($report.summary.waiting_hot_count)"
     } | Out-Null
 
+    Invoke-SupervisorAction -Actions $actions -Name "repo_hygiene" -Operation {
+        & $repoHygieneScript -ProjectRoot $ProjectRoot | Out-Null
+        $report = Read-JsonOrNull -Path (Join-Path $statusDir "repo_hygiene_latest.json")
+        if ($null -eq $report) {
+            return "rebuilt report_missing"
+        }
+        $counts = Get-OptionalValue -Object $report -Name "counts" -Default $null
+        $dirtyTotal = [int](Get-OptionalValue -Object $counts -Name "dirty_total" -Default 0)
+        $systemCoreDirty = [int](Get-OptionalValue -Object $counts -Name "system_core" -Default 0)
+        $auxiliaryBridgeDirty = [int](Get-OptionalValue -Object $counts -Name "auxiliary_bridge" -Default 0)
+        "verdict=$($report.verdict); dirty_total=$dirtyTotal; system_core=$systemCoreDirty; auxiliary_bridge=$auxiliaryBridgeDirty"
+    } | Out-Null
+
+    Invoke-SupervisorAction -Actions $actions -Name "supervisor_scope_audit" -Operation {
+        & $supervisorScopeAuditScript -ProjectRoot $ProjectRoot | Out-Null
+        $report = Read-JsonOrNull -Path (Join-Path $statusDir "supervisor_scope_audit_latest.json")
+        if ($null -eq $report) {
+            return "rebuilt report_missing"
+        }
+        $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null
+        $cleanBoundary = [int](Get-OptionalValue -Object $summary -Name "clean_boundary_count" -Default 0)
+        $contaminated = [int](Get-OptionalValue -Object $summary -Name "contaminated_count" -Default 0)
+        $missing = [int](Get-OptionalValue -Object $summary -Name "missing_count" -Default 0)
+        "verdict=$($report.verdict); clean_boundary=$cleanBoundary; contaminated=$contaminated; missing=$missing"
+    } | Out-Null
+
     Invoke-SupervisorAction -Actions $actions -Name "learning_wellbeing" -Operation {
         $report = (& $learningWellbeingScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
-        "verdict=$($report.verdict); bridge=$($report.vps_spool_bridge.verdict); pending_sync=$($report.summary.vps_bridge_pending_sync_count); lag=$($report.summary.vps_bridge_export_lag_total); repairs=$($report.summary.vps_bridge_repair_actions_count); freed_gb=$($report.summary.total_freed_gb); ops_deleted=$($report.summary.ops_deleted_count); runtime_deleted=$($report.summary.runtime_archive_deleted_count)"
+        $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null
+        $repoSystemCoreDirty = [int](Get-OptionalValue -Object $summary -Name "repo_system_core_dirty_count" -Default 0)
+        $repoAuxBridgeDirty = [int](Get-OptionalValue -Object $summary -Name "repo_auxiliary_bridge_dirty_count" -Default 0)
+        $supervisorBoundaryClean = [bool](Get-OptionalValue -Object $summary -Name "supervisor_boundary_clean" -Default $true)
+        "verdict=$($report.verdict); bridge=$($report.vps_spool_bridge.verdict); pending_sync=$($report.summary.vps_bridge_pending_sync_count); lag=$($report.summary.vps_bridge_export_lag_total); repairs=$($report.summary.vps_bridge_repair_actions_count); freed_gb=$($report.summary.total_freed_gb); ops_deleted=$($report.summary.ops_deleted_count); runtime_deleted=$($report.summary.runtime_archive_deleted_count); repo_system_core=$repoSystemCoreDirty; repo_auxiliary_bridge=$repoAuxBridgeDirty; supervisor_boundary_clean=$supervisorBoundaryClean"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "research_data_contract" -Operation {
@@ -1480,7 +1553,16 @@ while ($true) {
 
     Invoke-SupervisorAction -Actions $actions -Name "full_stack_audit" -Operation {
         & $fullStackAuditScript -ApplyLogRotation | Out-Null
-        "rebuilt"
+        $report = Read-JsonOrNull -Path $fullStackReportPath
+        if ($null -eq $report) {
+            return "rebuilt report_missing"
+        }
+        $cleanliness = Get-OptionalValue -Object $report -Name "cleanliness" -Default $null
+        $releaseGate = Get-OptionalValue -Object $report -Name "release_gate" -Default $null
+        $gitSystemCoreDirty = [int](Get-OptionalValue -Object $cleanliness -Name "git_system_core_dirty_count" -Default 0)
+        $gitAuxiliaryBridgeDirty = [int](Get-OptionalValue -Object $cleanliness -Name "git_auxiliary_bridge_dirty_count" -Default 0)
+        $systemAuxBoundaryClean = [bool](Get-OptionalValue -Object $releaseGate -Name "system_aux_boundary_clean" -Default $true)
+        "rebuilt system_core=$gitSystemCoreDirty; auxiliary_bridge=$gitAuxiliaryBridgeDirty; system_aux_boundary_clean=$systemAuxBoundaryClean"
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "snapshot" -Operation {

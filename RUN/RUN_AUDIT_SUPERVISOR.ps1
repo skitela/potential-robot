@@ -293,6 +293,8 @@ function Invoke-AuditCycle {
     $discoveryPath = Join-Path $opsRoot "audit_supervisor_discovery_latest.json"
     $learningHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
     $learningWellbeingPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
+    $repoHygienePath = Join-Path $opsRoot "repo_hygiene_latest.json"
+    $supervisorScopeAuditPath = Join-Path $opsRoot "supervisor_scope_audit_latest.json"
     $vpsSpoolWellbeingPath = Join-Path $opsRoot "vps_spool_wellbeing_latest.json"
     $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
@@ -679,6 +681,8 @@ function Invoke-AuditCycle {
     $discovery = Read-JsonSafe -Path $discoveryPath
     $learningHygiene = Read-JsonSafe -Path $learningHygienePath
     $learningWellbeing = Read-JsonSafe -Path $learningWellbeingPath
+    $repoHygiene = Read-JsonSafe -Path $repoHygienePath
+    $supervisorScopeAudit = Read-JsonSafe -Path $supervisorScopeAuditPath
     $vpsSpoolWellbeing = Read-JsonSafe -Path $vpsSpoolWellbeingPath
 
     $hostileFindings = @()
@@ -808,14 +812,14 @@ function Invoke-AuditCycle {
         $mlOverlaySummary = Get-OptionalValue -Object $mlOverlayAudit -Name "summary" -Default $null
         $rolloutBlocked = [bool](Get-OptionalValue -Object $mlOverlaySummary -Name "rollout_blocked" -Default $false)
         $warnings = @(Get-OptionalValue -Object $mlOverlaySummary -Name "warnings" -Default @())
-        $errors = @(Get-OptionalValue -Object $mlOverlaySummary -Name "errors" -Default @())
+        $overlayMessages = @(Get-OptionalValue -Object $mlOverlaySummary -Name "errors" -Default @())
 
         if ($rolloutBlocked) {
             $mlOverlayEvidence.Add([pscustomobject]@{
                 severity = "high"
                 component = "ml_overlay_rollout"
                 message = "Overlay ML blokuje rollout lub pakiet MT5 z powodu niespojnych artefaktow."
-                context = @{ errors = $errors }
+                context = @{ errors = $overlayMessages }
             }) | Out-Null
         }
         foreach ($warning in $warnings) {
@@ -826,12 +830,12 @@ function Invoke-AuditCycle {
                 context = @{ warning = $warning }
             }) | Out-Null
         }
-        foreach ($error in $errors) {
+        foreach ($overlayIssue in $overlayMessages) {
             $mlOverlayEvidence.Add([pscustomobject]@{
                 severity = "high"
                 component = "ml_overlay_error"
                 message = "Overlay ML zglosil blad krytyczny dla promocji lub pakietu MT5."
-                context = @{ error = $error }
+                context = @{ error = $overlayIssue }
             }) | Out-Null
         }
     }
@@ -902,6 +906,34 @@ function Invoke-AuditCycle {
         $domainStatuses.Add((New-DomainStatus -Domain "KONTRAKT_DANYCH_UCZENIA" -Gate "RAPORTUJ" -Severity "info" -Reason "Kanoniczny kontrakt danych uczenia jest swiezy i spojny.")) | Out-Null
     }
 
+    $boundaryEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $supervisorScopeAudit) {
+        $scopeSummary = Get-OptionalValue -Object $supervisorScopeAudit -Name "summary" -Default $null
+        $scopeVerdict = [string](Get-OptionalValue -Object $supervisorScopeAudit -Name "verdict" -Default "")
+        $contaminatedCount = [int](Get-OptionalValue -Object $scopeSummary -Name "contaminated_count" -Default 0)
+        $missingCount = [int](Get-OptionalValue -Object $scopeSummary -Name "missing_count" -Default 0)
+
+        if ($scopeVerdict -ne "SUPERVISOR_SCOPE_BOUNDARY_OK" -or $contaminatedCount -gt 0 -or $missingCount -gt 0) {
+            $boundaryEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "supervisor_scope_boundary"
+                message = "Supervisorzy mieszaja swiat systemu z warstwa pomocnicza albo maja brakujace skladniki kontraktu."
+                context = @{
+                    verdict = $scopeVerdict
+                    contaminated_count = $contaminatedCount
+                    missing_count = $missingCount
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($boundaryEvidence.Count -gt 0) {
+        $domainStatuses.Add((New-DomainStatus -Domain "GRANICA_SYSTEM_MOSTU" -Gate "BLOKUJ_ROLLOUT" -Severity "high" -Reason "Supervisor systemowy musi pozostac czysty i nie moze byc sklejony z mostem lub brygadami." -Evidence $boundaryEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "GRANICA_SYSTEM_MOSTU" -Gate "RAPORTUJ" -Severity "info" -Reason "Granica miedzy systemem scalpingu a mostem pomocniczym jest czysta.")) | Out-Null
+    }
+
     $runtimeEvidence = New-Object System.Collections.Generic.List[object]
     foreach ($finding in @($hostileFindings | Where-Object { $_.component -in @("git", "runtime_logs", "orphan_dirs") })) {
         $runtimeEvidence.Add($finding) | Out-Null
@@ -910,15 +942,33 @@ function Invoke-AuditCycle {
         $cleanliness = Get-OptionalValue -Object $fullStack -Name "cleanliness" -Default $null
         $releaseGate = Get-OptionalValue -Object $fullStack -Name "release_gate" -Default $null
         $gitDirtyCount = [int](Get-OptionalValue -Object $cleanliness -Name "git_dirty_count" -Default 0)
+        $gitSystemDirtyCount = [int](Get-OptionalValue -Object $cleanliness -Name "git_system_core_dirty_count" -Default $gitDirtyCount)
+        $gitAuxiliaryDirtyCount = [int](Get-OptionalValue -Object $cleanliness -Name "git_auxiliary_bridge_dirty_count" -Default 0)
+        $systemAuxBoundaryClean = [bool](Get-OptionalValue -Object $releaseGate -Name "system_aux_boundary_clean" -Default $true)
         $runtimeArtifactsClean = [bool](Get-OptionalValue -Object $releaseGate -Name "runtime_artifacts_clean" -Default $false)
         $runtimeLogsRotated = [bool](Get-OptionalValue -Object $releaseGate -Name "runtime_logs_under_control" -Default (Get-OptionalValue -Object $releaseGate -Name "runtime_logs_rotated" -Default $false))
 
-        if ($gitDirtyCount -gt 0) {
+        if ($gitSystemDirtyCount -gt 0) {
             $runtimeEvidence.Add([pscustomobject]@{
                 severity = "medium"
-                component = "git"
-                message = "Repo nie jest czyste."
-                context = @{ git_dirty_count = $gitDirtyCount }
+                component = "git_system_core"
+                message = "Repo ma brud systemowy dotyczacy samego runtime, uczenia lub rolloutu."
+                context = @{ git_system_core_dirty_count = $gitSystemDirtyCount }
+            }) | Out-Null
+        }
+        if ($gitAuxiliaryDirtyCount -gt 0) {
+            $runtimeEvidence.Add([pscustomobject]@{
+                severity = "low"
+                component = "git_auxiliary_bridge"
+                message = "Repo ma zmiany pomocnicze po stronie mostu lub brygad, ale nie sa one gate'em systemowym."
+                context = @{ git_auxiliary_bridge_dirty_count = $gitAuxiliaryDirtyCount }
+            }) | Out-Null
+        }
+        if (-not $systemAuxBoundaryClean) {
+            $runtimeEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "system_aux_boundary"
+                message = "Pelny stos raportuje nieczysta granice miedzy systemem a mostem pomocniczym."
             }) | Out-Null
         }
         if (-not $runtimeArtifactsClean) {
@@ -937,7 +987,7 @@ function Invoke-AuditCycle {
         }
     }
 
-    $runtimeBlockingEvidence = @($runtimeEvidence | Where-Object { [string]$_.severity -ne "low" })
+    $runtimeBlockingEvidence = @($runtimeEvidence | Where-Object { $_.component -notin @("git_auxiliary_bridge") -and [string]$_.severity -ne "low" })
     if ($runtimeBlockingEvidence.Count -gt 0) {
         $domainStatuses.Add((New-DomainStatus -Domain "HIGIENA_RUNTIME" -Gate "NAPRAW_W_CYKLU" -Severity (Get-HighestSeverity -Findings $runtimeEvidence) -Reason "Higiena runtime wymaga sprzatania albo dalszej rotacji." -Evidence $runtimeEvidence)) | Out-Null
     }
@@ -1921,6 +1971,8 @@ function Invoke-AuditCycle {
         learning_stack = $learningPath
         learning_path_hygiene = $learningHygienePath
         learning_wellbeing = $learningWellbeingPath
+        repo_hygiene = $repoHygienePath
+        supervisor_scope_audit = $supervisorScopeAuditPath
         vps_spool_wellbeing = $vpsSpoolWellbeingPath
         learning_health_registry = $learningHealthPath
         instrument_data_readiness = $instrumentDataReadinessPath
