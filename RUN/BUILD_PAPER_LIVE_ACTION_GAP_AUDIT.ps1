@@ -315,10 +315,14 @@ $fleetPaperLock = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_lock"
 $fleetPaperLockReason = Get-MapString -Map $sessionCoordinator -Key "fleet_paper_lock_reason" -Default "NONE"
 $fleetPaperDefensive = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_defensive"
 $fleetPaperDefensiveReason = Get-MapString -Map $sessionCoordinator -Key "fleet_paper_defensive_reason" -Default "NONE"
+$fleetPaperLockObserved = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_lock_observed"
+$fleetPaperLockIgnored = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_lock_ignored"
+$fleetPaperDefensiveObserved = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_defensive_observed"
+$fleetPaperDefensiveIgnored = Get-MapBool -Map $sessionCoordinator -Key "fleet_paper_defensive_ignored"
 $fleetDailyLossPct = Get-MapDouble -Map $sessionCoordinator -Key "fleet_daily_loss_pct"
 $runtimeProfile = Get-MapString -Map $sessionCoordinator -Key "runtime_profile" -Default "UNKNOWN"
 $capitalThresholdProfile = Get-MapString -Map $sessionCoordinator -Key "capital_threshold_profile" -Default ""
-$paperThresholdProfileMismatch = (($runtimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH")) -and $capitalThresholdProfile -ne "paper")
+$paperThresholdProfileMismatch = (($runtimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH","BROKER_PARITY_FIRST_WAVE")) -and $capitalThresholdProfile -ne "paper")
 
 $activeFleetVerdicts = Read-JsonSafe -Path $ActiveFleetVerdictsPath
 $fleetMap = @{}
@@ -433,8 +437,12 @@ $summary = [ordered]@{
     paper_threshold_profile_match = (-not $paperThresholdProfileMismatch)
     fleet_capital_lock_active = $fleetPaperLock
     fleet_capital_lock_reason = $fleetPaperLockReason
+    fleet_capital_lock_observed = $fleetPaperLockObserved
+    fleet_capital_lock_ignored = $fleetPaperLockIgnored
     fleet_capital_defensive_active = $fleetPaperDefensive
     fleet_capital_defensive_reason = $fleetPaperDefensiveReason
+    fleet_capital_defensive_observed = $fleetPaperDefensiveObserved
+    fleet_capital_defensive_ignored = $fleetPaperDefensiveIgnored
     fleet_daily_loss_pct = [math]::Round($fleetDailyLossPct, 4)
     paper_hard_daily_loss_pct = [math]::Round($paperHardDailyLossPct, 4)
     fleet_capital_lock_symbol_count = @($itemsArray | Where-Object { $_.direct_block -eq "BLOKADA_KAPITALU_FLOTY" }).Count
@@ -472,7 +480,12 @@ $lines.Add(("- active_trade_count: {0}" -f $report.summary.active_trade_count))
 $lines.Add(("- fresh_but_idle_count: {0}" -f $report.summary.fresh_but_idle_count))
 $lines.Add(("- runtime_profile: {0}" -f $report.summary.runtime_profile))
 $lines.Add(("- fleet_capital_lock_active: {0}" -f ([string]$report.summary.fleet_capital_lock_active).ToLowerInvariant()))
+$lines.Add(("- fleet_capital_lock_observed: {0}" -f ([string]$report.summary.fleet_capital_lock_observed).ToLowerInvariant()))
+$lines.Add(("- fleet_capital_lock_ignored: {0}" -f ([string]$report.summary.fleet_capital_lock_ignored).ToLowerInvariant()))
 $lines.Add(("- fleet_capital_lock_reason: {0}" -f $report.summary.fleet_capital_lock_reason))
+$lines.Add(("- fleet_capital_defensive_active: {0}" -f ([string]$report.summary.fleet_capital_defensive_active).ToLowerInvariant()))
+$lines.Add(("- fleet_capital_defensive_observed: {0}" -f ([string]$report.summary.fleet_capital_defensive_observed).ToLowerInvariant()))
+$lines.Add(("- fleet_capital_defensive_ignored: {0}" -f ([string]$report.summary.fleet_capital_defensive_ignored).ToLowerInvariant()))
 $lines.Add(("- fleet_daily_loss_pct: {0}" -f $report.summary.fleet_daily_loss_pct))
 $lines.Add(("- paper_hard_daily_loss_pct: {0}" -f $report.summary.paper_hard_daily_loss_pct))
 $lines.Add(("- fleet_capital_lock_symbol_count: {0}" -f $report.summary.fleet_capital_lock_symbol_count))

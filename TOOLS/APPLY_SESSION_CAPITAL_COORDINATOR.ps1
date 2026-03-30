@@ -614,6 +614,8 @@ if ($coord.PSObject.Properties.Name -contains "runtime_profiles") {
     $runtimeProfileConfig = $coord.runtime_profiles.PSObject.Properties[$RuntimeProfile]
 }
 $effectiveRules = Merge-CoordinatorRules -BaseRules $coord.rules -OverrideRules $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value.rules_override } else { $null })
+$ignoreFleetPaperLock = [bool](Get-OptionalPropertyValue -Object $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value } else { $null }) -Name "ignore_fleet_paper_lock")
+$ignoreFleetPaperDefensive = [bool](Get-OptionalPropertyValue -Object $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value } else { $null }) -Name "ignore_fleet_paper_defensive")
 $fleetAssessment = Get-FleetAssessment -CommonRoot $CommonFilesRoot
 
 $reentryRecoverFraction = [double]$effectiveRules.reentry_recover_fraction
@@ -829,10 +831,16 @@ foreach ($domainName in @($domainStates.Keys)) {
     $state.family_paper_defensive_reason = [string]$familyAssessment.paper_defensive_reason
     $state.family_trusted = [bool]$familyAssessment.trusted
     $state.family_max_daily_loss_pct = [double]$familyAssessment.max_family_daily_loss_pct
-    $state.fleet_paper_lock = [bool]$fleetAssessment.paper_lock
-    $state.fleet_paper_lock_reason = [string]$fleetAssessment.paper_lock_reason
-    $state.fleet_paper_defensive = [bool]$fleetAssessment.paper_defensive
-    $state.fleet_paper_defensive_reason = [string]$fleetAssessment.paper_defensive_reason
+    $state.fleet_paper_lock_observed = [bool]$fleetAssessment.paper_lock
+    $state.fleet_paper_lock_reason_observed = [string]$fleetAssessment.paper_lock_reason
+    $state.fleet_paper_defensive_observed = [bool]$fleetAssessment.paper_defensive
+    $state.fleet_paper_defensive_reason_observed = [string]$fleetAssessment.paper_defensive_reason
+    $state.fleet_paper_lock_ignored = $ignoreFleetPaperLock -and [bool]$fleetAssessment.paper_lock
+    $state.fleet_paper_defensive_ignored = $ignoreFleetPaperDefensive -and [bool]$fleetAssessment.paper_defensive
+    $state.fleet_paper_lock = if ($ignoreFleetPaperLock) { $false } else { [bool]$fleetAssessment.paper_lock }
+    $state.fleet_paper_lock_reason = if ($ignoreFleetPaperLock -and [bool]$fleetAssessment.paper_lock) { "IGNORED_FOR_BROKER_PARITY_FIRST_WAVE" } else { [string]$fleetAssessment.paper_lock_reason }
+    $state.fleet_paper_defensive = if ($ignoreFleetPaperDefensive) { $false } else { [bool]$fleetAssessment.paper_defensive }
+    $state.fleet_paper_defensive_reason = if ($ignoreFleetPaperDefensive -and [bool]$fleetAssessment.paper_defensive) { "IGNORED_FOR_BROKER_PARITY_FIRST_WAVE" } else { [string]$fleetAssessment.paper_defensive_reason }
     $state.fleet_daily_loss_pct = [double]$fleetAssessment.fleet_daily_loss_pct
 
     if ($state.fleet_paper_lock) {
@@ -953,10 +961,16 @@ $globalLines = @(
     "active_group_count`t$($activeGroups.Count)"
     "active_trade_groups`t$((@($activeGroups | Where-Object { $_.mode -eq 'TRADE' } | ForEach-Object { $_.group }) -join ','))"
     "active_observation_groups`t$((@($activeGroups | Where-Object { $_.mode -ne 'TRADE' } | ForEach-Object { $_.group }) -join ','))"
-    "fleet_paper_lock`t$([int][bool]$fleetAssessment.paper_lock)"
-    "fleet_paper_lock_reason`t$($fleetAssessment.paper_lock_reason)"
-    "fleet_paper_defensive`t$([int][bool]$fleetAssessment.paper_defensive)"
-    "fleet_paper_defensive_reason`t$($fleetAssessment.paper_defensive_reason)"
+    "fleet_paper_lock`t$([int][bool]$(if ($ignoreFleetPaperLock) { $false } else { [bool]$fleetAssessment.paper_lock }))"
+    "fleet_paper_lock_reason`t$(if ($ignoreFleetPaperLock -and [bool]$fleetAssessment.paper_lock) { 'IGNORED_FOR_BROKER_PARITY_FIRST_WAVE' } else { $fleetAssessment.paper_lock_reason })"
+    "fleet_paper_lock_observed`t$([int][bool]$fleetAssessment.paper_lock)"
+    "fleet_paper_lock_reason_observed`t$($fleetAssessment.paper_lock_reason)"
+    "fleet_paper_lock_ignored`t$([int][bool]($ignoreFleetPaperLock -and [bool]$fleetAssessment.paper_lock))"
+    "fleet_paper_defensive`t$([int][bool]$(if ($ignoreFleetPaperDefensive) { $false } else { [bool]$fleetAssessment.paper_defensive }))"
+    "fleet_paper_defensive_reason`t$(if ($ignoreFleetPaperDefensive -and [bool]$fleetAssessment.paper_defensive) { 'IGNORED_FOR_BROKER_PARITY_FIRST_WAVE' } else { $fleetAssessment.paper_defensive_reason })"
+    "fleet_paper_defensive_observed`t$([int][bool]$fleetAssessment.paper_defensive)"
+    "fleet_paper_defensive_reason_observed`t$($fleetAssessment.paper_defensive_reason)"
+    "fleet_paper_defensive_ignored`t$([int][bool]($ignoreFleetPaperDefensive -and [bool]$fleetAssessment.paper_defensive))"
     "fleet_daily_loss_pct`t$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture,'{0:F4}',$fleetAssessment.fleet_daily_loss_pct))"
     "rollover_daily_block`t$([int][bool]$dailyRolloverBlock)"
     "rollover_daily_force_flatten`t$([int][bool]$dailyRolloverForceFlatten)"
@@ -1002,8 +1016,14 @@ foreach ($domainName in @($domainStates.Keys | Sort-Object)) {
         "family_max_daily_loss_pct`t$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture,'{0:F4}',$state.family_max_daily_loss_pct))"
         "fleet_paper_lock`t$([int][bool]$state.fleet_paper_lock)"
         "fleet_paper_lock_reason`t$($state.fleet_paper_lock_reason)"
+        "fleet_paper_lock_observed`t$([int][bool]$state.fleet_paper_lock_observed)"
+        "fleet_paper_lock_reason_observed`t$($state.fleet_paper_lock_reason_observed)"
+        "fleet_paper_lock_ignored`t$([int][bool]$state.fleet_paper_lock_ignored)"
         "fleet_paper_defensive`t$([int][bool]$state.fleet_paper_defensive)"
         "fleet_paper_defensive_reason`t$($state.fleet_paper_defensive_reason)"
+        "fleet_paper_defensive_observed`t$([int][bool]$state.fleet_paper_defensive_observed)"
+        "fleet_paper_defensive_reason_observed`t$($state.fleet_paper_defensive_reason_observed)"
+        "fleet_paper_defensive_ignored`t$([int][bool]$state.fleet_paper_defensive_ignored)"
         "fleet_daily_loss_pct`t$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture,'{0:F4}',$state.fleet_daily_loss_pct))"
         "defensive_mode`t$([int][bool]$state.defensive_mode)"
         "reentry_ready`t$([int][bool]$state.reentry_ready)"
@@ -1030,6 +1050,12 @@ foreach ($domainName in @($domainStates.Keys | Sort-Object)) {
         paper_lock_reason = $state.paper_lock_reason
         paper_defensive = [bool]$state.paper_defensive
         paper_defensive_reason = $state.paper_defensive_reason
+        fleet_paper_lock = [bool]$state.fleet_paper_lock
+        fleet_paper_lock_observed = [bool]$state.fleet_paper_lock_observed
+        fleet_paper_lock_ignored = [bool]$state.fleet_paper_lock_ignored
+        fleet_paper_defensive = [bool]$state.fleet_paper_defensive
+        fleet_paper_defensive_observed = [bool]$state.fleet_paper_defensive_observed
+        fleet_paper_defensive_ignored = [bool]$state.fleet_paper_defensive_ignored
         defensive_mode = [bool]$state.defensive_mode
         reentry_ready = [bool]$state.reentry_ready
         rollover_block = [bool]$state.rollover_block
