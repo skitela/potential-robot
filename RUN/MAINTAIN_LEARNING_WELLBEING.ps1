@@ -173,8 +173,12 @@ $reportsRoot = Join-Path $ResearchRoot "reports"
 $researchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
 $commonStateRoot = Split-Path -Path $CommonRoot -Parent
 $manifestPath = Join-Path $reportsRoot "research_export_manifest_latest.json"
+$pathHygieneScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1"
+$hotPathScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1"
 $pathHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
 $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
+$learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
+$learningArtifactInventoryPath = Join-Path $opsRoot "learning_artifact_inventory_latest.json"
 $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYERS.ps1"
 $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
@@ -193,6 +197,7 @@ $mlScalpingFitAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_SCALPING_FIT_AU
 $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION_AUDIT.ps1"
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $paperLossSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1"
+$qdmCustomSymbolRealismAuditScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_CUSTOM_SYMBOL_REALISM_AUDIT.ps1"
 $mlOverlayAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_OVERLAY_AUDIT.ps1"
 $shadowRuntimeBootstrapScript = Join-Path $ProjectRoot "RUN\ENSURE_SHADOW_RUNTIME_BOOTSTRAP.ps1"
 $instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
@@ -217,7 +222,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($pathHygieneScript, $hotPathScript, $learningArtifactInventoryScript, $normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $qdmCustomSymbolRealismAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -225,8 +230,13 @@ foreach ($path in @($normalizeScript, $repoHygieneScript, $supervisorScopeAuditS
 
 New-DirectoryIfMissing -Path $opsRoot
 
+$null = & $pathHygieneScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -Apply:$Apply | Out-Null
+$null = & $hotPathScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -ResearchRoot $ResearchRoot -Apply:$Apply | Out-Null
+$null = & $learningArtifactInventoryScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -CommonRoot $CommonRoot -UniversePlanPath (Join-Path $ProjectRoot "CONFIG\scalping_universe_plan.json") -Apply:$Apply | Out-Null
+
 $pathHygiene = Read-JsonSafe -Path $pathHygienePath
 $hotPath = Read-JsonSafe -Path $hotPathPath
+$learningArtifactInventory = Read-JsonSafe -Path $learningArtifactInventoryPath
 $manifestState = Get-ManifestState -ManifestPath $manifestPath
 $null = & $repoHygieneScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
 $null = & $supervisorScopeAuditScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
@@ -255,6 +265,7 @@ $mlScalpingFitAudit = (& $mlScalpingFitAuditScript -ProjectRoot $ProjectRoot -Re
 $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
+$qdmCustomSymbolRealismAudit = (& $qdmCustomSymbolRealismAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 try {
     $mlOverlayAudit = (& $mlOverlayAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
 }
@@ -280,6 +291,7 @@ if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootst
     $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
     $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
+    $qdmCustomSymbolRealismAudit = (& $qdmCustomSymbolRealismAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 }
 $instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
@@ -520,9 +532,19 @@ $repoSystemCoreDirtyCount = if ($null -ne $repoHygiene) { [int](Get-OptionalNumb
 $repoAuxiliaryBridgeDirtyCount = if ($null -ne $repoHygiene) { [int](Get-OptionalNumber -Object $repoHygiene.counts -Name "auxiliary_bridge" -Default 0) } else { 0 }
 $supervisorBoundaryContaminatedCount = if ($null -ne $supervisorScopeAudit) { [int](Get-OptionalNumber -Object $supervisorScopeAudit.summary -Name "contaminated_count" -Default 0) } else { 0 }
 $supervisorBoundaryClean = ($null -ne $supervisorScopeAudit -and [string]$supervisorScopeAudit.verdict -eq "SUPERVISOR_SCOPE_BOUNDARY_OK")
+$learningArtifactVerdict = if ($null -ne $learningArtifactInventory) { [string](Get-OptionalValue -Object $learningArtifactInventory -Name "verdict" -Default "") } else { "" }
+$learningArtifactCriticalMissingCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "critical_missing_count" -Default 0) } else { 0 }
+$learningArtifactCriticalStaleCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "critical_stale_count" -Default 0) } else { 0 }
+$learningArtifactRepairSucceededCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "repair_succeeded_count" -Default 0) } else { 0 }
+$learningArtifactRetentionPendingCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "retention_pending_count" -Default 0) } else { 0 }
+$learningArtifactRetentionArchivedCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "retention_archived_count" -Default 0) } else { 0 }
+$learningArtifactLiveLogStaleSymbolCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "live_log_stale_symbol_count" -Default 0) } else { 0 }
+$learningArtifactSpoolEmptyCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "spool_empty_count" -Default 0) } else { 0 }
 $verdict = if (
     ($pathHygiene -ne $null -and [string]$pathHygiene.verdict -eq "CZYSTO") -and
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
+    $learningArtifactCriticalMissingCount -eq 0 -and
+    $learningArtifactCriticalStaleCount -eq 0 -and
     ($null -ne $vpsSpoolBridge -and [string]$vpsSpoolBridge.verdict -in @("MOST_STABILNY", "MOST_UTWARDZONY")) -and
     $contractPendingCount -eq 0 -and
     $qdmRefreshRequiredCount -eq 0 -and
@@ -558,6 +580,7 @@ $report = [ordered]@{
     manifest = $manifestState
     learning_path_hygiene = if ($null -ne $pathHygiene) { [pscustomobject]@{ verdict = [string]$pathHygiene.verdict } } else { $null }
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
+    learning_artifact_inventory = $learningArtifactInventory
     repo_hygiene = $repoHygiene
     supervisor_scope_audit = $supervisorScopeAudit
     vps_spool_bridge = $vpsSpoolBridge
@@ -576,6 +599,7 @@ $report = [ordered]@{
     ml_overlay_audit = $mlOverlayAudit
     paper_live_action_gap_audit = $paperLiveActionGapAudit
     paper_loss_source_audit = $paperLossSourceAudit
+    qdm_custom_symbol_realism_audit = $qdmCustomSymbolRealismAudit
     shadow_runtime_bootstrap = $shadowRuntimeBootstrap
     instrument_local_training_plan = $instrumentLocalTrainingPlan
     instrument_local_training_lane = $instrumentLocalTrainingLane
@@ -657,6 +681,11 @@ $report = [ordered]@{
         paper_loss_cost_driven_count = $paperLossCostDrivenCount
         paper_loss_quality_driven_count = $paperLossQualityDrivenCount
         paper_loss_timeout_driven_count = $paperLossTimeoutDrivenCount
+        qdm_custom_realism_verdict = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [string]$qdmCustomSymbolRealismAudit.verdict } else { "" })
+        qdm_custom_realism_ready_count = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [int](Get-OptionalNumber -Object $qdmCustomSymbolRealismAudit.summary -Name "realism_ready_count" -Default 0) } else { 0 })
+        qdm_custom_broker_mirror_ready_count = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [int](Get-OptionalNumber -Object $qdmCustomSymbolRealismAudit.summary -Name "broker_mirror_ready_count" -Default 0) } else { 0 })
+        qdm_custom_current_run_count = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [int](Get-OptionalNumber -Object $qdmCustomSymbolRealismAudit.summary -Name "current_run_count" -Default 0) } else { 0 })
+        qdm_custom_backfilled_count = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [int](Get-OptionalNumber -Object $qdmCustomSymbolRealismAudit.summary -Name "backfilled_count" -Default 0) } else { 0 })
         shadow_runtime_bootstrap_applied_count = $shadowRuntimeBootstrapAppliedCount
         shadow_runtime_bootstrap_pending_count = $shadowRuntimeBootstrapPendingCount
         local_training_ready_count = $localTrainingReadyCount
@@ -668,6 +697,14 @@ $report = [ordered]@{
         local_training_audit_repair_count = $localTrainingAuditRepairCount
         local_training_guardrail_forced_count = $localTrainingGuardrailForcedCount
         local_training_guardrail_probation_count = $localTrainingGuardrailProbationCount
+        learning_artifact_verdict = $learningArtifactVerdict
+        learning_artifact_critical_missing_count = $learningArtifactCriticalMissingCount
+        learning_artifact_critical_stale_count = $learningArtifactCriticalStaleCount
+        learning_artifact_repair_succeeded_count = $learningArtifactRepairSucceededCount
+        learning_artifact_retention_pending_count = $learningArtifactRetentionPendingCount
+        learning_artifact_retention_archived_count = $learningArtifactRetentionArchivedCount
+        learning_artifact_live_log_stale_symbol_count = $learningArtifactLiveLogStaleSymbolCount
+        learning_artifact_spool_empty_count = $learningArtifactSpoolEmptyCount
         repo_system_core_dirty_count = $repoSystemCoreDirtyCount
         repo_auxiliary_bridge_dirty_count = $repoAuxiliaryBridgeDirtyCount
         supervisor_boundary_clean = $supervisorBoundaryClean
@@ -698,6 +735,14 @@ $lines.Add("")
 $lines.Add(("- manifest_fresh: {0}" -f $report.manifest.fresh))
 $lines.Add(("- learning_path_hygiene: {0}" -f $(if ($null -ne $report.learning_path_hygiene) { $report.learning_path_hygiene.verdict } else { "BRAK" })))
 $lines.Add(("- learning_hot_path: {0}" -f $(if ($null -ne $report.learning_hot_path) { $report.learning_hot_path.verdict } else { "BRAK" })))
+$lines.Add(("- learning_artifact_inventory: {0}" -f $(if ($null -ne $report.learning_artifact_inventory) { $report.learning_artifact_inventory.verdict } else { "BRAK" })))
+$lines.Add(("- learning_artifact_critical_missing_count: {0}" -f $report.summary.learning_artifact_critical_missing_count))
+$lines.Add(("- learning_artifact_critical_stale_count: {0}" -f $report.summary.learning_artifact_critical_stale_count))
+$lines.Add(("- learning_artifact_repair_succeeded_count: {0}" -f $report.summary.learning_artifact_repair_succeeded_count))
+$lines.Add(("- learning_artifact_retention_pending_count: {0}" -f $report.summary.learning_artifact_retention_pending_count))
+$lines.Add(("- learning_artifact_retention_archived_count: {0}" -f $report.summary.learning_artifact_retention_archived_count))
+$lines.Add(("- learning_artifact_live_log_stale_symbol_count: {0}" -f $report.summary.learning_artifact_live_log_stale_symbol_count))
+$lines.Add(("- learning_artifact_spool_empty_count: {0}" -f $report.summary.learning_artifact_spool_empty_count))
 $lines.Add(("- repo_hygiene: {0}" -f $(if ($null -ne $report.repo_hygiene) { $report.repo_hygiene.verdict } else { "BRAK" })))
 $lines.Add(("- supervisor_scope_audit: {0}" -f $(if ($null -ne $report.supervisor_scope_audit) { $report.supervisor_scope_audit.verdict } else { "BRAK" })))
 $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridge) { $report.vps_spool_bridge.verdict } else { "BRAK" })))
@@ -748,6 +793,11 @@ $lines.Add(("- paper_loss_active_negative_symbols_count: {0}" -f $report.summary
 $lines.Add(("- paper_loss_cost_driven_count: {0}" -f $report.summary.paper_loss_cost_driven_count))
 $lines.Add(("- paper_loss_quality_driven_count: {0}" -f $report.summary.paper_loss_quality_driven_count))
 $lines.Add(("- paper_loss_timeout_driven_count: {0}" -f $report.summary.paper_loss_timeout_driven_count))
+$lines.Add(("- qdm_custom_realism_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.qdm_custom_realism_verdict)) { "BRAK" } else { $report.summary.qdm_custom_realism_verdict })))
+$lines.Add(("- qdm_custom_realism_ready_count: {0}" -f $report.summary.qdm_custom_realism_ready_count))
+$lines.Add(("- qdm_custom_broker_mirror_ready_count: {0}" -f $report.summary.qdm_custom_broker_mirror_ready_count))
+$lines.Add(("- qdm_custom_current_run_count: {0}" -f $report.summary.qdm_custom_current_run_count))
+$lines.Add(("- qdm_custom_backfilled_count: {0}" -f $report.summary.qdm_custom_backfilled_count))
 $lines.Add(("- shadow_runtime_bootstrap_applied_count: {0}" -f $report.summary.shadow_runtime_bootstrap_applied_count))
 $lines.Add(("- shadow_runtime_bootstrap_pending_count: {0}" -f $report.summary.shadow_runtime_bootstrap_pending_count))
 $lines.Add(("- local_training_ready_count: {0}" -f $report.summary.local_training_ready_count))

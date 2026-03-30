@@ -18,6 +18,7 @@ $runtimePersistenceAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_RUNTIME_PER
 $runtimeLogRotationScript = Join-Path $ProjectRoot "TOOLS\ROTATE_RUNTIME_LOGS.ps1"
 $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
+$learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
 $nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 $learningHotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 
@@ -27,6 +28,7 @@ foreach ($path in @(
     $runtimeLogRotationScript,
     $repoHygieneScript,
     $supervisorScopeAuditScript,
+    $learningArtifactInventoryScript,
     $nearProfitQueueStatusScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -176,6 +178,10 @@ Invoke-JsonAuditTool -ScriptPath $supervisorScopeAuditScript -Parameters @{
     ProjectRoot = $ProjectRoot
     OutputRoot = $opsRoot
 }
+Invoke-JsonAuditTool -ScriptPath $learningArtifactInventoryScript -Parameters @{
+    ProjectRoot = $ProjectRoot
+    ResearchRoot = $ResearchRoot
+}
 Invoke-JsonAuditTool -ScriptPath $nearProfitQueueStatusScript -Parameters @{
     ProjectRoot = $ProjectRoot
     UseDedicatedPortableLabLane = $true
@@ -187,6 +193,7 @@ $runtimePersistenceAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE
 $runtimeLogRotation = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_log_rotation_report.json")
 $repoHygiene = Read-JsonFile -Path (Join-Path $opsRoot "repo_hygiene_latest.json")
 $supervisorScopeAudit = Read-JsonFile -Path (Join-Path $opsRoot "supervisor_scope_audit_latest.json")
+$learningArtifactInventory = Read-JsonFile -Path (Join-Path $opsRoot "learning_artifact_inventory_latest.json")
 $learningHotPath = Read-JsonFile -Path $learningHotPathPath
 
 $freshness = @(
@@ -206,6 +213,8 @@ $freshness = @(
     Get-FileFreshness -Label "qdm_custom_symbol_pilot_registry" -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_registry_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_pilot_batch" -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_batch_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_first_wave" -Path (Join-Path $opsRoot "qdm_custom_symbol_first_wave_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "qdm_custom_symbol_realism_audit" -Path (Join-Path $opsRoot "qdm_custom_symbol_realism_audit_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "learning_artifact_inventory" -Path (Join-Path $opsRoot "learning_artifact_inventory_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "daily_system_report" -Path (Join-Path $ProjectRoot "EVIDENCE\DAILY\raport_dzienny_latest.json") -ThresholdSeconds 5400
@@ -228,6 +237,11 @@ $qdmCustomSmokeLatest = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symb
 $qdmCustomPilotRegistry = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_registry_latest.json")
 $qdmCustomPilotBatch = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_batch_latest.json")
 $qdmCustomFirstWave = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_first_wave_latest.json")
+$qdmCustomRealismAuditScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_CUSTOM_SYMBOL_REALISM_AUDIT.ps1"
+if (Test-Path -LiteralPath $qdmCustomRealismAuditScript) {
+    Invoke-JsonAuditTool -ScriptPath $qdmCustomRealismAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
+}
+$qdmCustomRealismAudit = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_realism_audit_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -327,6 +341,11 @@ $labBusy = (
 $gitSystemDirtyCount = if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'system_core' -Default 0) } else { $gitDirtyCount }
 $gitAuxiliaryDirtyCount = if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'auxiliary_bridge' -Default 0) } else { 0 }
 $systemBoundaryClean = ($null -ne $supervisorScopeAudit -and [string](Get-SafeObjectValue -Object $supervisorScopeAudit -PropertyName 'verdict' -Default "") -eq "SUPERVISOR_SCOPE_BOUNDARY_OK")
+$learningArtifactInventoryVerdict = if ($null -ne $learningArtifactInventory) { [string](Get-SafeObjectValue -Object $learningArtifactInventory -PropertyName 'verdict' -Default "") } else { "" }
+$learningArtifactCriticalMissingCount = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'critical_missing_count' -Default 0) } else { 0 }
+$learningArtifactCriticalStaleCount = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'critical_stale_count' -Default 0) } else { 0 }
+$learningArtifactRetentionPendingCount = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'retention_pending_count' -Default 0) } else { 0 }
+$learningArtifactLiveLogStaleSymbolCount = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'live_log_stale_symbol_count' -Default 0) } else { 0 }
 
 $mt5QueueFresh = @($freshness | Where-Object { $_.label -eq "mt5_retest_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "mt5_retest_queue" })[0].fresh)
 $nearProfitQueueFresh = @($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" })[0].fresh)
@@ -390,6 +409,9 @@ elseif (-not $runtimeLogsUnderControl) {
 }
 elseif ($gitSystemDirtyCount -gt 0) {
     $releaseVerdict = "CHECKPOINT_CODE_FIRST"
+}
+elseif ($learningArtifactCriticalMissingCount -gt 0 -or $learningArtifactCriticalStaleCount -gt 0) {
+    $releaseVerdict = "REFRESH_LEARNING_ARTIFACTS_FIRST"
 }
 elseif (-not $systemBoundaryClean) {
     $releaseVerdict = "SEPARATE_SYSTEM_AND_BRIDGE_FIRST"
@@ -586,6 +608,30 @@ $report = [ordered]@{
                 selected_symbols = @($qdmCustomFirstWave.selected_symbols)
             }
         } else { $null }
+        qdm_custom_symbol_realism = if ($null -ne $qdmCustomRealismAudit) {
+            [ordered]@{
+                verdict = $qdmCustomRealismAudit.verdict
+                selected_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'selected_count' -Default 0)
+                realism_ready_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'realism_ready_count' -Default 0)
+                broker_mirror_ready_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'broker_mirror_ready_count' -Default 0)
+                property_mirror_ready_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'property_mirror_ready_count' -Default 0)
+                session_mirror_ready_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'session_mirror_ready_count' -Default 0)
+                smoke_ready_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'smoke_ready_count' -Default 0)
+                learning_ready_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'learning_ready_count' -Default 0)
+                current_run_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'current_run_count' -Default 0)
+                backfilled_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'backfilled_count' -Default 0)
+                partial_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'partial_count' -Default 0)
+            }
+        } else { $null }
+        learning_artifact_inventory = if ($null -ne $learningArtifactInventory) {
+            [ordered]@{
+                verdict = $learningArtifactInventoryVerdict
+                critical_missing_count = $learningArtifactCriticalMissingCount
+                critical_stale_count = $learningArtifactCriticalStaleCount
+                retention_pending_count = $learningArtifactRetentionPendingCount
+                live_log_stale_symbol_count = $learningArtifactLiveLogStaleSymbolCount
+            }
+        } else { $null }
     }
     freshness = @($freshness)
     cleanliness = [ordered]@{
@@ -606,6 +652,11 @@ $report = [ordered]@{
         learning_hot_path_verdict = $learningHotPathVerdict
         learning_hot_waiting_count = $learningHotWaitingCount
         runtime_logs_under_control = $runtimeLogsUnderControl
+        learning_artifact_inventory_verdict = $learningArtifactInventoryVerdict
+        learning_artifact_critical_missing_count = $learningArtifactCriticalMissingCount
+        learning_artifact_critical_stale_count = $learningArtifactCriticalStaleCount
+        learning_artifact_retention_pending_count = $learningArtifactRetentionPendingCount
+        learning_artifact_live_log_stale_symbol_count = $learningArtifactLiveLogStaleSymbolCount
         supervisor_scope_verdict = $(if ($null -ne $supervisorScopeAudit) { $supervisorScopeAudit.verdict } else { $null })
         supervisor_scope_contaminated_count = $(if ($null -ne $supervisorScopeAudit) { [int](Get-SafeObjectValue -Object $supervisorScopeAudit.summary -PropertyName 'contaminated_count' -Default 0) } else { 0 })
     }
@@ -692,6 +743,11 @@ $lines.Add(("- repo_hygiene_verdict: {0}" -f $report.cleanliness.repo_hygiene_ve
 $lines.Add(("- git_code_dirty_count: {0}" -f $report.cleanliness.git_code_dirty_count))
 $lines.Add(("- git_generated_timestamp_only_count: {0}" -f $report.cleanliness.git_generated_timestamp_only_count))
 $lines.Add(("- git_generated_other_count: {0}" -f $report.cleanliness.git_generated_other_count))
+$lines.Add(("- learning_artifact_inventory_verdict: {0}" -f $report.cleanliness.learning_artifact_inventory_verdict))
+$lines.Add(("- learning_artifact_critical_missing_count: {0}" -f $report.cleanliness.learning_artifact_critical_missing_count))
+$lines.Add(("- learning_artifact_critical_stale_count: {0}" -f $report.cleanliness.learning_artifact_critical_stale_count))
+$lines.Add(("- learning_artifact_retention_pending_count: {0}" -f $report.cleanliness.learning_artifact_retention_pending_count))
+$lines.Add(("- learning_artifact_live_log_stale_symbol_count: {0}" -f $report.cleanliness.learning_artifact_live_log_stale_symbol_count))
 $lines.Add(("- supervisor_scope_verdict: {0}" -f $report.cleanliness.supervisor_scope_verdict))
 $lines.Add(("- supervisor_scope_contaminated_count: {0}" -f $report.cleanliness.supervisor_scope_contaminated_count))
 $lines.Add(("- runtime_unexpected_dir_count: {0}" -f $report.cleanliness.runtime_unexpected_dir_count))
@@ -825,6 +881,34 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_first_wave) {
 }
 else {
     $lines.Add("- qdm custom-symbol first-wave status not available")
+}
+if ($null -ne $report.lab_health.qdm_custom_symbol_realism) {
+    $lines.Add(("- realism_verdict: {0}" -f $report.lab_health.qdm_custom_symbol_realism.verdict))
+    $lines.Add(("- realism_ready_count: {0}/{1}" -f $report.lab_health.qdm_custom_symbol_realism.realism_ready_count, $report.lab_health.qdm_custom_symbol_realism.selected_count))
+    $lines.Add(("- realism_broker_mirror_ready_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.broker_mirror_ready_count))
+    $lines.Add(("- realism_property_mirror_ready_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.property_mirror_ready_count))
+    $lines.Add(("- realism_session_mirror_ready_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.session_mirror_ready_count))
+    $lines.Add(("- realism_smoke_ready_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.smoke_ready_count))
+    $lines.Add(("- realism_learning_ready_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.learning_ready_count))
+    $lines.Add(("- realism_current_run_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.current_run_count))
+    $lines.Add(("- realism_backfilled_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.backfilled_count))
+    $lines.Add(("- realism_partial_count: {0}" -f $report.lab_health.qdm_custom_symbol_realism.partial_count))
+}
+else {
+    $lines.Add("- qdm custom-symbol realism audit not available")
+}
+$lines.Add("")
+$lines.Add("## Learning Artifact Inventory")
+$lines.Add("")
+if ($null -ne $report.lab_health.learning_artifact_inventory) {
+    $lines.Add(("- verdict: {0}" -f $report.lab_health.learning_artifact_inventory.verdict))
+    $lines.Add(("- critical_missing_count: {0}" -f $report.lab_health.learning_artifact_inventory.critical_missing_count))
+    $lines.Add(("- critical_stale_count: {0}" -f $report.lab_health.learning_artifact_inventory.critical_stale_count))
+    $lines.Add(("- retention_pending_count: {0}" -f $report.lab_health.learning_artifact_inventory.retention_pending_count))
+    $lines.Add(("- live_log_stale_symbol_count: {0}" -f $report.lab_health.learning_artifact_inventory.live_log_stale_symbol_count))
+}
+else {
+    $lines.Add("- learning artifact inventory not available")
 }
 $lines.Add("")
 $lines.Add("## Consistency")

@@ -115,6 +115,22 @@ function Update-QdmPilotRegistry {
             $symbolKey = $symbolAlias.ToUpperInvariant()
             $exportName = "MB_{0}_DUKA_M1_PILOT" -f $symbolKey
             $pilotCsvPath = Join-Path $ProjectRoot ("EVIDENCE\QDM_PILOT\{0}.csv" -f $exportName)
+            $existingEntry = if ($entriesBySymbol.Contains($symbolKey)) { [pscustomobject]$entriesBySymbol[$symbolKey] } else { $null }
+            $summaryRunId = [string](Get-SafeObjectValue -Object $summary -PropertyName "run_id" -Default $runBaseName)
+            $backfillImportMessage = (Get-SafeObjectValue -Object $run -PropertyName "import_message" -Default (Get-SafeObjectValue -Object $existingEntry -PropertyName "import_message" -Default $null))
+            $backfillPropertyMirrorMessage = (Get-SafeObjectValue -Object $run -PropertyName "property_mirror_message" -Default (Get-SafeObjectValue -Object $existingEntry -PropertyName "property_mirror_message" -Default $null))
+            $backfillSessionMirrorMessage = (Get-SafeObjectValue -Object $run -PropertyName "session_mirror_message" -Default (Get-SafeObjectValue -Object $existingEntry -PropertyName "session_mirror_message" -Default $null))
+            $existingRunId = [string](Get-SafeObjectValue -Object $existingEntry -PropertyName "last_run_id" -Default "")
+            $preserveCurrentRunSource = (
+                $null -ne $existingEntry -and
+                $existingRunId -eq $summaryRunId -and
+                [string](Get-SafeObjectValue -Object $existingEntry -PropertyName "source" -Default "") -eq "current_run" -and
+                (
+                    -not [string]::IsNullOrWhiteSpace([string]$backfillImportMessage) -or
+                    -not [string]::IsNullOrWhiteSpace([string]$backfillPropertyMirrorMessage) -or
+                    -not [string]::IsNullOrWhiteSpace([string]$backfillSessionMirrorMessage)
+                )
+            )
 
             $entriesBySymbol[$symbolKey] = [ordered]@{
                 symbol_alias = $symbolKey
@@ -124,10 +140,10 @@ function Update-QdmPilotRegistry {
                 pilot_csv_path = $pilotCsvPath
                 pilot_csv_present = (Test-Path -LiteralPath $pilotCsvPath)
                 pilot_row_count = (Get-CsvRowCount -Path $pilotCsvPath)
-                last_run_id = (Get-SafeObjectValue -Object $summary -PropertyName "run_id" -Default $runBaseName)
-                import_message = (Get-SafeObjectValue -Object $run -PropertyName "import_message" -Default $null)
-                property_mirror_message = (Get-SafeObjectValue -Object $run -PropertyName "property_mirror_message" -Default $null)
-                session_mirror_message = (Get-SafeObjectValue -Object $run -PropertyName "session_mirror_message" -Default $null)
+                last_run_id = $summaryRunId
+                import_message = $backfillImportMessage
+                property_mirror_message = $backfillPropertyMirrorMessage
+                session_mirror_message = $backfillSessionMirrorMessage
                 result_label = (Get-SafeObjectValue -Object $summary -PropertyName "result_label" -Default $null)
                 final_balance = (Get-SafeObjectValue -Object $summary -PropertyName "final_balance" -Default $null)
                 test_duration = (Get-SafeObjectValue -Object $summary -PropertyName "test_duration" -Default $null)
@@ -135,7 +151,7 @@ function Update-QdmPilotRegistry {
                 model = (Get-SafeObjectValue -Object $run -PropertyName "model" -Default $null)
                 model_normalized_for_qdm_custom_symbol = (Get-SafeObjectValue -Object $run -PropertyName "model_normalized_for_qdm_custom_symbol" -Default $false)
                 last_write_local = $summaryFile.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
-                source = "smoke_backfill"
+                source = $(if ($preserveCurrentRunSource) { "current_run" } else { "smoke_backfill" })
             }
         }
     }
