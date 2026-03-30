@@ -201,6 +201,8 @@ $runStatus = if ($compileOk) { "ready" } else { "compile_failed" }
 $runTimedOut = $false
 $importSucceeded = $false
 $importMessage = ""
+$propertyMirrorMessage = $null
+$sessionMirrorMessage = $null
 $launchAt = $null
 $busyProcesses = @()
 
@@ -262,6 +264,8 @@ ShutdownTerminal=1
                 $terminalLogText = Read-TextBestEffort -Path $terminalLogItem.FullName
                 $successRegex = [regex]::Escape("Imported ") + ".*" + [regex]::Escape($CustomSymbol)
                 $latestSuccess = Get-LatestRegexMatchValue -Text $terminalLogText -Pattern $successRegex
+                $propertyMirrorMessage = Get-LatestRegexMatchValue -Text $terminalLogText -Pattern ([regex]::Escape("Copied broker properties from ") + ".*" + [regex]::Escape($CustomSymbol))
+                $sessionMirrorMessage = Get-LatestRegexMatchValue -Text $terminalLogText -Pattern ([regex]::Escape("Copied broker sessions from ") + ".*" + [regex]::Escape($CustomSymbol))
                 if (-not [string]::IsNullOrWhiteSpace($latestSuccess)) {
                     $importSucceeded = $true
                     $importMessage = $latestSuccess
@@ -302,6 +306,12 @@ ShutdownTerminal=1
                 $mqlLogText = Read-TextBestEffort -Path $mqlLogItem.FullName
                 $successRegex = [regex]::Escape("Imported ") + ".*" + [regex]::Escape($CustomSymbol)
                 $latestSuccess = Get-LatestRegexMatchValue -Text $mqlLogText -Pattern $successRegex
+                if ([string]::IsNullOrWhiteSpace($propertyMirrorMessage)) {
+                    $propertyMirrorMessage = Get-LatestRegexMatchValue -Text $mqlLogText -Pattern ([regex]::Escape("Copied broker properties from ") + ".*" + [regex]::Escape($CustomSymbol))
+                }
+                if ([string]::IsNullOrWhiteSpace($sessionMirrorMessage)) {
+                    $sessionMirrorMessage = Get-LatestRegexMatchValue -Text $mqlLogText -Pattern ([regex]::Escape("Copied broker sessions from ") + ".*" + [regex]::Escape($CustomSymbol))
+                }
                 if (-not [string]::IsNullOrWhiteSpace($latestSuccess)) {
                     $importSucceeded = $true
                     $importMessage = $latestSuccess
@@ -347,6 +357,8 @@ $result = [pscustomobject]@{
     run_timed_out = $runTimedOut
     import_succeeded = $importSucceeded
     import_message = $importMessage
+    property_mirror_message = $propertyMirrorMessage
+    session_mirror_message = $sessionMirrorMessage
     custom_symbol = $CustomSymbol
     custom_group = $CustomGroup
     broker_template_symbol = $BrokerTemplateSymbol

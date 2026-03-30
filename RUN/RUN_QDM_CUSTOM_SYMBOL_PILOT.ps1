@@ -78,14 +78,17 @@ function Update-QdmPilotRegistry {
                     pilot_csv_present = $entry.pilot_csv_present
                     pilot_row_count = $entry.pilot_row_count
                     last_run_id = $entry.last_run_id
-                    result_label = $entry.result_label
-                    final_balance = $entry.final_balance
-                    test_duration = $entry.test_duration
-                    requested_model = $entry.requested_model
-                    model = $entry.model
-                    model_normalized_for_qdm_custom_symbol = $entry.model_normalized_for_qdm_custom_symbol
-                    last_write_local = $entry.last_write_local
-                    source = $entry.source
+                    import_message = (Get-SafeObjectValue -Object $entry -PropertyName "import_message" -Default $null)
+                    property_mirror_message = (Get-SafeObjectValue -Object $entry -PropertyName "property_mirror_message" -Default $null)
+                    session_mirror_message = (Get-SafeObjectValue -Object $entry -PropertyName "session_mirror_message" -Default $null)
+                    result_label = (Get-SafeObjectValue -Object $entry -PropertyName "result_label" -Default $null)
+                    final_balance = (Get-SafeObjectValue -Object $entry -PropertyName "final_balance" -Default $null)
+                    test_duration = (Get-SafeObjectValue -Object $entry -PropertyName "test_duration" -Default $null)
+                    requested_model = (Get-SafeObjectValue -Object $entry -PropertyName "requested_model" -Default $null)
+                    model = (Get-SafeObjectValue -Object $entry -PropertyName "model" -Default $null)
+                    model_normalized_for_qdm_custom_symbol = (Get-SafeObjectValue -Object $entry -PropertyName "model_normalized_for_qdm_custom_symbol" -Default $false)
+                    last_write_local = (Get-SafeObjectValue -Object $entry -PropertyName "last_write_local" -Default $null)
+                    source = (Get-SafeObjectValue -Object $entry -PropertyName "source" -Default "existing_registry")
                 }
             }
         }
@@ -122,6 +125,9 @@ function Update-QdmPilotRegistry {
                 pilot_csv_present = (Test-Path -LiteralPath $pilotCsvPath)
                 pilot_row_count = (Get-CsvRowCount -Path $pilotCsvPath)
                 last_run_id = (Get-SafeObjectValue -Object $summary -PropertyName "run_id" -Default $runBaseName)
+                import_message = (Get-SafeObjectValue -Object $run -PropertyName "import_message" -Default $null)
+                property_mirror_message = (Get-SafeObjectValue -Object $run -PropertyName "property_mirror_message" -Default $null)
+                session_mirror_message = (Get-SafeObjectValue -Object $run -PropertyName "session_mirror_message" -Default $null)
                 result_label = (Get-SafeObjectValue -Object $summary -PropertyName "result_label" -Default $null)
                 final_balance = (Get-SafeObjectValue -Object $summary -PropertyName "final_balance" -Default $null)
                 test_duration = (Get-SafeObjectValue -Object $summary -PropertyName "test_duration" -Default $null)
@@ -145,6 +151,9 @@ function Update-QdmPilotRegistry {
             pilot_csv_present = (Test-Path -LiteralPath $CurrentResult.pilot_csv_path)
             pilot_row_count = [int](Get-SafeObjectValue -Object $CurrentResult.export -PropertyName "row_count" -Default (Get-CsvRowCount -Path $CurrentResult.pilot_csv_path))
             last_run_id = (Get-SafeObjectValue -Object $CurrentResult.smoke -PropertyName "tester_run_id" -Default $null)
+            import_message = (Get-SafeObjectValue -Object $CurrentResult.smoke -PropertyName "import_message" -Default $null)
+            property_mirror_message = (Get-SafeObjectValue -Object $CurrentResult.smoke -PropertyName "property_mirror_message" -Default $null)
+            session_mirror_message = (Get-SafeObjectValue -Object $CurrentResult.smoke -PropertyName "session_mirror_message" -Default $null)
             result_label = (Get-SafeObjectValue -Object $CurrentResult.smoke -PropertyName "result_label" -Default $null)
             final_balance = (Get-SafeObjectValue -Object $CurrentResult.smoke -PropertyName "final_balance" -Default $null)
             test_duration = (Get-SafeObjectValue -Object $CurrentResult.smoke -PropertyName "test_duration" -Default $null)
@@ -187,6 +196,12 @@ function Update-QdmPilotRegistry {
         $lines.Add(("## {0}" -f $entry.symbol_alias))
         $lines.Add(("- custom_symbol: {0}" -f $entry.custom_symbol))
         $lines.Add(("- pilot_row_count: {0}" -f $entry.pilot_row_count))
+        if (-not [string]::IsNullOrWhiteSpace([string]$entry.property_mirror_message)) {
+            $lines.Add(("- property_mirror_message: {0}" -f $entry.property_mirror_message))
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$entry.session_mirror_message)) {
+            $lines.Add(("- session_mirror_message: {0}" -f $entry.session_mirror_message))
+        }
         $lines.Add(("- result_label: {0}" -f $entry.result_label))
         $lines.Add(("- final_balance: {0}" -f $entry.final_balance))
         $lines.Add(("- test_duration: {0}" -f $entry.test_duration))

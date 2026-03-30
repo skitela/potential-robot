@@ -502,6 +502,8 @@ $report = [ordered]@{
                 portable_terminal = $qdmCustomPilot.portable_terminal
                 terminal_origin = $qdmCustomPilot.terminal_origin
                 import_message = $qdmCustomPilot.import_message
+                property_mirror_message = $(if ($qdmCustomPilot.PSObject.Properties.Name -contains "property_mirror_message") { $qdmCustomPilot.property_mirror_message } else { $null })
+                session_mirror_message = $(if ($qdmCustomPilot.PSObject.Properties.Name -contains "session_mirror_message") { $qdmCustomPilot.session_mirror_message } else { $null })
                 terminal_log_copy_path = $qdmCustomPilot.terminal_log_copy_path
                 mql_log_copy_path = $(if ($qdmCustomPilot.PSObject.Properties.Name -contains "mql_log_copy_path") { $qdmCustomPilot.mql_log_copy_path } else { $null })
             }
@@ -519,6 +521,8 @@ $report = [ordered]@{
                 requested_model = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'requested_model' -Default $null)
                 model = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'model' -Default $null)
                 model_normalized_for_qdm_custom_symbol = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'model_normalized_for_qdm_custom_symbol' -Default $false)
+                property_mirror_message = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'property_mirror_message' -Default $null)
+                session_mirror_message = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'session_mirror_message' -Default $null)
                 trust_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'trust_state' -Default $null)
                 trust_reason = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'trust_reason' -Default $null)
                 observation_data_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeLatest -PropertyName 'observation_data_state' -Default $null)
@@ -542,6 +546,8 @@ $report = [ordered]@{
                 requested_model = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'requested_model' -Default $null } else { $null })
                 model = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'model' -Default $null } else { $null })
                 model_normalized_for_qdm_custom_symbol = $(if ($null -ne $qdmCustomSmokeRun) { Get-SafeObjectValue -Object $qdmCustomSmokeRun -PropertyName 'model_normalized_for_qdm_custom_symbol' -Default $false } else { $false })
+                property_mirror_message = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'property_mirror_message' -Default $null)
+                session_mirror_message = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'session_mirror_message' -Default $null)
                 trust_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'trust_state' -Default $null)
                 trust_reason = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'trust_reason' -Default $null)
                 observation_data_state = $(Get-SafeObjectValue -Object $qdmCustomSmokeSummary -PropertyName 'observation_data_state' -Default $null)
@@ -756,6 +762,12 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_pilot) {
     $lines.Add(("- import_succeeded: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.import_succeeded))
     $lines.Add(("- custom_symbol: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.custom_symbol))
     $lines.Add(("- import_message: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.import_message))
+    if (-not [string]::IsNullOrWhiteSpace([string]$report.lab_health.qdm_custom_symbol_pilot.property_mirror_message)) {
+        $lines.Add(("- property_mirror_message: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.property_mirror_message))
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$report.lab_health.qdm_custom_symbol_pilot.session_mirror_message)) {
+        $lines.Add(("- session_mirror_message: {0}" -f $report.lab_health.qdm_custom_symbol_pilot.session_mirror_message))
+    }
 }
 else {
     $lines.Add("- qdm custom-symbol import status not available")
@@ -766,6 +778,12 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_smoke) {
     $lines.Add(("- smoke_requested_model: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.requested_model))
     $lines.Add(("- smoke_model: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.model))
     $lines.Add(("- smoke_model_normalized_for_qdm_custom_symbol: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.model_normalized_for_qdm_custom_symbol))
+    if (-not [string]::IsNullOrWhiteSpace([string]$report.lab_health.qdm_custom_symbol_smoke.property_mirror_message)) {
+        $lines.Add(("- smoke_property_mirror_message: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.property_mirror_message))
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$report.lab_health.qdm_custom_symbol_smoke.session_mirror_message)) {
+        $lines.Add(("- smoke_session_mirror_message: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.session_mirror_message))
+    }
     $lines.Add(("- smoke_final_balance: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.final_balance))
     $lines.Add(("- smoke_duration: {0}" -f $report.lab_health.qdm_custom_symbol_smoke.test_duration))
     $lines.Add(("- smoke_trust: {0} / {1}" -f $report.lab_health.qdm_custom_symbol_smoke.trust_state, $report.lab_health.qdm_custom_symbol_smoke.trust_reason))

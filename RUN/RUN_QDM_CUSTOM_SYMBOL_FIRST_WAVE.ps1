@@ -260,7 +260,9 @@ function Build-BackfilledRunResult {
             custom_symbol = [string]$RegistryEntry.custom_symbol
             broker_template_symbol = if ($null -ne $Resolution) { [string]$Resolution.broker_template_symbol } else { $null }
             import_status = "backfilled_from_registry"
-            import_message = Get-OptionalPropertyValue -Object $summary -PropertyName "import_message" -Default $null
+            import_message = $(if ($null -ne $run) { Get-OptionalPropertyValue -Object $run -PropertyName "import_message" -Default (Get-OptionalPropertyValue -Object $RegistryEntry -PropertyName "import_message" -Default (Get-OptionalPropertyValue -Object $summary -PropertyName "import_message" -Default $null)) } else { Get-OptionalPropertyValue -Object $RegistryEntry -PropertyName "import_message" -Default (Get-OptionalPropertyValue -Object $summary -PropertyName "import_message" -Default $null) })
+            property_mirror_message = $(if ($null -ne $run) { Get-OptionalPropertyValue -Object $run -PropertyName "property_mirror_message" -Default (Get-OptionalPropertyValue -Object $RegistryEntry -PropertyName "property_mirror_message" -Default (Get-OptionalPropertyValue -Object $summary -PropertyName "property_mirror_message" -Default $null)) } else { Get-OptionalPropertyValue -Object $RegistryEntry -PropertyName "property_mirror_message" -Default (Get-OptionalPropertyValue -Object $summary -PropertyName "property_mirror_message" -Default $null) })
+            session_mirror_message = $(if ($null -ne $run) { Get-OptionalPropertyValue -Object $run -PropertyName "session_mirror_message" -Default (Get-OptionalPropertyValue -Object $RegistryEntry -PropertyName "session_mirror_message" -Default (Get-OptionalPropertyValue -Object $summary -PropertyName "session_mirror_message" -Default $null)) } else { Get-OptionalPropertyValue -Object $RegistryEntry -PropertyName "session_mirror_message" -Default (Get-OptionalPropertyValue -Object $summary -PropertyName "session_mirror_message" -Default $null) })
             tester_run_id = $runId
             requested_model = if ($null -ne $run) { Get-OptionalPropertyValue -Object $run -PropertyName "requested_model" -Default $RegistryEntry.requested_model } else { $RegistryEntry.requested_model }
             model = if ($null -ne $run) { Get-OptionalPropertyValue -Object $run -PropertyName "model" -Default $RegistryEntry.model } else { $RegistryEntry.model }
@@ -346,6 +348,14 @@ function Write-MarkdownReport {
             $importMessage = $entry.result.smoke.import_message
             if (-not [string]::IsNullOrWhiteSpace([string]$importMessage)) {
                 $lines.Add(("- import_message: {0}" -f $importMessage))
+            }
+            $propertyMirrorMessage = $entry.result.smoke.property_mirror_message
+            if (-not [string]::IsNullOrWhiteSpace([string]$propertyMirrorMessage)) {
+                $lines.Add(("- property_mirror_message: {0}" -f $propertyMirrorMessage))
+            }
+            $sessionMirrorMessage = $entry.result.smoke.session_mirror_message
+            if (-not [string]::IsNullOrWhiteSpace([string]$sessionMirrorMessage)) {
+                $lines.Add(("- session_mirror_message: {0}" -f $sessionMirrorMessage))
             }
             $resultLabel = $entry.result.smoke.result_label
             if (-not [string]::IsNullOrWhiteSpace([string]$resultLabel)) {
