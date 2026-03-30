@@ -3,6 +3,8 @@ param(
     [string]$LogRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
     [int]$CycleSeconds = 300,
     [int]$HeavySweepEveryCycles = 36,
+    [ValidateSet("Off", "Safe", "Controlled")]
+    [string]$AutoHealLevel = "Off",
     [switch]$ApplySafeAutoHeal,
     [switch]$StopExisting
 )
@@ -50,18 +52,22 @@ New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logPath = Join-Path $LogRoot ("audit_supervisor_{0}.log" -f $timestamp)
 $wrapperPath = Join-Path $env:TEMP ("audit_supervisor_wrapper_{0}.ps1" -f $timestamp)
-$autoHealFlag = if ($PSBoundParameters.ContainsKey("ApplySafeAutoHeal")) {
-    if ($ApplySafeAutoHeal) { "-ApplySafeAutoHeal" } else { "" }
+$effectiveAutoHealLevel = if ($PSBoundParameters.ContainsKey("AutoHealLevel")) {
+    $AutoHealLevel
+}
+elseif ($PSBoundParameters.ContainsKey("ApplySafeAutoHeal")) {
+    if ($ApplySafeAutoHeal) { "Safe" } else { "Off" }
 }
 else {
-    "-ApplySafeAutoHeal"
+    "Safe"
 }
+$autoHealArgs = if ($effectiveAutoHealLevel -eq "Off") { "" } else { "-AutoHealLevel $effectiveAutoHealLevel" }
 
 $wrapperContent = @"
 `$ErrorActionPreference = 'Stop'
 Start-Transcript -Path '$logPath' -Force
 try {
-    & '$supervisorScript' -ProjectRoot '$ProjectRoot' -Mode Loop -CycleSeconds $CycleSeconds -HeavySweepEveryCycles $HeavySweepEveryCycles $autoHealFlag
+    & '$supervisorScript' -ProjectRoot '$ProjectRoot' -Mode Loop -CycleSeconds $CycleSeconds -HeavySweepEveryCycles $HeavySweepEveryCycles $autoHealArgs
 }
 finally {
     Stop-Transcript

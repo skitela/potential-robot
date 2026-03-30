@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "default_level": "Off",
+  "levels": {
+    "Off": {
+      "description": "Detection only. No automatic repair actions are executed."
+    },
+    "Safe": {
+      "description": "Only low-risk repairs: log rotation, archive retention, derived artifact rebuilds, wrapper restarts, safe rollback and shadow bootstrap."
+    },
+    "Controlled": {
+      "description": "Includes Safe plus controlled runtime and spool recovery actions that still require proof checks after repair."
+    }
+  }
+}

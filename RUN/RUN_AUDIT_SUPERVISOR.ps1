@@ -4,6 +4,8 @@ param(
     [string]$Mode = "Once",
     [int]$CycleSeconds = 300,
     [int]$HeavySweepEveryCycles = 36,
+    [ValidateSet("Off", "Safe", "Controlled")]
+    [string]$AutoHealLevel = "Off",
     [switch]$ApplySafeAutoHeal
 )
 
@@ -141,6 +143,35 @@ function Invoke-WrapperStarter {
 
     return [pscustomobject]$result
 }
+
+function Resolve-AutoHealLevel {
+    param(
+        [string]$ProjectRoot,
+        [string]$RequestedLevel,
+        [bool]$LegacyApplySafeAutoHeal
+    )
+
+    if ($LegacyApplySafeAutoHeal) {
+        return "Safe"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedLevel) -and $RequestedLevel -ne "Off") {
+        return $RequestedLevel
+    }
+
+    $policyPath = Join-Path $ProjectRoot "CONFIG\supervisor_autoheal_policy_v1.json"
+    $policy = Read-JsonSafe -Path $policyPath
+    $policyDefault = [string](Get-OptionalValue -Object $policy -Name "default_level" -Default "Off")
+    if ($policyDefault -in @("Off", "Safe", "Controlled")) {
+        return $policyDefault
+    }
+
+    return "Off"
+}
+
+$effectiveAutoHealLevel = Resolve-AutoHealLevel -ProjectRoot $ProjectRoot -RequestedLevel $AutoHealLevel -LegacyApplySafeAutoHeal ([bool]$ApplySafeAutoHeal)
+$safeAutoHealEnabled = $effectiveAutoHealLevel -in @("Safe", "Controlled")
+$controlledAutoHealEnabled = $effectiveAutoHealLevel -eq "Controlled"
 
 function Get-WrapperCount {
     param([string]$Pattern)
@@ -324,15 +355,15 @@ function Invoke-AuditCycle {
             path = (Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1")
             params = @{
                 ProjectRoot = $ProjectRoot
-                Apply = [bool]$ApplySafeAutoHeal
+                Apply = $safeAutoHealEnabled
             }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_FULL_STACK_AUDIT.ps1")
             params = @{
                 ProjectRoot = $ProjectRoot
-                ApplyRuntimeCleanup = [bool]$ApplySafeAutoHeal
-                ApplyLogRotation = [bool]$ApplySafeAutoHeal
+                ApplyRuntimeCleanup = $safeAutoHealEnabled
+                ApplyLogRotation = $safeAutoHealEnabled
             }
         },
         @{
@@ -411,7 +442,7 @@ function Invoke-AuditCycle {
             params = @{
                 ProjectRoot = $ProjectRoot
                 ResearchRoot = "C:\TRADING_DATA\RESEARCH"
-                Apply = [bool]$ApplySafeAutoHeal
+                Apply = $safeAutoHealEnabled
             }
         },
         @{
@@ -437,7 +468,7 @@ function Invoke-AuditCycle {
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_AUDIT.ps1")
-            params = @{ ProjectRoot = $ProjectRoot; ApplySafeRollback = [bool]$ApplySafeAutoHeal }
+            params = @{ ProjectRoot = $ProjectRoot; ApplySafeRollback = $safeAutoHealEnabled }
         },
         @{
             path = (Join-Path $ProjectRoot "RUN\BUILD_LEARNING_PAPER_RUNTIME_PLAN.ps1")
@@ -447,7 +478,7 @@ function Invoke-AuditCycle {
             path = (Join-Path $ProjectRoot "RUN\MAINTAIN_LEARNING_WELLBEING.ps1")
             params = @{
                 ProjectRoot = $ProjectRoot
-                Apply = [bool]$ApplySafeAutoHeal
+                AutoHealLevel = $effectiveAutoHealLevel
             }
         },
         @{
@@ -485,7 +516,7 @@ function Invoke-AuditCycle {
         $refreshResults.Add((Invoke-PowerShellScript -ScriptPath $script.path -Parameters $script.params)) | Out-Null
     }
 
-    if ($ApplySafeAutoHeal) {
+    if ($safeAutoHealEnabled) {
         $starterScripts = @(
             @{
                 path = (Join-Path $ProjectRoot "RUN\START_LOCAL_OPERATOR_ARCHIVER_BACKGROUND.ps1")
@@ -2010,6 +2041,9 @@ function Invoke-AuditCycle {
     $report["heavy_sweep_every_hours"] = [math]::Round((($CycleSeconds * $HeavySweepEveryCycles) / 3600.0), 3)
     $report["heavy_sweep"] = $heavySweep
     $report["apply_safe_auto_heal"] = [bool]$ApplySafeAutoHeal
+    $report["auto_heal_level"] = $effectiveAutoHealLevel
+    $report["safe_auto_heal_enabled"] = $safeAutoHealEnabled
+    $report["controlled_auto_heal_enabled"] = $controlledAutoHealEnabled
     $report["refresh_results"] = $refreshResultsArray
     $report["auto_heal_results"] = $autoHealResultsArray
     $report["domain_status"] = $domainStatusesArray

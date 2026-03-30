@@ -8,6 +8,8 @@ param(
     [int]$OpsRetentionDays = 3,
     [int]$RuntimeArchiveRetentionDays = 4,
     [int]$RuntimeArchiveKeepRecentPerKind = 2,
+    [ValidateSet("Off", "Safe", "Controlled")]
+    [string]$AutoHealLevel = "Off",
     [switch]$Apply
 )
 
@@ -113,6 +115,33 @@ function Invoke-JsonScript {
     )
 
     return (& $ScriptPath @Parameters)
+}
+
+function Resolve-AutoHealLevel {
+    param(
+        [string]$ProjectRoot,
+        [string]$RequestedLevel,
+        [bool]$LegacyApply
+    )
+
+    if ($LegacyApply) {
+        return "Safe"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedLevel) -and $RequestedLevel -ne "Off") {
+        return $RequestedLevel
+    }
+
+    $policyPath = Join-Path $ProjectRoot "CONFIG\supervisor_autoheal_policy_v1.json"
+    if (Test-Path -LiteralPath $policyPath) {
+        $policy = Read-JsonSafe -Path $policyPath
+        $policyDefault = [string](Get-OptionalValue -Object $policy -Name "default_level" -Default "Off")
+        if ($policyDefault -in @("Off", "Safe", "Controlled")) {
+            return $policyDefault
+        }
+    }
+
+    return "Off"
 }
 
 function Get-OptionalValue {
@@ -230,9 +259,13 @@ foreach ($path in @($pathHygieneScript, $hotPathScript, $learningArtifactInvento
 
 New-DirectoryIfMissing -Path $opsRoot
 
-$null = & $pathHygieneScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -Apply:$Apply | Out-Null
-$null = & $hotPathScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -ResearchRoot $ResearchRoot -Apply:$Apply | Out-Null
-$null = & $learningArtifactInventoryScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -CommonRoot $CommonRoot -UniversePlanPath (Join-Path $ProjectRoot "CONFIG\scalping_universe_plan.json") -Apply:$Apply | Out-Null
+$effectiveAutoHealLevel = Resolve-AutoHealLevel -ProjectRoot $ProjectRoot -RequestedLevel $AutoHealLevel -LegacyApply ([bool]$Apply)
+$safeAutoHealEnabled = $effectiveAutoHealLevel -in @("Safe", "Controlled")
+$controlledAutoHealEnabled = $effectiveAutoHealLevel -eq "Controlled"
+
+$null = & $pathHygieneScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -Apply:$safeAutoHealEnabled | Out-Null
+$null = & $hotPathScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -ResearchRoot $ResearchRoot -Apply:$safeAutoHealEnabled | Out-Null
+$null = & $learningArtifactInventoryScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -CommonRoot $CommonRoot -UniversePlanPath (Join-Path $ProjectRoot "CONFIG\scalping_universe_plan.json") -Apply:$safeAutoHealEnabled | Out-Null
 
 $pathHygiene = Read-JsonSafe -Path $pathHygienePath
 $hotPath = Read-JsonSafe -Path $hotPathPath
@@ -252,7 +285,7 @@ $vpsSpoolBridge = Invoke-JsonScript -ScriptPath $vpsSpoolWellbeingScript -Parame
     ProjectRoot = $ProjectRoot
     ResearchRoot = $ResearchRoot
     CommonRoot = $CommonRoot
-    Apply = [bool]$Apply
+    Apply = $controlledAutoHealEnabled
 } | ConvertFrom-Json
 $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
@@ -279,8 +312,8 @@ catch {
         }
     }
 }
-$shadowRuntimeBootstrap = (& $shadowRuntimeBootstrapScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -Apply:$Apply | ConvertFrom-Json)
-if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootstrap.summary.applied_count -gt 0) {
+$shadowRuntimeBootstrap = (& $shadowRuntimeBootstrapScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -Apply:$safeAutoHealEnabled | ConvertFrom-Json)
+if ($safeAutoHealEnabled -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootstrap.summary.applied_count -gt 0) {
     $instrumentDataReadiness = (& $instrumentDataReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentShadowDatasets = (& $instrumentShadowDatasetsScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $instrumentTrainingReadiness = (& $instrumentTrainingReadinessScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
@@ -295,7 +328,7 @@ if ($Apply -and $null -ne $shadowRuntimeBootstrap -and [int]$shadowRuntimeBootst
 }
 $instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
-$instrumentLocalTrainingAudit = (& $instrumentLocalTrainingAuditScript -ProjectRoot $ProjectRoot -ApplySafeRollback:$Apply | ConvertFrom-Json)
+$instrumentLocalTrainingAudit = (& $instrumentLocalTrainingAuditScript -ProjectRoot $ProjectRoot -ApplySafeRollback:$safeAutoHealEnabled | ConvertFrom-Json)
 $instrumentLocalTrainingGuardrails = Read-JsonSafe -Path $instrumentLocalTrainingGuardrailsPath
 $qdmMissingProfile = Read-JsonSafe -Path (Join-Path $opsRoot "qdm_missing_only_profile_latest.json")
 $qdmMissingSyncStatus = Read-JsonSafe -Path $qdmMissingSyncStatusPath
@@ -309,7 +342,7 @@ $qdmRecoveryRecoveredSymbols = if ($null -ne $qdmMissingSyncStatus -and $qdmMiss
 $qdmRecoveryResearchRefreshed = if ($null -ne $qdmMissingSyncStatus) { [bool]$qdmMissingSyncStatus.research_refreshed } else { $false }
 $globalQdmRetrain = $null
 
-if ($Apply -and $null -ne $qdmMissingProfile) {
+if ($controlledAutoHealEnabled -and $null -ne $qdmMissingProfile) {
     $qdmMissingCount = [int]$qdmMissingProfile.qdm_missing_count
     $qdmRefreshRequiredCount = if ($null -ne $qdmVisibilityRefresh) { [int]$qdmVisibilityRefresh.summary.refresh_required_count } else { 0 }
     $qdmServerTailBridgeRequiredCount = if ($null -ne $qdmVisibilityRefresh -and $null -ne $qdmVisibilityRefresh.summary.PSObject.Properties['server_tail_bridge_required_count']) { [int]$qdmVisibilityRefresh.summary.server_tail_bridge_required_count } else { 0 }
@@ -322,7 +355,7 @@ if ($Apply -and $null -ne $qdmMissingProfile) {
     }
 }
 
-$globalQdmRetrain = (& $globalQdmRetrainScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -Apply:$Apply | ConvertFrom-Json)
+$globalQdmRetrain = (& $globalQdmRetrainScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -Apply:$safeAutoHealEnabled | ConvertFrom-Json)
 
 $opsRules = @(
     [pscustomobject]@{ name = "local_operator_snapshot"; regex = '^local_operator_snapshot_\d{8}_\d{6}\.(json|md)$'; keep_count = $OpsSnapshotKeepCount; age_days = 2 },
@@ -363,7 +396,7 @@ foreach ($rule in $opsRules) {
             size_mb = [math]::Round($file.Length / 1MB, 2)
             last_write_local = $file.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
         }
-        if ($Apply) {
+        if ($safeAutoHealEnabled) {
             Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
             $opsDeleted.Add($row) | Out-Null
             $opsFreedBytes += [int64]$file.Length
@@ -434,7 +467,7 @@ elseif (Test-Path -LiteralPath $logsRoot) {
                 last_write_local = $file.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
             }
 
-            if ($Apply) {
+            if ($safeAutoHealEnabled) {
                 Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
                 $runtimeDeleted.Add($row) | Out-Null
                 $runtimeFreedBytes += [int64]$file.Length
@@ -445,7 +478,7 @@ elseif (Test-Path -LiteralPath $logsRoot) {
         }
     }
 
-    if ($Apply) {
+    if ($safeAutoHealEnabled) {
         foreach ($archiveRoot in @(Get-ChildItem -LiteralPath $logsRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName "archive" })) {
             $runtimeEmptyDirsRemoved += (Remove-EmptyDirectories -RootPath $archiveRoot)
         }
@@ -576,7 +609,10 @@ $report = [ordered]@{
     project_root = $ProjectRoot
     research_root = $ResearchRoot
     common_root = $CommonRoot
-    apply_mode = [bool]$Apply
+    apply_mode = $safeAutoHealEnabled
+    auto_heal_level = $effectiveAutoHealLevel
+    safe_auto_heal_enabled = $safeAutoHealEnabled
+    controlled_auto_heal_enabled = $controlledAutoHealEnabled
     manifest = $manifestState
     learning_path_hygiene = if ($null -ne $pathHygiene) { [pscustomobject]@{ verdict = [string]$pathHygiene.verdict } } else { $null }
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
@@ -728,6 +764,7 @@ $lines.Add("")
 $lines.Add(("- wygenerowano: {0}" -f $report.generated_at_local))
 $lines.Add(("- verdict: {0}" -f $report.verdict))
 $lines.Add(("- apply_mode: {0}" -f ([string]$report.apply_mode).ToLowerInvariant()))
+$lines.Add(("- auto_heal_level: {0}" -f $report.auto_heal_level))
 $lines.Add(("- total_freed_gb: {0}" -f $report.summary.total_freed_gb))
 $lines.Add("")
 $lines.Add("## Wejscie")
