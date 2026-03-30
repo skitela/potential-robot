@@ -614,6 +614,8 @@ if ($coord.PSObject.Properties.Name -contains "runtime_profiles") {
     $runtimeProfileConfig = $coord.runtime_profiles.PSObject.Properties[$RuntimeProfile]
 }
 $effectiveRules = Merge-CoordinatorRules -BaseRules $coord.rules -OverrideRules $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value.rules_override } else { $null })
+$ignoreFamilyPaperLock = [bool](Get-OptionalPropertyValue -Object $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value } else { $null }) -Name "ignore_family_paper_lock")
+$ignoreFamilyPaperDefensive = [bool](Get-OptionalPropertyValue -Object $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value } else { $null }) -Name "ignore_family_paper_defensive")
 $ignoreFleetPaperLock = [bool](Get-OptionalPropertyValue -Object $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value } else { $null }) -Name "ignore_fleet_paper_lock")
 $ignoreFleetPaperDefensive = [bool](Get-OptionalPropertyValue -Object $(if ($null -ne $runtimeProfileConfig) { $runtimeProfileConfig.Value } else { $null }) -Name "ignore_fleet_paper_defensive")
 $fleetAssessment = Get-FleetAssessment -CommonRoot $CommonFilesRoot
@@ -826,9 +828,18 @@ foreach ($domainName in @($domainStates.Keys)) {
     $familyAssessment = Get-FamilyAssessment -CommonRoot $CommonFilesRoot -Families $families
 
     $state.family_paper_lock = [bool]$familyAssessment.paper_lock
-    $state.family_paper_lock_reason = [string]$familyAssessment.paper_lock_reason
-    $state.family_paper_defensive = [bool]$familyAssessment.paper_defensive
-    $state.family_paper_defensive_reason = [string]$familyAssessment.paper_defensive_reason
+    $state.family_paper_lock_reason = if ($ignoreFamilyPaperLock -and [bool]$familyAssessment.paper_lock) { "IGNORED_FOR_BROKER_PARITY_FIRST_WAVE" } else { [string]$familyAssessment.paper_lock_reason }
+    $state.family_paper_defensive = if ($ignoreFamilyPaperDefensive) { $false } else { [bool]$familyAssessment.paper_defensive }
+    $state.family_paper_defensive_reason = if ($ignoreFamilyPaperDefensive -and [bool]$familyAssessment.paper_defensive) { "IGNORED_FOR_BROKER_PARITY_FIRST_WAVE" } else { [string]$familyAssessment.paper_defensive_reason }
+    $state.family_paper_lock_observed = [bool]$familyAssessment.paper_lock
+    $state.family_paper_lock_reason_observed = [string]$familyAssessment.paper_lock_reason
+    $state.family_paper_lock_ignored = $ignoreFamilyPaperLock -and [bool]$familyAssessment.paper_lock
+    $state.family_paper_defensive_observed = [bool]$familyAssessment.paper_defensive
+    $state.family_paper_defensive_reason_observed = [string]$familyAssessment.paper_defensive_reason
+    $state.family_paper_defensive_ignored = $ignoreFamilyPaperDefensive -and [bool]$familyAssessment.paper_defensive
+    if ($ignoreFamilyPaperLock) {
+        $state.family_paper_lock = $false
+    }
     $state.family_trusted = [bool]$familyAssessment.trusted
     $state.family_max_daily_loss_pct = [double]$familyAssessment.max_family_daily_loss_pct
     $state.fleet_paper_lock_observed = [bool]$fleetAssessment.paper_lock
@@ -1010,8 +1021,14 @@ foreach ($domainName in @($domainStates.Keys | Sort-Object)) {
         "paper_defensive_reason`t$($state.paper_defensive_reason)"
         "family_paper_lock`t$([int][bool]$state.family_paper_lock)"
         "family_paper_lock_reason`t$($state.family_paper_lock_reason)"
+        "family_paper_lock_observed`t$([int][bool]$state.family_paper_lock_observed)"
+        "family_paper_lock_reason_observed`t$($state.family_paper_lock_reason_observed)"
+        "family_paper_lock_ignored`t$([int][bool]$state.family_paper_lock_ignored)"
         "family_paper_defensive`t$([int][bool]$state.family_paper_defensive)"
         "family_paper_defensive_reason`t$($state.family_paper_defensive_reason)"
+        "family_paper_defensive_observed`t$([int][bool]$state.family_paper_defensive_observed)"
+        "family_paper_defensive_reason_observed`t$($state.family_paper_defensive_reason_observed)"
+        "family_paper_defensive_ignored`t$([int][bool]$state.family_paper_defensive_ignored)"
         "family_trusted`t$([int][bool]$state.family_trusted)"
         "family_max_daily_loss_pct`t$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture,'{0:F4}',$state.family_max_daily_loss_pct))"
         "fleet_paper_lock`t$([int][bool]$state.fleet_paper_lock)"

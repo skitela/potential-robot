@@ -37,6 +37,51 @@ def _collect_spool_state(folder: Path) -> dict[str, Any]:
     }
 
 
+def _collect_tester_truth_state(common_files_root: Path) -> dict[str, Any]:
+    tester_dirs = sorted(
+        path for path in common_files_root.glob("MAKRO_I_MIKRO_BOT_TESTER_*") if path.is_dir()
+    )
+    items: list[dict[str, Any]] = []
+    pretrade_total_rows = 0
+    execution_total_rows = 0
+    debug_file_count = 0
+
+    for tester_dir in tester_dirs:
+        pretrade = _collect_spool_state(tester_dir / "spool" / "pretrade_truth")
+        execution = _collect_spool_state(tester_dir / "spool" / "execution_truth")
+        debug_path = tester_dir / "run" / "mt5_truth_debug.csv"
+        debug_exists = debug_path.exists()
+        if debug_exists:
+            debug_file_count += 1
+        pretrade_total_rows += int(pretrade.get("total_rows", 0) or 0)
+        execution_total_rows += int(execution.get("total_rows", 0) or 0)
+        if (
+            int(pretrade.get("csv_count", 0) or 0) > 0
+            or int(execution.get("csv_count", 0) or 0) > 0
+            or debug_exists
+        ):
+            items.append(
+                {
+                    "root": str(tester_dir),
+                    "pretrade_csv_count": pretrade["csv_count"],
+                    "pretrade_total_rows": pretrade["total_rows"],
+                    "execution_csv_count": execution["csv_count"],
+                    "execution_total_rows": execution["total_rows"],
+                    "debug_exists": debug_exists,
+                    "debug_path": str(debug_path) if debug_exists else "",
+                }
+            )
+
+    return {
+        "tester_root_count": len(tester_dirs),
+        "tester_truth_root_count": len(items),
+        "pretrade_total_rows": pretrade_total_rows,
+        "execution_total_rows": execution_total_rows,
+        "debug_file_count": debug_file_count,
+        "items": items,
+    }
+
+
 def _read_text(path: Path) -> str:
     if not path.exists():
         return ""
@@ -110,7 +155,13 @@ def _read_truth_summary(paths: CompatPaths) -> dict[str, Any]:
     return payload
 
 
-def _resolve_operational_state(hooks: dict[str, Any], pretrade: dict[str, Any], execution: dict[str, Any], truth_summary: dict[str, Any]) -> str:
+def _resolve_operational_state(
+    hooks: dict[str, Any],
+    pretrade: dict[str, Any],
+    execution: dict[str, Any],
+    truth_summary: dict[str, Any],
+    tester_truth: dict[str, Any],
+) -> str:
     hook_summary = hooks.get("summary", {}) if isinstance(hooks, dict) else {}
     active_symbols_count = int(hook_summary.get("active_symbols_count", 0) or 0)
     fully_implanted = (
@@ -124,8 +175,12 @@ def _resolve_operational_state(hooks: dict[str, Any], pretrade: dict[str, Any], 
     execution_rows = int(execution.get("total_rows", 0) or 0)
     merged_rows = int(truth_summary.get("merged_rows", 0) or 0)
     truth_chain_rows = int(truth_summary.get("truth_chain_rows", 0) or 0)
+    tester_pretrade_rows = int(tester_truth.get("pretrade_total_rows", 0) or 0)
+    tester_execution_rows = int(tester_truth.get("execution_total_rows", 0) or 0)
 
     if fully_implanted and pretrade_rows == 0 and execution_rows == 0:
+        if tester_pretrade_rows > 0 or tester_execution_rows > 0:
+            return "LIVE_DORMANT_TESTER_ACTIVE"
         return "IMPLANTED_BUT_DORMANT"
     if fully_implanted and (pretrade_rows > 0 or execution_rows > 0) and merged_rows <= 0:
         return "SPOOL_LIVE_CONTRACT_BUILD_PENDING"
@@ -146,13 +201,16 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
     spool_root = compat.common_state_root / "spool"
     pretrade_spool = _collect_spool_state(spool_root / "pretrade_truth")
     execution_spool = _collect_spool_state(spool_root / "execution_truth")
+    tester_truth = _collect_tester_truth_state(compat.common_state_root.parent)
     hook_state = _inspect_hooks(project_root, active_symbols)
     truth_summary = _read_truth_summary(compat)
-    operational_state = _resolve_operational_state(hook_state, pretrade_spool, execution_spool, truth_summary)
+    operational_state = _resolve_operational_state(hook_state, pretrade_spool, execution_spool, truth_summary, tester_truth)
 
     notes: list[str] = []
     if operational_state == "IMPLANTED_BUT_DORMANT":
         notes.append("Hooki sa wpiete, ale spool pretrade/execution nie produkuje jeszcze zadnych rekordow.")
+    if operational_state == "LIVE_DORMANT_TESTER_ACTIVE":
+        notes.append("Prawda wykonania zyje w piaskownicach testera, ale nie zapisuje jeszcze nic do zywego korzenia Common Files.")
     if operational_state == "OPERATIONAL_BASE_CONTRACT_ONLY":
         notes.append("Bazowy kontrakt execution + pretrade dziala, ale contract chain do kandydatow i learningu nie ma jeszcze zywych wierszy.")
     if operational_state == "OPERATIONAL_WITH_CONTRACT_CHAIN":
@@ -179,6 +237,7 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
         "hooks": hook_state,
         "pretrade_spool": pretrade_spool,
         "execution_spool": execution_spool,
+        "tester_truth": tester_truth,
         "truth_summary": truth_summary,
         "notes": notes,
     }
@@ -196,6 +255,7 @@ def write_reports(payload: dict[str, Any], project_root: Path) -> dict[str, str]
     pretrade = payload["pretrade_spool"]
     execution = payload["execution_spool"]
     truth_summary = payload["truth_summary"]
+    tester_truth = payload["tester_truth"]
 
     lines = [
         "# MT5 Pretrade Execution Truth Status",
@@ -211,6 +271,9 @@ def write_reports(payload: dict[str, Any], project_root: Path) -> dict[str, str]
         f"- pretrade_total_rows: {pretrade['total_rows']}",
         f"- execution_csv_count: {execution['csv_count']}",
         f"- execution_total_rows: {execution['total_rows']}",
+        f"- tester_truth_root_count: {tester_truth.get('tester_truth_root_count', 0)}",
+        f"- tester_pretrade_total_rows: {tester_truth.get('pretrade_total_rows', 0)}",
+        f"- tester_execution_total_rows: {tester_truth.get('execution_total_rows', 0)}",
         f"- truth_summary_exists: {truth_summary.get('exists', False)}",
         f"- merged_rows: {truth_summary.get('merged_rows', 0)}",
         f"- truth_chain_rows: {truth_summary.get('truth_chain_rows', 0)}",

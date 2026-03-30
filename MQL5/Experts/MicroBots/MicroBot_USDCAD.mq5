@@ -433,7 +433,7 @@ void OnTimer()
       bool family_changed = false;
       bool coordinator_changed = false;
 
-      if(MbGetTuningFamilySymbols(g_profile.session_profile,family_symbols) > 0)
+      if(MbGetTuningFamilySymbolsForRuntime(g_profile.symbol,g_profile.session_profile,IsLocalPaperModeActive(),family_symbols) > 0)
         {
          MbLoadTuningFamilyPolicy(g_profile.session_profile,g_usdcad_family_tuning_policy);
          family_changed = MbRunTuningFamilyAgent(g_profile.session_profile,family_symbols,g_usdcad_family_tuning_policy,family_reason);

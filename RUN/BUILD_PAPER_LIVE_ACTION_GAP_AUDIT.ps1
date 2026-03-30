@@ -113,6 +113,61 @@ function Get-FamilyPolicyState {
     }
 }
 
+function Resolve-DomainFromSessionProfile {
+    param([string]$SessionProfile)
+    switch ([string]$SessionProfile) {
+        "FX_MAIN" { return "FX" }
+        "FX_ASIA" { return "FX" }
+        "FX_CROSS" { return "FX" }
+        "METALS_SPOT_PM" { return "METALS" }
+        "METALS_FUTURES" { return "METALS" }
+        "INDEX_EU" { return "INDICES" }
+        "INDEX_US" { return "INDICES" }
+        default { return "" }
+    }
+}
+
+function Get-DomainCoordinatorState {
+    param(
+        [string]$SessionCoordinatorPathValue,
+        [string]$SessionProfile
+    )
+
+    $domain = Resolve-DomainFromSessionProfile -SessionProfile $SessionProfile
+    if ([string]::IsNullOrWhiteSpace($domain)) {
+        return $null
+    }
+
+    $globalDir = Split-Path -Parent $SessionCoordinatorPathValue
+    if ([string]::IsNullOrWhiteSpace($globalDir)) {
+        return $null
+    }
+
+    $stateRoot = Split-Path -Parent $globalDir
+    if ([string]::IsNullOrWhiteSpace($stateRoot)) {
+        return $null
+    }
+
+    $path = Join-Path $stateRoot ("_domains\\{0}\\session_capital_state.csv" -f $domain)
+    $raw = Read-KeyValueTable -Path $path
+    if ($raw.Count -le 0) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        family_paper_lock = (Get-MapBool -Map $raw -Key "family_paper_lock")
+        family_paper_lock_reason = (Get-MapString -Map $raw -Key "family_paper_lock_reason" -Default "NONE")
+        family_paper_lock_observed = (Get-MapBool -Map $raw -Key "family_paper_lock_observed")
+        family_paper_lock_reason_observed = (Get-MapString -Map $raw -Key "family_paper_lock_reason_observed" -Default "NONE")
+        family_paper_lock_ignored = (Get-MapBool -Map $raw -Key "family_paper_lock_ignored")
+        family_paper_defensive = (Get-MapBool -Map $raw -Key "family_paper_defensive")
+        family_paper_defensive_reason = (Get-MapString -Map $raw -Key "family_paper_defensive_reason" -Default "NONE")
+        family_paper_defensive_observed = (Get-MapBool -Map $raw -Key "family_paper_defensive_observed")
+        family_paper_defensive_reason_observed = (Get-MapString -Map $raw -Key "family_paper_defensive_reason_observed" -Default "NONE")
+        family_paper_defensive_ignored = (Get-MapBool -Map $raw -Key "family_paper_defensive_ignored")
+    }
+}
+
 function Get-DecisionReasonSummary {
     param(
         [string]$DecisionCsvPath,
@@ -349,11 +404,15 @@ foreach ($instrument in @($dailyReport.instrumenty)) {
     $meta = if ($symbolMetaMap.ContainsKey($alias)) { $symbolMetaMap[$alias] } else { $null }
     $sessionProfile = if ($null -ne $meta) { [string]$meta.session_profile } else { "" }
     $familyPolicy = Get-FamilyPolicyState -FamilyStatesRootPath $FamilyStatesRoot -SessionProfile $sessionProfile
-    $familyPaperLock = [bool]$familyPolicy.paper_mode_active
-    if ([string]$familyPolicy.trust_reason -ne "FAMILY_DAILY_LOSS_HARD") {
-        $familyPaperLock = $false
-    }
-    $familyPaperDefensive = [bool]$familyPolicy.paper_defensive
+    $domainCoordinator = Get-DomainCoordinatorState -SessionCoordinatorPathValue $SessionCoordinatorPath -SessionProfile $sessionProfile
+    $familyPaperLock = if ($null -ne $domainCoordinator) { [bool]$domainCoordinator.family_paper_lock } else { [bool]$familyPolicy.paper_mode_active -and [string]$familyPolicy.trust_reason -eq "FAMILY_DAILY_LOSS_HARD" }
+    $familyPaperLockReason = if ($null -ne $domainCoordinator) { [string]$domainCoordinator.family_paper_lock_reason } else { [string]$familyPolicy.trust_reason }
+    $familyPaperLockObserved = if ($null -ne $domainCoordinator) { [bool]$domainCoordinator.family_paper_lock_observed } else { $familyPaperLock }
+    $familyPaperLockIgnored = if ($null -ne $domainCoordinator) { [bool]$domainCoordinator.family_paper_lock_ignored } else { $false }
+    $familyPaperDefensive = if ($null -ne $domainCoordinator) { [bool]$domainCoordinator.family_paper_defensive } else { [bool]$familyPolicy.paper_defensive }
+    $familyPaperDefensiveReason = if ($null -ne $domainCoordinator) { [string]$domainCoordinator.family_paper_defensive_reason } else { if ([bool]$familyPolicy.paper_defensive) { "FAMILY_DAILY_LOSS_DEFENSIVE" } else { "NONE" } }
+    $familyPaperDefensiveObserved = if ($null -ne $domainCoordinator) { [bool]$domainCoordinator.family_paper_defensive_observed } else { [bool]$familyPolicy.paper_defensive }
+    $familyPaperDefensiveIgnored = if ($null -ne $domainCoordinator) { [bool]$domainCoordinator.family_paper_defensive_ignored } else { $false }
     $familyDailyLossPct = [double]$familyPolicy.family_daily_loss_pct
     $decisionPath = Join-Path (Join-Path $DecisionLogsRoot $alias) "decision_events.csv"
     $decisionSummary = Get-DecisionReasonSummary -DecisionCsvPath $decisionPath -Window $DecisionWindow
@@ -412,8 +471,13 @@ foreach ($instrument in @($dailyReport.instrumenty)) {
         strata_floty_proc = [math]::Round($fleetDailyLossPct, 4)
         prog_twardy_floty_proc = [math]::Round($paperHardDailyLossPct, 4)
         blokada_kapitalu_rodziny = $familyPaperLock
-        powod_blokady_rodziny = [string]$familyPolicy.trust_reason
+        powod_blokady_rodziny = $familyPaperLockReason
+        blokada_kapitalu_rodziny_obserwowana = $familyPaperLockObserved
+        blokada_kapitalu_rodziny_ignorowana = $familyPaperLockIgnored
         sterowanie_defensywne_rodziny = $familyPaperDefensive
+        powod_sterowania_defensywnego_rodziny = $familyPaperDefensiveReason
+        sterowanie_defensywne_rodziny_obserwowane = $familyPaperDefensiveObserved
+        sterowanie_defensywne_rodziny_ignorowane = $familyPaperDefensiveIgnored
         strata_rodziny_proc = [math]::Round($familyDailyLossPct, 4)
         prog_twardy_rodziny_proc = [math]::Round($paperFamilyHardLossPct, 4)
         blokada_sensowna = $blockSensible

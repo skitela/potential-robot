@@ -62,6 +62,7 @@
         "First-wave broker parity keeps the four most advanced instruments under paper thresholds while preparing them for conditions as close as possible to the OANDA TMS MT5 server.",
         "This profile is a dedicated bridge between laptop research and execution-like paper conditions for US500, EURJPY, AUDUSD and USDCAD."
       ],
+      "ignore_family_paper_lock": true,
       "ignore_fleet_paper_lock": true,
       "ignore_fleet_paper_defensive": true,
       "rules_override": {

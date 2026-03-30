@@ -61,7 +61,11 @@ void MbTuningSummarizeFamilyAction(const MbTuningFamilyPolicy &policy,string &ou
   {
    out_code = "REBALANCE_FAMILY";
 
-   if(policy.trust_reason == "FAMILY_DAILY_LOSS_DEFENSIVE" && !policy.freeze_new_changes)
+   if(
+      (policy.trust_reason == "FAMILY_DAILY_LOSS_DEFENSIVE" ||
+       policy.trust_reason == "FIRST_WAVE_BROKER_PARITY_DEFENSIVE") &&
+      !policy.freeze_new_changes
+   )
       out_code = "DEFENSIVE_FAMILY";
    else if(policy.freeze_new_changes)
       out_code = "FREEZE_FAMILY";
@@ -87,6 +91,27 @@ void MbTuningSummarizeFamilyAction(const MbTuningFamilyPolicy &policy,string &ou
       policy.rejection_range_boost,
       (policy.freeze_new_changes ? "1" : "0")
    );
+  }
+
+bool MbIsFirstWaveBrokerParityFamilySet(const string &symbols[])
+  {
+   int count = ArraySize(symbols);
+   if(count <= 0)
+      return false;
+
+   for(int i = 0; i < count; ++i)
+     {
+      string key = MbCanonicalSymbol(symbols[i]);
+      if(
+         key != "US500" &&
+         key != "EURJPY" &&
+         key != "AUDUSD" &&
+         key != "USDCAD"
+      )
+         return false;
+     }
+
+   return true;
   }
 
 bool MbLoadTuningSymbolSnapshot(const string family,const string symbol,MbTuningSymbolSnapshot &out)
@@ -361,6 +386,19 @@ bool MbRunTuningFamilyAgent(const string family,const string &symbols[],MbTuning
             next.trust_reason = "FAMILY_DAILY_LOSS_HARD";
            }
         }
+     }
+
+   bool first_wave_paper_isolated = (family_paper_mode && MbIsFirstWaveBrokerParityFamilySet(symbols));
+   if(first_wave_paper_isolated)
+     {
+      next.freeze_new_changes = false;
+      next.dominant_confidence_cap = MathMin(next.dominant_confidence_cap,0.84);
+      next.dominant_risk_cap = MathMin(next.dominant_risk_cap,0.78);
+      next.breakout_family_tax = MathMin(next.breakout_family_tax,0.03);
+      next.trend_family_tax = MathMin(next.trend_family_tax,0.02);
+
+      if(next.trust_reason != "TRUSTED")
+         next.trust_reason = "FIRST_WAVE_BROKER_PARITY_DEFENSIVE";
      }
 
    MbApplyTuningGuardToFamilyPolicy(family,next);

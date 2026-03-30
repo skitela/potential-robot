@@ -83,6 +83,36 @@ int MbGetTuningFamilySymbols(const string family,string &out[])
    return ArraySize(out);
   }
 
+bool MbIsFirstWaveBrokerParitySymbol(const string symbol)
+  {
+   string key = MbCanonicalSymbol(symbol);
+   return (
+      key == "US500" ||
+      key == "EURJPY" ||
+      key == "AUDUSD" ||
+      key == "USDCAD"
+   );
+  }
+
+int MbGetTuningFamilySymbolsForRuntime(
+   const string symbol,
+   const string family,
+   const bool paper_mode_active,
+   string &out[]
+)
+  {
+   ArrayResize(out,0);
+
+   if(paper_mode_active && MbIsFirstWaveBrokerParitySymbol(symbol))
+     {
+      ArrayResize(out,1);
+      out[0] = symbol;
+      return 1;
+     }
+
+   return MbGetTuningFamilySymbols(family,out);
+  }
+
 void MbBuildEffectiveTuningPolicy(
    const string family,
    const MbTuningLocalPolicy &local_policy,
