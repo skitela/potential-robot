@@ -1,0 +1,162 @@
+{
+  "schema_version": "1.0",
+  "archive_root_relative": "EVIDENCE\\OPS\\archive\\stale_latest",
+  "entries": [
+    {
+      "name": "audit_supervisor_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\audit_supervisor_latest.json",
+      "threshold_seconds": 1200
+    },
+    {
+      "name": "audit_supervisor_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\audit_supervisor_latest.md",
+      "threshold_seconds": 1200
+    },
+    {
+      "name": "full_stack_audit_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\full_stack_audit_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "full_stack_audit_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\full_stack_audit_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "learning_wellbeing_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\learning_wellbeing_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "learning_wellbeing_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\learning_wellbeing_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "learning_artifact_inventory_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\learning_artifact_inventory_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "learning_artifact_inventory_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\learning_artifact_inventory_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "paper_live_feedback_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\paper_live_feedback_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "paper_live_feedback_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\paper_live_feedback_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "mt5_hosting_daily_report_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_hosting_daily_report_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "mt5_hosting_daily_report_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_hosting_daily_report_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "vps_spool_wellbeing_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\vps_spool_wellbeing_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "vps_spool_wellbeing_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\vps_spool_wellbeing_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "mt5_truth_status_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_pretrade_execution_truth_status_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "mt5_truth_status_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_pretrade_execution_truth_status_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "first_wave_runtime_activity_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_first_wave_runtime_activity_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "first_wave_runtime_activity_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_first_wave_runtime_activity_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "first_wave_server_parity_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_first_wave_server_parity_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "first_wave_server_parity_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\mt5_first_wave_server_parity_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "post_migration_startup_audit_json",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\post_migration_startup_audit_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "post_migration_startup_audit_md",
+      "root": "project",
+      "relative_path": "EVIDENCE\\OPS\\post_migration_startup_audit_latest.md",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "research_export_manifest_json",
+      "root": "research",
+      "relative_path": "reports\\research_export_manifest_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "research_contract_manifest_json",
+      "root": "research",
+      "relative_path": "reports\\research_contract_manifest_latest.json",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "mt5_truth_debug_csv",
+      "root": "common",
+      "relative_path": "run\\mt5_truth_debug.csv",
+      "threshold_seconds": 1800
+    },
+    {
+      "name": "first_wave_truth_diagnostic_csv",
+      "root": "common",
+      "relative_path": "run\\first_wave_truth_diagnostic.csv",
+      "threshold_seconds": 3600
+    }
+  ]
+}

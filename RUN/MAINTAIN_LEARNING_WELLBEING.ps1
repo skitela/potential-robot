@@ -206,6 +206,8 @@ $pathHygieneScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_PATH_HYGIENE.ps1
 $hotPathScript = Join-Path $ProjectRoot "RUN\CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1"
 $pathHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
 $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
+$runtimeLatestScrubScript = Join-Path $ProjectRoot "RUN\SCRUB_STALE_RUNTIME_LATESTS.ps1"
+$runtimeLatestScrubPath = Join-Path $opsRoot "runtime_latest_scrub_latest.json"
 $learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
 $learningArtifactInventoryPath = Join-Path $opsRoot "learning_artifact_inventory_latest.json"
 $postMigrationStartupAuditPath = Join-Path $opsRoot "post_migration_startup_audit_latest.json"
@@ -254,7 +256,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($pathHygieneScript, $hotPathScript, $learningArtifactInventoryScript, $normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $qdmCustomSymbolRealismAuditScript, $mt5FirstWaveServerParityAuditScript, $mt5FirstWaveRuntimeActivityAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($runtimeLatestScrubScript, $pathHygieneScript, $hotPathScript, $learningArtifactInventoryScript, $normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $qdmCustomSymbolRealismAuditScript, $mt5FirstWaveServerParityAuditScript, $mt5FirstWaveRuntimeActivityAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -266,10 +268,12 @@ $effectiveAutoHealLevel = Resolve-AutoHealLevel -ProjectRoot $ProjectRoot -Reque
 $safeAutoHealEnabled = $effectiveAutoHealLevel -in @("Safe", "Controlled")
 $controlledAutoHealEnabled = $effectiveAutoHealLevel -eq "Controlled"
 
+$null = & $runtimeLatestScrubScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -CommonRoot $CommonRoot -Apply:$safeAutoHealEnabled | Out-Null
 $null = & $pathHygieneScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -Apply:$safeAutoHealEnabled | Out-Null
 $null = & $hotPathScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot -ResearchRoot $ResearchRoot -Apply:$safeAutoHealEnabled | Out-Null
 $null = & $learningArtifactInventoryScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -CommonRoot $CommonRoot -UniversePlanPath (Join-Path $ProjectRoot "CONFIG\scalping_universe_plan.json") -Apply:$safeAutoHealEnabled | Out-Null
 
+$runtimeLatestScrub = Read-JsonSafe -Path $runtimeLatestScrubPath
 $pathHygiene = Read-JsonSafe -Path $pathHygienePath
 $hotPath = Read-JsonSafe -Path $hotPathPath
 $learningArtifactInventory = Read-JsonSafe -Path $learningArtifactInventoryPath
@@ -667,6 +671,7 @@ $report = [ordered]@{
     manifest = $manifestState
     learning_path_hygiene = if ($null -ne $pathHygiene) { [pscustomobject]@{ verdict = [string]$pathHygiene.verdict } } else { $null }
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
+    runtime_latest_scrub = $runtimeLatestScrub
     learning_artifact_inventory = $learningArtifactInventory
     repo_hygiene = $repoHygiene
     supervisor_scope_audit = $supervisorScopeAudit

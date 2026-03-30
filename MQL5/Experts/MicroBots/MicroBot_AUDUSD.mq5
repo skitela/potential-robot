@@ -87,6 +87,7 @@ string g_tuning_deckhand_log_path = "";
 string g_onnx_observation_log_path = "";
 string g_onnx_observation_state_path = "";
 MbMlRuntimeBridgeState g_ml_bridge;
+datetime g_last_decision_event_ts = 0;
 
 bool ShouldRunAUDUSDTuningCycle(const datetime now)
   {
@@ -170,7 +171,7 @@ void AppendAUDUSDDecisionEvent(
         }
      }
 
-   MbAppendDecisionEvent(
+  MbAppendDecisionEvent(
       g_decision_log_path,
       ts,
       g_state.symbol,
@@ -181,6 +182,31 @@ void AppendAUDUSDDecisionEvent(
       score,
       lots,
       retcode
+   );
+
+   g_last_decision_event_ts = ts;
+  }
+
+void EnsureAUDUSDDecisionHeartbeat(const datetime ts,const MbOnnxObservationResult &onnx_result)
+  {
+   const int heartbeat_interval_sec = 900;
+
+   if(!onnx_result.run_ok && !onnx_result.available && !onnx_result.teacher_available)
+      return;
+
+   if(g_last_decision_event_ts > 0 && (ts - g_last_decision_event_ts) < heartbeat_interval_sec)
+      return;
+
+   AppendAUDUSDDecisionEvent(
+      ts,
+      "HEARTBEAT",
+      "OBSERVE",
+      "ONNX_ACTIVE_NO_NEW_DECISION",
+      g_market.spread_points,
+      0.0,
+      0.0,
+      0,
+      false
    );
   }
 
@@ -356,6 +382,7 @@ int OnInit()
    ArrayResize(g_throttled_decision_times,0);
    g_last_aux_event_key = "";
    g_last_aux_event_ts = 0;
+   g_last_decision_event_ts = 0;
    MbTuningLocalPolicyReset(g_audusd_local_tuning_policy);
    MbLoadTuningLocalPolicy(g_profile.symbol,g_audusd_local_tuning_policy);
    MbTuningLocalPolicyReset(g_audusd_effective_tuning_policy);
@@ -424,6 +451,7 @@ void OnTimer()
    MbRuntimeOnTimer(g_state);
    MbOnnxObservationResult timer_onnx_result;
    MbOnnxObservationEmitTimerShadow(now,g_profile.symbol,(IsLocalPaperModeActive() ? "PAPER" : "LIVE"),g_market.spread_points,timer_onnx_result);
+   EnsureAUDUSDDecisionHeartbeat(now,timer_onnx_result);
    MbFlushHeartbeat(g_state);
    MbFlushRuntimeStatus(g_state,(g_kill_switch.halt ? g_kill_switch.reason_code : g_runtime_control.reason_code));
    MbFlushInformationalPolicy(g_profile,g_state,g_market,g_audusd_local_tuning_policy,"BOOTSTRAP",(g_kill_switch.halt ? g_kill_switch.reason_code : g_runtime_control.reason_code));

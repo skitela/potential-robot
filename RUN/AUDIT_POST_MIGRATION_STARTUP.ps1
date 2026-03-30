@@ -236,6 +236,7 @@ function Invoke-RefreshSuite {
 
     $steps = New-Object System.Collections.Generic.List[object]
 
+    $steps.Add((Invoke-ScriptStep -Label "runtime_latest_scrub" -ScriptPath (Join-Path $ProjectRoot "RUN\SCRUB_STALE_RUNTIME_LATESTS.ps1") -Parameters @{ ProjectRoot = $ProjectRoot; Apply = $true })) | Out-Null
     $steps.Add((Invoke-ScriptStep -Label "hosting_report" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_MT5_HOSTING_DAILY_REPORT.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
     $steps.Add((Invoke-ScriptStep -Label "paper_live_feedback" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
 
@@ -490,13 +491,23 @@ function Evaluate-StartupState {
         }
 
         if (-not [bool]$finalSample.decision_log.fresh) {
+            $decisionSeverity = "medium"
+            $decisionMessage = "Dziennik decyzji symbolu nie jest swiezy po migracji."
+
+            if([bool]$finalSample.onnx_log.fresh -and $continuityState -in @("PRZEPLYW_POTWIERDZONY","PRZEPLYW_SWIEZY_BEZ_ZMIANY_W_OKNIE")) {
+                $decisionSeverity = "info"
+                $decisionMessage = "Dziennik decyzji symbolu nie jest swiezy, ale stan pracy i obserwacje modelu pozostaja aktywne."
+            }
+
             $findings.Add([pscustomobject]@{
-                severity = "medium"
+                severity = $decisionSeverity
                 component = "symbol_decision_log"
-                message = "Dziennik decyzji symbolu nie jest swiezy po migracji."
+                message = $decisionMessage
                 context = @{
                     symbol_alias = $symbol
                     age_seconds = $finalSample.decision_log.age_seconds
+                    onnx_log_fresh = [bool]$finalSample.onnx_log.fresh
+                    continuity_state = $continuityState
                 }
             }) | Out-Null
         }
