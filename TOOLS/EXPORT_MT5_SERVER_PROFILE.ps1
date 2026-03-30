@@ -93,7 +93,13 @@ function Resolve-CompiledExpertPath {
     return $null
 }
 
-$resolvedSourceTerminalDataDir = Resolve-PreferredCompiledSourceDir -ProjectPath $projectPath -FallbackDir $SourceTerminalDataDir
+$resolvedSourceTerminalDataDir = $null
+if (-not [string]::IsNullOrWhiteSpace($SourceTerminalDataDir) -and (Test-Path -LiteralPath $SourceTerminalDataDir)) {
+    $resolvedSourceTerminalDataDir = (Resolve-Path -LiteralPath $SourceTerminalDataDir).Path
+}
+else {
+    $resolvedSourceTerminalDataDir = Resolve-PreferredCompiledSourceDir -ProjectPath $projectPath -FallbackDir $SourceTerminalDataDir
+}
 
 $dirs = @(
     $profilePath,

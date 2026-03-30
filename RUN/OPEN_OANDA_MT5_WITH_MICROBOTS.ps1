@@ -28,6 +28,7 @@ else {
 & (Join-Path $projectRoot "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
     -ProjectRoot $projectRoot `
     -GateType ROLLOUT `
+    -AllowStale:$AllowBlockedAuditGate `
     -AllowBlocked:$AllowBlockedAuditGate | Out-Null
 
 $targetTitlePattern = 'OANDA TMS Brokers S.A.'
