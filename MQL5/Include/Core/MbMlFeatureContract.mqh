@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MB_ML_FEATURE_CONTRACT_INCLUDED
+#define MB_ML_FEATURE_CONTRACT_INCLUDED
 
 #define MB_GLOBAL_FEATURE_COUNT 29
 #define MB_LOCAL_FEATURE_COUNT  25
@@ -66,3 +67,5 @@ void MbFillLocalFeatureNames(string &names[])
    names[23] = "qdm_spread_max";
    names[24] = "teacher_global_score";
 }
+
+#endif

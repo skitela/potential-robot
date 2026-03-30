@@ -68,6 +68,15 @@ string MbResolveCandidateArbitrationGroup(const string session_profile)
    return session_profile;
   }
 
+string MbCandidateArbitrationSymbolKey(const string symbol)
+  {
+   string key = MbCanonicalSymbol(symbol);
+   int qdm_pos = StringFind(key,"_QDM_");
+   if(qdm_pos > 0)
+      key = StringSubstr(key,0,qdm_pos);
+   return key;
+  }
+
 int MbGetCandidateArbitrationSymbols(const string arbitration_group,string &out[])
   {
    ArrayResize(out,0);
@@ -165,7 +174,7 @@ string MbCandidateArbitrationGroupStateDir(const string arbitration_group)
 
 string MbCandidateArbitrationSnapshotPath(const string arbitration_group,const string symbol)
   {
-   return MbCandidateArbitrationGroupStateDir(arbitration_group) + "\\candidate_" + MbCanonicalSymbol(symbol) + ".csv";
+   return MbCandidateArbitrationGroupStateDir(arbitration_group) + "\\candidate_" + MbCandidateArbitrationSymbolKey(symbol) + ".csv";
   }
 
 string MbCandidateArbitrationStatePath(const string arbitration_group)
@@ -334,7 +343,7 @@ bool MbSaveCandidateArbitrationSnapshot(const string arbitration_group,const MbC
       return false;
 
    FileWrite(h,"ts",(long)snapshot.ts);
-   FileWrite(h,"symbol",MbCanonicalSymbol(snapshot.symbol));
+   FileWrite(h,"symbol",MbCandidateArbitrationSymbolKey(snapshot.symbol));
    FileWrite(h,"arbitration_group",arbitration_group);
    FileWrite(h,"valid",(snapshot.valid ? 1 : 0));
    FileWrite(h,"paper_mode_active",(snapshot.paper_mode_active ? 1 : 0));
@@ -359,7 +368,7 @@ bool MbSaveCandidateArbitrationSnapshot(const string arbitration_group,const MbC
 bool MbLoadCandidateArbitrationSnapshot(const string arbitration_group,const string symbol,MbCandidateArbitrationSnapshot &out)
   {
    out.ts = 0;
-   out.symbol = MbCanonicalSymbol(symbol);
+   out.symbol = MbCandidateArbitrationSymbolKey(symbol);
    out.arbitration_group = arbitration_group;
    out.valid = false;
    out.paper_mode_active = false;
@@ -387,7 +396,7 @@ bool MbLoadCandidateArbitrationSnapshot(const string arbitration_group,const str
       string key = FileReadString(h);
       string value = FileReadString(h);
       if(key == "ts") out.ts = (datetime)StringToInteger(value);
-      else if(key == "symbol") out.symbol = MbCanonicalSymbol(value);
+      else if(key == "symbol") out.symbol = MbCandidateArbitrationSymbolKey(value);
       else if(key == "arbitration_group") out.arbitration_group = value;
       else if(key == "valid") out.valid = (StringToInteger(value) != 0);
       else if(key == "paper_mode_active") out.paper_mode_active = (StringToInteger(value) != 0);
@@ -432,7 +441,7 @@ string MbLoadCandidateArbitrationLastSelected(const string arbitration_group)
       string value = FileReadString(h);
       if(key == "selected_symbol")
         {
-         selected_symbol = MbCanonicalSymbol(value);
+         selected_symbol = MbCandidateArbitrationSymbolKey(value);
          break;
         }
      }
@@ -459,7 +468,7 @@ bool MbSaveCandidateArbitrationState(
       return false;
 
    FileWrite(h,"ts",(long)ts);
-   FileWrite(h,"selected_symbol",MbCanonicalSymbol(selected_symbol));
+   FileWrite(h,"selected_symbol",MbCandidateArbitrationSymbolKey(selected_symbol));
    FileWrite(h,"reason_code",reason_code);
    FileWrite(h,"candidate_count",candidate_count);
    FileWrite(h,"near_tie",(near_tie ? 1 : 0));
@@ -494,7 +503,7 @@ void MbEvaluateCandidateArbitration(
 
    MbCandidateArbitrationSnapshot own;
    own.ts = now;
-   own.symbol = MbCanonicalSymbol(symbol);
+   own.symbol = MbCandidateArbitrationSymbolKey(symbol);
    own.arbitration_group = arbitration_group;
    own.valid = true;
    own.paper_mode_active = paper_mode_active;
@@ -592,7 +601,7 @@ void MbEvaluateCandidateArbitration(
          if(paper_mode_active)
            {
             string last_selected = MbLoadCandidateArbitrationLastSelected(arbitration_group);
-            if(MbCanonicalSymbol(last_selected) == MbCanonicalSymbol(best_symbol) && StringLen(second_symbol) > 0)
+            if(MbCandidateArbitrationSymbolKey(last_selected) == MbCandidateArbitrationSymbolKey(best_symbol) && StringLen(second_symbol) > 0)
                selected_symbol = second_symbol;
             else
                selected_symbol = best_symbol;
@@ -631,7 +640,7 @@ void MbEvaluateCandidateArbitration(
       return;
      }
 
-   out.selected = (MbCanonicalSymbol(selected_symbol) == MbCanonicalSymbol(symbol));
+   out.selected = (MbCandidateArbitrationSymbolKey(selected_symbol) == MbCandidateArbitrationSymbolKey(symbol));
    out.entry_allowed = out.selected;
    if(!out.selected)
      out.reason_code = "FAMILY_TOP1_LOST";

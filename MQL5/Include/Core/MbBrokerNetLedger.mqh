@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MB_BROKER_NET_LEDGER_INCLUDED
+#define MB_BROKER_NET_LEDGER_INCLUDED
 
 struct MbBrokerNetLedgerRow
 {
@@ -27,3 +28,5 @@ bool MbBrokerNetOutcomeReady(const MbBrokerNetLedgerRow &row)
 {
    return(MathIsValidNumber(row.net_pln));
 }
+
+#endif

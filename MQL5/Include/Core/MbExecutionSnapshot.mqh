@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MB_EXECUTION_SNAPSHOT_INCLUDED
+#define MB_EXECUTION_SNAPSHOT_INCLUDED
 
 struct MbExecutionSnapshot
 {
@@ -15,3 +16,5 @@ struct MbExecutionSnapshot
    bool     broker_session_open;
    bool     server_ping_contract_enabled;
 };
+
+#endif

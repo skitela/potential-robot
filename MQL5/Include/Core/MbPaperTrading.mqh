@@ -353,7 +353,7 @@ bool MbPaperOpenPosition(
    const string reason_code
 )
   {
-   MbPaperOpenPosition(
+   return MbPaperOpenPosition(
       state,
       side,
       lots,

@@ -233,7 +233,7 @@ void MbMlRuntimeBridgeBuildExecutionSnapshot(
 )
   {
    snapshot.symbol_alias = MbCanonicalSymbol(profile.symbol);
-   snapshot.broker_symbol = profile.broker_symbol;
+   snapshot.broker_symbol = profile.symbol;
    snapshot.spread_points = market.spread_points;
    snapshot.tick_size = market.tick_size;
    snapshot.tick_value = market.tick_value;

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MB_STUDENT_DECISION_GATE_INCLUDED
+#define MB_STUDENT_DECISION_GATE_INCLUDED
 
 struct MbDecisionThresholds
 {
@@ -41,3 +42,5 @@ bool MbAllowStudentTrade(
 
    return(true);
 }
+
+#endif

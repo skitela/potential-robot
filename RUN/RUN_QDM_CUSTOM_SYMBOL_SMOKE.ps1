@@ -158,6 +158,7 @@ $smokeJsonPath = Get-OptionalPropertyValue -Object $testerResult -PropertyName "
 $smokeSummaryPath = Get-OptionalPropertyValue -Object $testerResult -PropertyName "summary_path" -Default $(if (-not [string]::IsNullOrWhiteSpace($testerRunId)) { Join-Path $smokeEvidenceDir ($testerRunId + "_summary.json") } else { $null })
 $testerJson = Read-JsonFileSafe -Path $smokeJsonPath
 $testerSummary = Read-JsonFileSafe -Path $smokeSummaryPath
+$testerState = [string](Get-OptionalPropertyValue -Object $testerResult -PropertyName "state" -Default "completed")
 
 function Get-TesterField {
     param(
@@ -186,7 +187,7 @@ function Get-TesterField {
 $result = [ordered]@{
     schema_version = "1.0"
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
-    state = "completed"
+    state = $testerState
     symbol_alias = $SymbolAlias
     expert_code_symbol = $resolvedExpertCodeSymbol
     expert_name = $expertName
@@ -221,6 +222,8 @@ $result = [ordered]@{
     observation_data_state = Get-TesterField -PropertyName "observation_data_state"
     observation_data_reason = Get-TesterField -PropertyName "observation_data_reason"
     paper_learning_state = Get-TesterField -PropertyName "paper_learning_state"
+    compile_ok = Get-TesterField -PropertyName "compile_ok"
+    compile_log = Get-TesterField -PropertyName "compile_log"
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LatestStatusPath) | Out-Null

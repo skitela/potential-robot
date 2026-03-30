@@ -695,7 +695,60 @@ New-Item -ItemType Directory -Force -Path $mt5ReportsDir | Out-Null
 
 & (Join-Path $ProjectRoot "TOOLS\RESET_MICROBOT_STRATEGY_TESTER_SANDBOX.ps1") -ProjectRoot $ProjectRoot -SymbolAlias $sandboxSymbolAlias -SandboxTag $sanitizedTag | Out-Null
 Initialize-StrategyTesterSandboxContract -SandboxRoot $sandboxRoot -StorageAlias $storageAlias -RuntimeSymbol $Symbol
-& (Join-Path $ProjectRoot "TOOLS\COMPILE_MICROBOT.ps1") -ExpertName $ExpertName | Out-Null
+$compileScript = Join-Path $ProjectRoot "TOOLS\COMPILE_MICROBOT.ps1"
+$compileRaw = & $compileScript -ProjectRoot $ProjectRoot -ExpertName $ExpertName -TerminalDataDirOverride $TerminalDataDir
+$compileResult = $null
+if ($compileRaw -is [string]) {
+    try {
+        $compileResult = $compileRaw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+    }
+}
+elseif ($compileRaw -is [System.Array] -and $compileRaw.Count -gt 0) {
+    $compileJoined = ($compileRaw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    if (-not [string]::IsNullOrWhiteSpace($compileJoined)) {
+        try {
+            $compileResult = $compileJoined | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+        }
+    }
+}
+else {
+    $compileResult = $compileRaw
+}
+
+if ($null -eq $compileResult -or -not [bool]($compileResult.compile_ok)) {
+    $jsonPath = Join-Path $evidenceDir ($runId + ".json")
+    $summaryPath = Join-Path $evidenceDir ($runId + "_summary.json")
+    $compileFailure = [ordered]@{
+        schema_version = "1.0"
+        generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+        run_id = $runId
+        symbol_alias = $resolvedAlias
+        code_symbol = $resolvedAlias
+        storage_alias = $storageAlias
+        symbol = $Symbol
+        expert_name = $ExpertName
+        requested_model = $requestedModel
+        model = $Model
+        model_normalized_for_qdm_custom_symbol = $modelNormalizedForQdmCustomSymbol
+        result_label = "compile_failed"
+        raw_result_label = "compile_failed"
+        state = "compile_failed"
+        compile_ok = $false
+        compile_log = if ($null -ne $compileResult) { $compileResult.compile_log } else { $null }
+        compile_result = $compileResult
+        evidence_dir = $evidenceDir
+        json_path = $jsonPath
+        summary_path = $summaryPath
+    }
+    $compileFailure | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+    $compileFailure | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+    $compileFailure | ConvertTo-Json -Depth 8
+    return
+}
 
 $config = @"
 [Tester]
