@@ -572,6 +572,19 @@ void MbEvaluateCandidateArbitration(
 
    if(candidate_count <= 0 || StringLen(best_symbol) <= 0)
      {
+      if(paper_mode_active && MbHasStrategyTesterSandbox() && own.valid && own.priority > 0.0)
+        {
+         out.entry_allowed = true;
+         out.selected = true;
+         out.reason_code = "TESTER_ISOLATED_LOCAL_ONLY";
+         out.candidate_count = 1;
+         out.selected_symbol = own.symbol;
+         out.selected_priority = own.priority;
+         out.runner_up_priority = 0.0;
+         MbSaveCandidateArbitrationState(arbitration_group,now,own.symbol,out.reason_code,1,false,own.priority,0.0);
+         return;
+        }
+
       out.entry_allowed = false;
       out.selected = false;
       out.reason_code = "NO_ACTIVE_CANDIDATES";
