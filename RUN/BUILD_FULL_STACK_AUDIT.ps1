@@ -20,6 +20,7 @@ $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
 $learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
 $mt5FirstWaveServerParityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_SERVER_PARITY_AUDIT.ps1"
+$mt5FirstWaveRuntimeActivityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_RUNTIME_ACTIVITY_AUDIT.ps1"
 $nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 $learningHotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 
@@ -31,6 +32,7 @@ foreach ($path in @(
     $supervisorScopeAuditScript,
     $learningArtifactInventoryScript,
     $mt5FirstWaveServerParityAuditScript,
+    $mt5FirstWaveRuntimeActivityAuditScript,
     $nearProfitQueueStatusScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -217,6 +219,7 @@ $freshness = @(
     Get-FileFreshness -Label "qdm_custom_symbol_first_wave" -Path (Join-Path $opsRoot "qdm_custom_symbol_first_wave_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_realism_audit" -Path (Join-Path $opsRoot "qdm_custom_symbol_realism_audit_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "mt5_first_wave_server_parity" -Path (Join-Path $opsRoot "mt5_first_wave_server_parity_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "mt5_first_wave_runtime_activity" -Path (Join-Path $opsRoot "mt5_first_wave_runtime_activity_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "learning_artifact_inventory" -Path (Join-Path $opsRoot "learning_artifact_inventory_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
@@ -249,6 +252,10 @@ if (Test-Path -LiteralPath $mt5FirstWaveServerParityAuditScript) {
     Invoke-JsonAuditTool -ScriptPath $mt5FirstWaveServerParityAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
 }
 $mt5FirstWaveServerParityAudit = Read-JsonFile -Path (Join-Path $opsRoot "mt5_first_wave_server_parity_latest.json")
+if (Test-Path -LiteralPath $mt5FirstWaveRuntimeActivityAuditScript) {
+    Invoke-JsonAuditTool -ScriptPath $mt5FirstWaveRuntimeActivityAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
+}
+$mt5FirstWaveRuntimeActivityAudit = Read-JsonFile -Path (Join-Path $opsRoot "mt5_first_wave_runtime_activity_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -648,6 +655,17 @@ $report = [ordered]@{
                 truth_chain_live_ready = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'truth_chain_live_ready' -Default $false)
             }
         } else { $null }
+        mt5_first_wave_runtime_activity = if ($null -ne $mt5FirstWaveRuntimeActivityAudit) {
+            [ordered]@{
+                verdict = $mt5FirstWaveRuntimeActivityAudit.verdict
+                live_log_fresh_count = $(Get-SafeObjectValue -Object $mt5FirstWaveRuntimeActivityAudit.summary -PropertyName 'live_log_fresh_count' -Default 0)
+                truth_live_symbol_count = $(Get-SafeObjectValue -Object $mt5FirstWaveRuntimeActivityAudit.summary -PropertyName 'truth_live_symbol_count' -Default 0)
+                outside_trade_window_count = $(Get-SafeObjectValue -Object $mt5FirstWaveRuntimeActivityAudit.summary -PropertyName 'outside_trade_window_count' -Default 0)
+                tuning_freeze_count = $(Get-SafeObjectValue -Object $mt5FirstWaveRuntimeActivityAudit.summary -PropertyName 'tuning_freeze_count' -Default 0)
+                weak_signal_count = $(Get-SafeObjectValue -Object $mt5FirstWaveRuntimeActivityAudit.summary -PropertyName 'weak_signal_count' -Default 0)
+                recent_paper_open_count = $(Get-SafeObjectValue -Object $mt5FirstWaveRuntimeActivityAudit.summary -PropertyName 'recent_paper_open_count' -Default 0)
+            }
+        } else { $null }
         learning_artifact_inventory = if ($null -ne $learningArtifactInventory) {
             [ordered]@{
                 verdict = $learningArtifactInventoryVerdict
@@ -941,6 +959,18 @@ if ($null -ne $report.lab_health.mt5_first_wave_server_parity) {
 }
 else {
     $lines.Add("- first-wave server parity audit not available")
+}
+if ($null -ne $report.lab_health.mt5_first_wave_runtime_activity) {
+    $lines.Add(("- first_wave_runtime_activity_verdict: {0}" -f $report.lab_health.mt5_first_wave_runtime_activity.verdict))
+    $lines.Add(("- first_wave_runtime_live_log_fresh_count: {0}" -f $report.lab_health.mt5_first_wave_runtime_activity.live_log_fresh_count))
+    $lines.Add(("- first_wave_runtime_truth_live_symbol_count: {0}" -f $report.lab_health.mt5_first_wave_runtime_activity.truth_live_symbol_count))
+    $lines.Add(("- first_wave_runtime_outside_trade_window_count: {0}" -f $report.lab_health.mt5_first_wave_runtime_activity.outside_trade_window_count))
+    $lines.Add(("- first_wave_runtime_tuning_freeze_count: {0}" -f $report.lab_health.mt5_first_wave_runtime_activity.tuning_freeze_count))
+    $lines.Add(("- first_wave_runtime_weak_signal_count: {0}" -f $report.lab_health.mt5_first_wave_runtime_activity.weak_signal_count))
+    $lines.Add(("- first_wave_runtime_recent_paper_open_count: {0}" -f $report.lab_health.mt5_first_wave_runtime_activity.recent_paper_open_count))
+}
+else {
+    $lines.Add("- first-wave runtime activity audit not available")
 }
 $lines.Add("")
 $lines.Add("## Learning Artifact Inventory")
