@@ -208,6 +208,7 @@ $pathHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
 $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 $learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
 $learningArtifactInventoryPath = Join-Path $opsRoot "learning_artifact_inventory_latest.json"
+$postMigrationStartupAuditPath = Join-Path $opsRoot "post_migration_startup_audit_latest.json"
 $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYERS.ps1"
 $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
@@ -277,6 +278,7 @@ $null = & $repoHygieneScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
 $null = & $supervisorScopeAuditScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
 $repoHygiene = Read-JsonSafe -Path (Join-Path $opsRoot "repo_hygiene_latest.json")
 $supervisorScopeAudit = Read-JsonSafe -Path (Join-Path $opsRoot "supervisor_scope_audit_latest.json")
+$postMigrationStartupAudit = Read-JsonSafe -Path $postMigrationStartupAuditPath
 $null = & $qdmMissingProfileScript
 $qdmVisibilityRefresh = (& $qdmVisibilityRefreshScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
 $artifactCleanup = Invoke-JsonScript -ScriptPath $normalizeScript -Parameters @{
@@ -592,6 +594,13 @@ $learningArtifactRetentionPendingCount = if ($null -ne $learningArtifactInventor
 $learningArtifactRetentionArchivedCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "retention_archived_count" -Default 0) } else { 0 }
 $learningArtifactLiveLogStaleSymbolCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "live_log_stale_symbol_count" -Default 0) } else { 0 }
 $learningArtifactSpoolEmptyCount = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "spool_empty_count" -Default 0) } else { 0 }
+$postMigrationStartupVerdict = if ($null -ne $postMigrationStartupAudit) { [string](Get-OptionalValue -Object $postMigrationStartupAudit -Name "verdict" -Default "") } else { "" }
+$postMigrationStartupOk = ($null -ne $postMigrationStartupAudit -and [bool](Get-OptionalValue -Object $postMigrationStartupAudit -Name "ok" -Default $false))
+$postMigrationContinuityCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "continuity_fresh_count" -Default 0) } else { 0 }
+$postMigrationWatchdogMissingCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "watchdog_missing_target_count" -Default 0) } else { 0 }
+$postMigrationWatchdogStaleCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "watchdog_stale_target_count" -Default 0) } else { 0 }
+$postMigrationPendingSyncCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "pending_vps_sync_count" -Default 0) } else { 0 }
+$postMigrationTruthFlowState = if ($null -ne $postMigrationStartupAudit) { [string](Get-OptionalValue -Object $postMigrationStartupAudit.final.summary -Name "truth_flow_state" -Default "") } else { "" }
 $verdict = if (
     ($pathHygiene -ne $null -and [string]$pathHygiene.verdict -eq "CZYSTO") -and
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
@@ -605,6 +614,7 @@ $verdict = if (
     -not $mlScalpingCritical -and
     $repoSystemCoreDirtyCount -eq 0 -and
     $supervisorBoundaryClean -and
+    ($null -eq $postMigrationStartupAudit -or $postMigrationStartupOk) -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
     $runtimeArchiveSkippedReason -eq "" -and
@@ -638,6 +648,7 @@ $report = [ordered]@{
     learning_artifact_inventory = $learningArtifactInventory
     repo_hygiene = $repoHygiene
     supervisor_scope_audit = $supervisorScopeAudit
+    post_migration_startup_audit = $postMigrationStartupAudit
     vps_spool_bridge = $vpsSpoolBridge
     qdm_missing_supported_sync = $qdmMissingSyncStatus
     qdm_visibility_refresh = $qdmVisibilityRefresh
@@ -775,6 +786,13 @@ $report = [ordered]@{
         learning_artifact_retention_archived_count = $learningArtifactRetentionArchivedCount
         learning_artifact_live_log_stale_symbol_count = $learningArtifactLiveLogStaleSymbolCount
         learning_artifact_spool_empty_count = $learningArtifactSpoolEmptyCount
+        post_migration_startup_verdict = $postMigrationStartupVerdict
+        post_migration_startup_ok = $postMigrationStartupOk
+        post_migration_continuity_fresh_count = $postMigrationContinuityCount
+        post_migration_watchdog_missing_count = $postMigrationWatchdogMissingCount
+        post_migration_watchdog_stale_count = $postMigrationWatchdogStaleCount
+        post_migration_pending_vps_sync_count = $postMigrationPendingSyncCount
+        post_migration_truth_flow_state = $postMigrationTruthFlowState
         repo_system_core_dirty_count = $repoSystemCoreDirtyCount
         repo_auxiliary_bridge_dirty_count = $repoAuxiliaryBridgeDirtyCount
         supervisor_boundary_clean = $supervisorBoundaryClean
@@ -814,6 +832,13 @@ $lines.Add(("- learning_artifact_retention_pending_count: {0}" -f $report.summar
 $lines.Add(("- learning_artifact_retention_archived_count: {0}" -f $report.summary.learning_artifact_retention_archived_count))
 $lines.Add(("- learning_artifact_live_log_stale_symbol_count: {0}" -f $report.summary.learning_artifact_live_log_stale_symbol_count))
 $lines.Add(("- learning_artifact_spool_empty_count: {0}" -f $report.summary.learning_artifact_spool_empty_count))
+$lines.Add(("- post_migration_startup_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.post_migration_startup_verdict)) { "BRAK" } else { $report.summary.post_migration_startup_verdict })))
+$lines.Add(("- post_migration_startup_ok: {0}" -f ([string]$report.summary.post_migration_startup_ok).ToLowerInvariant()))
+$lines.Add(("- post_migration_continuity_fresh_count: {0}" -f $report.summary.post_migration_continuity_fresh_count))
+$lines.Add(("- post_migration_watchdog_missing_count: {0}" -f $report.summary.post_migration_watchdog_missing_count))
+$lines.Add(("- post_migration_watchdog_stale_count: {0}" -f $report.summary.post_migration_watchdog_stale_count))
+$lines.Add(("- post_migration_pending_vps_sync_count: {0}" -f $report.summary.post_migration_pending_vps_sync_count))
+$lines.Add(("- post_migration_truth_flow_state: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.post_migration_truth_flow_state)) { "BRAK" } else { $report.summary.post_migration_truth_flow_state })))
 $lines.Add(("- repo_hygiene: {0}" -f $(if ($null -ne $report.repo_hygiene) { $report.repo_hygiene.verdict } else { "BRAK" })))
 $lines.Add(("- supervisor_scope_audit: {0}" -f $(if ($null -ne $report.supervisor_scope_audit) { $report.supervisor_scope_audit.verdict } else { "BRAK" })))
 $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridge) { $report.vps_spool_bridge.verdict } else { "BRAK" })))

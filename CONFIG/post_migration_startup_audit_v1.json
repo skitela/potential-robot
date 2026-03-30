@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "intent": "post_migration_startup_audit",
+  "symbol_scope": "paper_live_first_wave",
+  "target_symbols": [
+    "AUDUSD",
+    "USDCAD",
+    "EURJPY",
+    "US500"
+  ],
+  "wait_before_audit_sec": 180,
+  "continuity_samples": 3,
+  "continuity_interval_sec": 20,
+  "latest_report_max_age_sec": 14400,
+  "freshness_thresholds": {
+    "hosting_report_sec": 1800,
+    "paper_live_feedback_sec": 1800,
+    "runtime_watchdog_sec": 900,
+    "vps_spool_wellbeing_sec": 1800,
+    "truth_status_sec": 1800,
+    "runtime_activity_sec": 1800,
+    "research_manifest_sec": 1800,
+    "runtime_status_sec": 240,
+    "execution_summary_sec": 240,
+    "decision_log_sec": 1800,
+    "onnx_log_sec": 1800
+  },
+  "safe_repair_actions": [
+    "refresh_hosting_report",
+    "refresh_paper_live_feedback",
+    "runtime_watchdog_repair",
+    "sync_vps_spool_backlog",
+    "rebuild_research_data_contract",
+    "refresh_truth_status",
+    "refresh_first_wave_runtime_activity"
+  ]
+}

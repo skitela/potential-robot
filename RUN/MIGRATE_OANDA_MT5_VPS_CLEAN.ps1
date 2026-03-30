@@ -3,7 +3,11 @@ param(
     [string]$Mt5Exe = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe",
     [string]$TerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
     [string]$CommonFilesDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files",
-    [int]$VpsSyncTimeoutSec = 240
+    [int]$VpsSyncTimeoutSec = 240,
+    [int]$PostStartupAuditDelaySec = 180,
+    [int]$PostStartupAuditContinuitySamples = 3,
+    [int]$PostStartupAuditIntervalSec = 20,
+    [switch]$SkipPostStartupAudit
 )
 
 Set-StrictMode -Version Latest
@@ -164,6 +168,7 @@ $report = [ordered]@{
     local_validate = $null
     clear_sync = $null
     main_sync = $null
+    post_startup_audit = $null
     error = $null
 }
 
@@ -245,6 +250,20 @@ try {
     & (Join-Path $projectRootResolved "TOOLS\RUN_RUNTIME_WATCHDOG_PL.ps1") -ProjectRoot $projectRootResolved -NoRepair | Out-Null
     & (Join-Path $projectRootResolved "RUN\SYNC_VPS_SPOOL_BACKLOG.ps1") -ProjectRoot $projectRootResolved | Out-Null
     & (Join-Path $projectRootResolved "RUN\BUILD_RESEARCH_DATA_CONTRACT.ps1") -ProjectRoot $projectRootResolved | Out-Null
+
+    if (-not $SkipPostStartupAudit) {
+        $report.stage = "post_startup_audit"
+        $startupAuditRaw = & (Join-Path $projectRootResolved "RUN\AUDIT_POST_MIGRATION_STARTUP.ps1") `
+            -ProjectRoot $projectRootResolved `
+            -WaitBeforeAuditSec $PostStartupAuditDelaySec `
+            -ContinuitySamples $PostStartupAuditContinuitySamples `
+            -ContinuityIntervalSec $PostStartupAuditIntervalSec `
+            -ApplySafeRepair
+        $report.post_startup_audit = (($startupAuditRaw -join [Environment]::NewLine).Trim() | ConvertFrom-Json)
+        if (-not [bool]$report.post_startup_audit.ok) {
+            throw ("Audyt rozruchowy po migracji zakonczyl sie niepowodzeniem: {0}" -f [string]$report.post_startup_audit.verdict)
+        }
+    }
 
     $report.ok = $true
     $report.stage = "done"

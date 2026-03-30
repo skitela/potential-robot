@@ -326,6 +326,7 @@ function Invoke-AuditCycle {
     $learningWellbeingPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
     $repoHygienePath = Join-Path $opsRoot "repo_hygiene_latest.json"
     $supervisorScopeAuditPath = Join-Path $opsRoot "supervisor_scope_audit_latest.json"
+    $postMigrationStartupAuditPath = Join-Path $opsRoot "post_migration_startup_audit_latest.json"
     $vpsSpoolWellbeingPath = Join-Path $opsRoot "vps_spool_wellbeing_latest.json"
     $instrumentDataReadinessPath = Join-Path $opsRoot "instrument_data_readiness_latest.json"
     $instrumentShadowDatasetsPath = Join-Path $opsRoot "instrument_shadow_datasets_latest.json"
@@ -714,6 +715,7 @@ function Invoke-AuditCycle {
     $learningWellbeing = Read-JsonSafe -Path $learningWellbeingPath
     $repoHygiene = Read-JsonSafe -Path $repoHygienePath
     $supervisorScopeAudit = Read-JsonSafe -Path $supervisorScopeAuditPath
+    $postMigrationStartupAudit = Read-JsonSafe -Path $postMigrationStartupAuditPath
     $vpsSpoolWellbeing = Read-JsonSafe -Path $vpsSpoolWellbeingPath
 
     $hostileFindings = @()
@@ -963,6 +965,57 @@ function Invoke-AuditCycle {
     }
     else {
         $domainStatuses.Add((New-DomainStatus -Domain "GRANICA_SYSTEM_MOSTU" -Gate "RAPORTUJ" -Severity "info" -Reason "Granica miedzy systemem scalpingu a mostem pomocniczym jest czysta.")) | Out-Null
+    }
+
+    $postMigrationEvidence = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $postMigrationStartupAudit) {
+        $postMigrationOk = [bool](Get-OptionalValue -Object $postMigrationStartupAudit -Name "ok" -Default $false)
+        $postMigrationVerdict = [string](Get-OptionalValue -Object $postMigrationStartupAudit -Name "verdict" -Default "")
+        $postMigrationSummary = Get-OptionalValue -Object $postMigrationStartupAudit -Name "final" -Default $null
+        $postMigrationFreshness = Get-OptionalValue -Object $postMigrationSummary -Name "freshness" -Default $null
+        $hostingFresh = [bool](Get-OptionalValue -Object (Get-OptionalValue -Object $postMigrationFreshness -Name "hosting_report" -Default $null) -Name "fresh" -Default $false)
+        $runtimeWatchdogFresh = [bool](Get-OptionalValue -Object (Get-OptionalValue -Object $postMigrationFreshness -Name "runtime_watchdog" -Default $null) -Name "fresh" -Default $false)
+        $watchdogMissing = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $postMigrationSummary -Name "summary" -Default $null) -Name "watchdog_missing_target_count" -Default 0)
+        $watchdogStale = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $postMigrationSummary -Name "summary" -Default $null) -Name "watchdog_stale_target_count" -Default 0)
+        $truthFlowState = [string](Get-OptionalValue -Object (Get-OptionalValue -Object $postMigrationSummary -Name "summary" -Default $null) -Name "truth_flow_state" -Default "")
+        $pendingSync = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $postMigrationSummary -Name "summary" -Default $null) -Name "pending_vps_sync_count" -Default 0)
+
+        if (-not $postMigrationOk) {
+            $postMigrationEvidence.Add([pscustomobject]@{
+                severity = "high"
+                component = "post_migration_startup"
+                message = "Ostatni audyt rozruchowy po migracji nie potwierdzil stabilnego startu systemu."
+                context = @{
+                    verdict = $postMigrationVerdict
+                    watchdog_missing_target_count = $watchdogMissing
+                    watchdog_stale_target_count = $watchdogStale
+                    truth_flow_state = $truthFlowState
+                    pending_vps_sync_count = $pendingSync
+                }
+            }) | Out-Null
+        }
+        elseif (-not $hostingFresh -or -not $runtimeWatchdogFresh) {
+            $postMigrationEvidence.Add([pscustomobject]@{
+                severity = "medium"
+                component = "post_migration_startup"
+                message = "Audyt rozruchowy po migracji istnieje, ale jego dowody nie sa juz swieze."
+                context = @{
+                    verdict = $postMigrationVerdict
+                    hosting_fresh = $hostingFresh
+                    runtime_watchdog_fresh = $runtimeWatchdogFresh
+                }
+            }) | Out-Null
+        }
+    }
+
+    if ($postMigrationEvidence.Count -gt 0) {
+        $hasBlockingPostMigration = @($postMigrationEvidence | Where-Object { $_.severity -eq "high" }).Count -gt 0
+        $postMigrationGate = if ($hasBlockingPostMigration) { "BLOKUJ_ROLLOUT" } else { "NAPRAW_W_CYKLU" }
+        $postMigrationSeverity = if ($hasBlockingPostMigration) { "high" } else { "medium" }
+        $domainStatuses.Add((New-DomainStatus -Domain "ROZRUCH_PO_MIGRACJI" -Gate $postMigrationGate -Severity $postMigrationSeverity -Reason "Migracja nie jest zakonczona samym uruchomieniem terminala; musi byc potwierdzona ciaglosc danych i heartbeatow po starcie." -Evidence $postMigrationEvidence)) | Out-Null
+    }
+    else {
+        $domainStatuses.Add((New-DomainStatus -Domain "ROZRUCH_PO_MIGRACJI" -Gate "RAPORTUJ" -Severity "info" -Reason "Ostatni audyt rozruchowy po migracji nie pokazuje swiezych czerwonych flag.")) | Out-Null
     }
 
     $runtimeEvidence = New-Object System.Collections.Generic.List[object]
@@ -2004,6 +2057,7 @@ function Invoke-AuditCycle {
         learning_wellbeing = $learningWellbeingPath
         repo_hygiene = $repoHygienePath
         supervisor_scope_audit = $supervisorScopeAuditPath
+        post_migration_startup_audit = $postMigrationStartupAuditPath
         vps_spool_wellbeing = $vpsSpoolWellbeingPath
         learning_health_registry = $learningHealthPath
         instrument_data_readiness = $instrumentDataReadinessPath
