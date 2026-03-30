@@ -952,6 +952,7 @@ void OnTick()
                InpEnableLiveEntries
             );
             if(paper_opened)
+              {
                MbExecutionTruthWritePaperOpen(
                   "MICROBOT_PAPER",
                   g_state.symbol,
@@ -966,10 +967,20 @@ void OnTick()
                   now,
                   MbPreTradeTruthBuildRequestComment(pretrade_candidate_id)
                );
-            MbSavePaperPosition(g_profile.symbol,g_paper_position);
+               MbSavePaperPosition(g_profile.symbol,g_paper_position);
+               AppendEURJPYCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
+               AppendEURJPYDecisionEvent(now,"PAPER_OPEN","OK","PAPER_POSITION_OPENED",g_market.spread_points,signal.score,risk_plan.lots,0,false);
+              }
+            else
+              {
+               string paper_open_reason = g_paper_position.entry_reason;
+               if(StringLen(paper_open_reason) <= 0)
+                  paper_open_reason = "PAPER_OPEN_REJECTED";
+               MbSavePaperPosition(g_profile.symbol,g_paper_position);
+               AppendEURJPYCandidateEvent(now,"PAPER_OPEN",false,paper_open_reason,signal,risk_plan.lots);
+               AppendEURJPYDecisionEvent(now,"PAPER_OPEN","SKIP",paper_open_reason,g_market.spread_points,signal.score,risk_plan.lots,0,false);
+              }
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
-            AppendEURJPYCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
-            AppendEURJPYDecisionEvent(now,"PAPER_OPEN","OK","PAPER_POSITION_OPENED",g_market.spread_points,signal.score,risk_plan.lots,0,false);
          }
          AppendEURJPYDecisionEvent(now,"EXEC_SEND","SKIP","LIVE_SEND_DISABLED",g_market.spread_points,signal.score,risk_plan.lots,0,true,30);
         }
