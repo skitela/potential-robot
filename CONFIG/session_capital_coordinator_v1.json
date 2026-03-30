@@ -56,6 +56,19 @@
         "trade_requested_mode": "RUN",
         "paper_requested_mode": "PAPER_ONLY"
       }
+    },
+    "BROKER_PARITY_FIRST_WAVE": {
+      "notes": [
+        "First-wave broker parity keeps the four most advanced instruments under paper thresholds while preparing them for conditions as close as possible to the OANDA TMS MT5 server.",
+        "This profile is a dedicated bridge between laptop research and execution-like paper conditions for US500, EURJPY, AUDUSD and USDCAD."
+      ],
+      "rules_override": {
+        "sleep_requested_mode": "PAPER_ONLY",
+        "prewarm_requested_mode": "PAPER_ONLY",
+        "observation_requested_mode": "PAPER_ONLY",
+        "trade_requested_mode": "RUN",
+        "paper_requested_mode": "PAPER_ONLY"
+      }
     }
   },
   "domains": [

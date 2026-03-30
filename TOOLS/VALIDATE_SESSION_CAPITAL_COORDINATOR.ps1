@@ -109,7 +109,7 @@ else {
     if ([string]::IsNullOrWhiteSpace($capitalThresholdProfile)) {
         $issues.Add("Global coordinator state must define capital_threshold_profile")
     }
-    elseif ($runtimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH")) {
+    elseif ($runtimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH","BROKER_PARITY_FIRST_WAVE")) {
         if ($capitalThresholdProfile -ne "paper") {
             $issues.Add("Runtime profile '$runtimeProfile' must use paper capital thresholds, got '$capitalThresholdProfile'.")
         }

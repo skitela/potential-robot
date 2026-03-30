@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$CommonFilesRoot = "",
-    [ValidateSet("DEFAULT","LAPTOP_RESEARCH","PAPER_LIVE")]
+    [ValidateSet("DEFAULT","LAPTOP_RESEARCH","PAPER_LIVE","BROKER_PARITY_FIRST_WAVE")]
     [string]$RuntimeProfile = "DEFAULT"
 )
 
@@ -621,7 +621,7 @@ $defensiveFamilyLossFraction = [double]$effectiveRules.defensive_family_loss_fra
 $paperDefensiveRiskCap = if ($null -ne $effectiveRules.PSObject.Properties["paper_defensive_risk_cap"]) { [double]$effectiveRules.paper_defensive_risk_cap } else { [double]$effectiveRules.reentry_probation_risk_cap }
 $reentryProbationRiskCap = [double]$effectiveRules.reentry_probation_risk_cap
 $reserveTakeoverRiskCap = [double]$effectiveRules.reserve_takeover_risk_cap
-$capitalThresholdProfileName = if ($RuntimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH")) { "paper" } else { "live" }
+$capitalThresholdProfileName = if ($RuntimeProfile -in @("PAPER_LIVE","LAPTOP_RESEARCH","BROKER_PARITY_FIRST_WAVE")) { "paper" } else { "live" }
 $capitalThresholdProfile = if ($capitalThresholdProfileName -eq "paper") { $capital.paper } else { $capital.live }
 $familyReentryThreshold = [double]$capitalThresholdProfile.family_hard_daily_loss_pct * $reentryRecoverFraction
 $fleetReentryThreshold = [double]$capitalThresholdProfile.account_hard_daily_loss_pct * $reentryRecoverFraction
