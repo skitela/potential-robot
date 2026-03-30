@@ -463,17 +463,63 @@ def _write_dataframe(df: "pd.DataFrame", base_path: Path) -> dict[str, str]:
     return outputs
 
 
+def _detect_runtime_scope(common_state_root: Path) -> str:
+    name = common_state_root.name.upper()
+    if name == "MAKRO_I_MIKRO_BOT":
+        return "live"
+    if name.startswith("MAKRO_I_MIKRO_BOT_TESTER_"):
+        return "tester"
+    return "custom"
+
+
+def _write_outputs_for_scope(
+    *,
+    runtime_scope: str,
+    pretrade: "pd.DataFrame",
+    execution: "pd.DataFrame",
+    merged: "pd.DataFrame",
+    truth_chain: "pd.DataFrame",
+    by_symbol: "pd.DataFrame",
+    output_root: Path,
+) -> dict[str, object]:
+    scope_outputs = {
+        "pretrade_truth_latest": _write_dataframe(pretrade, output_root / f"mt5_pretrade_truth_{runtime_scope}_latest"),
+        "execution_truth_latest": _write_dataframe(execution, output_root / f"mt5_execution_truth_{runtime_scope}_latest"),
+        "execution_truth_merged_latest": _write_dataframe(merged, output_root / f"mt5_execution_truth_merged_{runtime_scope}_latest"),
+        "execution_truth_chain_latest": _write_dataframe(truth_chain, output_root / f"mt5_execution_truth_chain_{runtime_scope}_latest"),
+        "execution_truth_by_symbol_latest": _write_dataframe(by_symbol, output_root / f"mt5_execution_truth_by_symbol_{runtime_scope}_latest"),
+    }
+
+    generic_outputs: dict[str, dict[str, str]] = {}
+    if runtime_scope == "live":
+        generic_outputs = {
+            "pretrade_truth_latest": _write_dataframe(pretrade, output_root / "mt5_pretrade_truth_latest"),
+            "execution_truth_latest": _write_dataframe(execution, output_root / "mt5_execution_truth_latest"),
+            "execution_truth_merged_latest": _write_dataframe(merged, output_root / "mt5_execution_truth_merged_latest"),
+            "execution_truth_chain_latest": _write_dataframe(truth_chain, output_root / "mt5_execution_truth_chain_latest"),
+            "execution_truth_by_symbol_latest": _write_dataframe(by_symbol, output_root / "mt5_execution_truth_by_symbol_latest"),
+        }
+
+    return {
+        "runtime_scope": runtime_scope,
+        "scope_outputs": scope_outputs,
+        "generic_outputs": generic_outputs,
+    }
+
+
 def build(project_root: Path, research_root: Path, common_state_root: Path | None, spool_root: Path | None) -> dict[str, object]:
     compat = CompatPaths.create(project_root=project_root, research_root=research_root, common_state_root=common_state_root)
     effective_spool_root = Path(spool_root) if spool_root is not None else compat.common_state_root / "spool"
     output_root = compat.contracts_dir / "mt5_truth"
     ensure_dir(output_root)
+    runtime_scope = _detect_runtime_scope(compat.common_state_root)
 
     pretrade_folder = effective_spool_root / "pretrade_truth"
     execution_folder = effective_spool_root / "execution_truth"
     if not _folder_has_csvs(pretrade_folder) and not _folder_has_csvs(execution_folder):
         summary = {
             "schema_version": "1.0",
+            "runtime_scope": runtime_scope,
             "project_root": str(project_root),
             "research_root": str(research_root),
             "common_state_root": str(compat.common_state_root),
@@ -491,8 +537,13 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
             "outputs": {},
             "dormant_reason": "NO_TRUTH_SPOOL_FILES",
         }
-        summary_path = output_root / "mt5_execution_truth_summary_latest.json"
+        summary_path = output_root / f"mt5_execution_truth_summary_{runtime_scope}_latest.json"
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        if runtime_scope == "live":
+            (output_root / "mt5_execution_truth_summary_latest.json").write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         return summary
 
     pd = _import_pandas()
@@ -506,16 +557,19 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
     truth_chain = _build_truth_chain(merged, candidate_summary, onnx_summary, learning_summary)
     by_symbol = _build_symbol_summary(pretrade, execution, merged, truth_chain)
 
-    outputs = {
-        "pretrade_truth_latest": _write_dataframe(pretrade, output_root / "mt5_pretrade_truth_latest"),
-        "execution_truth_latest": _write_dataframe(execution, output_root / "mt5_execution_truth_latest"),
-        "execution_truth_merged_latest": _write_dataframe(merged, output_root / "mt5_execution_truth_merged_latest"),
-        "execution_truth_chain_latest": _write_dataframe(truth_chain, output_root / "mt5_execution_truth_chain_latest"),
-        "execution_truth_by_symbol_latest": _write_dataframe(by_symbol, output_root / "mt5_execution_truth_by_symbol_latest"),
-    }
+    outputs = _write_outputs_for_scope(
+        runtime_scope=runtime_scope,
+        pretrade=pretrade,
+        execution=execution,
+        merged=merged,
+        truth_chain=truth_chain,
+        by_symbol=by_symbol,
+        output_root=output_root,
+    )
 
     summary = {
         "schema_version": "1.0",
+        "runtime_scope": runtime_scope,
         "project_root": str(project_root),
         "research_root": str(research_root),
         "common_state_root": str(compat.common_state_root),
@@ -533,8 +587,13 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
         "outputs": outputs,
     }
 
-    summary_path = output_root / "mt5_execution_truth_summary_latest.json"
+    summary_path = output_root / f"mt5_execution_truth_summary_{runtime_scope}_latest.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    if runtime_scope == "live":
+        (output_root / "mt5_execution_truth_summary_latest.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     return summary
 
 

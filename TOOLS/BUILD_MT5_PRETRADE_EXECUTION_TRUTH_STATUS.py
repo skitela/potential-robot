@@ -88,6 +88,16 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
+def _read_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _inspect_hooks(project_root: Path, active_symbols: list[str]) -> dict[str, Any]:
     microbots_dir = project_root / "MQL5" / "Experts" / "MicroBots"
     include_pretrade = 0
@@ -138,20 +148,44 @@ def _inspect_hooks(project_root: Path, active_symbols: list[str]) -> dict[str, A
 
 
 def _read_truth_summary(paths: CompatPaths) -> dict[str, Any]:
-    summary_path = paths.contracts_dir / "mt5_truth" / "mt5_execution_truth_summary_latest.json"
+    output_root = paths.contracts_dir / "mt5_truth"
+    live_summary_path = output_root / "mt5_execution_truth_summary_live_latest.json"
+    generic_summary_path = output_root / "mt5_execution_truth_summary_latest.json"
+
+    summary_path = live_summary_path if live_summary_path.exists() else generic_summary_path
     if not summary_path.exists():
         return {
             "path": str(summary_path),
+            "live_path": str(live_summary_path),
+            "generic_path": str(generic_summary_path),
             "exists": False,
         }
+
     try:
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
     except Exception:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
+
+    generic_payload: dict[str, Any] = {}
+    if generic_summary_path.exists():
+        try:
+            parsed_generic = json.loads(generic_summary_path.read_text(encoding="utf-8"))
+            if isinstance(parsed_generic, dict):
+                generic_payload = parsed_generic
+        except Exception:
+            generic_payload = {}
+
     payload["path"] = str(summary_path)
+    payload["live_path"] = str(live_summary_path)
+    payload["generic_path"] = str(generic_summary_path)
     payload["exists"] = True
+    payload["generic_exists"] = generic_summary_path.exists()
+    payload["generic_common_state_root"] = generic_payload.get("common_state_root", "")
+    payload["generic_runtime_scope"] = generic_payload.get("runtime_scope", "")
+    payload["scope_matches_live_root"] = payload.get("common_state_root", "") == str(paths.common_state_root)
+    payload["generic_matches_live_root"] = generic_payload.get("common_state_root", "") == str(paths.common_state_root)
     return payload
 
 
@@ -161,6 +195,7 @@ def _resolve_operational_state(
     execution: dict[str, Any],
     truth_summary: dict[str, Any],
     tester_truth: dict[str, Any],
+    first_wave_activity: dict[str, Any],
 ) -> str:
     hook_summary = hooks.get("summary", {}) if isinstance(hooks, dict) else {}
     active_symbols_count = int(hook_summary.get("active_symbols_count", 0) or 0)
@@ -177,8 +212,19 @@ def _resolve_operational_state(
     truth_chain_rows = int(truth_summary.get("truth_chain_rows", 0) or 0)
     tester_pretrade_rows = int(tester_truth.get("pretrade_total_rows", 0) or 0)
     tester_execution_rows = int(tester_truth.get("execution_total_rows", 0) or 0)
+    activity_summary = first_wave_activity.get("summary", {}) if isinstance(first_wave_activity, dict) else {}
+    activity_results = first_wave_activity.get("results", []) if isinstance(first_wave_activity, dict) else []
+    fresh_paper_open_count = int(activity_summary.get("fresh_paper_open_count", 0) or 0)
+    has_fresh_precheck_only = any(
+        isinstance(item, dict) and item.get("activity_state") in {"DOCHODZI_DO_SPRAWDZENIA_PRZED_WYSLANIEM", "BLOKADA_PRZED_WYSLANIEM"}
+        for item in activity_results
+    )
 
     if fully_implanted and pretrade_rows == 0 and execution_rows == 0:
+        if fresh_paper_open_count > 0:
+            return "LIVE_WRITE_FAILURE_AFTER_FRESH_PAPER_OPEN"
+        if has_fresh_precheck_only:
+            return "LIVE_PRECHECK_ONLY_NO_FRESH_OPEN"
         if tester_pretrade_rows > 0 or tester_execution_rows > 0:
             return "LIVE_DORMANT_TESTER_ACTIVE"
         return "IMPLANTED_BUT_DORMANT"
@@ -204,13 +250,25 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
     tester_truth = _collect_tester_truth_state(compat.common_state_root.parent)
     hook_state = _inspect_hooks(project_root, active_symbols)
     truth_summary = _read_truth_summary(compat)
-    operational_state = _resolve_operational_state(hook_state, pretrade_spool, execution_spool, truth_summary, tester_truth)
+    first_wave_activity = _read_optional_json(project_root / "EVIDENCE" / "OPS" / "mt5_first_wave_runtime_activity_latest.json")
+    operational_state = _resolve_operational_state(
+        hook_state,
+        pretrade_spool,
+        execution_spool,
+        truth_summary,
+        tester_truth,
+        first_wave_activity,
+    )
 
     notes: list[str] = []
     if operational_state == "IMPLANTED_BUT_DORMANT":
         notes.append("Hooki sa wpiete, ale spool pretrade/execution nie produkuje jeszcze zadnych rekordow.")
     if operational_state == "LIVE_DORMANT_TESTER_ACTIVE":
         notes.append("Prawda wykonania zyje w piaskownicach testera, ale nie zapisuje jeszcze nic do zywego korzenia Common Files.")
+    if operational_state == "LIVE_WRITE_FAILURE_AFTER_FRESH_PAPER_OPEN":
+        notes.append("Pierwsza fala otwierala swieze pozycje papierowe, ale zywy zapis prawdy nadal nie pojawil sie w spool.")
+    if operational_state == "LIVE_PRECHECK_ONLY_NO_FRESH_OPEN":
+        notes.append("Pierwsza fala dochodzi do swiezego sprawdzenia przed wyslaniem, ale nie doszla jeszcze do swiezego otwarcia papierowego.")
     if operational_state == "OPERATIONAL_BASE_CONTRACT_ONLY":
         notes.append("Bazowy kontrakt execution + pretrade dziala, ale contract chain do kandydatow i learningu nie ma jeszcze zywych wierszy.")
     if operational_state == "OPERATIONAL_WITH_CONTRACT_CHAIN":
@@ -223,6 +281,14 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
         notes.append("Kontrakty truth istnieja, ale nie maja jeszcze polaczonego materialu execution + pretrade.")
     if truth_summary.get("exists") and int(truth_summary.get("truth_chain_rows", 0) or 0) <= 0:
         notes.append("Contract chain do kandydatow, ONNX i learningu nie ma jeszcze zywych wierszy.")
+    if first_wave_activity:
+        activity_summary = first_wave_activity.get("summary", {})
+        if isinstance(activity_summary, dict) and int(activity_summary.get("fresh_paper_open_count", 0) or 0) <= 0:
+            notes.append("Pierwsza fala nie ma swiezych otwarc papierowych w oknie swiezosci; aktualny brak prawdy nie jest jeszcze dowodem awarii zapisu po nowym otwarciu.")
+    if truth_summary.get("exists") and not bool(truth_summary.get("scope_matches_live_root", True)):
+        notes.append("Podsumowanie truth odpowiada innemu zakresowi niz zywy korzen Common Files.")
+    if truth_summary.get("generic_exists") and not bool(truth_summary.get("generic_matches_live_root", True)):
+        notes.append("Ogólne latest summary bylo nadpisywane przez inny zakres i nie powinno byc traktowane jako stan zywy.")
     if not truth_summary.get("exists"):
         notes.append("Builder truth nie wygenerowal jeszcze podsumowania mt5_execution_truth_summary_latest.json.")
 
@@ -238,6 +304,7 @@ def build(project_root: Path, research_root: Path, common_state_root: Path | Non
         "pretrade_spool": pretrade_spool,
         "execution_spool": execution_spool,
         "tester_truth": tester_truth,
+        "first_wave_activity": first_wave_activity,
         "truth_summary": truth_summary,
         "notes": notes,
     }
@@ -256,6 +323,8 @@ def write_reports(payload: dict[str, Any], project_root: Path) -> dict[str, str]
     execution = payload["execution_spool"]
     truth_summary = payload["truth_summary"]
     tester_truth = payload["tester_truth"]
+    first_wave_activity = payload.get("first_wave_activity", {})
+    first_wave_summary = first_wave_activity.get("summary", {}) if isinstance(first_wave_activity, dict) else {}
 
     lines = [
         "# MT5 Pretrade Execution Truth Status",
@@ -274,7 +343,12 @@ def write_reports(payload: dict[str, Any], project_root: Path) -> dict[str, str]
         f"- tester_truth_root_count: {tester_truth.get('tester_truth_root_count', 0)}",
         f"- tester_pretrade_total_rows: {tester_truth.get('pretrade_total_rows', 0)}",
         f"- tester_execution_total_rows: {tester_truth.get('execution_total_rows', 0)}",
+        f"- first_wave_fresh_paper_open_count: {first_wave_summary.get('fresh_paper_open_count', 0)}",
+        f"- first_wave_recent_paper_open_count: {first_wave_summary.get('recent_paper_open_count', 0)}",
         f"- truth_summary_exists: {truth_summary.get('exists', False)}",
+        f"- truth_summary_runtime_scope: {truth_summary.get('runtime_scope', '')}",
+        f"- truth_summary_scope_matches_live_root: {truth_summary.get('scope_matches_live_root', False)}",
+        f"- truth_summary_generic_matches_live_root: {truth_summary.get('generic_matches_live_root', False)}",
         f"- merged_rows: {truth_summary.get('merged_rows', 0)}",
         f"- truth_chain_rows: {truth_summary.get('truth_chain_rows', 0)}",
         f"- candidate_contract_matched_rows: {truth_summary.get('candidate_contract_matched_rows', 0)}",

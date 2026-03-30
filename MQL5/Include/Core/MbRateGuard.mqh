@@ -23,6 +23,7 @@ void MbMarkPriceProbe(MbRuntimeState &state)
 void MbMarkOrderSend(MbRuntimeState &state)
   {
    datetime now_ts = TimeCurrent();
+   state.last_trade_attempt = now_ts;
    if(state.order_budget_sec_anchor <= 0 || now_ts != state.order_budget_sec_anchor)
      {
       state.order_budget_sec_anchor = now_ts;

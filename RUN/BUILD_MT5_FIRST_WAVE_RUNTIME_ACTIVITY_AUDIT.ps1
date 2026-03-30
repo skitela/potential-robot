@@ -91,21 +91,39 @@ function Get-CsvDataRowCount {
     return ($lineCount - 1)
 }
 
+function Convert-UnixTsToLocalString {
+    param([Nullable[long]]$UnixTs)
+
+    if ($null -eq $UnixTs -or $UnixTs -le 0) {
+        return $null
+    }
+
+    return ([DateTimeOffset]::FromUnixTimeSeconds([long]$UnixTs).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))
+}
+
 function Get-RecentDecisionStats {
     param(
         [string]$Path,
-        [int]$TailCount
+        [int]$TailCount,
+        [int]$ThresholdSeconds
     )
 
     $empty = [ordered]@{
         total_rows = 0
         paper_open_ok_count = 0
+        fresh_paper_open_count = 0
         exec_precheck_ready_count = 0
+        fresh_exec_precheck_ready_count = 0
         exec_precheck_block_count = 0
+        fresh_exec_precheck_block_count = 0
         score_below_trigger_count = 0
         outside_trade_window_bypass_count = 0
         tuning_family_freeze_count = 0
         tuning_fleet_freeze_count = 0
+        last_event_ts = $null
+        last_event_local = $null
+        last_paper_open_ts = $null
+        last_paper_open_local = $null
         last_phase = ""
         last_action = ""
         last_reason = ""
@@ -120,6 +138,8 @@ function Get-RecentDecisionStats {
         return [pscustomobject]$empty
     }
 
+    $nowUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+
     foreach ($line in $lines) {
         if ([string]::IsNullOrWhiteSpace($line)) {
             continue
@@ -131,22 +151,41 @@ function Get-RecentDecisionStats {
         }
 
         $empty.total_rows++
+        $eventTs = 0L
+        [void][long]::TryParse([string]$parts[0], [ref]$eventTs)
         $phase = [string]$parts[2]
         $action = [string]$parts[3]
         $reason = [string]$parts[4]
 
+        if ($eventTs -gt 0) {
+            $empty.last_event_ts = $eventTs
+            $empty.last_event_local = Convert-UnixTsToLocalString -UnixTs $eventTs
+        }
         $empty.last_phase = $phase
         $empty.last_action = $action
         $empty.last_reason = $reason
 
         if ($phase -eq "PAPER_OPEN" -and $action -eq "OK") {
             $empty.paper_open_ok_count++
+            if ($eventTs -gt 0) {
+                $empty.last_paper_open_ts = $eventTs
+                $empty.last_paper_open_local = Convert-UnixTsToLocalString -UnixTs $eventTs
+                if (($nowUnix - $eventTs) -le $ThresholdSeconds) {
+                    $empty.fresh_paper_open_count++
+                }
+            }
         }
         elseif ($phase -eq "EXEC_PRECHECK" -and $action -eq "READY") {
             $empty.exec_precheck_ready_count++
+            if ($eventTs -gt 0 -and ($nowUnix - $eventTs) -le $ThresholdSeconds) {
+                $empty.fresh_exec_precheck_ready_count++
+            }
         }
         elseif ($phase -eq "EXEC_PRECHECK" -and $action -eq "BLOCK") {
             $empty.exec_precheck_block_count++
+            if ($eventTs -gt 0 -and ($nowUnix - $eventTs) -le $ThresholdSeconds) {
+                $empty.fresh_exec_precheck_block_count++
+            }
         }
         elseif ($phase -eq "SCAN" -and $action -eq "SKIP" -and $reason -eq "SCORE_BELOW_TRIGGER") {
             $empty.score_below_trigger_count++
@@ -179,6 +218,8 @@ $logsRoot = Join-Path $CommonRoot "logs"
 $stateRoot = Join-Path $CommonRoot "state"
 $pretradeSpoolRoot = Join-Path $CommonRoot "spool\pretrade_truth"
 $executionSpoolRoot = Join-Path $CommonRoot "spool\execution_truth"
+$truthDebugPath = Join-Path $CommonRoot "run\mt5_truth_debug.csv"
+$truthDebugState = Get-FileState -Path $truthDebugPath -ThresholdSeconds $FreshThresholdSeconds
 
 $results = New-Object System.Collections.Generic.List[object]
 
@@ -198,7 +239,7 @@ foreach ($symbol in $selectedSymbols) {
     $onnxState = Get-FileState -Path $onnxPath -ThresholdSeconds $FreshThresholdSeconds
     $runtimeStatusState = Get-FileState -Path $runtimeStatusPath -ThresholdSeconds $FreshThresholdSeconds
     $executionSummaryState = Get-FileState -Path $executionSummaryPath -ThresholdSeconds $FreshThresholdSeconds
-    $recentDecisionStats = Get-RecentDecisionStats -Path $decisionPath -TailCount $RecentDecisionSampleSize
+    $recentDecisionStats = Get-RecentDecisionStats -Path $decisionPath -TailCount $RecentDecisionSampleSize -ThresholdSeconds $FreshThresholdSeconds
 
     $runtimeStatus = Read-JsonFile -Path $runtimeStatusPath
     $executionSummary = Read-JsonFile -Path $executionSummaryPath
@@ -207,9 +248,10 @@ foreach ($symbol in $selectedSymbols) {
     $executionRows = Get-CsvDataRowCount -Path $executionSpoolPath
     $truthLive = ($pretradeRows -gt 0 -or $executionRows -gt 0)
     $liveLogFresh = ($decisionState.fresh -or $onnxState.fresh -or $runtimeStatusState.fresh -or $executionSummaryState.fresh)
-    $recentPaperOpen = ($recentDecisionStats.paper_open_ok_count -gt 0)
-    $recentPrecheckReady = ($recentDecisionStats.exec_precheck_ready_count -gt 0)
-    $recentPrecheckBlocked = ($recentDecisionStats.exec_precheck_block_count -gt 0)
+    $freshPaperOpen = ($recentDecisionStats.fresh_paper_open_count -gt 0)
+    $historicalPaperOpen = ($recentDecisionStats.paper_open_ok_count -gt 0)
+    $freshPrecheckReady = ($recentDecisionStats.fresh_exec_precheck_ready_count -gt 0)
+    $freshPrecheckBlocked = ($recentDecisionStats.fresh_exec_precheck_block_count -gt 0)
     $recentScoreBelow = ($recentDecisionStats.score_below_trigger_count -gt 0)
     $recentOutsideWindow = ($recentDecisionStats.outside_trade_window_bypass_count -gt 0)
     $recentFreeze = (($recentDecisionStats.tuning_family_freeze_count + $recentDecisionStats.tuning_fleet_freeze_count) -gt 0)
@@ -223,11 +265,17 @@ foreach ($symbol in $selectedSymbols) {
     $activityState = if ($truthLive) {
         "ZYWA_PRAWDA_AKTYWNA"
     }
-    elseif ($recentPaperOpen) {
+    elseif ($freshPaperOpen) {
         "PAPER_OTWARCIA_BEZ_ZAPISU_PRAWDA"
     }
-    elseif ($recentPrecheckReady) {
+    elseif ($freshPrecheckReady) {
         "DOCHODZI_DO_SPRAWDZENIA_PRZED_WYSLANIEM"
+    }
+    elseif ($freshPrecheckBlocked) {
+        "BLOKADA_PRZED_WYSLANIEM"
+    }
+    elseif ($historicalPaperOpen) {
+        "STARE_OTWARCIA_BEZ_SWIEZEJ_PROBY"
     }
     elseif ($recentOutsideWindow) {
         "POZA_OKNEM_HANDLU"
@@ -265,12 +313,19 @@ foreach ($symbol in $selectedSymbols) {
         recent = [pscustomobject]@{
             decision_rows = $recentDecisionStats.total_rows
             paper_open_ok_count = $recentDecisionStats.paper_open_ok_count
+            fresh_paper_open_count = $recentDecisionStats.fresh_paper_open_count
             exec_precheck_ready_count = $recentDecisionStats.exec_precheck_ready_count
+            fresh_exec_precheck_ready_count = $recentDecisionStats.fresh_exec_precheck_ready_count
             exec_precheck_block_count = $recentDecisionStats.exec_precheck_block_count
+            fresh_exec_precheck_block_count = $recentDecisionStats.fresh_exec_precheck_block_count
             score_below_trigger_count = $recentDecisionStats.score_below_trigger_count
             outside_trade_window_bypass_count = $recentDecisionStats.outside_trade_window_bypass_count
             tuning_family_freeze_count = $recentDecisionStats.tuning_family_freeze_count
             tuning_fleet_freeze_count = $recentDecisionStats.tuning_fleet_freeze_count
+            last_event_ts = $recentDecisionStats.last_event_ts
+            last_event_local = $recentDecisionStats.last_event_local
+            last_paper_open_ts = $recentDecisionStats.last_paper_open_ts
+            last_paper_open_local = $recentDecisionStats.last_paper_open_local
             last_phase = $recentDecisionStats.last_phase
             last_action = $recentDecisionStats.last_action
             last_reason = $recentDecisionStats.last_reason
@@ -286,12 +341,17 @@ $freezeCount = @($resultArray | Where-Object { $_.activity_state -eq "ZAMROZENIE
 $weakSignalCount = @($resultArray | Where-Object { $_.activity_state -eq "ZA_SLABY_SYGNAL" }).Count
 $deadLogCount = @($resultArray | Where-Object { $_.activity_state -eq "MARTWY_DZIENNIK" }).Count
 $recentPaperOpenCount = 0
+$freshPaperOpenCount = 0
 foreach ($item in $resultArray) {
     $recentPaperOpenCount += [int](0 + $item.recent.paper_open_ok_count)
+    $freshPaperOpenCount += [int](0 + $item.recent.fresh_paper_open_count)
 }
 
 $verdict = if ($truthLiveCount -eq $selectedSymbols.Count -and $selectedSymbols.Count -gt 0) {
     "PIERWSZA_FALA_AKTYWNA_Z_PRAWDA"
+}
+elseif ($freshPaperOpenCount -gt 0) {
+    "PIERWSZA_FALA_OTWIERA_BEZ_PRAWDY"
 }
 elseif ($liveLogFreshCount -gt 0) {
     "PIERWSZA_FALA_AKTYWNA_BEZ_PRAWDY"
@@ -307,6 +367,7 @@ $report = [pscustomobject]@{
     symbol_scope = "paper_live_first_wave"
     freshness_threshold_seconds = $FreshThresholdSeconds
     verdict = $verdict
+    truth_debug = $truthDebugState
     summary = [pscustomobject]@{
         target_symbol_count = $selectedSymbols.Count
         live_log_fresh_count = $liveLogFreshCount
@@ -316,6 +377,7 @@ $report = [pscustomobject]@{
         weak_signal_count = $weakSignalCount
         dead_log_count = $deadLogCount
         recent_paper_open_count = [int](0 + $recentPaperOpenCount)
+        fresh_paper_open_count = [int](0 + $freshPaperOpenCount)
         total_pretrade_truth_rows = [int](($resultArray | Measure-Object -Property pretrade_truth_rows -Sum).Sum)
         total_execution_truth_rows = [int](($resultArray | Measure-Object -Property execution_truth_rows -Sum).Sum)
     }
@@ -332,11 +394,15 @@ $lines.Add(("- verdict: {0}" -f $report.verdict))
 $lines.Add(("- target_symbol_count: {0}" -f $report.summary.target_symbol_count))
 $lines.Add(("- live_log_fresh_count: {0}" -f $report.summary.live_log_fresh_count))
 $lines.Add(("- truth_live_symbol_count: {0}" -f $report.summary.truth_live_symbol_count))
+$lines.Add(("- truth_debug_exists: {0}" -f ([string]$report.truth_debug.exists).ToLowerInvariant()))
+$lines.Add(("- truth_debug_fresh: {0}" -f ([string]$report.truth_debug.fresh).ToLowerInvariant()))
+$lines.Add(("- truth_debug_last_write_local: {0}" -f $report.truth_debug.last_write_local))
 $lines.Add(("- outside_trade_window_count: {0}" -f $report.summary.outside_trade_window_count))
 $lines.Add(("- tuning_freeze_count: {0}" -f $report.summary.tuning_freeze_count))
 $lines.Add(("- weak_signal_count: {0}" -f $report.summary.weak_signal_count))
 $lines.Add(("- dead_log_count: {0}" -f $report.summary.dead_log_count))
 $lines.Add(("- recent_paper_open_count: {0}" -f $report.summary.recent_paper_open_count))
+$lines.Add(("- fresh_paper_open_count: {0}" -f $report.summary.fresh_paper_open_count))
 $lines.Add(("- total_pretrade_truth_rows: {0}" -f $report.summary.total_pretrade_truth_rows))
 $lines.Add(("- total_execution_truth_rows: {0}" -f $report.summary.total_execution_truth_rows))
 $lines.Add("")
@@ -359,12 +425,17 @@ foreach ($item in $resultArray) {
     $lines.Add(("- pretrade_truth_rows: {0}" -f $item.pretrade_truth_rows))
     $lines.Add(("- execution_truth_rows: {0}" -f $item.execution_truth_rows))
     $lines.Add(("- recent_paper_open_ok_count: {0}" -f $item.recent.paper_open_ok_count))
+    $lines.Add(("- recent_fresh_paper_open_count: {0}" -f $item.recent.fresh_paper_open_count))
     $lines.Add(("- recent_exec_precheck_ready_count: {0}" -f $item.recent.exec_precheck_ready_count))
+    $lines.Add(("- recent_fresh_exec_precheck_ready_count: {0}" -f $item.recent.fresh_exec_precheck_ready_count))
     $lines.Add(("- recent_exec_precheck_block_count: {0}" -f $item.recent.exec_precheck_block_count))
+    $lines.Add(("- recent_fresh_exec_precheck_block_count: {0}" -f $item.recent.fresh_exec_precheck_block_count))
     $lines.Add(("- recent_score_below_trigger_count: {0}" -f $item.recent.score_below_trigger_count))
     $lines.Add(("- recent_outside_trade_window_bypass_count: {0}" -f $item.recent.outside_trade_window_bypass_count))
     $lines.Add(("- recent_tuning_family_freeze_count: {0}" -f $item.recent.tuning_family_freeze_count))
     $lines.Add(("- recent_tuning_fleet_freeze_count: {0}" -f $item.recent.tuning_fleet_freeze_count))
+    $lines.Add(("- recent_last_event_local: {0}" -f $item.recent.last_event_local))
+    $lines.Add(("- recent_last_paper_open_local: {0}" -f $item.recent.last_paper_open_local))
     $lines.Add(("- recent_last_phase: {0}" -f $item.recent.last_phase))
     $lines.Add(("- recent_last_action: {0}" -f $item.recent.last_action))
     $lines.Add(("- recent_last_reason: {0}" -f $item.recent.last_reason))

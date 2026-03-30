@@ -97,6 +97,11 @@ string MbPreTradeTruthSpoolDir()
    return MbRootPath() + "\\spool\\pretrade_truth";
   }
 
+string MbPreTradeTruthSpoolFilePath(const string symbol_alias)
+  {
+   return MbPreTradeTruthSpoolDir() + "\\pretrade_truth_" + MbStoragePathSanitizeToken(MbCanonicalSymbol(symbol_alias)) + ".csv";
+  }
+
 void MbPreTradeTruthDebugLog(const string stage,const string detail)
   {
    MbEnsureDir(MbRootPath());
@@ -253,10 +258,17 @@ bool MbPreTradeTruthEvaluate(
 int MbPreTradeTruthOpenAppend(const string symbol_alias)
   {
    MbPreTradeTruthEnsureDirs();
-   string path = MbPreTradeTruthSpoolDir() + "\\pretrade_truth_" + MbStoragePathSanitizeToken(symbol_alias) + ".csv";
+   string path = MbPreTradeTruthSpoolFilePath(symbol_alias);
+   ResetLastError();
    int handle = FileOpen(path,FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE,';');
    if(handle == INVALID_HANDLE)
+     {
+      MbPreTradeTruthDebugLog(
+         "PRETRADE_APPEND_FAIL",
+         "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";path=" + path + ";error=" + IntegerToString(GetLastError())
+      );
       return INVALID_HANDLE;
+     }
 
    if(FileSize(handle) == 0)
      {
@@ -396,7 +408,12 @@ bool MbPreTradeTruthWritePaperOpen(
    if(!ok)
       MbPreTradeTruthDebugLog(
          "PRETRADE_PAPER_FAIL",
-         "symbol_alias=" + symbol_alias + ";runtime_symbol=" + runtime_symbol + ";request_symbol=" + request.symbol + ";candidate_id=" + out_candidate_id
+         "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";runtime_symbol=" + runtime_symbol + ";request_symbol=" + request.symbol + ";candidate_id=" + out_candidate_id + ";target_path=" + MbPreTradeTruthSpoolFilePath(symbol_alias)
+      );
+   else
+      MbPreTradeTruthDebugLog(
+         "PRETRADE_PAPER_OK",
+         "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";runtime_symbol=" + runtime_symbol + ";request_symbol=" + request.symbol + ";candidate_id=" + out_candidate_id + ";target_path=" + MbPreTradeTruthSpoolFilePath(symbol_alias)
       );
    return ok;
   }

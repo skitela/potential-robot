@@ -61,6 +61,11 @@ string MbExecutionTruthSpoolDir()
    return MbRootPath() + "\\spool\\execution_truth";
   }
 
+string MbExecutionTruthSpoolFilePath(const string symbol_alias)
+  {
+   return MbExecutionTruthSpoolDir() + "\\execution_truth_" + MbStoragePathSanitizeToken(MbCanonicalSymbol(symbol_alias)) + ".csv";
+  }
+
 void MbExecutionTruthDebugLog(const string stage,const string detail)
   {
    MbEnsureDir(MbRootPath());
@@ -116,10 +121,17 @@ double MbExecutionTruthResolveSignedSlippage(const string request_type,const dou
 int MbExecutionTruthOpenAppend(const string symbol_alias)
   {
    MbExecutionTruthEnsureDirs();
-   string path = MbExecutionTruthSpoolDir() + "\\execution_truth_" + MbStoragePathSanitizeToken(symbol_alias) + ".csv";
+   string path = MbExecutionTruthSpoolFilePath(symbol_alias);
+   ResetLastError();
    int handle = FileOpen(path,FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE,';');
    if(handle == INVALID_HANDLE)
+     {
+      MbExecutionTruthDebugLog(
+         "EXEC_APPEND_FAIL",
+         "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";path=" + path + ";error=" + IntegerToString(GetLastError())
+      );
       return INVALID_HANDLE;
+     }
 
    if(FileSize(handle) == 0)
      {
@@ -346,7 +358,7 @@ bool MbExecutionTruthWritePaperOpen(
      {
       MbExecutionTruthDebugLog(
          "EXEC_PAPER_OPEN_FAIL",
-         "symbol_alias=" + symbol_alias + ";runtime_symbol=" + runtime_symbol + ";candidate_id=" + candidate_id
+         "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";runtime_symbol=" + runtime_symbol + ";candidate_id=" + candidate_id + ";target_path=" + MbExecutionTruthSpoolFilePath(symbol_alias)
       );
       return false;
      }
@@ -390,7 +402,7 @@ bool MbExecutionTruthWritePaperOpen(
    FileClose(handle);
    MbExecutionTruthDebugLog(
       "EXEC_PAPER_OPEN_OK",
-      "symbol_alias=" + symbol_alias + ";runtime_symbol=" + runtime_symbol + ";candidate_id=" + candidate_id
+      "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";runtime_symbol=" + runtime_symbol + ";candidate_id=" + candidate_id + ";target_path=" + MbExecutionTruthSpoolFilePath(symbol_alias)
    );
    return true;
   }
