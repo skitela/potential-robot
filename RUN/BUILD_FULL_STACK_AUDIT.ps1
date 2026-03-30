@@ -19,6 +19,7 @@ $runtimeLogRotationScript = Join-Path $ProjectRoot "TOOLS\ROTATE_RUNTIME_LOGS.ps
 $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
 $learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
+$mt5FirstWaveServerParityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_SERVER_PARITY_AUDIT.ps1"
 $nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 $learningHotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 
@@ -29,6 +30,7 @@ foreach ($path in @(
     $repoHygieneScript,
     $supervisorScopeAuditScript,
     $learningArtifactInventoryScript,
+    $mt5FirstWaveServerParityAuditScript,
     $nearProfitQueueStatusScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -214,6 +216,7 @@ $freshness = @(
     Get-FileFreshness -Label "qdm_custom_symbol_pilot_batch" -Path (Join-Path $opsRoot "qdm_custom_symbol_pilot_batch_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_first_wave" -Path (Join-Path $opsRoot "qdm_custom_symbol_first_wave_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "qdm_custom_symbol_realism_audit" -Path (Join-Path $opsRoot "qdm_custom_symbol_realism_audit_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "mt5_first_wave_server_parity" -Path (Join-Path $opsRoot "mt5_first_wave_server_parity_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "learning_artifact_inventory" -Path (Join-Path $opsRoot "learning_artifact_inventory_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
@@ -242,6 +245,10 @@ if (Test-Path -LiteralPath $qdmCustomRealismAuditScript) {
     Invoke-JsonAuditTool -ScriptPath $qdmCustomRealismAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
 }
 $qdmCustomRealismAudit = Read-JsonFile -Path (Join-Path $opsRoot "qdm_custom_symbol_realism_audit_latest.json")
+if (Test-Path -LiteralPath $mt5FirstWaveServerParityAuditScript) {
+    Invoke-JsonAuditTool -ScriptPath $mt5FirstWaveServerParityAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
+}
+$mt5FirstWaveServerParityAudit = Read-JsonFile -Path (Join-Path $opsRoot "mt5_first_wave_server_parity_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -623,6 +630,24 @@ $report = [ordered]@{
                 partial_count = $(Get-SafeObjectValue -Object $qdmCustomRealismAudit.summary -PropertyName 'partial_count' -Default 0)
             }
         } else { $null }
+        mt5_first_wave_server_parity = if ($null -ne $mt5FirstWaveServerParityAudit) {
+            [ordered]@{
+                verdict = $mt5FirstWaveServerParityAudit.verdict
+                near_server_count = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'near_server_count' -Default 0)
+                partial_count = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'partial_count' -Default 0)
+                blocked_count = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'blocked_count' -Default 0)
+                truth_hook_ready_count = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'truth_hook_ready_count' -Default 0)
+                live_truth_ready_count = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'live_truth_ready_count' -Default 0)
+                local_model_ready_count = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'local_model_ready_count' -Default 0)
+                migration_confirmed = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'migration_confirmed' -Default $false)
+                paper_live_sync_ok = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'paper_live_sync_ok' -Default $false)
+                runtime_profile_observed = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'runtime_profile_observed' -Default $null)
+                runtime_profile_target = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'runtime_profile_target' -Default $null)
+                runtime_profile_match = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'runtime_profile_match' -Default $false)
+                capital_isolation_ready = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'capital_isolation_ready' -Default $false)
+                truth_chain_live_ready = $(Get-SafeObjectValue -Object $mt5FirstWaveServerParityAudit.summary -PropertyName 'truth_chain_live_ready' -Default $false)
+            }
+        } else { $null }
         learning_artifact_inventory = if ($null -ne $learningArtifactInventory) {
             [ordered]@{
                 verdict = $learningArtifactInventoryVerdict
@@ -707,6 +732,7 @@ $report = [ordered]@{
         system_aux_boundary_clean = $systemBoundaryClean
         verification_clean = $verificationClean
         lab_busy = $labBusy
+        first_wave_server_parity_verdict = $(if ($null -ne $mt5FirstWaveServerParityAudit) { $mt5FirstWaveServerParityAudit.verdict } else { $null })
         sync_allowed = $syncAllowed
         verdict = $releaseVerdict
     }
@@ -896,6 +922,25 @@ if ($null -ne $report.lab_health.qdm_custom_symbol_realism) {
 }
 else {
     $lines.Add("- qdm custom-symbol realism audit not available")
+}
+if ($null -ne $report.lab_health.mt5_first_wave_server_parity) {
+    $lines.Add(("- first_wave_server_parity_verdict: {0}" -f $report.lab_health.mt5_first_wave_server_parity.verdict))
+    $lines.Add(("- first_wave_near_server_count: {0}" -f $report.lab_health.mt5_first_wave_server_parity.near_server_count))
+    $lines.Add(("- first_wave_partial_count: {0}" -f $report.lab_health.mt5_first_wave_server_parity.partial_count))
+    $lines.Add(("- first_wave_blocked_count: {0}" -f $report.lab_health.mt5_first_wave_server_parity.blocked_count))
+    $lines.Add(("- first_wave_truth_hook_ready_count: {0}" -f $report.lab_health.mt5_first_wave_server_parity.truth_hook_ready_count))
+    $lines.Add(("- first_wave_live_truth_ready_count: {0}" -f $report.lab_health.mt5_first_wave_server_parity.live_truth_ready_count))
+    $lines.Add(("- first_wave_local_model_ready_count: {0}" -f $report.lab_health.mt5_first_wave_server_parity.local_model_ready_count))
+    $lines.Add(("- first_wave_migration_confirmed: {0}" -f $report.lab_health.mt5_first_wave_server_parity.migration_confirmed))
+    $lines.Add(("- first_wave_paper_live_sync_ok: {0}" -f $report.lab_health.mt5_first_wave_server_parity.paper_live_sync_ok))
+    $lines.Add(("- first_wave_runtime_profile_observed: {0}" -f $report.lab_health.mt5_first_wave_server_parity.runtime_profile_observed))
+    $lines.Add(("- first_wave_runtime_profile_target: {0}" -f $report.lab_health.mt5_first_wave_server_parity.runtime_profile_target))
+    $lines.Add(("- first_wave_runtime_profile_match: {0}" -f $report.lab_health.mt5_first_wave_server_parity.runtime_profile_match))
+    $lines.Add(("- first_wave_capital_isolation_ready: {0}" -f $report.lab_health.mt5_first_wave_server_parity.capital_isolation_ready))
+    $lines.Add(("- first_wave_truth_chain_live_ready: {0}" -f $report.lab_health.mt5_first_wave_server_parity.truth_chain_live_ready))
+}
+else {
+    $lines.Add("- first-wave server parity audit not available")
 }
 $lines.Add("")
 $lines.Add("## Learning Artifact Inventory")

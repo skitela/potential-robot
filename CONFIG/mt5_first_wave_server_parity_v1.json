@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "universe_version": "2026-03-28_active13_v1",
+  "broker_runtime": "OANDA_TMS_MT5",
+  "symbol_scope": "paper_live_first_wave",
+  "target_runtime_profile": "BROKER_PARITY_FIRST_WAVE",
+  "required_global_checks": {
+    "migration_confirmed": true,
+    "paper_live_sync_ok": true,
+    "server_execution_ping_contract_enabled": true,
+    "global_model_uses_runtime_latency": true,
+    "global_model_uses_server_ping": true,
+    "global_model_uses_server_latency": true,
+    "dedicated_first_wave_capital_isolation": true,
+    "live_truth_contract_chain": true
+  },
+  "required_symbol_checks": {
+    "broker_symbol_suffix": ".pro",
+    "custom_symbol_suffix": "_QDM_M1",
+    "property_mirror_ready": true,
+    "session_mirror_ready": true,
+    "broker_mirror_ready": true,
+    "smoke_ready": true,
+    "learning_ready": true,
+    "pretrade_truth_hook_ready": true,
+    "execution_truth_hook_ready": true,
+    "runtime_contract_present": true,
+    "local_model_available": true,
+    "rollback_guard_allowed": false
+  },
+  "reference_sources": {
+    "oanda_tms_mt5_guide": "https://help.oanda.com/eu/en/faqs/mt5-user-guide-eu.htm",
+    "oanda_tms_connect_specification": "https://www.oanda.com/eu-en/sites/default/files/document_files/SIF%20TMS%20CONNECT%20ENG%2022.05.2023.pdf",
+    "oanda_tms_fees_and_commissions": "https://www.oanda.com/eu-en/sites/default/files/document_files/38.%202023_02_03_Table%20of%20Fees%20and%20Commissions%20Connect%20Professional.pdf",
+    "mql5_order_check": "https://www.mql5.com/en/docs/trading/ordercheck",
+    "mql5_trade_transaction": "https://www.mql5.com/en/docs/event_handlers/ontradetransaction",
+    "mql5_custom_ticks": "https://www.mql5.com/en/docs/customsymbols/customticksadd",
+    "mql5_symbol_sessions": "https://www.mql5.com/en/docs/marketinformation/symbolinfosessiontrade",
+    "mql5_database": "https://www.mql5.com/en/docs/database/databaseopen",
+    "mql5_tester_frames": "https://www.mql5.com/en/docs/event_handlers/ontesterpass"
+  },
+  "target_symbols": [
+    {
+      "symbol_alias": "US500",
+      "broker_symbol": "US500.pro",
+      "custom_symbol": "US500_QDM_M1",
+      "session_profile": "INDEX_US"
+    },
+    {
+      "symbol_alias": "EURJPY",
+      "broker_symbol": "EURJPY.pro",
+      "custom_symbol": "EURJPY_QDM_M1",
+      "session_profile": "FX_CROSS"
+    },
+    {
+      "symbol_alias": "AUDUSD",
+      "broker_symbol": "AUDUSD.pro",
+      "custom_symbol": "AUDUSD_QDM_M1",
+      "session_profile": "FX_ASIA"
+    },
+    {
+      "symbol_alias": "USDCAD",
+      "broker_symbol": "USDCAD.pro",
+      "custom_symbol": "USDCAD_QDM_M1",
+      "session_profile": "FX_MAIN"
+    }
+  ]
+}

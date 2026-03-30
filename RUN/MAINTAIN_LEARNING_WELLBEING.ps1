@@ -227,6 +227,7 @@ $tradeTransitionAuditScript = Join-Path $ProjectRoot "RUN\BUILD_TRADE_TRANSITION
 $paperLiveActionGapAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LIVE_ACTION_GAP_AUDIT.ps1"
 $paperLossSourceAuditScript = Join-Path $ProjectRoot "RUN\BUILD_PAPER_LOSS_SOURCE_AUDIT.ps1"
 $qdmCustomSymbolRealismAuditScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_CUSTOM_SYMBOL_REALISM_AUDIT.ps1"
+$mt5FirstWaveServerParityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_SERVER_PARITY_AUDIT.ps1"
 $mlOverlayAuditScript = Join-Path $ProjectRoot "RUN\BUILD_ML_OVERLAY_AUDIT.ps1"
 $shadowRuntimeBootstrapScript = Join-Path $ProjectRoot "RUN\ENSURE_SHADOW_RUNTIME_BOOTSTRAP.ps1"
 $instrumentLocalTrainingPlanScript = Join-Path $ProjectRoot "RUN\BUILD_INSTRUMENT_LOCAL_TRAINING_PLAN.ps1"
@@ -251,7 +252,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($pathHygieneScript, $hotPathScript, $learningArtifactInventoryScript, $normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $qdmCustomSymbolRealismAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($pathHygieneScript, $hotPathScript, $learningArtifactInventoryScript, $normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $qdmCustomSymbolRealismAuditScript, $mt5FirstWaveServerParityAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -299,6 +300,7 @@ $tradeTransitionAudit = (& $tradeTransitionAuditScript -ProjectRoot $ProjectRoot
 $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
 $qdmCustomSymbolRealismAudit = (& $qdmCustomSymbolRealismAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$mt5FirstWaveServerParityAudit = (& $mt5FirstWaveServerParityAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 try {
     $mlOverlayAudit = (& $mlOverlayAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
 }
@@ -325,6 +327,7 @@ if ($safeAutoHealEnabled -and $null -ne $shadowRuntimeBootstrap -and [int]$shado
     $paperLiveActionGapAudit = (& $paperLiveActionGapAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
     $paperLossSourceAudit = (& $paperLossSourceAuditScript -ProjectRoot $ProjectRoot -CommonRoot $CommonRoot | ConvertFrom-Json)
     $qdmCustomSymbolRealismAudit = (& $qdmCustomSymbolRealismAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+    $mt5FirstWaveServerParityAudit = (& $mt5FirstWaveServerParityAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 }
 $instrumentLocalTrainingPlan = (& $instrumentLocalTrainingPlanScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $instrumentLocalTrainingLane = Read-JsonSafe -Path $instrumentLocalTrainingLanePath
@@ -524,6 +527,13 @@ $paperLossActiveNegativeCount = if ($null -ne $paperLossSourceAudit) { [int]$pap
 $paperLossCostDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.cost_driven_count } else { 0 }
 $paperLossQualityDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.quality_driven_count } else { 0 }
 $paperLossTimeoutDrivenCount = if ($null -ne $paperLossSourceAudit) { [int]$paperLossSourceAudit.summary.timeout_driven_count } else { 0 }
+$firstWaveServerParityVerdict = if ($null -ne $mt5FirstWaveServerParityAudit) { [string]$mt5FirstWaveServerParityAudit.verdict } else { "" }
+$firstWaveServerNearServerCount = if ($null -ne $mt5FirstWaveServerParityAudit) { [int](Get-OptionalNumber -Object $mt5FirstWaveServerParityAudit.summary -Name "near_server_count" -Default 0) } else { 0 }
+$firstWaveServerPartialCount = if ($null -ne $mt5FirstWaveServerParityAudit) { [int](Get-OptionalNumber -Object $mt5FirstWaveServerParityAudit.summary -Name "partial_count" -Default 0) } else { 0 }
+$firstWaveServerBlockedCount = if ($null -ne $mt5FirstWaveServerParityAudit) { [int](Get-OptionalNumber -Object $mt5FirstWaveServerParityAudit.summary -Name "blocked_count" -Default 0) } else { 0 }
+$firstWaveServerLiveTruthReadyCount = if ($null -ne $mt5FirstWaveServerParityAudit) { [int](Get-OptionalNumber -Object $mt5FirstWaveServerParityAudit.summary -Name "live_truth_ready_count" -Default 0) } else { 0 }
+$firstWaveServerRuntimeProfileMatch = if ($null -ne $mt5FirstWaveServerParityAudit) { [bool](Get-OptionalValue -Object $mt5FirstWaveServerParityAudit.summary -Name "runtime_profile_match" -Default $false) } else { $false }
+$firstWaveServerCapitalIsolationReady = if ($null -ne $mt5FirstWaveServerParityAudit) { [bool](Get-OptionalValue -Object $mt5FirstWaveServerParityAudit.summary -Name "capital_isolation_ready" -Default $false) } else { $false }
 $candidateGapFinalZeroCount = if ($null -ne $candidateGapAudit) { [int]$candidateGapAudit.summary.final_zero_count } else { 0 }
 $candidateGapStrategyZeroCount = if ($null -ne $candidateGapAudit) { [int]$candidateGapAudit.summary.strategy_zero_count } else { 0 }
 $candidateGapRiskZeroCount = if ($null -ne $candidateGapAudit) { [int]$candidateGapAudit.summary.risk_zero_count } else { 0 }
@@ -636,6 +646,7 @@ $report = [ordered]@{
     paper_live_action_gap_audit = $paperLiveActionGapAudit
     paper_loss_source_audit = $paperLossSourceAudit
     qdm_custom_symbol_realism_audit = $qdmCustomSymbolRealismAudit
+    mt5_first_wave_server_parity_audit = $mt5FirstWaveServerParityAudit
     shadow_runtime_bootstrap = $shadowRuntimeBootstrap
     instrument_local_training_plan = $instrumentLocalTrainingPlan
     instrument_local_training_lane = $instrumentLocalTrainingLane
@@ -717,6 +728,13 @@ $report = [ordered]@{
         paper_loss_cost_driven_count = $paperLossCostDrivenCount
         paper_loss_quality_driven_count = $paperLossQualityDrivenCount
         paper_loss_timeout_driven_count = $paperLossTimeoutDrivenCount
+        first_wave_server_parity_verdict = $firstWaveServerParityVerdict
+        first_wave_server_near_server_count = $firstWaveServerNearServerCount
+        first_wave_server_partial_count = $firstWaveServerPartialCount
+        first_wave_server_blocked_count = $firstWaveServerBlockedCount
+        first_wave_server_live_truth_ready_count = $firstWaveServerLiveTruthReadyCount
+        first_wave_server_runtime_profile_match = $firstWaveServerRuntimeProfileMatch
+        first_wave_server_capital_isolation_ready = $firstWaveServerCapitalIsolationReady
         qdm_custom_realism_verdict = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [string]$qdmCustomSymbolRealismAudit.verdict } else { "" })
         qdm_custom_realism_ready_count = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [int](Get-OptionalNumber -Object $qdmCustomSymbolRealismAudit.summary -Name "realism_ready_count" -Default 0) } else { 0 })
         qdm_custom_broker_mirror_ready_count = $(if ($null -ne $qdmCustomSymbolRealismAudit) { [int](Get-OptionalNumber -Object $qdmCustomSymbolRealismAudit.summary -Name "broker_mirror_ready_count" -Default 0) } else { 0 })
@@ -830,6 +848,13 @@ $lines.Add(("- paper_loss_active_negative_symbols_count: {0}" -f $report.summary
 $lines.Add(("- paper_loss_cost_driven_count: {0}" -f $report.summary.paper_loss_cost_driven_count))
 $lines.Add(("- paper_loss_quality_driven_count: {0}" -f $report.summary.paper_loss_quality_driven_count))
 $lines.Add(("- paper_loss_timeout_driven_count: {0}" -f $report.summary.paper_loss_timeout_driven_count))
+$lines.Add(("- first_wave_server_parity_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.first_wave_server_parity_verdict)) { "BRAK" } else { $report.summary.first_wave_server_parity_verdict })))
+$lines.Add(("- first_wave_server_near_server_count: {0}" -f $report.summary.first_wave_server_near_server_count))
+$lines.Add(("- first_wave_server_partial_count: {0}" -f $report.summary.first_wave_server_partial_count))
+$lines.Add(("- first_wave_server_blocked_count: {0}" -f $report.summary.first_wave_server_blocked_count))
+$lines.Add(("- first_wave_server_live_truth_ready_count: {0}" -f $report.summary.first_wave_server_live_truth_ready_count))
+$lines.Add(("- first_wave_server_runtime_profile_match: {0}" -f ([string]$report.summary.first_wave_server_runtime_profile_match).ToLowerInvariant()))
+$lines.Add(("- first_wave_server_capital_isolation_ready: {0}" -f ([string]$report.summary.first_wave_server_capital_isolation_ready).ToLowerInvariant()))
 $lines.Add(("- qdm_custom_realism_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.qdm_custom_realism_verdict)) { "BRAK" } else { $report.summary.qdm_custom_realism_verdict })))
 $lines.Add(("- qdm_custom_realism_ready_count: {0}" -f $report.summary.qdm_custom_realism_ready_count))
 $lines.Add(("- qdm_custom_broker_mirror_ready_count: {0}" -f $report.summary.qdm_custom_broker_mirror_ready_count))
