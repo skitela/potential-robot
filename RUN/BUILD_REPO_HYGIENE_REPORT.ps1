@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
-    [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
+    [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS",
+    [string]$ContractPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\supervisor_scope_contract_v1.json"
 )
 
 Set-StrictMode -Version Latest
@@ -64,14 +65,55 @@ function Test-TimestampOnlyDiff {
     return $true
 }
 
+function Read-JsonSafe {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-MatchesAnyPattern {
+    param(
+        [string]$Value,
+        [object[]]$Patterns
+    )
+
+    foreach ($pattern in @($Patterns)) {
+        if ([string]::IsNullOrWhiteSpace([string]$pattern)) {
+            continue
+        }
+
+        if ($Value -like [string]$pattern) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 $statusLines = Invoke-Git -Arguments @("status", "--porcelain")
-$knownGeneratedPaths = @(
+$contract = Read-JsonSafe -Path $ContractPath
+$knownGeneratedPaths = if ($null -ne $contract) { @($contract.timestamp_only_candidates) } else { @(
     "CONFIG/family_policy_registry.json",
     "CONFIG/family_reference_registry.json",
     "SERVER_PROFILE/HANDOFF/handoff_manifest.json"
-)
+) }
+$generatedPatterns = if ($null -ne $contract) { @($contract.generated_path_patterns) } else { @(
+    "EVIDENCE/*",
+    "SERVER_PROFILE/HANDOFF/DOCS/*",
+    "DOCS/06_MT5_CHART_ATTACHMENT_PLAN*"
+) }
+$auxiliaryBridgePatterns = if ($null -ne $contract) { @($contract.auxiliary_bridge_path_patterns) } else { @() }
 
 $classified = New-Object System.Collections.Generic.List[object]
 foreach ($line in $statusLines) {
@@ -81,15 +123,18 @@ foreach ($line in $statusLines) {
 
     $status = $line.Substring(0,2)
     $path = $line.Substring(3).Trim()
-    $bucket = "code_or_logic"
+    $bucket = "system_core"
     $timestampOnly = $false
 
     if ($knownGeneratedPaths -contains $path) {
         $timestampOnly = Test-TimestampOnlyDiff -RelativePath $path
         $bucket = if ($timestampOnly) { "generated_timestamp_only" } else { "generated_meaningful" }
     }
-    elseif ($path -match '^(EVIDENCE/|DOCS/06_MT5_CHART_ATTACHMENT_PLAN|SERVER_PROFILE/HANDOFF/DOCS/)') {
+    elseif (Test-MatchesAnyPattern -Value $path -Patterns $generatedPatterns) {
         $bucket = "generated_or_report"
+    }
+    elseif (Test-MatchesAnyPattern -Value $path -Patterns $auxiliaryBridgePatterns) {
+        $bucket = "auxiliary_bridge"
     }
 
     $classified.Add([pscustomobject]@{
@@ -101,13 +146,17 @@ foreach ($line in $statusLines) {
 }
 
 $items = @($classified.ToArray())
-$codeItems = @($items | Where-Object { $_.bucket -eq "code_or_logic" })
+$systemCoreItems = @($items | Where-Object { $_.bucket -eq "system_core" })
+$auxiliaryBridgeItems = @($items | Where-Object { $_.bucket -eq "auxiliary_bridge" })
 $timestampItems = @($items | Where-Object { $_.bucket -eq "generated_timestamp_only" })
 $generatedItems = @($items | Where-Object { $_.bucket -eq "generated_or_report" -or $_.bucket -eq "generated_meaningful" })
 
 $verdict = "CZYSTO"
-if ($codeItems.Count -gt 0) {
-    $verdict = "BRUD_KODU"
+if ($systemCoreItems.Count -gt 0) {
+    $verdict = "BRUD_SYSTEMU"
+}
+elseif ($auxiliaryBridgeItems.Count -gt 0) {
+    $verdict = "BRUD_POMOCNICZY"
 }
 elseif ($generatedItems.Count -gt 0 -or $timestampItems.Count -gt 0) {
     $verdict = "TYLKO_ARTEFAKTY_LUB_ZNACZNIKI"
@@ -121,10 +170,19 @@ $report = [ordered]@{
     verdict = $verdict
     counts = [ordered]@{
         dirty_total = $items.Count
-        code_or_logic = $codeItems.Count
+        system_core = $systemCoreItems.Count
+        auxiliary_bridge = $auxiliaryBridgeItems.Count
+        code_or_logic = ($systemCoreItems.Count + $auxiliaryBridgeItems.Count)
         generated_timestamp_only = $timestampItems.Count
         generated_other = $generatedItems.Count
     }
+    scope_contract = if ($null -ne $contract) {
+        [ordered]@{
+            contract_path = $ContractPath
+            auxiliary_bridge_path_patterns = @($auxiliaryBridgePatterns)
+            generated_path_patterns = @($generatedPatterns)
+        }
+    } else { $null }
     items = @($items)
 }
 
@@ -139,6 +197,8 @@ $lines.Add("")
 $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- verdict: {0}" -f $report.verdict))
 $lines.Add(("- dirty_total: {0}" -f $report.counts.dirty_total))
+$lines.Add(("- system_core: {0}" -f $report.counts.system_core))
+$lines.Add(("- auxiliary_bridge: {0}" -f $report.counts.auxiliary_bridge))
 $lines.Add(("- code_or_logic: {0}" -f $report.counts.code_or_logic))
 $lines.Add(("- generated_timestamp_only: {0}" -f $report.counts.generated_timestamp_only))
 $lines.Add(("- generated_other: {0}" -f $report.counts.generated_other))

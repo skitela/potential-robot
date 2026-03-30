@@ -17,6 +17,7 @@ $runtimeArtifactAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_AND_CLEAN_RUNT
 $runtimePersistenceAuditScript = Join-Path $ProjectRoot "TOOLS\AUDIT_RUNTIME_PERSISTENCE.ps1"
 $runtimeLogRotationScript = Join-Path $ProjectRoot "TOOLS\ROTATE_RUNTIME_LOGS.ps1"
 $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
+$supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
 $nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 $learningHotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 
@@ -25,6 +26,7 @@ foreach ($path in @(
     $runtimePersistenceAuditScript,
     $runtimeLogRotationScript,
     $repoHygieneScript,
+    $supervisorScopeAuditScript,
     $nearProfitQueueStatusScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -170,6 +172,10 @@ Invoke-JsonAuditTool -ScriptPath $repoHygieneScript -Parameters @{
     ProjectRoot = $ProjectRoot
     OutputRoot = $opsRoot
 }
+Invoke-JsonAuditTool -ScriptPath $supervisorScopeAuditScript -Parameters @{
+    ProjectRoot = $ProjectRoot
+    OutputRoot = $opsRoot
+}
 Invoke-JsonAuditTool -ScriptPath $nearProfitQueueStatusScript -Parameters @{
     ProjectRoot = $ProjectRoot
     UseDedicatedPortableLabLane = $true
@@ -180,6 +186,7 @@ $runtimeArtifactAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\ru
 $runtimePersistenceAudit = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_persistence_audit_report.json")
 $runtimeLogRotation = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runtime_log_rotation_report.json")
 $repoHygiene = Read-JsonFile -Path (Join-Path $opsRoot "repo_hygiene_latest.json")
+$supervisorScopeAudit = Read-JsonFile -Path (Join-Path $opsRoot "supervisor_scope_audit_latest.json")
 $learningHotPath = Read-JsonFile -Path $learningHotPathPath
 
 $freshness = @(
@@ -317,6 +324,10 @@ $labBusy = (
     $mlRunning
 )
 
+$gitSystemDirtyCount = if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'system_core' -Default 0) } else { $gitDirtyCount }
+$gitAuxiliaryDirtyCount = if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'auxiliary_bridge' -Default 0) } else { 0 }
+$systemBoundaryClean = ($null -ne $supervisorScopeAudit -and [string](Get-SafeObjectValue -Object $supervisorScopeAudit -PropertyName 'verdict' -Default "") -eq "SUPERVISOR_SCOPE_BOUNDARY_OK")
+
 $mt5QueueFresh = @($freshness | Where-Object { $_.label -eq "mt5_retest_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "mt5_retest_queue" })[0].fresh)
 $nearProfitQueueFresh = @($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" })[0].fresh)
 $researchExportFresh = @($freshness | Where-Object { $_.label -eq "research_export_manifest" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "research_export_manifest" })[0].fresh)
@@ -358,7 +369,8 @@ $syncAllowed = (
     $localFresh -and
     ($runtimeUnexpectedTotal -eq 0) -and
     $runtimeLogsUnderControl -and
-    ($gitDirtyCount -eq 0) -and
+    ($gitSystemDirtyCount -eq 0) -and
+    $systemBoundaryClean -and
     $verificationClean -and
     -not $labBusy
 )
@@ -376,8 +388,11 @@ elseif ($runtimeUnexpectedTotal -gt 0) {
 elseif (-not $runtimeLogsUnderControl) {
     $releaseVerdict = "ROTATE_RUNTIME_LOGS_FIRST"
 }
-elseif ($gitDirtyCount -gt 0) {
+elseif ($gitSystemDirtyCount -gt 0) {
     $releaseVerdict = "CHECKPOINT_CODE_FIRST"
+}
+elseif (-not $systemBoundaryClean) {
+    $releaseVerdict = "SEPARATE_SYSTEM_AND_BRIDGE_FIRST"
 }
 elseif (-not $verificationClean) {
     $releaseVerdict = "TRUST_BUT_VERIFY_RECHECK_FIRST"
@@ -571,6 +586,8 @@ $report = [ordered]@{
         git_dirty_count = $gitDirtyCount
         git_tracked_count = $gitTrackedCount
         git_untracked_count = $gitUntrackedCount
+        git_system_core_dirty_count = $gitSystemDirtyCount
+        git_auxiliary_bridge_dirty_count = $gitAuxiliaryDirtyCount
         git_dirty_head = @($gitStatusLines | Select-Object -First 20)
         repo_hygiene_verdict = $(if ($null -ne $repoHygiene) { $repoHygiene.verdict } else { $null })
         git_code_dirty_count = $(if ($null -ne $repoHygiene) { [int](Get-SafeObjectValue -Object $repoHygiene.counts -PropertyName 'code_or_logic' -Default 0) } else { 0 })
@@ -583,6 +600,8 @@ $report = [ordered]@{
         learning_hot_path_verdict = $learningHotPathVerdict
         learning_hot_waiting_count = $learningHotWaitingCount
         runtime_logs_under_control = $runtimeLogsUnderControl
+        supervisor_scope_verdict = $(if ($null -ne $supervisorScopeAudit) { $supervisorScopeAudit.verdict } else { $null })
+        supervisor_scope_contaminated_count = $(if ($null -ne $supervisorScopeAudit) { [int](Get-SafeObjectValue -Object $supervisorScopeAudit.summary -PropertyName 'contaminated_count' -Default 0) } else { 0 })
     }
     runtime_audits = [ordered]@{
         artifact_audit = $runtimeArtifactAudit
@@ -590,6 +609,7 @@ $report = [ordered]@{
         log_rotation = $runtimeLogRotation
         learning_hot_path = $learningHotPath
         repo_hygiene = $repoHygiene
+        supervisor_scope = $supervisorScopeAudit
     }
     market_context = if ($null -ne $profitTracking) {
         [ordered]@{
@@ -626,7 +646,8 @@ $report = [ordered]@{
         runtime_artifacts_clean = ($runtimeUnexpectedTotal -eq 0)
         runtime_logs_rotated = $runtimeLogsUnderControl
         runtime_logs_under_control = $runtimeLogsUnderControl
-        code_checkpoint_clean = ($gitDirtyCount -eq 0)
+        code_checkpoint_clean = ($gitSystemDirtyCount -eq 0)
+        system_aux_boundary_clean = $systemBoundaryClean
         verification_clean = $verificationClean
         lab_busy = $labBusy
         sync_allowed = $syncAllowed
@@ -652,16 +673,21 @@ $lines.Add(("- local_lab_fresh: {0}" -f $report.release_gate.local_lab_fresh))
 $lines.Add(("- runtime_artifacts_clean: {0}" -f $report.release_gate.runtime_artifacts_clean))
 $lines.Add(("- runtime_logs_rotated: {0}" -f $report.release_gate.runtime_logs_rotated))
 $lines.Add(("- code_checkpoint_clean: {0}" -f $report.release_gate.code_checkpoint_clean))
+$lines.Add(("- system_aux_boundary_clean: {0}" -f $report.release_gate.system_aux_boundary_clean))
 $lines.Add(("- verification_clean: {0}" -f $report.release_gate.verification_clean))
 $lines.Add(("- lab_busy: {0}" -f $report.release_gate.lab_busy))
 $lines.Add("")
 $lines.Add("## Cleanliness")
 $lines.Add("")
 $lines.Add(("- git_dirty_count: {0}" -f $report.cleanliness.git_dirty_count))
+$lines.Add(("- git_system_core_dirty_count: {0}" -f $report.cleanliness.git_system_core_dirty_count))
+$lines.Add(("- git_auxiliary_bridge_dirty_count: {0}" -f $report.cleanliness.git_auxiliary_bridge_dirty_count))
 $lines.Add(("- repo_hygiene_verdict: {0}" -f $report.cleanliness.repo_hygiene_verdict))
 $lines.Add(("- git_code_dirty_count: {0}" -f $report.cleanliness.git_code_dirty_count))
 $lines.Add(("- git_generated_timestamp_only_count: {0}" -f $report.cleanliness.git_generated_timestamp_only_count))
 $lines.Add(("- git_generated_other_count: {0}" -f $report.cleanliness.git_generated_other_count))
+$lines.Add(("- supervisor_scope_verdict: {0}" -f $report.cleanliness.supervisor_scope_verdict))
+$lines.Add(("- supervisor_scope_contaminated_count: {0}" -f $report.cleanliness.supervisor_scope_contaminated_count))
 $lines.Add(("- runtime_unexpected_dir_count: {0}" -f $report.cleanliness.runtime_unexpected_dir_count))
 $lines.Add(("- rotation_candidate_count: {0}" -f $report.cleanliness.rotation_candidate_count))
 $lines.Add(("- persistence_overgrowth_count: {0}" -f $report.cleanliness.persistence_overgrowth_count))

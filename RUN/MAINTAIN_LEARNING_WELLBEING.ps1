@@ -176,6 +176,8 @@ $manifestPath = Join-Path $reportsRoot "research_export_manifest_latest.json"
 $pathHygienePath = Join-Path $opsRoot "learning_path_hygiene_latest.json"
 $hotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYERS.ps1"
+$repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
+$supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
 $vpsSpoolWellbeingScript = Join-Path $ProjectRoot "RUN\BUILD_VPS_SPOOL_WELLBEING_AUDIT.ps1"
 $qdmMissingProfileScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_MISSING_ONLY_PROFILE.ps1"
 $qdmVisibilityRefreshScript = Join-Path $ProjectRoot "RUN\BUILD_QDM_VISIBILITY_REFRESH_PROFILE.ps1"
@@ -215,7 +217,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($normalizeScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -226,6 +228,10 @@ New-DirectoryIfMissing -Path $opsRoot
 $pathHygiene = Read-JsonSafe -Path $pathHygienePath
 $hotPath = Read-JsonSafe -Path $hotPathPath
 $manifestState = Get-ManifestState -ManifestPath $manifestPath
+$null = & $repoHygieneScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
+$null = & $supervisorScopeAuditScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
+$repoHygiene = Read-JsonSafe -Path (Join-Path $opsRoot "repo_hygiene_latest.json")
+$supervisorScopeAudit = Read-JsonSafe -Path (Join-Path $opsRoot "supervisor_scope_audit_latest.json")
 $null = & $qdmMissingProfileScript
 $qdmVisibilityRefresh = (& $qdmVisibilityRefreshScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot | ConvertFrom-Json)
 $artifactCleanup = Invoke-JsonScript -ScriptPath $normalizeScript -Parameters @{
@@ -510,6 +516,10 @@ $localTrainingAuditProbationCount = if ($null -ne $instrumentLocalTrainingAudit)
 $localTrainingAuditRepairCount = if ($null -ne $instrumentLocalTrainingAudit) { [int]$instrumentLocalTrainingAudit.summary.repair_applied_count } else { 0 }
 $localTrainingGuardrailForcedCount = if ($null -ne $instrumentLocalTrainingGuardrails) { [int]$instrumentLocalTrainingGuardrails.summary.forced_global_fallback_count } else { 0 }
 $localTrainingGuardrailProbationCount = if ($null -ne $instrumentLocalTrainingGuardrails) { [int]$instrumentLocalTrainingGuardrails.summary.probation_count } else { 0 }
+$repoSystemCoreDirtyCount = if ($null -ne $repoHygiene) { [int](Get-OptionalNumber -Object $repoHygiene.counts -Name "system_core" -Default 0) } else { 0 }
+$repoAuxiliaryBridgeDirtyCount = if ($null -ne $repoHygiene) { [int](Get-OptionalNumber -Object $repoHygiene.counts -Name "auxiliary_bridge" -Default 0) } else { 0 }
+$supervisorBoundaryContaminatedCount = if ($null -ne $supervisorScopeAudit) { [int](Get-OptionalNumber -Object $supervisorScopeAudit.summary -Name "contaminated_count" -Default 0) } else { 0 }
+$supervisorBoundaryClean = ($null -ne $supervisorScopeAudit -and [string]$supervisorScopeAudit.verdict -eq "SUPERVISOR_SCOPE_BOUNDARY_OK")
 $verdict = if (
     ($pathHygiene -ne $null -and [string]$pathHygiene.verdict -eq "CZYSTO") -and
     ($hotPath -ne $null -and [string]$hotPath.verdict -eq "GORACY_SZLAK_CZYSTY") -and
@@ -519,6 +529,8 @@ $verdict = if (
     $qdmServerTailBridgeRequiredCount -eq 0 -and
     -not $mlOverlayRolloutBlocked -and
     -not $mlScalpingCritical -and
+    $repoSystemCoreDirtyCount -eq 0 -and
+    $supervisorBoundaryClean -and
     $opsPending.Count -eq 0 -and
     $runtimePending.Count -eq 0 -and
     $runtimeArchiveSkippedReason -eq "" -and
@@ -546,6 +558,8 @@ $report = [ordered]@{
     manifest = $manifestState
     learning_path_hygiene = if ($null -ne $pathHygiene) { [pscustomobject]@{ verdict = [string]$pathHygiene.verdict } } else { $null }
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
+    repo_hygiene = $repoHygiene
+    supervisor_scope_audit = $supervisorScopeAudit
     vps_spool_bridge = $vpsSpoolBridge
     qdm_missing_supported_sync = $qdmMissingSyncStatus
     qdm_visibility_refresh = $qdmVisibilityRefresh
@@ -654,6 +668,10 @@ $report = [ordered]@{
         local_training_audit_repair_count = $localTrainingAuditRepairCount
         local_training_guardrail_forced_count = $localTrainingGuardrailForcedCount
         local_training_guardrail_probation_count = $localTrainingGuardrailProbationCount
+        repo_system_core_dirty_count = $repoSystemCoreDirtyCount
+        repo_auxiliary_bridge_dirty_count = $repoAuxiliaryBridgeDirtyCount
+        supervisor_boundary_clean = $supervisorBoundaryClean
+        supervisor_boundary_contaminated_count = $supervisorBoundaryContaminatedCount
         vps_bridge_pending_sync_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.pending_sync_count } else { 0 }
         vps_bridge_repair_actions_count = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.repair_actions_count } else { 0 }
         vps_bridge_export_lag_total = if ($null -ne $vpsSpoolBridge) { [int]$vpsSpoolBridge.summary.export_spool_lag_total } else { 0 }
@@ -680,6 +698,8 @@ $lines.Add("")
 $lines.Add(("- manifest_fresh: {0}" -f $report.manifest.fresh))
 $lines.Add(("- learning_path_hygiene: {0}" -f $(if ($null -ne $report.learning_path_hygiene) { $report.learning_path_hygiene.verdict } else { "BRAK" })))
 $lines.Add(("- learning_hot_path: {0}" -f $(if ($null -ne $report.learning_hot_path) { $report.learning_hot_path.verdict } else { "BRAK" })))
+$lines.Add(("- repo_hygiene: {0}" -f $(if ($null -ne $report.repo_hygiene) { $report.repo_hygiene.verdict } else { "BRAK" })))
+$lines.Add(("- supervisor_scope_audit: {0}" -f $(if ($null -ne $report.supervisor_scope_audit) { $report.supervisor_scope_audit.verdict } else { "BRAK" })))
 $lines.Add(("- vps_spool_bridge: {0}" -f $(if ($null -ne $report.vps_spool_bridge) { $report.vps_spool_bridge.verdict } else { "BRAK" })))
 $lines.Add(("- qdm_export_pending_count: {0}" -f $report.summary.qdm_export_pending_count))
 $lines.Add(("- qdm_contract_pending_count: {0}" -f $report.summary.qdm_contract_pending_count))
@@ -739,6 +759,10 @@ $lines.Add(("- local_training_audit_probation_count: {0}" -f $report.summary.loc
 $lines.Add(("- local_training_audit_repair_count: {0}" -f $report.summary.local_training_audit_repair_count))
 $lines.Add(("- local_training_guardrail_forced_count: {0}" -f $report.summary.local_training_guardrail_forced_count))
 $lines.Add(("- local_training_guardrail_probation_count: {0}" -f $report.summary.local_training_guardrail_probation_count))
+$lines.Add(("- repo_system_core_dirty_count: {0}" -f $report.summary.repo_system_core_dirty_count))
+$lines.Add(("- repo_auxiliary_bridge_dirty_count: {0}" -f $report.summary.repo_auxiliary_bridge_dirty_count))
+$lines.Add(("- supervisor_boundary_clean: {0}" -f $report.summary.supervisor_boundary_clean))
+$lines.Add(("- supervisor_boundary_contaminated_count: {0}" -f $report.summary.supervisor_boundary_contaminated_count))
 $lines.Add(("- qdm_recovery_batch_symbols: {0}" -f $(if (@($report.summary.qdm_recovery_batch_symbols).Count -gt 0) { (@($report.summary.qdm_recovery_batch_symbols) -join ", ") } else { "none" })))
 $lines.Add(("- qdm_recovery_recovered_symbols: {0}" -f $(if (@($report.summary.qdm_recovery_recovered_symbols).Count -gt 0) { (@($report.summary.qdm_recovery_recovered_symbols) -join ", ") } else { "none" })))
 $lines.Add("")

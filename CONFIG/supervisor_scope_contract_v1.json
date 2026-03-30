@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "contract_kind": "supervisor_scope_boundary",
+  "purpose": "Separate core Macro/Micro Bot supervision from auxiliary bridge, orchestrator and brigade tooling.",
+  "system_identity": {
+    "name": "macro_i_mikro_bot_core",
+    "primary_goals": [
+      "net profit after full costs",
+      "capital protection",
+      "cleaner and faster runtime",
+      "research-to-runtime parity"
+    ]
+  },
+  "core_dirty_gate_policy": {
+    "core_system_changes_block_release": true,
+    "auxiliary_bridge_changes_block_release": false,
+    "generated_artifacts_block_release": false
+  },
+  "generated_path_patterns": [
+    "EVIDENCE/*",
+    "SERVER_PROFILE/HANDOFF/DOCS/*",
+    "DOCS/06_MT5_CHART_ATTACHMENT_PLAN*"
+  ],
+  "timestamp_only_candidates": [
+    "CONFIG/family_policy_registry.json",
+    "CONFIG/family_reference_registry.json",
+    "SERVER_PROFILE/HANDOFF/handoff_manifest.json"
+  ],
+  "auxiliary_bridge_path_patterns": [
+    "00_BRYGADY_TUTAJ.md",
+    "BRYGADY/*",
+    ".github/prompts/wejdz-brygada-*.prompt.md",
+    "CONFIG/orchestrator_brigades_registry_v1.json",
+    "RUN/*ORCHESTRATOR*.ps1",
+    "RUN/*BRIGADE*.ps1",
+    "TOOLS/orchestrator/*"
+  ],
+  "supervisor_scripts": [
+    "RUN/RUN_AUDIT_SUPERVISOR.ps1",
+    "RUN/RUN_AUTONOMOUS_90P_SUPERVISOR.ps1",
+    "RUN/BUILD_FULL_STACK_AUDIT.ps1",
+    "RUN/MAINTAIN_LEARNING_WELLBEING.ps1",
+    "RUN/BUILD_LEARNING_HEALTH_REGISTRY.ps1",
+    "RUN/CLEAN_LEARNING_SUPERVISOR_HOT_PATH.ps1",
+    "RUN/BUILD_AUDIT_SUPERVISOR_DISCOVERY_REPORT.ps1",
+    "RUN/BUILD_REPO_HYGIENE_REPORT.ps1"
+  ],
+  "forbidden_auxiliary_refs_in_supervisors": [
+    {
+      "id": "orchestrator_mailbox",
+      "label": "Mailbox mostu brygad",
+      "needle": "orchestrator_mailbox"
+    },
+    {
+      "id": "desktop_tuning_exchange",
+      "label": "Pulpit strojenie agenta",
+      "needle": "Desktop\\strojenie agenta"
+    },
+    {
+      "id": "brigades_docs",
+      "label": "Dokumentacja brygad",
+      "needle": "BRYGADY\\"
+    },
+    {
+      "id": "brigade_index",
+      "label": "Indeks brygad",
+      "needle": "00_BRYGADY_TUTAJ.md"
+    },
+    {
+      "id": "orchestrator_registry",
+      "label": "Rejestr orchestratora brygad",
+      "needle": "CONFIG\\orchestrator_brigades_registry_v1.json"
+    },
+    {
+      "id": "orchestrator_tools",
+      "label": "Narzędzia orchestratora",
+      "needle": "TOOLS\\orchestrator"
+    },
+    {
+      "id": "brigade_prompts",
+      "label": "Prompt files brygad",
+      "needle": ".github\\prompts\\wejdz-brygada-"
+    }
+  ]
+}
