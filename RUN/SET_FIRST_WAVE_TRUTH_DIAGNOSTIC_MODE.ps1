@@ -62,10 +62,15 @@ if ($Mode -eq "Enable") {
         "enabled,1"
         "max_age_sec,$maxAgeSeconds"
         "allow_symbol_daily_loss_hard,1"
-        "breakout_gate_abs,0.28"
-        "trend_gate_abs,0.24"
-        "range_gate_abs,0.16"
-        "rejection_gate_abs,0.16"
+        "allow_central_state_stale,1"
+        "allow_low_conversion_ratio,1"
+        "allow_forefield_dirty,1"
+        "relax_symbol_cost_gates,1"
+        "force_scan_interval_sec,90"
+        "breakout_gate_abs,0.14"
+        "trend_gate_abs,0.14"
+        "range_gate_abs,0.10"
+        "rejection_gate_abs,0.10"
     ) | Set-Content -LiteralPath $diagnosticPath -Encoding ASCII
 }
 elseif (Test-Path -LiteralPath $diagnosticPath) {

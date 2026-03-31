@@ -8,6 +8,11 @@ bool g_mb_first_wave_truth_diag_loaded = false;
 bool g_mb_first_wave_truth_diag_enabled = false;
 int g_mb_first_wave_truth_diag_max_age_sec = 1800;
 bool g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
+bool g_mb_first_wave_truth_diag_allow_central_state_stale = false;
+bool g_mb_first_wave_truth_diag_allow_low_conversion_ratio = false;
+bool g_mb_first_wave_truth_diag_allow_forefield_dirty = false;
+bool g_mb_first_wave_truth_diag_relax_symbol_cost_gates = false;
+int g_mb_first_wave_truth_diag_force_scan_interval_sec = 0;
 double g_mb_first_wave_truth_diag_breakout_gate_abs = 0.28;
 double g_mb_first_wave_truth_diag_trend_gate_abs = 0.24;
 double g_mb_first_wave_truth_diag_range_gate_abs = 0.16;
@@ -34,6 +39,11 @@ void MbResetFirstWaveTruthDiagnosticState()
    g_mb_first_wave_truth_diag_enabled = false;
    g_mb_first_wave_truth_diag_max_age_sec = 1800;
    g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
+   g_mb_first_wave_truth_diag_allow_central_state_stale = false;
+   g_mb_first_wave_truth_diag_allow_low_conversion_ratio = false;
+   g_mb_first_wave_truth_diag_allow_forefield_dirty = false;
+   g_mb_first_wave_truth_diag_relax_symbol_cost_gates = false;
+   g_mb_first_wave_truth_diag_force_scan_interval_sec = 0;
    g_mb_first_wave_truth_diag_breakout_gate_abs = 0.28;
    g_mb_first_wave_truth_diag_trend_gate_abs = 0.24;
    g_mb_first_wave_truth_diag_range_gate_abs = 0.16;
@@ -104,6 +114,16 @@ void MbLoadFirstWaveTruthDiagnostic(const bool force_reload = false)
          g_mb_first_wave_truth_diag_max_age_sec = MathMax(60,MbFirstWaveTruthDiagnosticParseInt(value,g_mb_first_wave_truth_diag_max_age_sec));
       else if(key == "allow_symbol_daily_loss_hard")
          g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard);
+      else if(key == "allow_central_state_stale")
+         g_mb_first_wave_truth_diag_allow_central_state_stale = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_central_state_stale);
+      else if(key == "allow_low_conversion_ratio")
+         g_mb_first_wave_truth_diag_allow_low_conversion_ratio = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_low_conversion_ratio);
+      else if(key == "allow_forefield_dirty")
+         g_mb_first_wave_truth_diag_allow_forefield_dirty = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_forefield_dirty);
+      else if(key == "relax_symbol_cost_gates")
+         g_mb_first_wave_truth_diag_relax_symbol_cost_gates = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_relax_symbol_cost_gates);
+      else if(key == "force_scan_interval_sec")
+         g_mb_first_wave_truth_diag_force_scan_interval_sec = MathMax(0,MbFirstWaveTruthDiagnosticParseInt(value,g_mb_first_wave_truth_diag_force_scan_interval_sec));
       else if(key == "breakout_gate_abs")
          g_mb_first_wave_truth_diag_breakout_gate_abs = MbFirstWaveTruthDiagnosticParseDouble(value,g_mb_first_wave_truth_diag_breakout_gate_abs);
       else if(key == "trend_gate_abs")
@@ -138,8 +158,33 @@ bool MbShouldBypassFirstWaveTruthDiagnosticGuard(const string symbol,const bool 
 
    if(reason_code == "SYMBOL_DAILY_LOSS_HARD" && g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard)
       return true;
+   if(reason_code == "CENTRAL_STATE_STALE" && g_mb_first_wave_truth_diag_allow_central_state_stale)
+      return true;
+   if(StringFind(reason_code,"PAPER_CONVERSION_BLOCKED_",0) == 0 && g_mb_first_wave_truth_diag_allow_low_conversion_ratio)
+      return true;
+   if(StringFind(reason_code,"FOREFIELD_DIRTY_",0) == 0 && g_mb_first_wave_truth_diag_allow_forefield_dirty)
+      return true;
 
    return false;
+  }
+
+bool MbShouldRelaxFirstWaveTruthDiagnosticTuningGate(const string symbol,const bool paper_mode_active)
+  {
+   return MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active);
+  }
+
+bool MbShouldRelaxFirstWaveTruthDiagnosticCostGate(const string symbol,const bool paper_mode_active)
+  {
+   if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return false;
+   return g_mb_first_wave_truth_diag_relax_symbol_cost_gates;
+  }
+
+int MbResolveFirstWaveTruthDiagnosticForceScanIntervalSec(const string symbol,const bool paper_mode_active)
+  {
+   if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return 0;
+   return g_mb_first_wave_truth_diag_force_scan_interval_sec;
   }
 
 double MbResolveFirstWaveTruthDiagnosticGateAbs(

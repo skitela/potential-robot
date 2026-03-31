@@ -82,12 +82,27 @@ string g_throttled_decision_keys[];
 datetime g_throttled_decision_times[];
 string g_last_aux_event_key = "";
 datetime g_last_aux_event_ts = 0;
+datetime g_last_timer_diagnostic_scan_ts = 0;
 string g_tuning_action_log_path = "";
 string g_tuning_deckhand_log_path = "";
 string g_onnx_observation_log_path = "";
 string g_onnx_observation_state_path = "";
 MbMlRuntimeBridgeState g_ml_bridge;
 datetime g_last_decision_event_ts = 0;
+
+bool ShouldRunAUDUSDTimerDiagnosticScan(const datetime now)
+  {
+   if(!IsLocalPaperModeActive())
+      return false;
+   int interval_sec = MbResolveFirstWaveTruthDiagnosticForceScanIntervalSec(g_profile.symbol,IsLocalPaperModeActive());
+   if(interval_sec <= 0)
+      interval_sec = 90;
+   if(g_last_timer_diagnostic_scan_ts > 0 && (now - g_last_timer_diagnostic_scan_ts) < interval_sec)
+      return false;
+   if(g_state.last_trade_attempt > 0 && (now - g_state.last_trade_attempt) < interval_sec)
+      return false;
+   return true;
+  }
 
 bool ShouldRunAUDUSDTuningCycle(const datetime now)
   {
@@ -449,6 +464,15 @@ void OnTimer()
    if(g_kill_switch.halt)
       g_state.halt = true;
    MbRuntimeOnTimer(g_state);
+   if(ShouldRunAUDUSDTimerDiagnosticScan(now))
+     {
+      g_last_timer_diagnostic_scan_ts = now;
+      AppendAUDUSDDecisionEvent(now,"DIAGNOSTIC","FORCE","TIMER_FALLBACK_SCAN",g_market.spread_points,0.0,0.0,0,true,60);
+      OnTick();
+      now = TimeCurrent();
+      MbRefreshMarketSnapshot(g_profile,g_market);
+      NormalizeAUDUSDMarketPermissions();
+     }
    MbOnnxObservationResult timer_onnx_result;
    MbOnnxObservationEmitTimerShadow(now,g_profile.symbol,(IsLocalPaperModeActive() ? "PAPER" : "LIVE"),g_market.spread_points,timer_onnx_result);
    EnsureAUDUSDDecisionHeartbeat(now,timer_onnx_result);
@@ -700,6 +724,8 @@ void OnTick()
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
+      bool diagnostic_relaxes_tuning_gate = MbShouldRelaxFirstWaveTruthDiagnosticTuningGate(g_profile.symbol,IsLocalPaperModeActive());
+      bool diagnostic_relaxes_cost_gate = MbShouldRelaxFirstWaveTruthDiagnosticCostGate(g_profile.symbol,IsLocalPaperModeActive());
       bool blocked_by_audusd_dirty_range_gate = false;
       bool blocked_by_audusd_breakout_cost_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_audusd_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
@@ -764,6 +790,13 @@ void OnTick()
         }
 
       paper_gate_abs = MbResolveFirstWaveTruthDiagnosticGateAbs(g_profile.symbol,signal.setup_type,IsLocalPaperModeActive(),paper_gate_abs);
+      if(diagnostic_relaxes_tuning_gate)
+         blocked_by_tuning_gate = false;
+      if(diagnostic_relaxes_cost_gate)
+        {
+         blocked_by_audusd_dirty_range_gate = false;
+         blocked_by_audusd_breakout_cost_gate = false;
+        }
 
       if(!blocked_by_tuning_gate &&
          !blocked_by_audusd_dirty_range_gate &&

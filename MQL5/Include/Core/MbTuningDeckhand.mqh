@@ -3,6 +3,7 @@
 
 #include "MbLearningContext.mqh"
 #include "MbTuningEpistemology.mqh"
+#include "MbFirstWaveTruthDiagnostic.mqh"
 
 bool MbTuningDeckhandShouldJournal(
    const MbTuningLocalPolicy &policy,
@@ -601,6 +602,10 @@ void MbRunTuningDeckhand(
          max_dirty_ratio
       );
    else
+      report.reason_code = "TRUSTED";
+
+   bool paper_mode_active = (market.paper_runtime_override_active || state.paper_mode_active);
+   if(MbShouldBypassFirstWaveTruthDiagnosticGuard(symbol,paper_mode_active,report.reason_code))
       report.reason_code = "TRUSTED";
 
    MbNormalizeReasonTriple(report.reason_code,report.normalized_reason);

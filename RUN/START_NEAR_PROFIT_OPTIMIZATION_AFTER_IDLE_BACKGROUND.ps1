@@ -175,6 +175,29 @@ function Get-DedicatedLabProcesses {
     )
 }
 
+function Get-DedicatedLabTrainingTerminalProcesses {
+    param([string]$TerminalRoot)
+
+    if ([string]::IsNullOrWhiteSpace($TerminalRoot) -or -not (Test-Path -LiteralPath $TerminalRoot)) {
+        return @()
+    }
+
+    $terminalRootFull = [System.IO.Path]::GetFullPath($TerminalRoot).TrimEnd('\')
+    $terminalExe = Join-Path $terminalRootFull "terminal64.exe"
+
+    return @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "terminal64.exe" -and
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                ([System.IO.Path]::GetFullPath($_.ExecutablePath).Equals($terminalExe, [System.StringComparison]::OrdinalIgnoreCase)) -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                $_.CommandLine -like "*/portable*" -and
+                $_.CommandLine -notlike "*/config:*"
+            }
+    )
+}
+
 function Stop-DedicatedLabProcesses {
     param([string]$TerminalRoot)
 
@@ -335,6 +358,32 @@ if ($existingWrappers.Count -gt 0) {
         risk_guard_log = $(if ($null -ne $nearProfitRiskGuard) { [string]$nearProfitRiskGuard.log_path } else { "" })
     }
     return
+}
+
+if ($UseDedicatedPortableLabLane) {
+    $activeTrainingTerminals = @(Get-DedicatedLabTrainingTerminalProcesses -TerminalRoot $DedicatedLabTerminalRoot)
+    if ($activeTrainingTerminals.Count -gt 0) {
+        & $statusScript `
+            -ProjectRoot $ProjectRoot `
+            -OpsEvidenceDir $OpsEvidenceDir `
+            -LogRoot $LogRoot `
+            -ProfitTrackingPath $ProfitTrackingPath `
+            -Mt5TesterStatusPath (Join-Path $OpsEvidenceDir "mt5_tester_status_latest.json") `
+            -BatchReportPath (Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\optimization_lab\near_profit_optimization_latest.json") `
+            -UseDedicatedPortableLabLane $UseDedicatedPortableLabLane `
+            -DedicatedLabTerminalRoot $DedicatedLabTerminalRoot `
+            -NearProfitCount $NearProfitCount `
+            -CurrentNote "portable_lab_reserved_for_training" | Out-Null
+
+        [pscustomobject]@{
+            started = $false
+            reason = "portable_lab_reserved_for_training"
+            active_training_terminal_count = $activeTrainingTerminals.Count
+            risk_guard_state = $(if ($null -ne $nearProfitRiskGuard) { [string]$nearProfitRiskGuard.reason } else { "" })
+            risk_guard_log = $(if ($null -ne $nearProfitRiskGuard) { [string]$nearProfitRiskGuard.log_path } else { "" })
+        }
+        return
+    }
 }
 
 $profitTracking = Get-Content -LiteralPath $ProfitTrackingPath -Raw -Encoding UTF8 | ConvertFrom-Json
