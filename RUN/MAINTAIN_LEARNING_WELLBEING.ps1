@@ -196,6 +196,44 @@ function Get-WrapperCount {
     ).Count
 }
 
+function Resolve-PythonExecutable {
+    param([string]$PreferredPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath) -and (Test-Path -LiteralPath $PreferredPath)) {
+        return $PreferredPath
+    }
+
+    $command = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    return $null
+}
+
+function Invoke-OptionalPythonHelper {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [string[]]$Arguments = @()
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath)) {
+        return
+    }
+
+    $pythonExe = Resolve-PythonExecutable -PreferredPath $researchPython
+    if ([string]::IsNullOrWhiteSpace($pythonExe)) {
+        return
+    }
+
+    try {
+        & $pythonExe $ScriptPath @Arguments | Out-Null
+    }
+    catch {
+        Write-Verbose ("Optional helper failed: {0} -> {1}" -f $ScriptPath, $_.Exception.Message)
+    }
+}
+
 $opsRoot = Join-Path $ProjectRoot "EVIDENCE\OPS"
 $logsRoot = Join-Path $CommonRoot "logs"
 $reportsRoot = Join-Path $ResearchRoot "reports"
@@ -257,6 +295,10 @@ $globalQdmRetrainPath = Join-Path $opsRoot "global_qdm_retrain_audit_latest.json
 $paperLiveActionGapAuditPath = Join-Path $opsRoot "paper_live_action_gap_audit_latest.json"
 $paperLossSourceAuditPath = Join-Path $opsRoot "paper_loss_source_audit_latest.json"
 $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_latest.json"
+$controlSnapshotScript = Join-Path $ProjectRoot "CONTROL\build_system_snapshot.py"
+$controlHealthScript = Join-Path $ProjectRoot "CONTROL\build_symbol_health_matrix.py"
+$controlActionPlanScript = Join-Path $ProjectRoot "CONTROL\build_action_plan.py"
+$controlWorkbenchScript = Join-Path $ProjectRoot "CONTROL\export_codex_workbench.py"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
@@ -1077,5 +1119,10 @@ if ($report.runtime_archive_prune.deleted.Count -gt 0) {
 }
 
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdPath -Encoding UTF8
+
+Invoke-OptionalPythonHelper -ScriptPath $controlSnapshotScript -Arguments @("--project-root", $ProjectRoot)
+Invoke-OptionalPythonHelper -ScriptPath $controlHealthScript -Arguments @("--project-root", $ProjectRoot)
+Invoke-OptionalPythonHelper -ScriptPath $controlActionPlanScript -Arguments @("--project-root", $ProjectRoot)
+Invoke-OptionalPythonHelper -ScriptPath $controlWorkbenchScript -Arguments @("--project-root", $ProjectRoot)
 
 $report | ConvertTo-Json -Depth 8

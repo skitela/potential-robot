@@ -476,6 +476,16 @@ def _launch_mt5(mt5_exe: Path, profile_name: str, terminal_data_dir: Path) -> Di
     }
 
 
+def _determine_mode(args: argparse.Namespace) -> str:
+    if args.verify_only and args.dry_run:
+        return "verify_only+dry_run"
+    if args.verify_only:
+        return "verify_only"
+    if args.dry_run:
+        return "dry_run"
+    return "apply"
+
+
 def main() -> int:
     here = Path(__file__).resolve().parent
     project_root = here.parent
@@ -488,6 +498,9 @@ def main() -> int:
     ap.add_argument("--preset-root", default=str(project_root / "MQL5" / "Presets"))
     ap.add_argument("--use-active-presets", action="store_true")
     ap.add_argument("--launch", action="store_true")
+    ap.add_argument("--verify-only", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--export-chart-manifest", default="")
     args = ap.parse_args()
 
     data_dir = Path(args.terminal_data_dir)
@@ -495,6 +508,9 @@ def main() -> int:
     mt5_exe = Path(args.mt5_exe)
     preset_root = Path(args.preset_root)
     active_preset_root = preset_root / "ActiveLive"
+    mode = _determine_mode(args)
+    mutate_profile = mode == "apply"
+    launch_requested = bool(args.launch) and mutate_profile
 
     items = json.loads(chart_plan_path.read_text(encoding="utf-8-sig"))
     template = _pick_source_chart(data_dir)
@@ -504,13 +520,14 @@ def main() -> int:
 
     charts_dir = data_dir / "MQL5" / "Profiles" / "Charts" / args.profile_name
     backup_dir = data_dir / "MQL5" / "Profiles" / "Charts" / f"{args.profile_name}_backup_{int(time.time())}"
-    if charts_dir.exists():
-        shutil.copytree(charts_dir, backup_dir)
-        shutil.rmtree(charts_dir)
-    charts_dir.mkdir(parents=True, exist_ok=True)
+    if mutate_profile:
+        if charts_dir.exists():
+            shutil.copytree(charts_dir, backup_dir)
+            shutil.rmtree(charts_dir)
+        charts_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.launch:
-        _close_mt5_processes()
+        if launch_requested:
+            _close_mt5_processes()
 
     id_seed = max(int(time.time_ns() % 9_000_000_000_000_000_000), 1)
     written: List[Dict[str, Any]] = []
@@ -565,7 +582,8 @@ def main() -> int:
             preserve_existing_structure=bool(expert_template),
         )
         out_path = charts_dir / f"chart{idx:02d}.chr"
-        _write_chart_text(out_path, chart_text)
+        if mutate_profile:
+            _write_chart_text(out_path, chart_text)
         chart_filenames.append(out_path.name)
         written.append(
             {
@@ -582,33 +600,71 @@ def main() -> int:
             }
         )
 
-    _write_order_file(charts_dir, chart_filenames)
-    _prime_terminal_profile(data_dir, args.profile_name)
+    if mutate_profile:
+        _write_order_file(charts_dir, chart_filenames)
+        _prime_terminal_profile(data_dir, args.profile_name)
 
     launch_report: Dict[str, Any] = {
-        "requested": False,
+        "requested": launch_requested,
         "launched": False,
-        "launch_note": "launch_not_requested",
+        "launch_note": (
+            "launch_not_requested"
+            if not args.launch
+            else ("launch_blocked_by_mode" if not mutate_profile else "launch_not_requested")
+        ),
         "before": _list_oanda_terminal_processes(include_vps=True),
         "after": _list_oanda_terminal_processes(include_vps=True),
     }
-    if args.launch:
+    if launch_requested:
         launch_report = _launch_mt5(mt5_exe, args.profile_name, data_dir)
+
+    evidence_dir = project_root / "EVIDENCE"
+    ops_evidence_dir = evidence_dir / "OPS"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    ops_evidence_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = (
+        Path(args.export_chart_manifest)
+        if args.export_chart_manifest
+        else ops_evidence_dir / "chart_profile_manifest_latest.json"
+    )
+    manifest = {
+        "ok": True,
+        "profile_name": args.profile_name,
+        "mode": mode,
+        "verify_only": bool(args.verify_only),
+        "dry_run": bool(args.dry_run),
+        "mutate_profile": mutate_profile,
+        "launch_requested": bool(args.launch),
+        "launch_effective": launch_requested,
+        "charts_dir": str(charts_dir),
+        "template": str(template),
+        "chart_plan": str(chart_plan_path),
+        "preset_root": str(preset_root),
+        "use_active_presets": bool(args.use_active_presets),
+        "charts": written,
+        "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     report = {
         "ok": True,
+        "mode": mode,
+        "verify_only": bool(args.verify_only),
+        "dry_run": bool(args.dry_run),
+        "mutate_profile": mutate_profile,
         "profile_name": args.profile_name,
         "charts_dir": str(charts_dir),
         "template": str(template),
+        "chart_plan": str(chart_plan_path),
         "preset_root": str(preset_root),
         "use_active_presets": bool(args.use_active_presets),
         "launched": bool(launch_report.get("launched", False)),
         "launch_report": launch_report,
+        "chart_manifest_path": str(manifest_path),
         "charts": written,
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    evidence_dir = project_root / "EVIDENCE"
-    evidence_dir.mkdir(parents=True, exist_ok=True)
     report_json = evidence_dir / "mt5_microbots_profile_setup_report.json"
     report_txt = evidence_dir / "mt5_microbots_profile_setup_report.txt"
     report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -616,10 +672,12 @@ def main() -> int:
         "\n".join(
             [
                 f"ok={report['ok']}",
+                f"mode={report['mode']}",
                 f"profile_name={report['profile_name']}",
                 f"charts_dir={report['charts_dir']}",
                 f"template={report['template']}",
                 f"launched={report['launched']}",
+                f"chart_manifest_path={report['chart_manifest_path']}",
             ]
             + [
                 f"{row['chart']} | {row['symbol_terminal']} | {row['expert']} | {row['preset']}"

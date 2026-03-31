@@ -154,6 +154,31 @@ bool MbMlRuntimeBridgePaperLiveEnabled(const MbMlRuntimeBridgeState &state)
    return state.contract.paper_live_enabled;
   }
 
+bool MbMlRuntimeBridgeContractPresent(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.present;
+  }
+
+bool MbMlRuntimeBridgeOutcomeReady(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.outcome_ready;
+  }
+
+bool MbMlRuntimeBridgeLocalModelAvailable(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.local_model_available;
+  }
+
+bool MbMlRuntimeBridgeGlobalModelAvailable(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.global_model_available;
+  }
+
+string MbMlRuntimeBridgeLocalTrainingMode(const MbMlRuntimeBridgeState &state)
+  {
+   return state.contract.local_training_mode;
+  }
+
 string MbMlRuntimeBridgeRuntimeScope(const MbMlRuntimeBridgeState &state)
   {
    return state.contract.runtime_scope;

@@ -23,10 +23,69 @@ $auditScript = Join-Path $projectPath "RUN\BUILD_GLOBAL_TEACHER_COHORT_ACTIVITY_
 $diagnosticScript = Join-Path $projectPath "RUN\SET_GLOBAL_TEACHER_COHORT_DIAGNOSTIC_MODE.ps1"
 $profileScript = Join-Path $projectPath "TOOLS\setup_mt5_microbots_profile.py"
 $guardScript = Join-Path $projectPath "TOOLS\mt5_risk_popup_guard.ps1"
+$controlSnapshotScript = Join-Path $projectPath "CONTROL\build_system_snapshot.py"
+$controlHealthScript = Join-Path $projectPath "CONTROL\build_symbol_health_matrix.py"
+$controlWorkbenchScript = Join-Path $projectPath "CONTROL\export_codex_workbench.py"
 $terminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
 $mt5Exe = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe"
+$preferredPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
 
 $stopped = New-Object System.Collections.Generic.List[object]
+
+function Resolve-PythonExecutable {
+    param([string]$PreferredPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath) -and (Test-Path -LiteralPath $PreferredPath)) {
+        return $PreferredPath
+    }
+
+    $command = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    return $null
+}
+
+function Invoke-OptionalPythonHelper {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [string[]]$Arguments = @()
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath)) {
+        return [pscustomobject]@{
+            script = $ScriptPath
+            executed = $false
+            status = "SCRIPT_MISSING"
+        }
+    }
+
+    $pythonExe = Resolve-PythonExecutable -PreferredPath $preferredPython
+    if ([string]::IsNullOrWhiteSpace($pythonExe)) {
+        return [pscustomobject]@{
+            script = $ScriptPath
+            executed = $false
+            status = "PYTHON_MISSING"
+        }
+    }
+
+    try {
+        & $pythonExe $ScriptPath @Arguments | Out-Null
+        return [pscustomobject]@{
+            script = $ScriptPath
+            executed = $true
+            status = "OK"
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            script = $ScriptPath
+            executed = $false
+            status = ("FAILED: " + $_.Exception.Message)
+        }
+    }
+}
 
 function Stop-ProcessRow {
     param(
@@ -111,6 +170,12 @@ if ($RefreshAudits) {
     $audit = & $auditScript -ProjectRoot $projectPath -Symbols $targetSymbols | ConvertFrom-Json
 }
 
+$controlHelpers = @(
+    Invoke-OptionalPythonHelper -ScriptPath $controlSnapshotScript -Arguments @("--project-root", $projectPath)
+    Invoke-OptionalPythonHelper -ScriptPath $controlHealthScript -Arguments @("--project-root", $projectPath)
+    Invoke-OptionalPythonHelper -ScriptPath $controlWorkbenchScript -Arguments @("--project-root", $projectPath)
+)
+
 [pscustomobject]@{
     schema_version = "1.0"
     generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -124,4 +189,5 @@ if ($RefreshAudits) {
     verdict = if ($null -ne $audit) { [string]$audit.verdict } else { $null }
     teacher_runtime_active_count = if ($null -ne $audit) { [int]$audit.summary.teacher_runtime_active_count } else { 0 }
     fresh_full_lesson_count = if ($null -ne $audit) { [int]$audit.summary.fresh_full_lesson_count } else { 0 }
+    control_helpers = $controlHelpers
 } | ConvertTo-Json -Depth 8

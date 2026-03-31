@@ -41,6 +41,10 @@
 #include "..\\..\\Include\\Core\\MbTuningHierarchyBridge.mqh"
 #include "..\\..\\Include\\Core\\MbOnnxPilotObservation.mqh"
 #include "..\\..\\Include\\Core\\MbMlRuntimeBridge.mqh"
+#include "..\\..\\Include\\Core\\MbRuntimeStatusSchema.mqh"
+#include "..\\..\\Include\\Core\\MbSupervisorSnapshot.mqh"
+#include "..\\..\\Include\\Core\\MbMicrobotHooks.mqh"
+#include "..\\..\\Include\\Core\\MbLearningOutcomeChain.mqh"
 #include "..\\..\\Include\\Profiles\\Profile_US500.mqh"
 #include "..\\..\\Include\\Strategies\\Strategy_US500.mqh"
 
@@ -84,6 +88,7 @@ string g_onnx_observation_log_path = "";
 string g_onnx_observation_state_path = "";
 MbMlRuntimeBridgeState g_ml_bridge;
 datetime g_last_decision_event_ts = 0;
+MbMicrobotHookState g_hook_state;
 
 bool ShouldRunUS500TimerDiagnosticScan(const datetime now)
   {
@@ -412,6 +417,9 @@ int OnInit()
    MbMlRuntimeBridgeFlushSnapshot(g_ml_bridge,g_profile,g_market,g_latency);
    if(g_kill_switch.halt)
       g_state.halt = true;
+   MbMicrobotHooksInit(g_hook_state,IsLocalPaperModeActive());
+   MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"BOOTSTRAP",(g_kill_switch.halt ? g_kill_switch.reason_code : "INIT_SUCCEEDED"));
+   MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
 
    EventSetTimer((int)MathMax(1,(int)InpTimerSec));
    return(INIT_SUCCEEDED);
@@ -448,6 +456,8 @@ void OnTimer()
    NormalizeUS500MarketPermissions();
    if(g_kill_switch.halt)
       g_state.halt = true;
+   MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"TIMER",(g_kill_switch.halt ? g_kill_switch.reason_code : "TIMER_OK"));
+   MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
    MbRuntimeOnTimer(g_state);
    if(ShouldRunUS500TimerDiagnosticScan(now))
      {
@@ -581,82 +591,45 @@ void OnTick()
       if(MbPaperMaybeClosePosition(g_market,g_paper_position,now,paper_pnl,paper_close_reason,closed_paper))
         {
          MbProcessSyntheticClosedDealFeedback(g_state,paper_pnl,now);
-         string close_request_comment = closed_paper.request_comment;
-         if(StringLen(close_request_comment) <= 0 && StringLen(closed_paper.candidate_id) > 0)
-            close_request_comment = MbPreTradeTruthBuildRequestComment(closed_paper.candidate_id);
-         string close_chain_reason = paper_close_reason;
-         if(StringLen(closed_paper.candidate_id) > 0)
-            close_chain_reason += "|CID=" + closed_paper.candidate_id;
-         bool truth_close_written = MbExecutionTruthWritePaperClose(
-            "MICROBOT_PAPER",
+         MbLearningOutcomeCloseResult close_result;
+         MbLearningOutcomeHandlePaperClose(
+            now,
             g_state.symbol,
             Symbol(),
-            closed_paper.candidate_id,
-            closed_paper.side,
-            closed_paper.lots,
-            closed_paper.last_mark_price,
-            closed_paper.last_mark_price,
-            g_market.bid,
-            g_market.ask,
-            now,
-            close_request_comment,
+            g_ml_bridge,
+            g_market,
+            closed_paper,
+            paper_pnl,
             paper_close_reason,
-            closed_paper.gross_pln,
-            closed_paper.commission_pln,
-            closed_paper.swap_pln,
-            (closed_paper.slippage_cost_pln + closed_paper.extra_fee_pln),
-            closed_paper.net_pln
+            close_result
          );
          AppendUS500DecisionEvent(
             now,
             "EXECUTION_TRUTH_CLOSE",
-            (truth_close_written ? "OK" : "FAIL"),
-            close_chain_reason,
+            (close_result.truth_close_written ? "OK" : "FAIL"),
+            close_result.chain_reason,
             g_market.spread_points,
             0.0,
             0.0,
             0,
             false
-         );
-         bool lesson_written = MbAppendLearningObservationV2(
-            g_state.symbol,
-            now,
-            closed_paper.setup_type,
-            closed_paper.market_regime,
-            closed_paper.spread_regime,
-            closed_paper.execution_regime,
-            closed_paper.confidence_bucket,
-            closed_paper.confidence_score,
-            closed_paper.candle_bias,
-            closed_paper.candle_quality_grade,
-            closed_paper.candle_score,
-            closed_paper.renko_bias,
-            closed_paper.renko_quality_grade,
-            closed_paper.renko_score,
-            closed_paper.renko_run_length,
-            closed_paper.renko_reversal_flag,
-            closed_paper.side,
-            paper_pnl,
-            paper_close_reason
          );
          AppendUS500DecisionEvent(
             now,
             "LESSON_WRITE",
-            (lesson_written ? "OK" : "FAIL"),
-            close_chain_reason,
+            (close_result.lesson_written ? "OK" : "FAIL"),
+            close_result.chain_reason,
             g_market.spread_points,
             0.0,
             0.0,
             0,
             false
          );
-         bool knowledge_bridge_enabled = g_ml_bridge.enabled;
-         bool knowledge_written = MbMlRuntimeBridgeAppendPaperLedger(g_ml_bridge,now,g_profile.symbol,closed_paper,g_market,paper_pnl,paper_close_reason);
          AppendUS500DecisionEvent(
             now,
             "KNOWLEDGE_WRITE",
-            (knowledge_bridge_enabled ? (knowledge_written ? "OK" : "FAIL") : "SKIP"),
-            (knowledge_bridge_enabled ? close_chain_reason : "ML_BRIDGE_DISABLED"),
+            (close_result.knowledge_bridge_enabled ? (close_result.knowledge_written ? "OK" : "FAIL") : "SKIP"),
+            (close_result.knowledge_bridge_enabled ? close_result.chain_reason : "ML_BRIDGE_DISABLED"),
             g_market.spread_points,
             0.0,
             0.0,
@@ -665,7 +638,9 @@ void OnTick()
          );
          AppendUS500DecisionEvent(now,"PAPER_CLOSE",(paper_pnl >= 0.0 ? "OK" : "LOSS"),paper_close_reason,g_market.spread_points,0.0,paper_pnl,0,false);
          MbSavePaperPosition(g_profile.symbol,g_paper_position);
-            MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"KNOWLEDGE_WRITE",(close_result.knowledge_bridge_enabled ? close_result.chain_reason : "ML_BRIDGE_DISABLED"));
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
+         MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
         }
      }
    ManageUS500OpenPosition(g_trade,g_state,g_profile,g_market);
@@ -835,6 +810,7 @@ void OnTick()
       g_market.spread_points,
       onnx_result
    );
+   MbMicrobotHooksRecordObservation(g_hook_state,IsLocalPaperModeActive(),onnx_result);
    AppendUS500CandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
       MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
@@ -861,6 +837,7 @@ void OnTick()
    MbNormalizeRiskContractBlockAfterSizing(signal,risk_plan.allowed,risk_plan.reason_code,risk_plan.lots);
    if(signal.valid)
       MbMlRuntimeBridgeApplyStudentGate(g_ml_bridge,now,g_profile,g_market,g_latency,g_state,signal,onnx_result,risk_plan.lots);
+   MbMicrobotHooksRecordGate(g_hook_state,IsLocalPaperModeActive(),signal.valid,signal.reason_code);
    if(signal.valid && !risk_plan.allowed)
      {
       AppendUS500CandidateEvent(now,"SIZE_BLOCK",false,risk_plan.reason_code,signal,0.0);
@@ -982,8 +959,6 @@ void OnTick()
         {
          if(IsLocalPaperModeActive())
            {
-            string pretrade_candidate_id = "";
-            string paper_request_comment = "";
             MbPreTradeTruthRecord pretrade_record;
             MbPreTradeTruthWritePaperOpen(
                "MICROBOT_PAPER",
@@ -997,77 +972,46 @@ void OnTick()
                entry_price,
                sl_price,
                tp_price,
-               pretrade_candidate_id,
+               pretrade_record.candidate_id,
                pretrade_record
             );
-            paper_request_comment = MbPreTradeTruthBuildRequestComment(pretrade_candidate_id);
             MbMarkOrderSend(g_state);
             MbLatencyProfileRecordExecution(g_latency,true,0,0.0);
-            bool paper_opened = MbPaperOpenPosition(
+            MbLearningOutcomeOpenResult paper_open_result;
+            bool paper_opened = MbLearningOutcomeHandlePaperOpen(
                g_paper_position,
-               signal.side,
+               g_state.symbol,
+               Symbol(),
+               signal,
                risk_plan.lots,
                entry_price,
                sl_price,
                tp_price,
-               g_market.spread_points,
+               exec_check,
+               g_market,
                now,
                ResolveUS500PaperHoldSeconds(signal),
-               signal.reason_code,
-               signal.setup_type,
-               signal.market_regime,
-               signal.spread_regime,
-               signal.execution_regime,
-               signal.confidence_bucket,
-               signal.confidence_score,
-               signal.risk_multiplier,
-               signal.candle_bias,
-               signal.candle_quality_grade,
-               signal.candle_score,
-               signal.renko_bias,
-               signal.renko_quality_grade,
-               signal.renko_score,
-               signal.renko_run_length,
-               signal.renko_reversal_flag,
-               exec_check.modeled_slippage_points,
-               exec_check.modeled_commission_points,
                InpEnableLiveEntries,
-               g_state.symbol
+               paper_open_result
             );
             if(paper_opened)
               {
-               MbPaperPositionSetTruthContext(g_paper_position,pretrade_candidate_id,paper_request_comment);
-               bool truth_open_written = MbExecutionTruthWritePaperOpen(
-                  "MICROBOT_PAPER",
-                  g_state.symbol,
-                  Symbol(),
-                  pretrade_candidate_id,
-                  signal.side,
-                  risk_plan.lots,
-                  entry_price,
-                  g_paper_position.entry_price,
-                  g_market.bid,
-                  g_market.ask,
-                  now,
-                  paper_request_comment
-               );
                AppendUS500DecisionEvent(
                   now,
                   "EXECUTION_TRUTH_OPEN",
-                  (truth_open_written ? "OK" : "FAIL"),
-                  (truth_open_written ? pretrade_candidate_id : "PAPER_OPEN_TRUTH_WRITE_FAIL"),
+                  (paper_open_result.truth_open_written ? "OK" : "FAIL"),
+                  (paper_open_result.truth_open_written ? paper_open_result.candidate_id : "PAPER_OPEN_TRUTH_WRITE_FAIL"),
                   g_market.spread_points,
                   signal.score,
                   risk_plan.lots,
                   0,
                   false
                );
-               bool paper_saved = MbSavePaperPosition(g_profile.symbol,g_paper_position);
                AppendUS500DecisionEvent(
                   now,
                   "PAPER_POSITION_SAVE",
-                  (paper_saved ? "OK" : "FAIL"),
-                  (paper_saved ? pretrade_candidate_id : "PAPER_POSITION_SAVE_FAIL"),
+                  (paper_open_result.paper_saved ? "OK" : "FAIL"),
+                  (paper_open_result.paper_saved ? paper_open_result.candidate_id : "PAPER_POSITION_SAVE_FAIL"),
                   g_market.spread_points,
                   signal.score,
                   risk_plan.lots,
@@ -1076,26 +1020,26 @@ void OnTick()
                );
                AppendUS500CandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
                AppendUS500DecisionEvent(now,"PAPER_OPEN","OK","PAPER_POSITION_OPENED",g_market.spread_points,signal.score,risk_plan.lots,0,false);
+               MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"PAPER_OPEN","PAPER_POSITION_OPENED");
+               MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
               }
             else
               {
-               string paper_open_reason = g_paper_position.entry_reason;
-               if(StringLen(paper_open_reason) <= 0)
-                  paper_open_reason = "PAPER_OPEN_REJECTED";
-               bool paper_saved = MbSavePaperPosition(g_profile.symbol,g_paper_position);
                AppendUS500DecisionEvent(
                   now,
                   "PAPER_POSITION_SAVE",
-                  (paper_saved ? "OK" : "FAIL"),
-                  (paper_saved ? paper_open_reason : "PAPER_POSITION_SAVE_FAIL"),
+                  (paper_open_result.paper_saved ? "OK" : "FAIL"),
+                  (paper_open_result.paper_saved ? paper_open_result.reason_code : "PAPER_POSITION_SAVE_FAIL"),
                   g_market.spread_points,
                   signal.score,
                   risk_plan.lots,
                   0,
                   false
                );
-               AppendUS500CandidateEvent(now,"PAPER_OPEN",false,paper_open_reason,signal,risk_plan.lots);
-               AppendUS500DecisionEvent(now,"PAPER_OPEN","SKIP",paper_open_reason,g_market.spread_points,signal.score,risk_plan.lots,0,false);
+               AppendUS500CandidateEvent(now,"PAPER_OPEN",false,paper_open_result.reason_code,signal,risk_plan.lots);
+               AppendUS500DecisionEvent(now,"PAPER_OPEN","SKIP",paper_open_result.reason_code,g_market.spread_points,signal.score,risk_plan.lots,0,false);
+               MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"PAPER_OPEN",paper_open_result.reason_code);
+               MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
               }
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
          }
@@ -1164,6 +1108,8 @@ void OnTick()
    MbLatencyProfileRecord(g_latency,local_latency_us,0);
    bool throttle_scan = (!signal.valid && (signal.reason_code == "WAIT_NEW_BAR" || signal.reason_code == "SCORE_BELOW_TRIGGER" || StringFind(signal.reason_code,"PAPER_IGNORE_") == 0));
    AppendUS500DecisionEvent(now,"SCAN",(signal.valid ? "READY" : "SKIP"),signal.reason_code,g_market.spread_points,signal.score,(signal.valid ? risk_plan.lots : 0.0),0,throttle_scan,60);
+   MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"SCAN",signal.reason_code);
+   MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
   }
 
 void OnTradeTransaction(
@@ -1190,25 +1136,25 @@ void OnTradeTransaction(
      {
       datetime now = TimeCurrent();
       double deal_lots = (trans.volume > 0.0 ? trans.volume : 0.0);
-      bool live_close_processed = MbProcessClosedDealFeedback(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state);
-      if(live_close_processed)
+      MbLearningOutcomeCloseResult live_close_result;
+      MbLearningOutcomeHandleLiveClose(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,truth_capture_written,live_close_result);
+      if(live_close_result.live_close_processed)
         {
          AppendUS500DecisionEvent(
             now,
             "EXECUTION_TRUTH_CLOSE",
-            (truth_capture_written ? "OK" : "FAIL"),
-            (truth_capture_written ? "LIVE_DEAL_CLOSE" : "LIVE_TRUTH_CAPTURE_FAIL"),
+            (live_close_result.truth_close_written ? "OK" : "FAIL"),
+            live_close_result.chain_reason,
             g_market.spread_points,
             0.0,
             deal_lots,
             0,
             false
          );
-         bool lesson_written = MbAppendHistoricalLearningObservation(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,"LIVE_DEAL_CLOSE");
          AppendUS500DecisionEvent(
             now,
             "LESSON_WRITE",
-            (lesson_written ? "OK" : "FAIL"),
+            (live_close_result.lesson_written ? "OK" : "FAIL"),
             "LIVE_DEAL_CLOSE",
             g_market.spread_points,
             0.0,
@@ -1217,20 +1163,23 @@ void OnTradeTransaction(
             false
          );
         }
-      bool knowledge_bridge_enabled = g_ml_bridge.enabled;
-      bool knowledge_written = false;
-      if(live_close_processed)
-         knowledge_written = MbMlRuntimeBridgeAppendLiveDealLedger(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal);
       AppendUS500DecisionEvent(
          now,
          "KNOWLEDGE_WRITE",
-         (!live_close_processed ? "SKIP" : (knowledge_bridge_enabled ? (knowledge_written ? "OK" : "FAIL") : "SKIP")),
-         (!live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")),
+         (!live_close_result.live_close_processed ? "SKIP" : (live_close_result.knowledge_bridge_enabled ? (live_close_result.knowledge_written ? "OK" : "FAIL") : "SKIP")),
+         (!live_close_result.live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (live_close_result.knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")),
          g_market.spread_points,
          0.0,
          deal_lots,
          0,
          false
       );
+      MbMicrobotHooksRecordStage(
+         g_hook_state,
+         IsLocalPaperModeActive(),
+         (live_close_result.live_close_processed ? "KNOWLEDGE_WRITE" : "LIVE_DEAL_CLOSE"),
+         (!live_close_result.live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (live_close_result.knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED"))
+      );
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
      }
   }
