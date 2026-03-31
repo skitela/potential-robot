@@ -4,6 +4,7 @@
 #include "MbStorage.mqh"
 #include "MbPaperTrading.mqh"
 #include "MbCapitalRiskContract.mqh"
+#include "MbGlobalTeacherLearningDiagnostic.mqh"
 
 struct MbCandidateArbitrationSnapshot
   {
@@ -679,6 +680,13 @@ void MbEvaluateCandidateArbitration(
 
    if((open_risk_money + own.planned_risk_money) > (max_open_risk_money + 0.01))
      {
+      if(MbShouldBypassGlobalTeacherLearningCandidateArbitration(symbol,paper_mode_active,"PORTFOLIO_HEAT_BLOCK",own.setup_type,own.score,own.execution_regime,own.spread_regime))
+        {
+         out.entry_allowed = true;
+         out.reason_code = "GLOBAL_TEACHER_IGNORE_PORTFOLIO_HEAT";
+         return;
+        }
+
       out.entry_allowed = false;
       out.reason_code = "PORTFOLIO_HEAT_BLOCK";
       return;

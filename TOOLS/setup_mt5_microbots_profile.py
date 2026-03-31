@@ -106,7 +106,8 @@ def _write_chart_text(path: Path, text: str) -> None:
 def _write_order_file(charts_dir: Path, chart_files: List[str]) -> None:
     order_path = charts_dir / "order.wnd"
     lines = [name for name in chart_files if name]
-    order_path.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
+    payload = codecs.BOM_UTF16_LE + ("\r\n".join(lines) + "\r\n").encode("utf-16le")
+    order_path.write_bytes(payload)
 
 
 def _description_for_symbol(symbol: str) -> str:
@@ -167,6 +168,19 @@ def _merge_input_lines(base_lines: List[str], override_lines: List[str]) -> List
     return merged
 
 
+def _ensure_default_input_lines(lines: List[str], defaults: Dict[str, str]) -> List[str]:
+    effective = list(lines)
+    present = set()
+    for line in effective:
+        if "=" not in line:
+            continue
+        present.add(line.split("=", 1)[0].strip())
+    for key, value in defaults.items():
+        if key not in present:
+            effective.append(f"{key}={value}")
+    return effective
+
+
 def _render_microbot_expert_block(expert: str, preset_lines: List[str]) -> str:
     lines = [
         "<expert>",
@@ -189,7 +203,13 @@ def _upsert_microbot_expert_block(chart_text: str, expert: str, preset_lines: Li
     return out.rstrip() + "\r\n\r\n" + block
 
 
-def _build_chart_text(template_text: str, item: Dict[str, Any], preset_lines: List[str], chart_id: str) -> str:
+def _build_chart_text(
+    template_text: str,
+    item: Dict[str, Any],
+    preset_lines: List[str],
+    chart_id: str,
+    preserve_existing_structure: bool = False,
+) -> str:
     symbol = _resolve_symbol(str(item.get("broker_symbol") or item["symbol"]))
     expert = str(item["expert"])
     out = _upsert_microbot_expert_block(template_text, expert, preset_lines)
@@ -200,11 +220,12 @@ def _build_chart_text(template_text: str, item: Dict[str, Any], preset_lines: Li
     out = _replace_line(out, "period_size", "5")
     out = _replace_line(out, "one_click", "0")
     out = _replace_line(out, "one_click_btn", "1")
-    for key, value in SAFE_WINDOW_FIELDS.items():
-        out = _replace_line(out, key, value)
-    out = re.sub(r"(?is)\s*<object>.*?</object>\s*", "\r\n", out)
-    out = re.sub(r"(?mi)^objects=\d+\s*$", "objects=0", out)
-    out = _normalize_window_block(out)
+    if not preserve_existing_structure:
+        for key, value in SAFE_WINDOW_FIELDS.items():
+            out = _replace_line(out, key, value)
+        out = re.sub(r"(?is)\s*<object>.*?</object>\s*", "\r\n", out)
+        out = re.sub(r"(?mi)^objects=\d+\s*$", "objects=0", out)
+        out = _normalize_window_block(out)
     return out
 
 
@@ -525,7 +546,24 @@ def main() -> int:
             if len(preset_lines) <= 4 and source_inputs
             else preset_lines
         )
-        chart_text = _build_chart_text(source_template_text, item, effective_preset_lines, str(id_seed + idx))
+        if not args.use_active_presets:
+            effective_preset_lines = _ensure_default_input_lines(
+                effective_preset_lines,
+                {
+                    "InpEnableLiveEntries": "false",
+                    "InpPaperCollectMode": "true",
+                    "InpEnableOnnxObservation": "true",
+                    "InpEnableMlRuntimeBridge": "true",
+                    "InpEnableStudentDecisionGate": "false",
+                },
+            )
+        chart_text = _build_chart_text(
+            source_template_text,
+            item,
+            effective_preset_lines,
+            str(id_seed + idx),
+            preserve_existing_structure=bool(expert_template),
+        )
         out_path = charts_dir / f"chart{idx:02d}.chr"
         _write_chart_text(out_path, chart_text)
         chart_filenames.append(out_path.name)

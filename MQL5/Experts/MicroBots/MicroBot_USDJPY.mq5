@@ -41,6 +41,7 @@
 #include "..\\..\\Include\\Core\\MbTuningHierarchyBridge.mqh"
 #include "..\\..\\Include\\Core\\MbOnnxPilotObservation.mqh"
 #include "..\\..\\Include\\Core\\MbMlRuntimeBridge.mqh"
+#include "..\\..\\Include\\Core\\MbGlobalTeacherLearningDiagnostic.mqh"
 #include "..\\..\\Include\\Profiles\\Profile_USDJPY.mqh"
 #include "..\\..\\Include\\Strategies\\Strategy_USDJPY.mqh"
 
@@ -614,6 +615,7 @@ void OnTick()
    MbSignalDecision signal;
    MbRefreshPaperTradeRights(g_state,IsLocalPaperModeActive());
    EvaluateUSDJPYStrategy(g_state,g_profile,g_market,signal);
+   bool global_teacher_diag_active = MbIsGlobalTeacherLearningDiagnosticActive(g_profile.symbol,IsLocalPaperModeActive());
    if(signal.setup_type != "NONE")
      {
       g_state.market_regime = signal.market_regime;
@@ -636,7 +638,7 @@ void OnTick()
    if(signal.setup_type != "NONE")
       AppendUSDJPYAuxDecisionEvent(now,signal,(signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL));
 
-   if(IsLocalPaperModeActive() && !signal.valid && signal.reason_code == "SCORE_BELOW_TRIGGER")
+   if(IsLocalPaperModeActive() && !signal.valid && MbShouldBypassGlobalTeacherLearningSoftReject(g_profile.symbol,IsLocalPaperModeActive(),signal.setup_type,signal.reason_code))
      {
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
@@ -714,11 +716,20 @@ void OnTick()
             paper_gate_abs = MathMax(paper_gate_abs,0.32);
         }
 
-      if(!blocked_by_tuning_gate && !blocked_by_usdjpy_breakout_chaos_gate && !blocked_by_usdjpy_range_chaos_gate && MathAbs(signal.score) >= paper_gate_abs)
+      paper_gate_abs = MbResolveGlobalTeacherLearningGateAbs(g_profile.symbol,signal.setup_type,IsLocalPaperModeActive(),paper_gate_abs);
+      if(MbShouldRelaxGlobalTeacherLearningTuningGate(g_profile.symbol,IsLocalPaperModeActive()))
+         blocked_by_tuning_gate = false;
+      if(MbShouldRelaxGlobalTeacherLearningCostGate(g_profile.symbol,IsLocalPaperModeActive()))
+        {
+         blocked_by_usdjpy_breakout_chaos_gate = false;
+         blocked_by_usdjpy_range_chaos_gate = false;
+        }
+
+      if(!blocked_by_tuning_gate && !blocked_by_usdjpy_breakout_chaos_gate && !blocked_by_usdjpy_range_chaos_gate && (global_teacher_diag_active || MathAbs(signal.score) >= paper_gate_abs))
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
-         signal.reason_code = "PAPER_SCORE_GATE";
+         signal.reason_code = (global_teacher_diag_active ? "GLOBAL_TEACHER_SCORE_GATE_DIAGNOSTIC" : "PAPER_SCORE_GATE");
         }
       else if(blocked_by_usdjpy_breakout_chaos_gate)
          signal.reason_code = "USDJPY_BREAKOUT_CHAOS_POOR_CANDLE_BLOCK";
@@ -1032,4 +1043,3 @@ void OnTradeTransaction(
       MbMlRuntimeBridgeAppendLiveDealLedger(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal);
      }
   }
-

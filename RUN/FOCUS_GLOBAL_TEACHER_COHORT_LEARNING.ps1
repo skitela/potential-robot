@@ -1,6 +1,8 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [int]$LaunchWaitSeconds = 45,
+    [string]$ProfileName = "MAKRO_I_MIKRO_BOT_AUTO",
+    [int]$DiagnosticDurationMinutes = 120,
     [switch]$StopNonTargetTesters = $true,
     [switch]$RefreshAudits = $true
 )
@@ -18,11 +20,11 @@ $exportPackageScript = Join-Path $projectPath "RUN\EXPORT_MT5_PAPER_GATE_PACKAGE
 $healthRegistryScript = Join-Path $projectPath "RUN\BUILD_LEARNING_HEALTH_REGISTRY.ps1"
 $trainingReadinessScript = Join-Path $projectPath "RUN\BUILD_INSTRUMENT_TRAINING_READINESS_REPORT.ps1"
 $auditScript = Join-Path $projectPath "RUN\BUILD_GLOBAL_TEACHER_COHORT_ACTIVITY_AUDIT.ps1"
+$diagnosticScript = Join-Path $projectPath "RUN\SET_GLOBAL_TEACHER_COHORT_DIAGNOSTIC_MODE.ps1"
 $profileScript = Join-Path $projectPath "TOOLS\setup_mt5_microbots_profile.py"
 $guardScript = Join-Path $projectPath "TOOLS\mt5_risk_popup_guard.ps1"
 $terminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
 $mt5Exe = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe"
-$profileName = "MAKRO_I_MIKRO_BOT_GLOBAL_TEACHER_AUTO"
 
 $stopped = New-Object System.Collections.Generic.List[object]
 
@@ -84,6 +86,7 @@ if ($StopNonTargetTesters) {
 & $healthRegistryScript -ProjectRoot $projectPath | Out-Null
 & $trainingReadinessScript -ProjectRoot $projectPath | Out-Null
 & $chartPlanScript -ProjectRoot $projectPath -Symbols $targetSymbols -OutputJsonPath $chartPlanJson -OutputTxtPath $chartPlanTxt | Out-Null
+$diagnosticResult = & $diagnosticScript -Mode Enable -ProjectRoot $projectPath -DurationMinutes $DiagnosticDurationMinutes | ConvertFrom-Json
 
 Start-Process powershell -ArgumentList @(
     "-NoProfile",
@@ -117,6 +120,7 @@ if ($RefreshAudits) {
     chart_plan_json = $chartPlanJson
     target_symbols = $targetSymbols
     stopped_processes = @($stopped.ToArray())
+    diagnostic_mode = $diagnosticResult
     verdict = if ($null -ne $audit) { [string]$audit.verdict } else { $null }
     teacher_runtime_active_count = if ($null -ne $audit) { [int]$audit.summary.teacher_runtime_active_count } else { 0 }
     fresh_full_lesson_count = if ($null -ne $audit) { [int]$audit.summary.fresh_full_lesson_count } else { 0 }
