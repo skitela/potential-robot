@@ -38,6 +38,33 @@ void MbMarkOrderSend(MbRuntimeState &state)
    state.order_requests_min++;
   }
 
+void MbRefreshRateGuardWindows(MbRuntimeState &state)
+  {
+   datetime now_ts = TimeCurrent();
+
+   if(state.price_budget_sec_anchor <= 0 || now_ts != state.price_budget_sec_anchor)
+     {
+      state.price_budget_sec_anchor = now_ts;
+      state.price_requests_sec = 0;
+     }
+   if(state.price_budget_min_anchor <= 0 || (now_ts - state.price_budget_min_anchor) >= 60)
+     {
+      state.price_budget_min_anchor = now_ts;
+      state.price_requests_min = 0;
+     }
+
+   if(state.order_budget_sec_anchor <= 0 || now_ts != state.order_budget_sec_anchor)
+     {
+      state.order_budget_sec_anchor = now_ts;
+      state.order_requests_sec = 0;
+     }
+   if(state.order_budget_min_anchor <= 0 || (now_ts - state.order_budget_min_anchor) >= 60)
+     {
+      state.order_budget_min_anchor = now_ts;
+      state.order_requests_min = 0;
+     }
+  }
+
 void MbRateGuardEvaluate(const MbSymbolProfile &profile,const MbRuntimeState &state,MbRateGuardState &out)
   {
    MbRateGuardStateReset(out);

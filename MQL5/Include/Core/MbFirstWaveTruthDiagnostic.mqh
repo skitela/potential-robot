@@ -260,6 +260,40 @@ bool MbShouldBypassFirstWaveTruthDiagnosticSoftReject(
    return false;
   }
 
+bool MbShouldBypassFirstWaveTruthDiagnosticRateGuard(
+   const string symbol,
+   const bool paper_mode_active,
+   const string reason_code
+)
+  {
+   if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return false;
+
+   if(reason_code == "BROKER_ORDER_RATE_LIMIT")
+      return true;
+   if(reason_code == "BROKER_PRICE_RATE_LIMIT")
+      return true;
+
+   return false;
+  }
+
+bool MbShouldBypassFirstWaveTruthDiagnosticExecutionPrecheck(
+   const string symbol,
+   const bool paper_mode_active,
+   const string reason_code
+)
+  {
+   if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return false;
+
+   if(reason_code == "NET_EDGE_TOO_SMALL_FOR_TIME_STOP")
+      return true;
+   if(reason_code == "NET_EDGE_TOO_SMALL")
+      return true;
+
+   return false;
+  }
+
 double MbResolveFirstWaveTruthDiagnosticGateAbs(
    const string symbol,
    const string setup_type,

@@ -12,7 +12,9 @@ bool MbShouldBypassExecutionPrecheckInPaper(const string reason_code)
       reason_code == "ORDER_CHECK_REJECT" ||
       reason_code == "ORDER_CALC_MARGIN_FAIL" ||
       reason_code == "MARGIN_REQUIRED_EXCEEDED" ||
-      reason_code == "QUOTE_TOLERANCE_EXCEEDED"
+      reason_code == "QUOTE_TOLERANCE_EXCEEDED" ||
+      reason_code == "NET_EDGE_TOO_SMALL_FOR_TIME_STOP" ||
+      reason_code == "NET_EDGE_TOO_SMALL"
    );
   }
 

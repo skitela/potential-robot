@@ -670,14 +670,23 @@ void OnTick()
      }
 
    ManageUSDCADOpenPosition(g_trade,g_state,g_profile,g_market);
-
+   MbRefreshRateGuardWindows(g_state);
    MbRateGuardState rate_guard;
    MbRateGuardEvaluate(g_profile,g_state,rate_guard);
    if(rate_guard.halt)
      {
-      g_state.halt = true;
-      MbIncidentNoteGuard(g_incident_log_path,g_state.symbol,"rate_guard",rate_guard.reason_code,"ERROR","broker_policy");
-      return;
+      if(MbShouldBypassFirstWaveTruthDiagnosticRateGuard(g_profile.symbol,IsLocalPaperModeActive(),rate_guard.reason_code))
+        {
+         g_state.halt = false;
+         g_state.caution_mode = true;
+         AppendUSDCADDecisionEvent(now,"RATE_GUARD","BYPASS",("PAPER_IGNORE_" + rate_guard.reason_code),g_market.spread_points,0.0,0.0,0,true,60);
+        }
+      else
+        {
+         g_state.halt = true;
+         MbIncidentNoteGuard(g_incident_log_path,g_state.symbol,"rate_guard",rate_guard.reason_code,"ERROR","broker_policy");
+         return;
+        }
      }
    if(rate_guard.caution_mode)
       g_state.caution_mode = true;
@@ -767,8 +776,19 @@ void OnTick()
    if(signal.setup_type != "NONE")
       AppendUSDCADAuxDecisionEvent(now,signal,(signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL));
 
-   if(IsLocalPaperModeActive() && !signal.valid &&
-      MbShouldBypassFirstWaveTruthDiagnosticSoftReject(g_profile.symbol,IsLocalPaperModeActive(),signal.setup_type,signal.reason_code))
+   string soft_diag_reason = signal.reason_code;
+   bool soft_diag_reject =
+      truth_diag_active &&
+      !signal.valid &&
+      (
+         soft_diag_reason == "SCORE_BELOW_TRIGGER" ||
+         soft_diag_reason == "LOW_CONFIDENCE" ||
+         soft_diag_reason == "CONTEXT_LOW_CONFIDENCE" ||
+         soft_diag_reason == "AUX_CONFLICT_BLOCK" ||
+         (StringFind(soft_diag_reason,"FOREFIELD_DIRTY_",0) == 0 && MbShouldBypassFirstWaveTruthDiagnosticGuard(g_profile.symbol,IsLocalPaperModeActive(),soft_diag_reason)) ||
+         (StringFind(soft_diag_reason,"PAPER_CONVERSION_BLOCKED_",0) == 0 && MbShouldBypassFirstWaveTruthDiagnosticGuard(g_profile.symbol,IsLocalPaperModeActive(),soft_diag_reason))
+      );
+   if(IsLocalPaperModeActive() && soft_diag_reject)
      {
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
@@ -818,9 +838,10 @@ void OnTick()
       if(diagnostic_relaxes_cost_gate)
          blocked_by_usdcad_breakout_chaos_cost_gate = false;
 
+      bool diagnostic_force_entry = MbIsFirstWaveTruthDiagnosticActive(g_profile.symbol,IsLocalPaperModeActive());
       if(!blocked_by_tuning_gate &&
          !blocked_by_usdcad_breakout_chaos_cost_gate &&
-         MathAbs(signal.score) >= paper_gate_abs)
+         (diagnostic_force_entry || MathAbs(signal.score) >= paper_gate_abs))
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
@@ -947,7 +968,10 @@ void OnTick()
 
       if(IsLocalPaperModeActive() && signal.valid && !exec_check.allowed)
         {
-         if(MbShouldBypassExecutionPrecheckInPaper(exec_check.reason))
+         if(
+            MbShouldBypassExecutionPrecheckInPaper(exec_check.reason) ||
+            MbShouldBypassFirstWaveTruthDiagnosticExecutionPrecheck(g_profile.symbol,IsLocalPaperModeActive(),exec_check.reason)
+         )
            {
             AppendUSDCADDecisionEvent(
                now,
