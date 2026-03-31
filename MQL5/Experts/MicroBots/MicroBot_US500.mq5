@@ -1031,7 +1031,8 @@ void OnTick()
                signal.renko_reversal_flag,
                exec_check.modeled_slippage_points,
                exec_check.modeled_commission_points,
-               InpEnableLiveEntries
+               InpEnableLiveEntries,
+               g_state.symbol
             );
             if(paper_opened)
               {

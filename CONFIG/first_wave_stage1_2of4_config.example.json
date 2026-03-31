@@ -1,0 +1,24 @@
+{
+  "runtime_profile": "BROKER_PARITY_FIRST_WAVE_STAGE1",
+  "target_symbols": [
+    "US500",
+    "EURJPY"
+  ],
+  "apply_runtime_profile_before_preflight": true,
+  "validate_session_capital_after_runtime_apply": true,
+  "migration": {
+    "enabled": true,
+    "apply_safe_repair_after_migration": true,
+    "vps_sync_timeout_sec": 240,
+    "post_startup_audit_delay_sec": 180,
+    "post_startup_continuity_samples": 3,
+    "post_startup_interval_sec": 20
+  },
+  "success_contract": {
+    "require_truth_hooks_ready_count": 2,
+    "require_local_model_ready_count": 2,
+    "require_broker_mirror_ready_count": 2,
+    "require_runtime_profile_match": true,
+    "require_capital_isolation_ready": true
+  }
+}

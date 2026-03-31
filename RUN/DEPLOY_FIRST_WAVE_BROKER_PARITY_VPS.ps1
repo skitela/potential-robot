@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$ConfigPath = "C:\MAKRO_I_MIKRO_BOT\CONFIG\first_wave_final_deployment_v1.json",
+    [string[]]$TargetSymbols = @("US500","EURJPY"),
     [switch]$SkipMigration
 )
 
@@ -86,6 +87,25 @@ $postStartupAuditDelaySec = [int](Get-OptionalValue -Object $migrationConfig -Na
 $postStartupContinuitySamples = [int](Get-OptionalValue -Object $migrationConfig -Name "post_startup_continuity_samples" -Default 3)
 $postStartupIntervalSec = [int](Get-OptionalValue -Object $migrationConfig -Name "post_startup_interval_sec" -Default 20)
 
+$targetSymbolsRaw = Get-OptionalValue -Object $config -Name "target_symbols" -Default @()
+$targetSymbols = @(
+    $TargetSymbols |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { $_.Trim().ToUpperInvariant() }
+)
+if ($targetSymbols.Count -eq 0 -and $null -ne $targetSymbolsRaw) {
+    foreach ($item in @($targetSymbolsRaw)) {
+        $symbol = ([string]$item).Trim().ToUpperInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($symbol)) {
+            $targetSymbols += $symbol
+        }
+    }
+}
+if ($targetSymbols.Count -eq 0) {
+    $targetSymbols = @("US500","EURJPY")
+}
+$targetSymbolCount = $targetSymbols.Count
+
 if ($applyRuntimeProfile) {
     $steps.Add((Invoke-Step -Label "apply_runtime_profile" -Action {
         & (Join-Path $projectRootResolved "RUN\APPLY_FIRST_WAVE_BROKER_PARITY_RUNTIME.ps1") -ProjectRoot $projectRootResolved
@@ -123,6 +143,9 @@ $wellbeing = Read-JsonSafe -Path (Join-Path $opsRoot "learning_wellbeing_latest.
 $fullStack = Read-JsonSafe -Path (Join-Path $opsRoot "full_stack_audit_latest.json")
 
 $preflight = [ordered]@{
+    rollout_mode = if ($targetSymbolCount -lt 4) { "PAIR_CANARY" } else { "FULL_WAVE" }
+    target_symbols = @($targetSymbols)
+    target_symbol_count = $targetSymbolCount
     runtime_profile_target = $runtimeProfile
     parity_verdict = [string](Get-OptionalValue -Object $parityAudit -Name "verdict" -Default "")
     runtime_activity_verdict = [string](Get-OptionalValue -Object $runtimeAudit -Name "verdict" -Default "")
@@ -138,9 +161,9 @@ $preflight = [ordered]@{
     historical_lesson_chain_count = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $closureAudit -Name "summary" -Default $null) -Name "historical_chain_ready_count" -Default 0)
 }
 
-$requiredTruthHooks = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_truth_hooks_ready_count" -Default 4)
-$requiredLocalModels = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_local_model_ready_count" -Default 4)
-$requiredBrokerMirrors = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_broker_mirror_ready_count" -Default 4)
+$requiredTruthHooks = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_truth_hooks_ready_count" -Default $targetSymbolCount)
+$requiredLocalModels = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_local_model_ready_count" -Default $targetSymbolCount)
+$requiredBrokerMirrors = [int](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_broker_mirror_ready_count" -Default $targetSymbolCount)
 $requireRuntimeProfileMatch = [bool](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_runtime_profile_match" -Default $true)
 $requireCapitalIsolationReady = [bool](Get-OptionalValue -Object (Get-OptionalValue -Object $config -Name "success_contract" -Default $null) -Name "require_capital_isolation_ready" -Default $true)
 
@@ -221,7 +244,10 @@ $lines.Add(("- wygenerowano: {0}" -f $report.generated_at_local))
 $lines.Add(("- verdict: {0}" -f $report.verdict))
 $lines.Add(("- preflight_ok: {0}" -f ([string]$report.preflight.ok).ToLowerInvariant()))
 $lines.Add(("- skip_migration: {0}" -f ([string]$report.skip_migration).ToLowerInvariant()))
+$lines.Add(("- rollout_mode: {0}" -f $report.preflight.summary.rollout_mode))
 $lines.Add(("- runtime_profile_target: {0}" -f $report.preflight.summary.runtime_profile_target))
+$lines.Add(("- target_symbol_count: {0}" -f $report.preflight.summary.target_symbol_count))
+$lines.Add(("- target_symbols: {0}" -f ((@($report.preflight.summary.target_symbols)) -join ", ")))
 $lines.Add(("- runtime_profile_match: {0}" -f ([string]$report.preflight.summary.runtime_profile_match).ToLowerInvariant()))
 $lines.Add(("- parity_verdict: {0}" -f $report.preflight.summary.parity_verdict))
 $lines.Add(("- runtime_activity_verdict: {0}" -f $report.preflight.summary.runtime_activity_verdict))

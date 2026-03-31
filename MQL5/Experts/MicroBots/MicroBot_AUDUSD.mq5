@@ -765,6 +765,8 @@ void OnTick()
    MbRefreshPaperTradeRights(g_state,IsLocalPaperModeActive());
    EvaluateAUDUSDStrategy(g_state,g_profile,g_market,signal);
    bool truth_diag_active = MbIsFirstWaveTruthDiagnosticActive(g_profile.symbol,IsLocalPaperModeActive());
+   bool broker_parity_rescue = MbShouldForceFirstWaveBrokerParityRescue(g_profile.symbol,IsLocalPaperModeActive());
+   bool diagnostic_gate_active = (truth_diag_active || broker_parity_rescue);
    if(signal.setup_type != "NONE")
      {
       g_state.market_regime = signal.market_regime;
@@ -783,7 +785,7 @@ void OnTick()
       g_state.renko_run_length = signal.renko_run_length;
       g_state.renko_reversal_flag = signal.renko_reversal_flag;
      }
-   else if(truth_diag_active)
+   else if(diagnostic_gate_active)
      {
       string no_setup_reason = (StringLen(signal.reason_code) > 0 ? signal.reason_code : "NONE");
       AppendAUDUSDDecisionEvent(now,"DIAGNOSTIC","SKIP",("NO_SETUP_" + no_setup_reason),g_market.spread_points,signal.score,0.0,0,true,60);
@@ -794,7 +796,7 @@ void OnTick()
 
    string soft_diag_reason = signal.reason_code;
    bool soft_diag_reject =
-      truth_diag_active &&
+      diagnostic_gate_active &&
       !signal.valid &&
       (
          soft_diag_reason == "SCORE_BELOW_TRIGGER" ||
@@ -810,8 +812,8 @@ void OnTick()
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
       bool poor_renko = (signal.renko_quality_grade == "POOR" || signal.renko_quality_grade == "UNKNOWN");
       bool blocked_by_tuning_gate = false;
-      bool diagnostic_relaxes_tuning_gate = MbShouldRelaxFirstWaveTruthDiagnosticTuningGate(g_profile.symbol,IsLocalPaperModeActive());
-      bool diagnostic_relaxes_cost_gate = MbShouldRelaxFirstWaveTruthDiagnosticCostGate(g_profile.symbol,IsLocalPaperModeActive());
+      bool diagnostic_relaxes_tuning_gate = (broker_parity_rescue || MbShouldRelaxFirstWaveTruthDiagnosticTuningGate(g_profile.symbol,IsLocalPaperModeActive()));
+      bool diagnostic_relaxes_cost_gate = (broker_parity_rescue || MbShouldRelaxFirstWaveTruthDiagnosticCostGate(g_profile.symbol,IsLocalPaperModeActive()));
       bool blocked_by_audusd_dirty_range_gate = false;
       bool blocked_by_audusd_breakout_cost_gate = false;
       if(signal.setup_type == "SETUP_TREND" && g_audusd_effective_tuning_policy.require_non_poor_candle_for_trend && poor_candle)
@@ -884,7 +886,7 @@ void OnTick()
          blocked_by_audusd_breakout_cost_gate = false;
         }
 
-      bool diagnostic_force_entry = MbIsFirstWaveTruthDiagnosticActive(g_profile.symbol,IsLocalPaperModeActive());
+      bool diagnostic_force_entry = diagnostic_gate_active;
       if(!blocked_by_tuning_gate &&
          !blocked_by_audusd_dirty_range_gate &&
          !blocked_by_audusd_breakout_cost_gate &&
@@ -1128,7 +1130,8 @@ void OnTick()
                signal.renko_reversal_flag,
                exec_check.modeled_slippage_points,
                exec_check.modeled_commission_points,
-               InpEnableLiveEntries
+               InpEnableLiveEntries,
+               g_state.symbol
             );
             if(paper_opened)
               {

@@ -6,15 +6,15 @@
 datetime g_mb_first_wave_truth_diag_last_reload_local = 0;
 bool g_mb_first_wave_truth_diag_loaded = false;
 bool g_mb_first_wave_truth_diag_enabled = false;
-int g_mb_first_wave_truth_diag_max_age_sec = 1800;
+int g_mb_first_wave_truth_diag_max_age_sec = 43200;
 bool g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
-bool g_mb_first_wave_truth_diag_allow_central_state_stale = false;
-bool g_mb_first_wave_truth_diag_allow_low_conversion_ratio = false;
-bool g_mb_first_wave_truth_diag_allow_forefield_dirty = false;
-bool g_mb_first_wave_truth_diag_allow_bootstrap_low_sample = false;
-bool g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets = false;
-bool g_mb_first_wave_truth_diag_relax_symbol_cost_gates = false;
-int g_mb_first_wave_truth_diag_force_scan_interval_sec = 0;
+bool g_mb_first_wave_truth_diag_allow_central_state_stale = true;
+bool g_mb_first_wave_truth_diag_allow_low_conversion_ratio = true;
+bool g_mb_first_wave_truth_diag_allow_forefield_dirty = true;
+bool g_mb_first_wave_truth_diag_allow_bootstrap_low_sample = true;
+bool g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets = true;
+bool g_mb_first_wave_truth_diag_relax_symbol_cost_gates = true;
+int g_mb_first_wave_truth_diag_force_scan_interval_sec = 90;
 double g_mb_first_wave_truth_diag_breakout_gate_abs = 0.28;
 double g_mb_first_wave_truth_diag_trend_gate_abs = 0.24;
 double g_mb_first_wave_truth_diag_range_gate_abs = 0.16;
@@ -41,15 +41,15 @@ bool MbIsFirstWaveTruthDiagnosticSymbol(const string symbol)
 void MbResetFirstWaveTruthDiagnosticState()
   {
    g_mb_first_wave_truth_diag_enabled = false;
-   g_mb_first_wave_truth_diag_max_age_sec = 1800;
+   g_mb_first_wave_truth_diag_max_age_sec = 43200;
    g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
-   g_mb_first_wave_truth_diag_allow_central_state_stale = false;
-   g_mb_first_wave_truth_diag_allow_low_conversion_ratio = false;
-   g_mb_first_wave_truth_diag_allow_forefield_dirty = false;
-   g_mb_first_wave_truth_diag_allow_bootstrap_low_sample = false;
-   g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets = false;
-   g_mb_first_wave_truth_diag_relax_symbol_cost_gates = false;
-   g_mb_first_wave_truth_diag_force_scan_interval_sec = 0;
+   g_mb_first_wave_truth_diag_allow_central_state_stale = true;
+   g_mb_first_wave_truth_diag_allow_low_conversion_ratio = true;
+   g_mb_first_wave_truth_diag_allow_forefield_dirty = true;
+   g_mb_first_wave_truth_diag_allow_bootstrap_low_sample = true;
+   g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets = true;
+   g_mb_first_wave_truth_diag_relax_symbol_cost_gates = true;
+   g_mb_first_wave_truth_diag_force_scan_interval_sec = 90;
    g_mb_first_wave_truth_diag_breakout_gate_abs = 0.28;
    g_mb_first_wave_truth_diag_trend_gate_abs = 0.24;
    g_mb_first_wave_truth_diag_range_gate_abs = 0.16;
@@ -194,6 +194,17 @@ bool MbShouldRelaxFirstWaveTruthDiagnosticCostGate(const string symbol,const boo
    if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
       return false;
    return g_mb_first_wave_truth_diag_relax_symbol_cost_gates;
+  }
+
+bool MbShouldForceFirstWaveBrokerParityRescue(const string symbol,const bool paper_mode_active)
+  {
+   if(!paper_mode_active)
+      return false;
+   if(MbIsStrategyTesterRuntime())
+      return false;
+
+   string canonical = MbCanonicalSymbol(symbol);
+   return (canonical == "AUDUSD" || canonical == "USDCAD");
   }
 
 int MbResolveFirstWaveTruthDiagnosticForceScanIntervalSec(const string symbol,const bool paper_mode_active)

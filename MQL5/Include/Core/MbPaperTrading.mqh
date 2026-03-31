@@ -302,14 +302,18 @@ bool MbPaperOpenPosition(
    const bool renko_reversal_flag,
    const double modeled_slippage_points,
    const double modeled_commission_points,
-   const bool enforce_paper_live_scope = false
+   const bool enforce_paper_live_scope = false,
+   const string contract_symbol = ""
 )
   {
    if(enforce_paper_live_scope)
      {
       string paper_live_bucket = "";
       string runtime_scope = "";
-      if(!MbPaperLiveUniverseAllowsSymbol(Symbol(),paper_live_bucket,runtime_scope))
+      string scope_symbol = contract_symbol;
+      if(StringLen(scope_symbol) <= 0)
+         scope_symbol = Symbol();
+      if(!MbPaperLiveUniverseAllowsSymbol(scope_symbol,paper_live_bucket,runtime_scope))
         {
          MbPaperPositionReset(state);
          state.entry_reason = "PAPER_LIVE_SYMBOL_DISABLED";
