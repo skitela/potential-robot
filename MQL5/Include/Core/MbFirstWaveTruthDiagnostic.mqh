@@ -11,12 +11,16 @@ bool g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
 bool g_mb_first_wave_truth_diag_allow_central_state_stale = false;
 bool g_mb_first_wave_truth_diag_allow_low_conversion_ratio = false;
 bool g_mb_first_wave_truth_diag_allow_forefield_dirty = false;
+bool g_mb_first_wave_truth_diag_allow_bootstrap_low_sample = false;
+bool g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets = false;
 bool g_mb_first_wave_truth_diag_relax_symbol_cost_gates = false;
 int g_mb_first_wave_truth_diag_force_scan_interval_sec = 0;
 double g_mb_first_wave_truth_diag_breakout_gate_abs = 0.28;
 double g_mb_first_wave_truth_diag_trend_gate_abs = 0.24;
 double g_mb_first_wave_truth_diag_range_gate_abs = 0.16;
 double g_mb_first_wave_truth_diag_rejection_gate_abs = 0.16;
+bool g_mb_first_wave_truth_diag_timer_scan_active = false;
+string g_mb_first_wave_truth_diag_timer_scan_symbol = "";
 
 string MbFirstWaveTruthDiagnosticPath()
   {
@@ -42,12 +46,16 @@ void MbResetFirstWaveTruthDiagnosticState()
    g_mb_first_wave_truth_diag_allow_central_state_stale = false;
    g_mb_first_wave_truth_diag_allow_low_conversion_ratio = false;
    g_mb_first_wave_truth_diag_allow_forefield_dirty = false;
+   g_mb_first_wave_truth_diag_allow_bootstrap_low_sample = false;
+   g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets = false;
    g_mb_first_wave_truth_diag_relax_symbol_cost_gates = false;
    g_mb_first_wave_truth_diag_force_scan_interval_sec = 0;
    g_mb_first_wave_truth_diag_breakout_gate_abs = 0.28;
    g_mb_first_wave_truth_diag_trend_gate_abs = 0.24;
    g_mb_first_wave_truth_diag_range_gate_abs = 0.16;
    g_mb_first_wave_truth_diag_rejection_gate_abs = 0.16;
+   g_mb_first_wave_truth_diag_timer_scan_active = false;
+   g_mb_first_wave_truth_diag_timer_scan_symbol = "";
   }
 
 bool MbFirstWaveTruthDiagnosticParseBool(const string value,const bool fallback)
@@ -120,6 +128,10 @@ void MbLoadFirstWaveTruthDiagnostic(const bool force_reload = false)
          g_mb_first_wave_truth_diag_allow_low_conversion_ratio = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_low_conversion_ratio);
       else if(key == "allow_forefield_dirty")
          g_mb_first_wave_truth_diag_allow_forefield_dirty = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_forefield_dirty);
+      else if(key == "allow_bootstrap_low_sample")
+         g_mb_first_wave_truth_diag_allow_bootstrap_low_sample = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_bootstrap_low_sample);
+      else if(key == "allow_bootstrap_empty_buckets")
+         g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets);
       else if(key == "relax_symbol_cost_gates")
          g_mb_first_wave_truth_diag_relax_symbol_cost_gates = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_relax_symbol_cost_gates);
       else if(key == "force_scan_interval_sec")
@@ -160,6 +172,10 @@ bool MbShouldBypassFirstWaveTruthDiagnosticGuard(const string symbol,const bool 
       return true;
    if(reason_code == "CENTRAL_STATE_STALE" && g_mb_first_wave_truth_diag_allow_central_state_stale)
       return true;
+   if(reason_code == "LOW_SAMPLE" && g_mb_first_wave_truth_diag_allow_bootstrap_low_sample)
+      return true;
+   if(reason_code == "BUCKETS_EMPTY" && g_mb_first_wave_truth_diag_allow_bootstrap_empty_buckets)
+      return true;
    if(StringFind(reason_code,"PAPER_CONVERSION_BLOCKED_",0) == 0 && g_mb_first_wave_truth_diag_allow_low_conversion_ratio)
       return true;
    if(StringFind(reason_code,"FOREFIELD_DIRTY_",0) == 0 && g_mb_first_wave_truth_diag_allow_forefield_dirty)
@@ -185,6 +201,63 @@ int MbResolveFirstWaveTruthDiagnosticForceScanIntervalSec(const string symbol,co
    if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
       return 0;
    return g_mb_first_wave_truth_diag_force_scan_interval_sec;
+  }
+
+void MbBeginFirstWaveTruthDiagnosticTimerScan(const string symbol,const bool paper_mode_active)
+  {
+   g_mb_first_wave_truth_diag_timer_scan_active = false;
+   g_mb_first_wave_truth_diag_timer_scan_symbol = "";
+
+   if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return;
+   if(g_mb_first_wave_truth_diag_force_scan_interval_sec <= 0)
+      return;
+
+   g_mb_first_wave_truth_diag_timer_scan_active = true;
+   g_mb_first_wave_truth_diag_timer_scan_symbol = MbCanonicalSymbol(symbol);
+  }
+
+void MbEndFirstWaveTruthDiagnosticTimerScan()
+  {
+   g_mb_first_wave_truth_diag_timer_scan_active = false;
+   g_mb_first_wave_truth_diag_timer_scan_symbol = "";
+  }
+
+bool MbShouldBypassFirstWaveTruthDiagnosticNewBar(const string symbol,const bool paper_mode_active)
+  {
+   if(!g_mb_first_wave_truth_diag_timer_scan_active)
+      return false;
+   if(MbCanonicalSymbol(symbol) != g_mb_first_wave_truth_diag_timer_scan_symbol)
+      return false;
+   if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return false;
+   return (g_mb_first_wave_truth_diag_force_scan_interval_sec > 0);
+  }
+
+bool MbShouldBypassFirstWaveTruthDiagnosticSoftReject(
+   const string symbol,
+   const bool paper_mode_active,
+   const string setup_type,
+   const string reason_code
+)
+  {
+   if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return false;
+   if(setup_type == "NONE" || StringLen(setup_type) <= 0)
+      return false;
+
+   if(reason_code == "SCORE_BELOW_TRIGGER")
+      return true;
+   if(reason_code == "LOW_CONFIDENCE" || reason_code == "CONTEXT_LOW_CONFIDENCE")
+      return true;
+   if(reason_code == "AUX_CONFLICT_BLOCK")
+      return true;
+   if(StringFind(reason_code,"FOREFIELD_DIRTY_",0) == 0 && g_mb_first_wave_truth_diag_allow_forefield_dirty)
+      return true;
+   if(StringFind(reason_code,"PAPER_CONVERSION_BLOCKED_",0) == 0 && g_mb_first_wave_truth_diag_allow_low_conversion_ratio)
+      return true;
+
+   return false;
   }
 
 double MbResolveFirstWaveTruthDiagnosticGateAbs(

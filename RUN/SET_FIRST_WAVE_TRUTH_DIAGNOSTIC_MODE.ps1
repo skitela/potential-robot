@@ -65,6 +65,8 @@ if ($Mode -eq "Enable") {
         "allow_central_state_stale,1"
         "allow_low_conversion_ratio,1"
         "allow_forefield_dirty,1"
+        "allow_bootstrap_low_sample,1"
+        "allow_bootstrap_empty_buckets,1"
         "relax_symbol_cost_gates,1"
         "force_scan_interval_sec,90"
         "breakout_gate_abs,0.14"

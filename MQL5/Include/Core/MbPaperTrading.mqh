@@ -17,6 +17,8 @@ struct MbPaperPositionState
    datetime opened_at;
    datetime expires_at;
    string entry_reason;
+  string candidate_id;
+  string request_comment;
    string setup_type;
    string market_regime;
    string spread_regime;
@@ -56,6 +58,8 @@ void MbPaperPositionReset(MbPaperPositionState &state)
    state.opened_at = 0;
    state.expires_at = 0;
    state.entry_reason = "";
+  state.candidate_id = "";
+  state.request_comment = "";
    state.setup_type = "NONE";
    state.market_regime = "UNKNOWN";
    state.spread_regime = "UNKNOWN";
@@ -98,6 +102,8 @@ bool MbSavePaperPosition(const string symbol,const MbPaperPositionState &state)
    FileWrite(h,"opened_at",(long)state.opened_at);
    FileWrite(h,"expires_at",(long)state.expires_at);
    FileWrite(h,"entry_reason",state.entry_reason);
+  FileWrite(h,"candidate_id",state.candidate_id);
+  FileWrite(h,"request_comment",state.request_comment);
    FileWrite(h,"setup_type",state.setup_type);
    FileWrite(h,"market_regime",state.market_regime);
    FileWrite(h,"spread_regime",state.spread_regime);
@@ -147,6 +153,8 @@ bool MbLoadPaperPosition(const string symbol,MbPaperPositionState &state)
       else if(key == "opened_at") state.opened_at = (datetime)StringToInteger(value);
       else if(key == "expires_at") state.expires_at = (datetime)StringToInteger(value);
       else if(key == "entry_reason") state.entry_reason = value;
+      else if(key == "candidate_id") state.candidate_id = value;
+      else if(key == "request_comment") state.request_comment = value;
       else if(key == "setup_type") state.setup_type = value;
       else if(key == "market_regime") state.market_regime = value;
       else if(key == "spread_regime") state.spread_regime = value;
@@ -174,6 +182,16 @@ bool MbLoadPaperPosition(const string symbol,MbPaperPositionState &state)
      }
    FileClose(h);
    return true;
+  }
+
+void MbPaperPositionSetTruthContext(
+  MbPaperPositionState &state,
+  const string candidate_id,
+  const string request_comment
+)
+  {
+  state.candidate_id = candidate_id;
+  state.request_comment = request_comment;
   }
 
 double MbPaperPointsToMoney(

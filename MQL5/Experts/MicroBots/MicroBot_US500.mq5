@@ -225,9 +225,6 @@ void AppendUS500CandidateEvent(
    const double lots
 )
   {
-   if(signal.setup_type == "NONE")
-      return;
-
    MbAppendCandidateSignal(
       g_candidate_log_path,
       ts,
@@ -321,7 +318,7 @@ int ResolveUS500PaperHoldSeconds(const MbSignalDecision &signal)
 
    if(signal.setup_type == "SETUP_BREAKOUT")
      {
-      if(signal.reason_code == "PAPER_SCORE_GATE" || signal.confidence_bucket == "LOW")
+      if(StringFind(signal.reason_code,"PAPER_SCORE_GATE",0) == 0 || signal.confidence_bucket == "LOW")
          hold_seconds = 180;
       else if(signal.market_regime == "CHAOS" || signal.market_regime == "RANGE")
          hold_seconds = 210;
@@ -704,7 +701,7 @@ void OnTick()
      }
    if(signal.setup_type != "NONE")
       AppendUS500AuxDecisionEvent(now,signal,(signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL));
-   if(IsLocalPaperModeActive() && !signal.valid && signal.reason_code == "SCORE_BELOW_TRIGGER")
+   if(IsLocalPaperModeActive() && !signal.valid && MbShouldBypassFirstWaveTruthDiagnosticSoftReject(g_profile.symbol,IsLocalPaperModeActive(),signal.setup_type,signal.reason_code))
      {
       double paper_gate_abs = 0.20;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
@@ -740,7 +737,7 @@ void OnTick()
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
-         signal.reason_code = "PAPER_SCORE_GATE";
+         signal.reason_code = "PAPER_SCORE_GATE_DIAGNOSTIC";
         }
      }
    MbOnnxObservationResult onnx_result;

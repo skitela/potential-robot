@@ -4,6 +4,7 @@
 #include <Trade/Trade.mqh>
 #include "..\\..\\Core\\MbRuntimeTypes.mqh"
 #include "..\\..\\Core\\MbCapitalRiskContract.mqh"
+#include "..\\..\\Core\\MbFirstWaveTruthDiagnostic.mqh"
 #include "..\\..\\Core\\MbLearningPolicy.mqh"
 
 struct MbStrategyRiskModel
@@ -101,7 +102,8 @@ bool MbStrategyResolveNewBar(
    const ENUM_TIMEFRAMES trade_tf,
    const datetime last_bar_time,
    datetime &out_current_bar_time,
-   string &out_reason_code
+   string &out_reason_code,
+   const bool allow_same_bar_scan = false
 )
   {
    datetime bar_times[1];
@@ -120,6 +122,11 @@ bool MbStrategyResolveNewBar(
 
    if(out_current_bar_time == last_bar_time)
      {
+         if(allow_same_bar_scan)
+            {
+             out_reason_code = "OK";
+             return true;
+            }
       out_reason_code = "WAIT_NEW_BAR";
       return false;
      }

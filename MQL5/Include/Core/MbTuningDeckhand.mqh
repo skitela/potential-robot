@@ -210,7 +210,7 @@ bool MbTuningDeckhandScanCandidates(
       bool accepted = (c4 != "0");
       if(c3 == "SIZE_BLOCK" && c5 == "RISK_CONTRACT_BLOCK")
          out_risk_block_rows++;
-      if(c3 == "EVALUATED" && accepted && c5 == "PAPER_SCORE_GATE")
+      if(c3 == "EVALUATED" && accepted && StringFind(c5,"PAPER_SCORE_GATE",0) == 0)
         {
          out_score_gate_rows++;
 

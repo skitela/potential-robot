@@ -158,7 +158,7 @@ void EvaluateAUDUSDStrategy(
      }
 
    datetime current_bar_time = 0;
-   if(!MbStrategyResolveNewBar(profile.symbol,profile.trade_tf,g_audusd_last_bar_time,current_bar_time,out.reason_code))
+  if(!MbStrategyResolveNewBar(profile.symbol,profile.trade_tf,g_audusd_last_bar_time,current_bar_time,out.reason_code,MbShouldBypassFirstWaveTruthDiagnosticNewBar(profile.symbol,state.paper_mode_active)))
       return;
 
    if(atr_raw <= 0.0)

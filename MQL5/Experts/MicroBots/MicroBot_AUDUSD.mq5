@@ -234,9 +234,6 @@ void AppendAUDUSDCandidateEvent(
    const double lots
 )
   {
-   if(signal.setup_type == "NONE")
-      return;
-
    MbAppendCandidateSignal(
       g_candidate_log_path,
       ts,
@@ -329,7 +326,7 @@ int ResolveAUDUSDPaperHoldSeconds(const MbSignalDecision &signal)
 
    if(signal.setup_type == "SETUP_BREAKOUT")
      {
-      if(signal.reason_code == "PAPER_SCORE_GATE" || signal.confidence_bucket == "LOW")
+      if(StringFind(signal.reason_code,"PAPER_SCORE_GATE",0) == 0 || signal.confidence_bucket == "LOW")
          hold_seconds = 180;
       else if(signal.market_regime == "BREAKOUT" &&
               (signal.renko_quality_grade == "POOR" ||
@@ -468,7 +465,9 @@ void OnTimer()
      {
       g_last_timer_diagnostic_scan_ts = now;
       AppendAUDUSDDecisionEvent(now,"DIAGNOSTIC","FORCE","TIMER_FALLBACK_SCAN",g_market.spread_points,0.0,0.0,0,true,60);
+         MbBeginFirstWaveTruthDiagnosticTimerScan(g_profile.symbol,IsLocalPaperModeActive());
       OnTick();
+         MbEndFirstWaveTruthDiagnosticTimerScan();
       now = TimeCurrent();
       MbRefreshMarketSnapshot(g_profile,g_market);
       NormalizeAUDUSDMarketPermissions();
@@ -598,6 +597,29 @@ void OnTick()
       if(MbPaperMaybeClosePosition(g_market,g_paper_position,now,paper_pnl,paper_close_reason,closed_paper))
         {
          MbProcessSyntheticClosedDealFeedback(g_state,paper_pnl,now);
+         string close_request_comment = closed_paper.request_comment;
+         if(StringLen(close_request_comment) <= 0 && StringLen(closed_paper.candidate_id) > 0)
+            close_request_comment = MbPreTradeTruthBuildRequestComment(closed_paper.candidate_id);
+         MbExecutionTruthWritePaperClose(
+            "MICROBOT_PAPER",
+            g_state.symbol,
+            Symbol(),
+            closed_paper.candidate_id,
+            closed_paper.side,
+            closed_paper.lots,
+            closed_paper.last_mark_price,
+            closed_paper.last_mark_price,
+            g_market.bid,
+            g_market.ask,
+            now,
+            close_request_comment,
+            paper_close_reason,
+            closed_paper.gross_pln,
+            closed_paper.commission_pln,
+            closed_paper.swap_pln,
+            (closed_paper.slippage_cost_pln + closed_paper.extra_fee_pln),
+            closed_paper.net_pln
+         );
          MbAppendLearningObservationV2(
             g_state.symbol,
             now,
@@ -724,7 +746,8 @@ void OnTick()
    if(signal.setup_type != "NONE")
       AppendAUDUSDAuxDecisionEvent(now,signal,(signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL));
 
-   if(IsLocalPaperModeActive() && !signal.valid && signal.reason_code == "SCORE_BELOW_TRIGGER")
+   if(IsLocalPaperModeActive() && !signal.valid &&
+      MbShouldBypassFirstWaveTruthDiagnosticSoftReject(g_profile.symbol,IsLocalPaperModeActive(),signal.setup_type,signal.reason_code))
      {
       double paper_gate_abs = 0.22;
       bool poor_candle = (signal.candle_quality_grade == "POOR" || signal.candle_quality_grade == "UNKNOWN");
@@ -811,7 +834,7 @@ void OnTick()
         {
          signal.valid = true;
          signal.side = (signal.score >= 0.0 ? MB_SIGNAL_BUY : MB_SIGNAL_SELL);
-         signal.reason_code = "PAPER_SCORE_GATE";
+         signal.reason_code = "PAPER_SCORE_GATE_DIAGNOSTIC";
         }
       else if(blocked_by_audusd_dirty_range_gate)
          signal.reason_code = "AUDUSD_RANGE_DIRTY_HYBRID_BLOCK";
@@ -1013,6 +1036,7 @@ void OnTick()
                pretrade_candidate_id,
                pretrade_record
             );
+            string paper_request_comment = MbPreTradeTruthBuildRequestComment(pretrade_candidate_id);
             MbMarkOrderSend(g_state);
             MbLatencyProfileRecordExecution(g_latency,true,0,0.0);
             bool paper_opened = MbPaperOpenPosition(
@@ -1047,6 +1071,7 @@ void OnTick()
             );
             if(paper_opened)
               {
+               MbPaperPositionSetTruthContext(g_paper_position,pretrade_candidate_id,paper_request_comment);
                MbExecutionTruthWritePaperOpen(
                   "MICROBOT_PAPER",
                   g_state.symbol,
@@ -1059,7 +1084,7 @@ void OnTick()
                   g_market.bid,
                   g_market.ask,
                   now,
-                  MbPreTradeTruthBuildRequestComment(pretrade_candidate_id)
+                  paper_request_comment
                );
                MbSavePaperPosition(g_profile.symbol,g_paper_position);
                AppendAUDUSDCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);

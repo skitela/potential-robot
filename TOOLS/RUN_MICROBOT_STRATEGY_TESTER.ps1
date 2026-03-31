@@ -965,7 +965,7 @@ if (Test-Path -LiteralPath $candidateSignalsPath) {
     $candidateRows = Import-TabCsvWithRetry -Path $candidateSignalsPath
     $candidateSignalRowsTotal = @($candidateRows).Count
     $paperOpenRows = @($candidateRows | Where-Object { $_.stage -eq 'PAPER_OPEN' -and $_.reason_code -eq 'PAPER_POSITION_OPENED' }).Count
-    $paperScoreGateRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and $_.reason_code -eq 'PAPER_SCORE_GATE' }).Count
+    $paperScoreGateRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and [string]$_.reason_code -like 'PAPER_SCORE_GATE*' }).Count
     $acceptedEvaluatedRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and $_.accepted -eq '1' }).Count
     $scoreBelowTriggerRows = @($candidateRows | Where-Object { $_.stage -eq 'EVALUATED' -and $_.reason_code -eq 'SCORE_BELOW_TRIGGER' }).Count
     $topCandidateReasons = @(

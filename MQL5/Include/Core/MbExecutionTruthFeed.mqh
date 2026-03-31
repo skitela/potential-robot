@@ -407,4 +407,124 @@ bool MbExecutionTruthWritePaperOpen(
    return true;
   }
 
+bool MbExecutionTruthWritePaperClose(
+   const string source,
+   const string symbol_alias,
+   const string runtime_symbol,
+   const string candidate_id,
+   const MbSignalSide open_side,
+   const double lots,
+   const double request_price,
+   const double execution_price,
+   const double bid,
+   const double ask,
+   const datetime server_time,
+   const string request_comment,
+   const string close_reason,
+   const double gross_profit,
+   const double commission_cost,
+   const double swap_cost,
+   const double fee_cost,
+   const double net_observed
+)
+  {
+   string symbol = runtime_symbol;
+   if(StringLen(symbol) <= 0)
+      symbol = symbol_alias;
+   if(StringLen(symbol) <= 0 || StringLen(candidate_id) <= 0)
+      return false;
+
+   MbExecutionTruthRecord record;
+   ZeroMemory(record);
+   record.schema_version = "1.0";
+   record.source = source;
+   record.symbol_alias = MbCanonicalSymbol(symbol_alias);
+   record.candidate_id = candidate_id;
+   record.trans_type = "PAPER_CLOSE";
+   record.request_action = "TRADE_ACTION_DEAL";
+   if(open_side == MB_SIGNAL_SELL)
+      record.request_type = "ORDER_TYPE_BUY";
+   else
+      record.request_type = "ORDER_TYPE_SELL";
+   record.result_retcode = 0;
+   record.order_ticket = 0;
+   record.deal_ticket = 0;
+   record.position_ticket = 0;
+   record.request_volume = lots;
+   record.request_price = request_price;
+   record.execution_volume = lots;
+   record.execution_price = execution_price;
+   record.digits = (int)SymbolInfoInteger(symbol,SYMBOL_DIGITS);
+   record.point = SymbolInfoDouble(symbol,SYMBOL_POINT);
+   record.bid = bid;
+   record.ask = ask;
+   if(record.point > 0.0)
+      record.spread_points = (record.ask - record.bid) / record.point;
+   record.slippage_points = MbExecutionTruthResolveSignedSlippage(record.request_type,record.request_price,record.execution_price,record.point);
+   record.commission = -MathAbs(commission_cost);
+   record.swap = -MathAbs(swap_cost);
+   record.fee = -MathAbs(fee_cost);
+   record.profit = gross_profit;
+   record.net_observed = net_observed;
+   record.deal_entry = "DEAL_ENTRY_OUT";
+   record.deal_reason = "DEAL_REASON_EXPERT";
+   record.request_comment = MbExecutionTruthNormalizeText(request_comment);
+   record.deal_comment = MbExecutionTruthNormalizeText(close_reason);
+   record.server_time = server_time;
+   record.time_msc = (long)GetMicrosecondCount();
+
+   int handle = MbExecutionTruthOpenAppend(record.symbol_alias);
+   if(handle == INVALID_HANDLE)
+     {
+      MbExecutionTruthDebugLog(
+         "EXEC_PAPER_CLOSE_FAIL",
+         "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";runtime_symbol=" + runtime_symbol + ";candidate_id=" + candidate_id + ";target_path=" + MbExecutionTruthSpoolFilePath(symbol_alias)
+      );
+      return false;
+     }
+
+   FileWrite(
+      handle,
+      record.schema_version,
+      record.source,
+      record.symbol_alias,
+      record.candidate_id,
+      record.trans_type,
+      record.request_action,
+      record.request_type,
+      StringFormat("%I64d",record.result_retcode),
+      StringFormat("%I64u",record.order_ticket),
+      StringFormat("%I64u",record.deal_ticket),
+      StringFormat("%I64u",record.position_ticket),
+      DoubleToString(record.request_volume,8),
+      DoubleToString(record.request_price,record.digits),
+      DoubleToString(record.execution_volume,8),
+      DoubleToString(record.execution_price,record.digits),
+      DoubleToString(record.bid,record.digits),
+      DoubleToString(record.ask,record.digits),
+      DoubleToString(record.point,10),
+      IntegerToString(record.digits),
+      DoubleToString(record.spread_points,4),
+      DoubleToString(record.slippage_points,4),
+      DoubleToString(record.commission,2),
+      DoubleToString(record.swap,2),
+      DoubleToString(record.fee,2),
+      DoubleToString(record.profit,2),
+      DoubleToString(record.net_observed,2),
+      record.deal_entry,
+      record.deal_reason,
+      record.request_comment,
+      record.deal_comment,
+      TimeToString(record.server_time,TIME_DATE | TIME_SECONDS),
+      StringFormat("%I64d",record.time_msc)
+   );
+   FileFlush(handle);
+   FileClose(handle);
+   MbExecutionTruthDebugLog(
+      "EXEC_PAPER_CLOSE_OK",
+      "symbol_alias=" + MbCanonicalSymbol(symbol_alias) + ";runtime_symbol=" + runtime_symbol + ";candidate_id=" + candidate_id + ";target_path=" + MbExecutionTruthSpoolFilePath(symbol_alias)
+   );
+   return true;
+  }
+
 #endif
