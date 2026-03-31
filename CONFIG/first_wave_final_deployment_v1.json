@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "intent": "first_wave_final_deployment",
+  "symbol_scope": "paper_live_first_wave",
+  "target_symbols": [
+    "US500",
+    "EURJPY",
+    "AUDUSD",
+    "USDCAD"
+  ],
+  "runtime_profile": "BROKER_PARITY_FIRST_WAVE",
+  "apply_runtime_profile_before_preflight": true,
+  "validate_session_capital_after_runtime_apply": true,
+  "preflight_required": [
+    "trade_transition_audit",
+    "qdm_custom_symbol_realism_audit",
+    "mt5_truth_status",
+    "local_model_readiness",
+    "first_wave_server_parity",
+    "first_wave_runtime_activity",
+    "first_wave_lesson_closure",
+    "learning_wellbeing",
+    "full_stack_audit"
+  ],
+  "migration": {
+    "enabled": true,
+    "vps_sync_timeout_sec": 240,
+    "post_startup_audit_delay_sec": 180,
+    "post_startup_continuity_samples": 3,
+    "post_startup_interval_sec": 20,
+    "apply_safe_repair_after_migration": true
+  },
+  "success_contract": {
+    "require_truth_hooks_ready_count": 4,
+    "require_local_model_ready_count": 4,
+    "require_broker_mirror_ready_count": 4,
+    "require_runtime_profile_match": true,
+    "require_capital_isolation_ready": true,
+    "require_post_migration_ok": true
+  }
+}

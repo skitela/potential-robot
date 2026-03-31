@@ -21,6 +21,7 @@ $supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE
 $learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
 $mt5FirstWaveServerParityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_SERVER_PARITY_AUDIT.ps1"
 $mt5FirstWaveRuntimeActivityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_RUNTIME_ACTIVITY_AUDIT.ps1"
+$firstWaveLessonClosureAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FIRST_WAVE_LESSON_CLOSURE_AUDIT.ps1"
 $nearProfitQueueStatusScript = Join-Path $ProjectRoot "RUN\SYNC_NEAR_PROFIT_OPTIMIZATION_QUEUE_STATUS.ps1"
 $learningHotPathPath = Join-Path $opsRoot "learning_hot_path_latest.json"
 
@@ -33,6 +34,7 @@ foreach ($path in @(
     $learningArtifactInventoryScript,
     $mt5FirstWaveServerParityAuditScript,
     $mt5FirstWaveRuntimeActivityAuditScript,
+    $firstWaveLessonClosureAuditScript,
     $nearProfitQueueStatusScript
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -220,6 +222,7 @@ $freshness = @(
     Get-FileFreshness -Label "qdm_custom_symbol_realism_audit" -Path (Join-Path $opsRoot "qdm_custom_symbol_realism_audit_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "mt5_first_wave_server_parity" -Path (Join-Path $opsRoot "mt5_first_wave_server_parity_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "mt5_first_wave_runtime_activity" -Path (Join-Path $opsRoot "mt5_first_wave_runtime_activity_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "first_wave_lesson_closure" -Path (Join-Path $opsRoot "first_wave_lesson_closure_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "learning_artifact_inventory" -Path (Join-Path $opsRoot "learning_artifact_inventory_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
@@ -256,6 +259,10 @@ if (Test-Path -LiteralPath $mt5FirstWaveRuntimeActivityAuditScript) {
     Invoke-JsonAuditTool -ScriptPath $mt5FirstWaveRuntimeActivityAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
 }
 $mt5FirstWaveRuntimeActivityAudit = Read-JsonFile -Path (Join-Path $opsRoot "mt5_first_wave_runtime_activity_latest.json")
+if (Test-Path -LiteralPath $firstWaveLessonClosureAuditScript) {
+    Invoke-JsonAuditTool -ScriptPath $firstWaveLessonClosureAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
+}
+$firstWaveLessonClosureAudit = Read-JsonFile -Path (Join-Path $opsRoot "first_wave_lesson_closure_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -366,6 +373,11 @@ $learningProgressFirstWaveAlert30m = if ($null -ne $learningArtifactInventory) {
 $learningProgressFirstWaveLessonAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_first_wave_lesson_alert_30m' -Default $false) } else { $false }
 $learningProgressObservationActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_observation_active_count_30m' -Default 0) } else { 0 }
 $learningProgressLessonActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_lesson_active_count_30m' -Default 0) } else { 0 }
+$firstWaveLessonClosureVerdict = if ($null -ne $firstWaveLessonClosureAudit) { [string](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit -PropertyName 'verdict' -Default "") } else { "" }
+$firstWaveLessonClosureFreshReadyCount = if ($null -ne $firstWaveLessonClosureAudit) { [int](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit.summary -PropertyName 'fresh_chain_ready_count' -Default 0) } else { 0 }
+$firstWaveLessonClosureHistoricalReadyCount = if ($null -ne $firstWaveLessonClosureAudit) { [int](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit.summary -PropertyName 'historical_chain_ready_count' -Default 0) } else { 0 }
+$firstWaveLessonClosureMissingCount = if ($null -ne $firstWaveLessonClosureAudit) { [int](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit.summary -PropertyName 'missing_chain_count' -Default 0) } else { 0 }
+$firstWaveLessonClosurePartialGapCount = if ($null -ne $firstWaveLessonClosureAudit) { [int](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit.summary -PropertyName 'partial_gap_count' -Default 0) } else { 0 }
 
 $mt5QueueFresh = @($freshness | Where-Object { $_.label -eq "mt5_retest_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "mt5_retest_queue" })[0].fresh)
 $nearProfitQueueFresh = @($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" }).Count -gt 0 -and (@($freshness | Where-Object { $_.label -eq "near_profit_optimization_queue" })[0].fresh)
@@ -675,6 +687,15 @@ $report = [ordered]@{
                 recent_paper_open_count = $(Get-SafeObjectValue -Object $mt5FirstWaveRuntimeActivityAudit.summary -PropertyName 'recent_paper_open_count' -Default 0)
             }
         } else { $null }
+        first_wave_lesson_closure = if ($null -ne $firstWaveLessonClosureAudit) {
+            [ordered]@{
+                verdict = $firstWaveLessonClosureVerdict
+                fresh_chain_ready_count = $firstWaveLessonClosureFreshReadyCount
+                historical_chain_ready_count = $firstWaveLessonClosureHistoricalReadyCount
+                missing_chain_count = $firstWaveLessonClosureMissingCount
+                partial_gap_count = $firstWaveLessonClosurePartialGapCount
+            }
+        } else { $null }
         learning_artifact_inventory = if ($null -ne $learningArtifactInventory) {
             [ordered]@{
                 verdict = $learningArtifactInventoryVerdict
@@ -721,6 +742,11 @@ $report = [ordered]@{
         learning_progress_first_wave_lesson_alert_30m = $learningProgressFirstWaveLessonAlert30m
         learning_progress_observation_active_count_30m = $learningProgressObservationActiveCount30m
         learning_progress_lesson_active_count_30m = $learningProgressLessonActiveCount30m
+        first_wave_lesson_closure_verdict = $firstWaveLessonClosureVerdict
+        first_wave_lesson_closure_fresh_ready_count = $firstWaveLessonClosureFreshReadyCount
+        first_wave_lesson_closure_historical_ready_count = $firstWaveLessonClosureHistoricalReadyCount
+        first_wave_lesson_closure_missing_count = $firstWaveLessonClosureMissingCount
+        first_wave_lesson_closure_partial_gap_count = $firstWaveLessonClosurePartialGapCount
         supervisor_scope_verdict = $(if ($null -ne $supervisorScopeAudit) { $supervisorScopeAudit.verdict } else { $null })
         supervisor_scope_contaminated_count = $(if ($null -ne $supervisorScopeAudit) { [int](Get-SafeObjectValue -Object $supervisorScopeAudit.summary -PropertyName 'contaminated_count' -Default 0) } else { 0 })
     }
@@ -998,6 +1024,19 @@ if ($null -ne $report.lab_health.mt5_first_wave_runtime_activity) {
 }
 else {
     $lines.Add("- first-wave runtime activity audit not available")
+}
+$lines.Add("")
+$lines.Add("## First Wave Lesson Closure")
+$lines.Add("")
+if ($null -ne $report.lab_health.first_wave_lesson_closure) {
+    $lines.Add(("- first_wave_lesson_closure_verdict: {0}" -f $report.lab_health.first_wave_lesson_closure.verdict))
+    $lines.Add(("- first_wave_lesson_closure_fresh_ready_count: {0}" -f $report.lab_health.first_wave_lesson_closure.fresh_chain_ready_count))
+    $lines.Add(("- first_wave_lesson_closure_historical_ready_count: {0}" -f $report.lab_health.first_wave_lesson_closure.historical_chain_ready_count))
+    $lines.Add(("- first_wave_lesson_closure_missing_count: {0}" -f $report.lab_health.first_wave_lesson_closure.missing_chain_count))
+    $lines.Add(("- first_wave_lesson_closure_partial_gap_count: {0}" -f $report.lab_health.first_wave_lesson_closure.partial_gap_count))
+}
+else {
+    $lines.Add("- first-wave lesson closure audit not available")
 }
 $lines.Add("")
 $lines.Add("## Learning Artifact Inventory")

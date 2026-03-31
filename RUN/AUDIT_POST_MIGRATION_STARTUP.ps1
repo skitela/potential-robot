@@ -150,6 +150,8 @@ function Get-SymbolStateSnapshot {
         execution_summary = New-FileProbe -Label "execution_summary" -Path (Join-Path $stateDir "execution_summary.json") -ThresholdSeconds $Thresholds.execution_summary_sec
         decision_log = New-FileProbe -Label "decision_log" -Path (Join-Path $logsDir "decision_events.csv") -ThresholdSeconds $Thresholds.decision_log_sec
         onnx_log = New-FileProbe -Label "onnx_log" -Path (Join-Path $logsDir "onnx_observations.csv") -ThresholdSeconds $Thresholds.onnx_log_sec
+        learning_log = New-FileProbe -Label "learning_log" -Path (Join-Path $logsDir "learning_observations_v2.csv") -ThresholdSeconds $Thresholds.learning_log_sec
+        knowledge_log = New-FileProbe -Label "knowledge_log" -Path (Join-Path $logsDir "broker_net_ledger_runtime.csv") -ThresholdSeconds $Thresholds.knowledge_log_sec
     }
 }
 
@@ -205,16 +207,22 @@ function Get-ContinuityState {
 
     $runtimeTicks = @($symbolRows | ForEach-Object { $_.runtime_status.last_write_ticks } | Where-Object { $null -ne $_ } | Select-Object -Unique)
     $executionTicks = @($symbolRows | ForEach-Object { $_.execution_summary.last_write_ticks } | Where-Object { $null -ne $_ } | Select-Object -Unique)
+    $learningTicks = @($symbolRows | ForEach-Object { $_.learning_log.last_write_ticks } | Where-Object { $null -ne $_ } | Select-Object -Unique)
+    $knowledgeTicks = @($symbolRows | ForEach-Object { $_.knowledge_log.last_write_ticks } | Where-Object { $null -ne $_ } | Select-Object -Unique)
     $runtimeChanged = ($runtimeTicks.Count -gt 1)
     $executionChanged = ($executionTicks.Count -gt 1)
+    $learningChanged = ($learningTicks.Count -gt 1)
+    $knowledgeChanged = ($knowledgeTicks.Count -gt 1)
     $finalRow = $symbolRows[-1]
     $runtimeFresh = [bool]$finalRow.runtime_status.fresh
     $executionFresh = [bool]$finalRow.execution_summary.fresh
+    $learningFresh = [bool]$finalRow.learning_log.fresh
+    $knowledgeFresh = [bool]$finalRow.knowledge_log.fresh
 
-    $state = if ($runtimeChanged -or $executionChanged) {
+    $state = if ($runtimeChanged -or $executionChanged -or $learningChanged -or $knowledgeChanged) {
         "PRZEPLYW_POTWIERDZONY"
     }
-    elseif ($runtimeFresh -and $executionFresh) {
+    elseif ($runtimeFresh -and $executionFresh -and ($learningFresh -or $knowledgeFresh)) {
         "PRZEPLYW_SWIEZY_BEZ_ZMIANY_W_OKNIE"
     }
     else {
@@ -225,7 +233,29 @@ function Get-ContinuityState {
         state = $state
         runtime_status_changed = $runtimeChanged
         execution_summary_changed = $executionChanged
+        learning_log_changed = $learningChanged
+        knowledge_log_changed = $knowledgeChanged
     }
+}
+
+function Get-UpperSymbolMap {
+    param([object[]]$Items)
+
+    $map = @{}
+    foreach ($item in @($Items)) {
+        if ($null -eq $item) {
+            continue
+        }
+
+        $symbolAlias = [string](Get-OptionalValue -Object $item -Name "symbol_alias" -Default "")
+        if ([string]::IsNullOrWhiteSpace($symbolAlias)) {
+            continue
+        }
+
+        $map[$symbolAlias.ToUpperInvariant()] = $item
+    }
+
+    return $map
 }
 
 function Invoke-RefreshSuite {
@@ -250,6 +280,7 @@ function Invoke-RefreshSuite {
     $steps.Add((Invoke-ScriptStep -Label "truth_status" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_MT5_PRETRADE_EXECUTION_TRUTH_STATUS.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
     $steps.Add((Invoke-ScriptStep -Label "first_wave_runtime_activity" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_RUNTIME_ACTIVITY_AUDIT.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
     $steps.Add((Invoke-ScriptStep -Label "first_wave_server_parity" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_SERVER_PARITY_AUDIT.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
+    $steps.Add((Invoke-ScriptStep -Label "first_wave_lesson_closure" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_FIRST_WAVE_LESSON_CLOSURE_AUDIT.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
 
     if ($AllowRepair) {
         $steps.Add((Invoke-ScriptStep -Label "vps_spool_sync" -ScriptPath (Join-Path $ProjectRoot "RUN\SYNC_VPS_SPOOL_BACKLOG.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
@@ -259,6 +290,7 @@ function Invoke-RefreshSuite {
         $steps.Add((Invoke-ScriptStep -Label "paper_live_feedback_after_repair" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_CANONICAL_PAPER_LIVE_FEEDBACK.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
         $steps.Add((Invoke-ScriptStep -Label "truth_status_after_repair" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_MT5_PRETRADE_EXECUTION_TRUTH_STATUS.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
         $steps.Add((Invoke-ScriptStep -Label "first_wave_runtime_activity_after_repair" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_RUNTIME_ACTIVITY_AUDIT.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
+        $steps.Add((Invoke-ScriptStep -Label "first_wave_lesson_closure_after_repair" -ScriptPath (Join-Path $ProjectRoot "RUN\BUILD_FIRST_WAVE_LESSON_CLOSURE_AUDIT.ps1") -Parameters @{ ProjectRoot = $ProjectRoot })) | Out-Null
     }
 
     return @($steps.ToArray())
@@ -281,6 +313,7 @@ function Evaluate-StartupState {
     $vpsSpoolWellbeingPath = Join-Path $opsRoot "vps_spool_wellbeing_latest.json"
     $truthStatusPath = Join-Path $opsRoot "mt5_pretrade_execution_truth_status_latest.json"
     $firstWaveRuntimeActivityPath = Join-Path $opsRoot "mt5_first_wave_runtime_activity_latest.json"
+    $firstWaveLessonClosurePath = Join-Path $opsRoot "first_wave_lesson_closure_latest.json"
     $runtimeWatchdogPath = Join-Path $ProjectRoot "EVIDENCE\runtime_watchdog_status.json"
 
     $hostingReport = Read-JsonSafe -Path $hostingReportPath
@@ -288,6 +321,7 @@ function Evaluate-StartupState {
     $vpsSpoolWellbeing = Read-JsonSafe -Path $vpsSpoolWellbeingPath
     $truthStatus = Read-JsonSafe -Path $truthStatusPath
     $firstWaveRuntimeActivity = Read-JsonSafe -Path $firstWaveRuntimeActivityPath
+    $firstWaveLessonClosure = Read-JsonSafe -Path $firstWaveLessonClosurePath
     $runtimeWatchdog = Read-JsonSafe -Path $runtimeWatchdogPath
     $researchManifest = Read-JsonSafe -Path $researchManifestPath
 
@@ -298,6 +332,7 @@ function Evaluate-StartupState {
         vps_spool_wellbeing = New-FileProbe -Label "vps_spool_wellbeing" -Path $vpsSpoolWellbeingPath -ThresholdSeconds $Thresholds.vps_spool_wellbeing_sec
         truth_status = New-FileProbe -Label "truth_status" -Path $truthStatusPath -ThresholdSeconds $Thresholds.truth_status_sec
         first_wave_runtime_activity = New-FileProbe -Label "first_wave_runtime_activity" -Path $firstWaveRuntimeActivityPath -ThresholdSeconds $Thresholds.runtime_activity_sec
+        first_wave_lesson_closure = New-FileProbe -Label "first_wave_lesson_closure" -Path $firstWaveLessonClosurePath -ThresholdSeconds $Thresholds.lesson_closure_sec
         research_manifest = New-FileProbe -Label "research_manifest" -Path $researchManifestPath -ThresholdSeconds $Thresholds.research_manifest_sec
     }
 
@@ -426,6 +461,15 @@ function Evaluate-StartupState {
         }) | Out-Null
     }
 
+    if (-not $freshness.first_wave_lesson_closure.fresh) {
+        $findings.Add([pscustomobject]@{
+            severity = "medium"
+            component = "first_wave_lesson_closure"
+            message = "Audyt domkniecia lekcji pierwszej czworki nie jest swiezy po migracji."
+            context = @{ age_seconds = $freshness.first_wave_lesson_closure.age_seconds }
+        }) | Out-Null
+    }
+
     if (-not $freshness.research_manifest.fresh) {
         $findings.Add([pscustomobject]@{
             severity = "medium"
@@ -451,6 +495,8 @@ function Evaluate-StartupState {
         }) | Out-Null
     }
 
+    $lessonClosureItems = @(Get-OptionalValue -Object $firstWaveLessonClosure -Name "results" -Default @())
+    $lessonClosureMap = Get-UpperSymbolMap -Items $lessonClosureItems
     $symbolResults = New-Object System.Collections.Generic.List[object]
     $continuityConfirmedCount = 0
     $continuityFreshCount = 0
@@ -458,6 +504,7 @@ function Evaluate-StartupState {
     foreach ($symbol in $TargetSymbols) {
         $finalSample = @($Samples[-1].rows | Where-Object { $_.symbol_alias -eq $symbol })[0]
         $continuity = Get-ContinuityState -Samples $Samples -SymbolAlias $symbol
+        $closureEntry = if ($lessonClosureMap.ContainsKey($symbol)) { $lessonClosureMap[$symbol] } else { $null }
         $continuityState = [string]$continuity.state
         if ($continuityState -eq "PRZEPLYW_POTWIERDZONY") {
             $continuityConfirmedCount++
@@ -524,6 +571,42 @@ function Evaluate-StartupState {
             }) | Out-Null
         }
 
+        if (-not [bool]$finalSample.learning_log.fresh -and [bool]$finalSample.onnx_log.fresh) {
+            $findings.Add([pscustomobject]@{
+                severity = "medium"
+                component = "symbol_learning_log"
+                message = "Obserwacje modelu sa swieze, ale dziennik lekcji nie jest swiezy po migracji."
+                context = @{
+                    symbol_alias = $symbol
+                    age_seconds = $finalSample.learning_log.age_seconds
+                }
+            }) | Out-Null
+        }
+
+        if (-not [bool]$finalSample.knowledge_log.fresh -and [bool]$finalSample.onnx_log.fresh) {
+            $findings.Add([pscustomobject]@{
+                severity = "medium"
+                component = "symbol_knowledge_log"
+                message = "Obserwacje modelu sa swieze, ale zapis wiedzy i kosztow nie jest swiezy po migracji."
+                context = @{
+                    symbol_alias = $symbol
+                    age_seconds = $finalSample.knowledge_log.age_seconds
+                }
+            }) | Out-Null
+        }
+
+        if ($null -ne $closureEntry) {
+            $closureState = [string](Get-OptionalValue -Object $closureEntry -Name "closure_state" -Default "")
+            if ($closureState -eq "SWIEZE_ZAMKNIECIE_BEZ_PELNEGO_LANCUCHA") {
+                $findings.Add([pscustomobject]@{
+                    severity = "critical"
+                    component = "first_wave_lesson_closure"
+                    message = "Po migracji symbol domyka probe, ale nadal nie domyka calego lancucha lekcji."
+                    context = @{ symbol_alias = $symbol; closure_state = $closureState }
+                }) | Out-Null
+            }
+        }
+
         if ($continuityState -eq "BRAK_SWIEZEGO_PRZEPLYWU") {
             $findings.Add([pscustomobject]@{
                 severity = "high"
@@ -539,17 +622,24 @@ function Evaluate-StartupState {
             execution_summary = $finalSample.execution_summary
             decision_log = $finalSample.decision_log
             onnx_log = $finalSample.onnx_log
+            learning_log = $finalSample.learning_log
+            knowledge_log = $finalSample.knowledge_log
+            lesson_closure = $closureEntry
             continuity = $continuity
         }) | Out-Null
     }
 
     $truthSummary = Get-OptionalValue -Object $truthStatus -Name "truth_summary" -Default $null
     $activitySummary = Get-OptionalValue -Object $firstWaveRuntimeActivity -Name "summary" -Default $null
+    $lessonClosureSummary = Get-OptionalValue -Object $firstWaveLessonClosure -Name "summary" -Default $null
     $freshPaperOpenCount = [int](Get-OptionalNumber -Object $activitySummary -Name "fresh_paper_open_count" -Default 0)
     $truthLiveSymbolCount = [int](Get-OptionalNumber -Object $activitySummary -Name "truth_live_symbol_count" -Default 0)
     $pretradeRows = [int](Get-OptionalNumber -Object $truthSummary -Name "pretrade_rows" -Default 0)
     $executionRows = [int](Get-OptionalNumber -Object $truthSummary -Name "execution_rows" -Default 0)
     $truthChainRows = [int](Get-OptionalNumber -Object $truthSummary -Name "truth_chain_rows" -Default 0)
+    $lessonClosureVerdict = if ($null -ne $firstWaveLessonClosure) { [string](Get-OptionalValue -Object $firstWaveLessonClosure -Name "verdict" -Default "") } else { "" }
+    $freshChainReadyCount = [int](Get-OptionalNumber -Object $lessonClosureSummary -Name "fresh_chain_ready_count" -Default 0)
+    $historicalChainReadyCount = [int](Get-OptionalNumber -Object $lessonClosureSummary -Name "historical_chain_ready_count" -Default 0)
 
     $truthFlowState = "BRAK_SWIEZEJ_PROBY"
     if ($freshPaperOpenCount -gt 0) {
@@ -609,6 +699,9 @@ function Evaluate-StartupState {
             execution_rows = $executionRows
             truth_chain_rows = $truthChainRows
             truth_flow_state = $truthFlowState
+            first_wave_lesson_closure_verdict = $lessonClosureVerdict
+            first_wave_fresh_chain_ready_count = $freshChainReadyCount
+            first_wave_historical_chain_ready_count = $historicalChainReadyCount
             pending_vps_sync_count = $pendingSyncCount
             pending_vps_sync_oldest_age_seconds = $pendingSyncOldestAge
             pending_vps_sync_is_moving_tail = $pendingSyncIsMovingTail
@@ -643,11 +736,14 @@ $thresholds = @{
     vps_spool_wellbeing_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "vps_spool_wellbeing_sec" -Default 1800
     truth_status_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "truth_status_sec" -Default 1800
     runtime_activity_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "runtime_activity_sec" -Default 1800
+    lesson_closure_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "lesson_closure_sec" -Default 1800
     research_manifest_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "research_manifest_sec" -Default 1800
     runtime_status_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "runtime_status_sec" -Default 240
     execution_summary_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "execution_summary_sec" -Default 240
     decision_log_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "decision_log_sec" -Default 1800
     onnx_log_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "onnx_log_sec" -Default 1800
+    learning_log_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "learning_log_sec" -Default 1800
+    knowledge_log_sec = Get-ConfigSeconds -Thresholds $thresholdConfig -Name "knowledge_log_sec" -Default 1800
 }
 
 $opsRoot = Join-Path $projectRootResolved "EVIDENCE\OPS"
@@ -733,6 +829,9 @@ $lines.Add(("- watchdog_stale_target_count: {0}" -f $report.final.summary.watchd
 $lines.Add(("- fresh_paper_open_count: {0}" -f $report.final.summary.fresh_paper_open_count))
 $lines.Add(("- truth_live_symbol_count: {0}" -f $report.final.summary.truth_live_symbol_count))
 $lines.Add(("- truth_flow_state: {0}" -f $report.final.summary.truth_flow_state))
+$lines.Add(("- first_wave_lesson_closure_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.final.summary.first_wave_lesson_closure_verdict)) { "BRAK" } else { $report.final.summary.first_wave_lesson_closure_verdict })))
+$lines.Add(("- first_wave_fresh_chain_ready_count: {0}" -f $report.final.summary.first_wave_fresh_chain_ready_count))
+$lines.Add(("- first_wave_historical_chain_ready_count: {0}" -f $report.final.summary.first_wave_historical_chain_ready_count))
 $lines.Add(("- pending_vps_sync_count: {0}" -f $report.final.summary.pending_vps_sync_count))
 $lines.Add(("- pending_vps_sync_is_moving_tail: {0}" -f ([string]$report.final.summary.pending_vps_sync_is_moving_tail).ToLowerInvariant()))
 $lines.Add(("- export_lag_is_moving_tail: {0}" -f ([string]$report.final.summary.export_lag_is_moving_tail).ToLowerInvariant()))

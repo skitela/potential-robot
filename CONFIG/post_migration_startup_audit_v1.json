@@ -19,11 +19,14 @@
     "vps_spool_wellbeing_sec": 1800,
     "truth_status_sec": 1800,
     "runtime_activity_sec": 1800,
+    "lesson_closure_sec": 1800,
     "research_manifest_sec": 1800,
     "runtime_status_sec": 240,
     "execution_summary_sec": 240,
     "decision_log_sec": 1800,
-    "onnx_log_sec": 1800
+    "onnx_log_sec": 1800,
+    "learning_log_sec": 1800,
+    "knowledge_log_sec": 1800
   },
   "safe_repair_actions": [
     "refresh_hosting_report",
@@ -32,6 +35,7 @@
     "sync_vps_spool_backlog",
     "rebuild_research_data_contract",
     "refresh_truth_status",
-    "refresh_first_wave_runtime_activity"
+    "refresh_first_wave_runtime_activity",
+    "refresh_first_wave_lesson_closure"
   ]
 }
