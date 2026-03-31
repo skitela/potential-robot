@@ -405,6 +405,19 @@ bool MbAppendLearningObservationV2(
    return true;
   }
 
+MbSignalSide MbInferHistoricalLearningSide(const ulong deal_ticket)
+  {
+   if(deal_ticket == 0 || !HistoryDealSelect(deal_ticket))
+      return MB_SIGNAL_NONE;
+
+   ENUM_DEAL_TYPE deal_type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(deal_ticket,DEAL_TYPE);
+   if(deal_type == DEAL_TYPE_SELL)
+      return MB_SIGNAL_BUY;
+   if(deal_type == DEAL_TYPE_BUY)
+      return MB_SIGNAL_SELL;
+   return MB_SIGNAL_NONE;
+  }
+
 bool MbAppendHistoricalLearningObservation(
    const string symbol,
    const ulong magic,
@@ -421,15 +434,18 @@ bool MbAppendHistoricalLearningObservation(
       return false;
    if(HistoryDealGetString(deal_ticket,DEAL_SYMBOL) != symbol)
       return false;
-   if((int)HistoryDealGetInteger(deal_ticket,DEAL_ENTRY) != DEAL_ENTRY_OUT)
+   int deal_entry = (int)HistoryDealGetInteger(deal_ticket,DEAL_ENTRY);
+   if(deal_entry != DEAL_ENTRY_OUT && deal_entry != DEAL_ENTRY_OUT_BY)
       return false;
 
    double pnl = HistoryDealGetDouble(deal_ticket,DEAL_PROFIT)
       + HistoryDealGetDouble(deal_ticket,DEAL_SWAP)
-      + HistoryDealGetDouble(deal_ticket,DEAL_COMMISSION);
+      + HistoryDealGetDouble(deal_ticket,DEAL_COMMISSION)
+      + HistoryDealGetDouble(deal_ticket,DEAL_FEE);
    datetime deal_time = (datetime)HistoryDealGetInteger(deal_ticket,DEAL_TIME);
+   MbSignalSide inferred_side = MbInferHistoricalLearningSide(deal_ticket);
 
-   MbAppendLearningObservation(
+   return MbAppendLearningObservationV2(
       symbol,
       deal_time,
       state.last_setup_type,
@@ -446,11 +462,10 @@ bool MbAppendHistoricalLearningObservation(
       state.renko_score,
       state.renko_run_length,
       state.renko_reversal_flag,
-      MB_SIGNAL_NONE,
+      inferred_side,
       pnl,
       close_reason
    );
-   return true;
   }
 
 #endif

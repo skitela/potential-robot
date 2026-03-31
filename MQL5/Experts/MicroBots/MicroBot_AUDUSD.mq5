@@ -1109,7 +1109,7 @@ void OnTick()
             if(paper_opened)
               {
                MbPaperPositionSetTruthContext(g_paper_position,pretrade_candidate_id,paper_request_comment);
-               MbExecutionTruthWritePaperOpen(
+               bool truth_open_written = MbExecutionTruthWritePaperOpen(
                   "MICROBOT_PAPER",
                   g_state.symbol,
                   Symbol(),
@@ -1123,7 +1123,29 @@ void OnTick()
                   now,
                   paper_request_comment
                );
-               MbSavePaperPosition(g_profile.symbol,g_paper_position);
+               AppendAUDUSDDecisionEvent(
+                  now,
+                  "EXECUTION_TRUTH_OPEN",
+                  (truth_open_written ? "OK" : "FAIL"),
+                  (truth_open_written ? pretrade_candidate_id : "PAPER_OPEN_TRUTH_WRITE_FAIL"),
+                  g_market.spread_points,
+                  signal.score,
+                  risk_plan.lots,
+                  0,
+                  false
+               );
+               bool paper_saved = MbSavePaperPosition(g_profile.symbol,g_paper_position);
+               AppendAUDUSDDecisionEvent(
+                  now,
+                  "PAPER_POSITION_SAVE",
+                  (paper_saved ? "OK" : "FAIL"),
+                  (paper_saved ? pretrade_candidate_id : "PAPER_POSITION_SAVE_FAIL"),
+                  g_market.spread_points,
+                  signal.score,
+                  risk_plan.lots,
+                  0,
+                  false
+               );
                AppendAUDUSDCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
                AppendAUDUSDDecisionEvent(now,"PAPER_OPEN","OK","PAPER_POSITION_OPENED",g_market.spread_points,signal.score,risk_plan.lots,0,false);
               }
@@ -1132,7 +1154,18 @@ void OnTick()
                string paper_open_reason = g_paper_position.entry_reason;
                if(StringLen(paper_open_reason) <= 0)
                   paper_open_reason = "PAPER_OPEN_REJECTED";
-               MbSavePaperPosition(g_profile.symbol,g_paper_position);
+               bool paper_saved = MbSavePaperPosition(g_profile.symbol,g_paper_position);
+               AppendAUDUSDDecisionEvent(
+                  now,
+                  "PAPER_POSITION_SAVE",
+                  (paper_saved ? "OK" : "FAIL"),
+                  (paper_saved ? paper_open_reason : "PAPER_POSITION_SAVE_FAIL"),
+                  g_market.spread_points,
+                  signal.score,
+                  risk_plan.lots,
+                  0,
+                  false
+               );
                AppendAUDUSDCandidateEvent(now,"PAPER_OPEN",false,paper_open_reason,signal,risk_plan.lots);
                AppendAUDUSDDecisionEvent(now,"PAPER_OPEN","SKIP",paper_open_reason,g_market.spread_points,signal.score,risk_plan.lots,0,false);
               }
@@ -1158,6 +1191,13 @@ void OnTick()
          );
          MbPreTradeTruthRecord pretrade_record;
          MbPreTradeTruthEvaluateAndWrite("MICROBOT",g_state.symbol,pretrade_candidate_id,pretrade_request,pretrade_record);
+         string live_scope_reason = "OK";
+         if(MbMlRuntimeBridgeBlocksLiveExecution(g_ml_bridge,live_scope_reason))
+           {
+            AppendAUDUSDDecisionEvent(now,"EXEC_SCOPE","BLOCK",live_scope_reason,g_market.spread_points,signal.score,risk_plan.lots,0,false);
+            MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
+            return;
+           }
          MbMarkOrderSend(g_state);
          MbExecutionResult exec_result = MbExecuteMarketOrder(
             g_trade,
@@ -1207,7 +1247,7 @@ void OnTradeTransaction(
    if(!MbTransactionMatchesLocalBot(g_state.symbol,g_state.magic,trans,request))
       return;
 
-   MbExecutionTruthCapture("MICROBOT",g_state.symbol,trans,request,result);
+   bool truth_capture_written = MbExecutionTruthCapture("MICROBOT",g_state.symbol,trans,request,result);
 
    MbAppendTradeTransactionEvent(
       g_trade_transaction_log_path,
@@ -1220,8 +1260,49 @@ void OnTradeTransaction(
 
    if(trans.deal > 0)
      {
-      if(MbProcessClosedDealFeedback(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state))
-         MbAppendHistoricalLearningObservation(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,"LIVE_DEAL_CLOSE");
-      MbMlRuntimeBridgeAppendLiveDealLedger(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal);
+      datetime now = TimeCurrent();
+      double deal_lots = (trans.volume > 0.0 ? trans.volume : 0.0);
+      bool live_close_processed = MbProcessClosedDealFeedback(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state);
+      if(live_close_processed)
+        {
+         AppendAUDUSDDecisionEvent(
+            now,
+            "EXECUTION_TRUTH_CLOSE",
+            (truth_capture_written ? "OK" : "FAIL"),
+            (truth_capture_written ? "LIVE_DEAL_CLOSE" : "LIVE_TRUTH_CAPTURE_FAIL"),
+            g_market.spread_points,
+            0.0,
+            deal_lots,
+            0,
+            false
+         );
+         bool lesson_written = MbAppendHistoricalLearningObservation(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,"LIVE_DEAL_CLOSE");
+         AppendAUDUSDDecisionEvent(
+            now,
+            "LESSON_WRITE",
+            (lesson_written ? "OK" : "FAIL"),
+            "LIVE_DEAL_CLOSE",
+            g_market.spread_points,
+            0.0,
+            deal_lots,
+            0,
+            false
+         );
+        }
+      bool knowledge_bridge_enabled = g_ml_bridge.enabled;
+      bool knowledge_written = false;
+      if(live_close_processed)
+         knowledge_written = MbMlRuntimeBridgeAppendLiveDealLedger(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal);
+      AppendAUDUSDDecisionEvent(
+         now,
+         "KNOWLEDGE_WRITE",
+         (!live_close_processed ? "SKIP" : (knowledge_bridge_enabled ? (knowledge_written ? "OK" : "FAIL") : "SKIP")),
+         (!live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")),
+         g_market.spread_points,
+         0.0,
+         deal_lots,
+         0,
+         false
+      );
      }
   }

@@ -164,6 +164,56 @@ string MbMlRuntimeBridgePaperLiveBucket(const MbMlRuntimeBridgeState &state)
    return state.contract.paper_live_bucket;
   }
 
+bool MbMlRuntimeBridgeBlocksLiveExecution(
+   const MbMlRuntimeBridgeState &state,
+   string &reason,
+   const string expected_runtime_scope = "PAPER_LIVE"
+)
+  {
+   reason = "OK";
+   if(!state.enabled)
+      return false;
+   if(!state.contract.present)
+     {
+      reason = "LIVE_CONTRACT_MISSING";
+      return true;
+     }
+   if(!state.contract.enabled)
+     {
+      reason = "LIVE_CONTRACT_DISABLED";
+      return true;
+     }
+   if(!state.contract.local_model_available)
+     {
+      reason = "LIVE_LOCAL_MODEL_MISSING";
+      return true;
+     }
+   if(state.contract.teacher_required && !state.contract.global_model_available)
+     {
+      reason = "LIVE_TEACHER_UNAVAILABLE";
+      return true;
+     }
+   if(!state.contract.paper_live_enabled)
+     {
+      reason = "LIVE_SCOPE_DISABLED";
+      return true;
+     }
+
+   string runtime_scope = state.contract.runtime_scope;
+   string runtime_scope_expected = expected_runtime_scope;
+   string runtime_scope_token = runtime_scope;
+   StringToUpper(runtime_scope);
+   StringToUpper(runtime_scope_expected);
+   if(StringLen(runtime_scope_expected) > 0 && runtime_scope != runtime_scope_expected)
+     {
+      if(StringLen(runtime_scope_token) <= 0)
+         runtime_scope_token = "MISSING";
+      reason = "LIVE_RUNTIME_SCOPE_MISMATCH_" + runtime_scope_token;
+      return true;
+     }
+   return false;
+  }
+
 string MbMlRuntimeBridgeUniverseVersion(const MbMlRuntimeBridgeState &state)
   {
    return state.contract.universe_version;
@@ -565,13 +615,19 @@ bool MbMlRuntimeBridgeAppendLiveDealLedger(
       return false;
    if(HistoryDealGetString(deal_ticket,DEAL_SYMBOL) != symbol)
       return false;
-   if((int)HistoryDealGetInteger(deal_ticket,DEAL_ENTRY) != DEAL_ENTRY_OUT)
+   int deal_entry = (int)HistoryDealGetInteger(deal_ticket,DEAL_ENTRY);
+   if(deal_entry != DEAL_ENTRY_OUT && deal_entry != DEAL_ENTRY_OUT_BY)
       return false;
 
    MbBrokerNetLedgerRow row;
    row.symbol_alias = MbCanonicalSymbol(symbol);
    row.ts = (long)HistoryDealGetInteger(deal_ticket,DEAL_TIME);
-   row.side = "UNKNOWN";
+   ENUM_DEAL_TYPE deal_type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(deal_ticket,DEAL_TYPE);
+   row.side = "NONE";
+   if(deal_type == DEAL_TYPE_SELL)
+      row.side = "BUY";
+   else if(deal_type == DEAL_TYPE_BUY)
+      row.side = "SELL";
    row.lots = HistoryDealGetDouble(deal_ticket,DEAL_VOLUME);
    row.entry_price = 0.0;
    row.exit_price = HistoryDealGetDouble(deal_ticket,DEAL_PRICE);
