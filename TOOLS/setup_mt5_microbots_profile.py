@@ -270,6 +270,66 @@ def _is_portable_launch(mt5_exe: Path, terminal_data_dir: Path) -> bool:
         return False
 
 
+def _replace_or_append_ini_line(text: str, section: str, key: str, value: str) -> str:
+    section_header = f"[{section}]"
+    lines = text.splitlines()
+    out: List[str] = []
+    in_section = False
+    section_found = False
+    key_written = False
+
+    for idx, raw_line in enumerate(lines):
+        line = raw_line
+        stripped = raw_line.strip()
+        is_section = stripped.startswith("[") and stripped.endswith("]")
+        if is_section:
+            if in_section and not key_written:
+                out.append(f"{key}={value}")
+                key_written = True
+            in_section = stripped == section_header
+            if in_section:
+                section_found = True
+            out.append(line)
+            continue
+
+        if in_section and stripped.lower().startswith(f"{key.lower()}="):
+            if not key_written:
+                out.append(f"{key}={value}")
+                key_written = True
+            continue
+
+        out.append(line)
+
+    if in_section and not key_written:
+        out.append(f"{key}={value}")
+        key_written = True
+
+    if not section_found:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(section_header)
+        out.append(f"{key}={value}")
+    elif not key_written:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key}={value}")
+
+    return "\r\n".join(out) + "\r\n"
+
+
+def _prime_terminal_profile(data_dir: Path, profile_name: str) -> None:
+    common_ini = data_dir / "config" / "common.ini"
+    if not common_ini.exists():
+        return
+    try:
+        text = common_ini.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return
+    text = _replace_or_append_ini_line(text, "Charts", "ProfileLast", profile_name)
+    text = _replace_or_append_ini_line(text, "Experts", "Enabled", "1")
+    common_ini.write_text(text, encoding="utf-8")
+
+
 def _launch_mt5(mt5_exe: Path, profile_name: str, terminal_data_dir: Path) -> Dict[str, Any]:
     if not mt5_exe.exists():
         return {
@@ -397,6 +457,8 @@ def main() -> int:
                 "symbol_terminal": _resolve_symbol(str(item.get("broker_symbol") or item["symbol"])),
             }
         )
+
+    _prime_terminal_profile(data_dir, args.profile_name)
 
     launch_report: Dict[str, Any] = {
         "requested": False,
