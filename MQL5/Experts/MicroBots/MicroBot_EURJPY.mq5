@@ -667,6 +667,7 @@ void OnTick()
    MbSignalDecision signal;
    MbRefreshPaperTradeRights(g_state,IsLocalPaperModeActive());
    EvaluateEURJPYStrategy(g_state,g_profile,g_market,signal);
+   bool truth_diag_active = MbIsFirstWaveTruthDiagnosticActive(g_profile.symbol,IsLocalPaperModeActive());
    if(signal.setup_type != "NONE")
      {
       g_state.market_regime = signal.market_regime;
@@ -684,6 +685,11 @@ void OnTick()
       g_state.renko_score = signal.renko_score;
       g_state.renko_run_length = signal.renko_run_length;
       g_state.renko_reversal_flag = signal.renko_reversal_flag;
+     }
+   else if(truth_diag_active)
+     {
+      string no_setup_reason = (StringLen(signal.reason_code) > 0 ? signal.reason_code : "NONE");
+      AppendEURJPYDecisionEvent(now,"DIAGNOSTIC","SKIP",("NO_SETUP_" + no_setup_reason),g_market.spread_points,signal.score,0.0,0,true,60);
      }
 
    if(signal.setup_type != "NONE")

@@ -11,6 +11,7 @@ import codecs
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -238,7 +239,38 @@ def _list_oanda_terminal_processes(include_vps: bool = True) -> List[Dict[str, A
     return [row for row in rows if "[VPS]" not in str(row.get("MainWindowTitle", ""))]
 
 
-def _launch_mt5(mt5_exe: Path, profile_name: str) -> Dict[str, Any]:
+def _list_terminal_processes_by_exe(mt5_exe: Path) -> List[Dict[str, Any]]:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            "$exe=$args[0]; "
+            "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Name -eq 'terminal64.exe' -and $_.ExecutablePath -eq $exe } | "
+            "Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3"
+        ),
+        str(mt5_exe),
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8")
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else [data]
+
+
+def _is_portable_launch(mt5_exe: Path, terminal_data_dir: Path) -> bool:
+    try:
+        return mt5_exe.parent.resolve() == terminal_data_dir.resolve()
+    except FileNotFoundError:
+        return False
+
+
+def _launch_mt5(mt5_exe: Path, profile_name: str, terminal_data_dir: Path) -> Dict[str, Any]:
     if not mt5_exe.exists():
         return {
             "requested": False,
@@ -247,31 +279,54 @@ def _launch_mt5(mt5_exe: Path, profile_name: str) -> Dict[str, Any]:
             "before": _list_oanda_terminal_processes(include_vps=True),
             "after": _list_oanda_terminal_processes(include_vps=True),
         }
+    portable_launch = _is_portable_launch(mt5_exe, terminal_data_dir)
+    launch_args = [str(mt5_exe)]
+    if portable_launch:
+        launch_args.append("/portable")
+    launch_args.append(f"/profile:{profile_name}")
     before_all = _list_oanda_terminal_processes(include_vps=True)
     before_local = _list_oanda_terminal_processes(include_vps=False)
-    subprocess.Popen([str(mt5_exe), f"/profile:{profile_name}"])
-    time.sleep(6)
+    before_portable = _list_terminal_processes_by_exe(mt5_exe) if portable_launch else []
+    subprocess.Popen(launch_args)
+    time.sleep(8 if portable_launch else 6)
     after_all = _list_oanda_terminal_processes(include_vps=True)
     after_local = _list_oanda_terminal_processes(include_vps=False)
+    after_portable = _list_terminal_processes_by_exe(mt5_exe) if portable_launch else []
     before_ids = {int(row.get("Id", 0)) for row in before_local if row.get("Id")}
     after_ids = {int(row.get("Id", 0)) for row in after_local if row.get("Id")}
     new_local_ids = sorted(after_ids - before_ids)
-    launched = bool(new_local_ids) or bool(after_local)
+    if portable_launch:
+        before_portable_ids = {int(row.get("ProcessId", 0)) for row in before_portable if row.get("ProcessId")}
+        after_portable_ids = {int(row.get("ProcessId", 0)) for row in after_portable if row.get("ProcessId")}
+        new_local_ids = sorted(after_portable_ids - before_portable_ids)
+        launched = bool(new_local_ids) or bool(after_portable)
+    else:
+        launched = bool(new_local_ids) or bool(after_local)
     launch_note = "local_terminal_visible"
-    if before_local and after_local and before_ids == after_ids:
-        launch_note = "reused_existing_local_terminal"
-    elif not after_local:
-        if any("[VPS]" in str(row.get("MainWindowTitle", "")) for row in after_all):
-            launch_note = "blocked_by_existing_vps_instance"
-        else:
-            launch_note = "local_terminal_not_visible_after_launch"
+    if portable_launch:
+        if before_portable and after_portable and {int(row.get("ProcessId", 0)) for row in before_portable if row.get("ProcessId")} == {int(row.get("ProcessId", 0)) for row in after_portable if row.get("ProcessId")}:
+            launch_note = "reused_existing_portable_terminal"
+        elif not after_portable:
+            launch_note = "portable_terminal_not_visible_after_launch"
+    else:
+        if before_local and after_local and before_ids == after_ids:
+            launch_note = "reused_existing_local_terminal"
+        elif not after_local:
+            if any("[VPS]" in str(row.get("MainWindowTitle", "")) for row in after_all):
+                launch_note = "blocked_by_existing_vps_instance"
+            else:
+                launch_note = "local_terminal_not_visible_after_launch"
     return {
         "requested": True,
         "launched": launched,
         "launch_note": launch_note,
+        "portable_launch": portable_launch,
+        "launch_command": " ".join(shlex.quote(arg) for arg in launch_args),
         "before": before_all,
         "after": after_all,
         "new_local_ids": new_local_ids,
+        "before_portable": before_portable,
+        "after_portable": after_portable,
     }
 
 
@@ -351,7 +406,7 @@ def main() -> int:
         "after": _list_oanda_terminal_processes(include_vps=True),
     }
     if args.launch:
-        launch_report = _launch_mt5(mt5_exe, args.profile_name)
+        launch_report = _launch_mt5(mt5_exe, args.profile_name, data_dir)
 
     report = {
         "ok": True,

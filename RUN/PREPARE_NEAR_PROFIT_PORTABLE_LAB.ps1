@@ -105,7 +105,11 @@ $prepared = & $prepareScript `
     -MetaEditorExe (Join-Path $LabTerminalRoot "MetaEditor64.exe") `
     -CompileAll:$CompileAll
 
-Copy-CompiledExpertsToPortableLab -SourceTerminalDataDir $sourceTerminalDataDir -LabRoot $LabTerminalRoot
+$copiedCompiledExpertsFromSource = $false
+if (-not $CompileAll) {
+    Copy-CompiledExpertsToPortableLab -SourceTerminalDataDir $sourceTerminalDataDir -LabRoot $LabTerminalRoot
+    $copiedCompiledExpertsFromSource = $true
+}
 
 [pscustomobject]@{
     terminal_origin = $LabTerminalRoot
@@ -113,6 +117,7 @@ Copy-CompiledExpertsToPortableLab -SourceTerminalDataDir $sourceTerminalDataDir 
     mt5_exe = $labTerminalExe
     portable_terminal = $true
     source_terminal_data_dir = $sourceTerminalDataDir
+    copied_compiled_experts_from_source = $copiedCompiledExpertsFromSource
     robocopy_log = $robocopyLog
     robocopy_exit_code = $robocopyCode
     prepare_result = $prepared
