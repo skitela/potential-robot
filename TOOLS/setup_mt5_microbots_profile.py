@@ -103,6 +103,12 @@ def _write_chart_text(path: Path, text: str) -> None:
     path.write_bytes(payload)
 
 
+def _write_order_file(charts_dir: Path, chart_files: List[str]) -> None:
+    order_path = charts_dir / "order.wnd"
+    lines = [name for name in chart_files if name]
+    order_path.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
+
+
 def _description_for_symbol(symbol: str) -> str:
     base = symbol.replace(".pro", "").upper()
     if len(base) == 6 and base.isalpha():
@@ -125,6 +131,40 @@ def _read_preset_lines(preset_path: Path) -> List[str]:
             continue
         lines.append(line)
     return lines
+
+
+def _extract_inputs(chart_text: str) -> List[str]:
+    match = re.search(r"(?is)<inputs>\s*(.*?)\s*</inputs>", chart_text)
+    if not match:
+        return []
+    lines: List[str] = []
+    for raw in match.group(1).splitlines():
+        line = raw.strip()
+        if not line or line.startswith(";"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _merge_input_lines(base_lines: List[str], override_lines: List[str]) -> List[str]:
+    merged: List[str] = list(base_lines)
+    index_by_key: Dict[str, int] = {}
+    for idx, line in enumerate(merged):
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        index_by_key[key] = idx
+
+    for line in override_lines:
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in index_by_key:
+            merged[index_by_key[key]] = line
+        else:
+            index_by_key[key] = len(merged)
+            merged.append(line)
+    return merged
 
 
 def _render_microbot_expert_block(expert: str, preset_lines: List[str]) -> str:
@@ -189,6 +229,31 @@ def _pick_source_chart(data_dir: Path) -> Optional[Path]:
         if charts:
             return charts[0]
     return None
+
+
+def _pick_source_chart_for_expert(data_dir: Path, expert: str, exclude_profile: Optional[str] = None) -> Optional[Path]:
+    charts_root = data_dir / "MQL5" / "Profiles" / "Charts"
+    if not charts_root.exists():
+        return None
+
+    candidates: List[Path] = []
+    for chart_path in charts_root.rglob("chart*.chr"):
+        profile_name = chart_path.parent.name
+        if exclude_profile:
+            excluded_prefix = f"{exclude_profile}_backup_"
+            if profile_name == exclude_profile or profile_name.startswith(excluded_prefix):
+                continue
+        try:
+            text = _normalize_chart_template_text(chart_path.read_text(encoding="utf-16le"))
+        except Exception:
+            continue
+        if f"name={expert}" in text:
+            candidates.append(chart_path)
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def _close_mt5_processes() -> None:
@@ -428,7 +493,20 @@ def main() -> int:
 
     id_seed = max(int(time.time_ns() % 9_000_000_000_000_000_000), 1)
     written: List[Dict[str, Any]] = []
+    chart_filenames: List[str] = []
     for idx, item in enumerate(items, start=1):
+        expert_name = str(item["expert"])
+        expert_template = _pick_source_chart_for_expert(data_dir, expert_name, exclude_profile=args.profile_name)
+        source_template_text = template_text
+        source_inputs: List[str] = []
+        if expert_template is not None:
+            try:
+                source_template_text = _normalize_chart_template_text(expert_template.read_text(encoding="utf-16le"))
+                source_inputs = _extract_inputs(source_template_text)
+            except Exception:
+                source_template_text = template_text
+                source_inputs = []
+
         preset_name = str(item["preset"])
         preset_mode = "safe"
         if args.use_active_presets:
@@ -442,9 +520,15 @@ def main() -> int:
         if not preset_path.exists():
             raise SystemExit(f"Brak presetu: {preset_path}")
         preset_lines = _read_preset_lines(preset_path)
-        chart_text = _build_chart_text(template_text, item, preset_lines, str(id_seed + idx))
+        effective_preset_lines = (
+            _merge_input_lines(source_inputs, preset_lines)
+            if len(preset_lines) <= 4 and source_inputs
+            else preset_lines
+        )
+        chart_text = _build_chart_text(source_template_text, item, effective_preset_lines, str(id_seed + idx))
         out_path = charts_dir / f"chart{idx:02d}.chr"
         _write_chart_text(out_path, chart_text)
+        chart_filenames.append(out_path.name)
         written.append(
             {
                 "chart": out_path.name,
@@ -454,10 +538,13 @@ def main() -> int:
                 "preset": preset_name,
                 "preset_mode": preset_mode,
                 "resolved_preset_path": str(preset_path),
+                "source_chart": str(expert_template) if expert_template else str(template),
+                "effective_input_count": len(effective_preset_lines),
                 "symbol_terminal": _resolve_symbol(str(item.get("broker_symbol") or item["symbol"])),
             }
         )
 
+    _write_order_file(charts_dir, chart_filenames)
     _prime_terminal_profile(data_dir, args.profile_name)
 
     launch_report: Dict[str, Any] = {
