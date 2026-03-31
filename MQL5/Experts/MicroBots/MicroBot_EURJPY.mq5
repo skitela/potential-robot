@@ -584,7 +584,10 @@ void OnTick()
          string close_request_comment = closed_paper.request_comment;
          if(StringLen(close_request_comment) <= 0 && StringLen(closed_paper.candidate_id) > 0)
             close_request_comment = MbPreTradeTruthBuildRequestComment(closed_paper.candidate_id);
-         MbExecutionTruthWritePaperClose(
+         string close_chain_reason = paper_close_reason;
+         if(StringLen(closed_paper.candidate_id) > 0)
+            close_chain_reason += "|CID=" + closed_paper.candidate_id;
+         bool truth_close_written = MbExecutionTruthWritePaperClose(
             "MICROBOT_PAPER",
             g_state.symbol,
             Symbol(),
@@ -604,7 +607,18 @@ void OnTick()
             (closed_paper.slippage_cost_pln + closed_paper.extra_fee_pln),
             closed_paper.net_pln
          );
-         MbAppendLearningObservationV2(
+         AppendEURJPYDecisionEvent(
+            now,
+            "EXECUTION_TRUTH_CLOSE",
+            (truth_close_written ? "OK" : "FAIL"),
+            close_chain_reason,
+            g_market.spread_points,
+            0.0,
+            0.0,
+            0,
+            false
+         );
+         bool lesson_written = MbAppendLearningObservationV2(
             g_state.symbol,
             now,
             closed_paper.setup_type,
@@ -625,7 +639,30 @@ void OnTick()
             paper_pnl,
             paper_close_reason
          );
-         MbMlRuntimeBridgeAppendPaperLedger(g_ml_bridge,now,g_profile.symbol,closed_paper,g_market,paper_pnl,paper_close_reason);
+         AppendEURJPYDecisionEvent(
+            now,
+            "LESSON_WRITE",
+            (lesson_written ? "OK" : "FAIL"),
+            close_chain_reason,
+            g_market.spread_points,
+            0.0,
+            0.0,
+            0,
+            false
+         );
+         bool knowledge_bridge_enabled = g_ml_bridge.enabled;
+         bool knowledge_written = MbMlRuntimeBridgeAppendPaperLedger(g_ml_bridge,now,g_profile.symbol,closed_paper,g_market,paper_pnl,paper_close_reason);
+         AppendEURJPYDecisionEvent(
+            now,
+            "KNOWLEDGE_WRITE",
+            (knowledge_bridge_enabled ? (knowledge_written ? "OK" : "FAIL") : "SKIP"),
+            (knowledge_bridge_enabled ? close_chain_reason : "ML_BRIDGE_DISABLED"),
+            g_market.spread_points,
+            0.0,
+            0.0,
+            0,
+            false
+         );
          AppendEURJPYDecisionEvent(now,"PAPER_CLOSE",(paper_pnl >= 0.0 ? "OK" : "LOSS"),paper_close_reason,g_market.spread_points,closed_paper.confidence_score,paper_pnl,0,false);
          MbSavePaperPosition(g_profile.symbol,g_paper_position);
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);

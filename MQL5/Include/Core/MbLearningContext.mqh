@@ -322,7 +322,7 @@ void MbAppendLearningObservation(
    FileClose(h);
   }
 
-void MbAppendLearningObservationV2(
+bool MbAppendLearningObservationV2(
    const string symbol,
    const datetime ts,
    const string setup_type,
@@ -346,7 +346,7 @@ void MbAppendLearningObservationV2(
   {
    int h = FileOpen(MbLogFilePath(symbol,"learning_observations_v2.csv"), FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI);
    if(h == INVALID_HANDLE)
-      return;
+      return false;
    MbEnsureLearningObservationHeader(h,true);
    FileSeek(h,0,SEEK_END);
    MbWriteLearningObservationRecord(
@@ -402,6 +402,7 @@ void MbAppendLearningObservationV2(
       market_regime,
       pnl
    );
+   return true;
   }
 
 bool MbAppendHistoricalLearningObservation(

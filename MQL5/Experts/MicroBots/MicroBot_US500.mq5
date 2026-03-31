@@ -579,7 +579,44 @@ void OnTick()
       if(MbPaperMaybeClosePosition(g_market,g_paper_position,now,paper_pnl,paper_close_reason,closed_paper))
         {
          MbProcessSyntheticClosedDealFeedback(g_state,paper_pnl,now);
-         MbAppendLearningObservationV2(
+         string close_request_comment = closed_paper.request_comment;
+         if(StringLen(close_request_comment) <= 0 && StringLen(closed_paper.candidate_id) > 0)
+            close_request_comment = MbPreTradeTruthBuildRequestComment(closed_paper.candidate_id);
+         string close_chain_reason = paper_close_reason;
+         if(StringLen(closed_paper.candidate_id) > 0)
+            close_chain_reason += "|CID=" + closed_paper.candidate_id;
+         bool truth_close_written = MbExecutionTruthWritePaperClose(
+            "MICROBOT_PAPER",
+            g_state.symbol,
+            Symbol(),
+            closed_paper.candidate_id,
+            closed_paper.side,
+            closed_paper.lots,
+            closed_paper.last_mark_price,
+            closed_paper.last_mark_price,
+            g_market.bid,
+            g_market.ask,
+            now,
+            close_request_comment,
+            paper_close_reason,
+            closed_paper.gross_pln,
+            closed_paper.commission_pln,
+            closed_paper.swap_pln,
+            (closed_paper.slippage_cost_pln + closed_paper.extra_fee_pln),
+            closed_paper.net_pln
+         );
+         AppendUS500DecisionEvent(
+            now,
+            "EXECUTION_TRUTH_CLOSE",
+            (truth_close_written ? "OK" : "FAIL"),
+            close_chain_reason,
+            g_market.spread_points,
+            0.0,
+            0.0,
+            0,
+            false
+         );
+         bool lesson_written = MbAppendLearningObservationV2(
             g_state.symbol,
             now,
             closed_paper.setup_type,
@@ -600,7 +637,30 @@ void OnTick()
             paper_pnl,
             paper_close_reason
          );
-         MbMlRuntimeBridgeAppendPaperLedger(g_ml_bridge,now,g_profile.symbol,closed_paper,g_market,paper_pnl,paper_close_reason);
+         AppendUS500DecisionEvent(
+            now,
+            "LESSON_WRITE",
+            (lesson_written ? "OK" : "FAIL"),
+            close_chain_reason,
+            g_market.spread_points,
+            0.0,
+            0.0,
+            0,
+            false
+         );
+         bool knowledge_bridge_enabled = g_ml_bridge.enabled;
+         bool knowledge_written = MbMlRuntimeBridgeAppendPaperLedger(g_ml_bridge,now,g_profile.symbol,closed_paper,g_market,paper_pnl,paper_close_reason);
+         AppendUS500DecisionEvent(
+            now,
+            "KNOWLEDGE_WRITE",
+            (knowledge_bridge_enabled ? (knowledge_written ? "OK" : "FAIL") : "SKIP"),
+            (knowledge_bridge_enabled ? close_chain_reason : "ML_BRIDGE_DISABLED"),
+            g_market.spread_points,
+            0.0,
+            0.0,
+            0,
+            false
+         );
          AppendUS500DecisionEvent(now,"PAPER_CLOSE",(paper_pnl >= 0.0 ? "OK" : "LOSS"),paper_close_reason,g_market.spread_points,0.0,paper_pnl,0,false);
          MbSavePaperPosition(g_profile.symbol,g_paper_position);
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
@@ -895,6 +955,7 @@ void OnTick()
          if(IsLocalPaperModeActive())
            {
             string pretrade_candidate_id = "";
+            string paper_request_comment = "";
             MbPreTradeTruthRecord pretrade_record;
             MbPreTradeTruthWritePaperOpen(
                "MICROBOT_PAPER",
@@ -911,6 +972,7 @@ void OnTick()
                pretrade_candidate_id,
                pretrade_record
             );
+            paper_request_comment = MbPreTradeTruthBuildRequestComment(pretrade_candidate_id);
             MbMarkOrderSend(g_state);
             MbLatencyProfileRecordExecution(g_latency,true,0,0.0);
             bool paper_opened = MbPaperOpenPosition(
@@ -945,6 +1007,7 @@ void OnTick()
             );
             if(paper_opened)
               {
+               MbPaperPositionSetTruthContext(g_paper_position,pretrade_candidate_id,paper_request_comment);
                MbExecutionTruthWritePaperOpen(
                   "MICROBOT_PAPER",
                   g_state.symbol,
@@ -957,7 +1020,7 @@ void OnTick()
                   g_market.bid,
                   g_market.ask,
                   now,
-                  MbPreTradeTruthBuildRequestComment(pretrade_candidate_id)
+                  paper_request_comment
                );
                MbSavePaperPosition(g_profile.symbol,g_paper_position);
                AppendUS500CandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);

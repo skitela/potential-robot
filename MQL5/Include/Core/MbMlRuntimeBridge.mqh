@@ -480,18 +480,18 @@ bool MbMlRuntimeBridgeApplyStudentGate(
    return !allowed;
   }
 
-void MbMlRuntimeBridgeAppendLedgerRow(
+bool MbMlRuntimeBridgeAppendLedgerRow(
    MbMlRuntimeBridgeState &state,
    const MbBrokerNetLedgerRow &row
 )
   {
    if(!state.enabled || StringLen(state.ledger_log_path) <= 0)
-      return;
+      return false;
 
    MbMlRuntimeBridgeEnsureLedgerHeader(state.ledger_log_path);
    int handle = FileOpen(state.ledger_log_path,FILE_COMMON | FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI,',');
    if(handle == INVALID_HANDLE)
-      return;
+      return false;
 
    FileSeek(handle,0,SEEK_END);
    FileWrite(
@@ -514,9 +514,10 @@ void MbMlRuntimeBridgeAppendLedgerRow(
       DoubleToString(row.net_pln,6)
    );
    FileClose(handle);
+   return true;
   }
 
-void MbMlRuntimeBridgeAppendPaperLedger(
+bool MbMlRuntimeBridgeAppendPaperLedger(
    MbMlRuntimeBridgeState &state,
    const datetime now_ts,
    const string symbol,
@@ -527,7 +528,7 @@ void MbMlRuntimeBridgeAppendPaperLedger(
 )
   {
    if(!state.enabled)
-      return;
+      return false;
 
    MbBrokerNetLedgerRow row;
    row.symbol_alias = MbCanonicalSymbol(symbol);
@@ -546,10 +547,10 @@ void MbMlRuntimeBridgeAppendPaperLedger(
    row.swap_pln = (MathIsValidNumber(closed_state.swap_pln) ? closed_state.swap_pln : 0.0);
    row.extra_fee_pln = (MathIsValidNumber(closed_state.extra_fee_pln) ? closed_state.extra_fee_pln : 0.0);
    row.net_pln = (MathIsValidNumber(closed_state.net_pln) ? closed_state.net_pln : (row.gross_pln - row.slippage_cost_pln - row.commission_pln - row.swap_pln - row.extra_fee_pln));
-   MbMlRuntimeBridgeAppendLedgerRow(state,row);
+   return MbMlRuntimeBridgeAppendLedgerRow(state,row);
   }
 
-void MbMlRuntimeBridgeAppendLiveDealLedger(
+bool MbMlRuntimeBridgeAppendLiveDealLedger(
    MbMlRuntimeBridgeState &state,
    const string symbol,
    const ulong magic,
@@ -557,15 +558,15 @@ void MbMlRuntimeBridgeAppendLiveDealLedger(
 )
   {
    if(!state.enabled || deal_ticket == 0)
-      return;
+      return false;
    if(!HistoryDealSelect(deal_ticket))
-      return;
+      return false;
    if((ulong)HistoryDealGetInteger(deal_ticket,DEAL_MAGIC) != magic)
-      return;
+      return false;
    if(HistoryDealGetString(deal_ticket,DEAL_SYMBOL) != symbol)
-      return;
+      return false;
    if((int)HistoryDealGetInteger(deal_ticket,DEAL_ENTRY) != DEAL_ENTRY_OUT)
-      return;
+      return false;
 
    MbBrokerNetLedgerRow row;
    row.symbol_alias = MbCanonicalSymbol(symbol);
@@ -584,7 +585,7 @@ void MbMlRuntimeBridgeAppendLiveDealLedger(
    row.swap_pln = HistoryDealGetDouble(deal_ticket,DEAL_SWAP);
    row.extra_fee_pln = HistoryDealGetDouble(deal_ticket,DEAL_FEE);
    row.net_pln = row.gross_pln + row.commission_pln + row.swap_pln + row.extra_fee_pln;
-   MbMlRuntimeBridgeAppendLedgerRow(state,row);
+   return MbMlRuntimeBridgeAppendLedgerRow(state,row);
   }
 
 #endif
