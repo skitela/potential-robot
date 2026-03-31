@@ -210,6 +210,8 @@ $runtimeLatestScrubScript = Join-Path $ProjectRoot "RUN\SCRUB_STALE_RUNTIME_LATE
 $runtimeLatestScrubPath = Join-Path $opsRoot "runtime_latest_scrub_latest.json"
 $learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
 $learningArtifactInventoryPath = Join-Path $opsRoot "learning_artifact_inventory_latest.json"
+$globalTeacherCohortAuditScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_TEACHER_COHORT_ACTIVITY_AUDIT.ps1"
+$globalTeacherCohortAuditPath = Join-Path $opsRoot "global_teacher_cohort_activity_latest.json"
 $firstWaveLessonClosureAuditPath = Join-Path $opsRoot "first_wave_lesson_closure_latest.json"
 $postMigrationStartupAuditPath = Join-Path $opsRoot "post_migration_startup_audit_latest.json"
 $normalizeScript = Join-Path $ProjectRoot "RUN\NORMALIZE_LEARNING_ARTIFACT_LAYERS.ps1"
@@ -258,7 +260,7 @@ $shadowRuntimeBootstrapPath = Join-Path $opsRoot "shadow_runtime_bootstrap_lates
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
-foreach ($path in @($runtimeLatestScrubScript, $pathHygieneScript, $hotPathScript, $learningArtifactInventoryScript, $normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $qdmCustomSymbolRealismAuditScript, $mt5FirstWaveServerParityAuditScript, $mt5FirstWaveRuntimeActivityAuditScript, $firstWaveLessonClosureAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
+foreach ($path in @($runtimeLatestScrubScript, $pathHygieneScript, $hotPathScript, $learningArtifactInventoryScript, $globalTeacherCohortAuditScript, $normalizeScript, $repoHygieneScript, $supervisorScopeAuditScript, $vpsSpoolWellbeingScript, $qdmMissingProfileScript, $qdmVisibilityRefreshScript, $globalQdmRetrainScript, $instrumentDataReadinessScript, $instrumentShadowDatasetsScript, $instrumentTrainingReadinessScript, $candidateGapAuditScript, $outcomeClosureAuditScript, $localModelReadinessScript, $learningSourceAuditScript, $mlScalpingFitAuditScript, $tradeTransitionAuditScript, $paperLiveActionGapAuditScript, $paperLossSourceAuditScript, $qdmCustomSymbolRealismAuditScript, $mt5FirstWaveServerParityAuditScript, $mt5FirstWaveRuntimeActivityAuditScript, $firstWaveLessonClosureAuditScript, $mlOverlayAuditScript, $shadowRuntimeBootstrapScript, $instrumentLocalTrainingPlanScript, $instrumentLocalTrainingAuditScript, $qdmMissingSyncStarterScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required script not found: $path"
     }
@@ -279,6 +281,7 @@ $runtimeLatestScrub = Read-JsonSafe -Path $runtimeLatestScrubPath
 $pathHygiene = Read-JsonSafe -Path $pathHygienePath
 $hotPath = Read-JsonSafe -Path $hotPathPath
 $learningArtifactInventory = Read-JsonSafe -Path $learningArtifactInventoryPath
+$globalTeacherCohortAudit = Read-JsonSafe -Path $globalTeacherCohortAuditPath
 $manifestState = Get-ManifestState -ManifestPath $manifestPath
 $null = & $repoHygieneScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
 $null = & $supervisorScopeAuditScript -ProjectRoot $ProjectRoot -OutputRoot $opsRoot
@@ -312,6 +315,7 @@ $qdmCustomSymbolRealismAudit = (& $qdmCustomSymbolRealismAuditScript -ProjectRoo
 $mt5FirstWaveServerParityAudit = (& $mt5FirstWaveServerParityAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $mt5FirstWaveRuntimeActivityAudit = (& $mt5FirstWaveRuntimeActivityAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 $firstWaveLessonClosureAudit = (& $firstWaveLessonClosureAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
+$globalTeacherCohortAudit = (& $globalTeacherCohortAuditScript -ProjectRoot $ProjectRoot | ConvertFrom-Json)
 try {
     $mlOverlayAudit = (& $mlOverlayAuditScript -ProjectRoot $ProjectRoot -ResearchRoot $ResearchRoot -ResearchPython $researchPython -CommonStateRoot $commonStateRoot | ConvertFrom-Json)
 }
@@ -617,6 +621,15 @@ $learningProgressObservationActiveCount30m = if ($null -ne $learningArtifactInve
 $learningProgressLessonActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_lesson_active_count_30m" -Default 0) } else { 0 }
 $learningProgressFirstWaveObservationActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_first_wave_observation_active_count_30m" -Default 0) } else { 0 }
 $learningProgressFirstWaveLessonActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-OptionalNumber -Object $learningArtifactInventory.summary -Name "learning_progress_first_wave_lesson_active_count_30m" -Default 0) } else { 0 }
+$globalTeacherCohortVerdict = if ($null -ne $globalTeacherCohortAudit) { [string](Get-OptionalValue -Object $globalTeacherCohortAudit -Name "verdict" -Default "") } else { "" }
+$globalTeacherCohortTargetCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-OptionalNumber -Object $globalTeacherCohortAudit.summary -Name "target_symbol_count" -Default 0) } else { 0 }
+$globalTeacherCohortRuntimeActiveCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-OptionalNumber -Object $globalTeacherCohortAudit.summary -Name "teacher_runtime_active_count" -Default 0) } else { 0 }
+$globalTeacherCohortRuntimeInactiveCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-OptionalNumber -Object $globalTeacherCohortAudit.summary -Name "teacher_runtime_inactive_count" -Default 0) } else { 0 }
+$globalTeacherCohortFreshFullLessonCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-OptionalNumber -Object $globalTeacherCohortAudit.summary -Name "fresh_full_lesson_count" -Default 0) } else { 0 }
+$globalTeacherCohortStalledCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-OptionalNumber -Object $globalTeacherCohortAudit.summary -Name "learning_stalled_count" -Default 0) } else { 0 }
+$globalTeacherCohortMissingLessonSymbols = if ($null -ne $globalTeacherCohortAudit) { @(Get-OptionalValue -Object $globalTeacherCohortAudit.summary -Name "symbols_without_fresh_lessons" -Default @()) } else { @() }
+$globalTeacherCohortInactiveSymbols = if ($null -ne $globalTeacherCohortAudit) { @(Get-OptionalValue -Object $globalTeacherCohortAudit.summary -Name "symbols_without_teacher_runtime" -Default @()) } else { @() }
+$learningProgressGlobalTeacherAlert30m = ($globalTeacherCohortTargetCount -gt 0 -and ($globalTeacherCohortRuntimeInactiveCount -gt 0 -or $globalTeacherCohortStalledCount -gt 0))
 $postMigrationStartupVerdict = if ($null -ne $postMigrationStartupAudit) { [string](Get-OptionalValue -Object $postMigrationStartupAudit -Name "verdict" -Default "") } else { "" }
 $postMigrationStartupOk = ($null -ne $postMigrationStartupAudit -and [bool](Get-OptionalValue -Object $postMigrationStartupAudit -Name "ok" -Default $false))
 $postMigrationContinuityCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "continuity_fresh_count" -Default 0) } else { 0 }
@@ -624,7 +637,7 @@ $postMigrationWatchdogMissingCount = if ($null -ne $postMigrationStartupAudit) {
 $postMigrationWatchdogStaleCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "watchdog_stale_target_count" -Default 0) } else { 0 }
 $postMigrationPendingSyncCount = if ($null -ne $postMigrationStartupAudit) { [int](Get-OptionalNumber -Object $postMigrationStartupAudit.final.summary -Name "pending_vps_sync_count" -Default 0) } else { 0 }
 $postMigrationTruthFlowState = if ($null -ne $postMigrationStartupAudit) { [string](Get-OptionalValue -Object $postMigrationStartupAudit.final.summary -Name "truth_flow_state" -Default "") } else { "" }
-$learningProgressAlarm30m = ($learningProgressFleetAlert30m -or $learningProgressFirstWaveAlert30m -or $learningProgressFirstWaveLessonAlert30m)
+$learningProgressAlarm30m = ($learningProgressFleetAlert30m -or $learningProgressFirstWaveAlert30m -or $learningProgressFirstWaveLessonAlert30m -or $learningProgressGlobalTeacherAlert30m)
 $learningProgressKnownCause = ($firstWaveRuntimeOutsideWindowCount -gt 0 -or $firstWaveRuntimeFreezeCount -gt 0 -or $paperLiveIdleCount -gt 0)
 $verdict = if (
     $learningProgressAlarm30m
@@ -682,6 +695,7 @@ $report = [ordered]@{
     learning_hot_path = if ($null -ne $hotPath) { [pscustomobject]@{ verdict = [string]$hotPath.verdict } } else { $null }
     runtime_latest_scrub = $runtimeLatestScrub
     learning_artifact_inventory = $learningArtifactInventory
+    global_teacher_cohort_audit = $globalTeacherCohortAudit
     repo_hygiene = $repoHygiene
     supervisor_scope_audit = $supervisorScopeAudit
     post_migration_startup_audit = $postMigrationStartupAudit
@@ -840,6 +854,15 @@ $report = [ordered]@{
         learning_progress_lesson_active_count_30m = $learningProgressLessonActiveCount30m
         learning_progress_first_wave_observation_active_count_30m = $learningProgressFirstWaveObservationActiveCount30m
         learning_progress_first_wave_lesson_active_count_30m = $learningProgressFirstWaveLessonActiveCount30m
+        global_teacher_cohort_verdict = $globalTeacherCohortVerdict
+        global_teacher_cohort_target_count = $globalTeacherCohortTargetCount
+        global_teacher_cohort_runtime_active_count = $globalTeacherCohortRuntimeActiveCount
+        global_teacher_cohort_runtime_inactive_count = $globalTeacherCohortRuntimeInactiveCount
+        global_teacher_cohort_fresh_full_lesson_count = $globalTeacherCohortFreshFullLessonCount
+        global_teacher_cohort_learning_stalled_count = $globalTeacherCohortStalledCount
+        global_teacher_cohort_alert_30m = $learningProgressGlobalTeacherAlert30m
+        global_teacher_cohort_inactive_symbols = @($globalTeacherCohortInactiveSymbols)
+        global_teacher_cohort_missing_lesson_symbols = @($globalTeacherCohortMissingLessonSymbols)
         post_migration_startup_verdict = $postMigrationStartupVerdict
         post_migration_startup_ok = $postMigrationStartupOk
         post_migration_continuity_fresh_count = $postMigrationContinuityCount
@@ -897,6 +920,12 @@ $lines.Add(("- learning_progress_observation_active_count_30m: {0}" -f $report.s
 $lines.Add(("- learning_progress_lesson_active_count_30m: {0}" -f $report.summary.learning_progress_lesson_active_count_30m))
 $lines.Add(("- learning_progress_first_wave_observation_active_count_30m: {0}" -f $report.summary.learning_progress_first_wave_observation_active_count_30m))
 $lines.Add(("- learning_progress_first_wave_lesson_active_count_30m: {0}" -f $report.summary.learning_progress_first_wave_lesson_active_count_30m))
+$lines.Add(("- global_teacher_cohort_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.global_teacher_cohort_verdict)) { "BRAK" } else { $report.summary.global_teacher_cohort_verdict })))
+$lines.Add(("- global_teacher_cohort_runtime_active_count: {0}/{1}" -f $report.summary.global_teacher_cohort_runtime_active_count, $report.summary.global_teacher_cohort_target_count))
+$lines.Add(("- global_teacher_cohort_fresh_full_lesson_count: {0}" -f $report.summary.global_teacher_cohort_fresh_full_lesson_count))
+$lines.Add(("- global_teacher_cohort_learning_stalled_count: {0}" -f $report.summary.global_teacher_cohort_learning_stalled_count))
+$lines.Add(("- global_teacher_cohort_inactive_symbols: {0}" -f $(if ($report.summary.global_teacher_cohort_inactive_symbols.Count -gt 0) { ($report.summary.global_teacher_cohort_inactive_symbols -join ", ") } else { "BRAK" })))
+$lines.Add(("- global_teacher_cohort_missing_lesson_symbols: {0}" -f $(if ($report.summary.global_teacher_cohort_missing_lesson_symbols.Count -gt 0) { ($report.summary.global_teacher_cohort_missing_lesson_symbols -join ", ") } else { "BRAK" })))
 $lines.Add(("- post_migration_startup_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.summary.post_migration_startup_verdict)) { "BRAK" } else { $report.summary.post_migration_startup_verdict })))
 $lines.Add(("- post_migration_startup_ok: {0}" -f ([string]$report.summary.post_migration_startup_ok).ToLowerInvariant()))
 $lines.Add(("- post_migration_continuity_fresh_count: {0}" -f $report.summary.post_migration_continuity_fresh_count))

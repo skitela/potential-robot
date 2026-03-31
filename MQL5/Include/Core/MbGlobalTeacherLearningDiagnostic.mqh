@@ -2,20 +2,26 @@
 #define MB_GLOBAL_TEACHER_LEARNING_DIAGNOSTIC_INCLUDED
 
 #include "MbRuntimeKernel.mqh"
+#include "MbTuningTypes.mqh"
 
 datetime g_mb_global_teacher_diag_last_reload_local = 0;
 bool g_mb_global_teacher_diag_loaded = false;
 bool g_mb_global_teacher_diag_enabled = false;
 int g_mb_global_teacher_diag_max_age_sec = 43200;
+int g_mb_global_teacher_diag_force_scan_interval_sec = 60;
 bool g_mb_global_teacher_diag_allow_low_conversion_ratio = true;
 bool g_mb_global_teacher_diag_allow_forefield_dirty = true;
 bool g_mb_global_teacher_diag_allow_portfolio_heat = true;
+bool g_mb_global_teacher_diag_allow_family_freeze_relief = true;
+bool g_mb_global_teacher_diag_allow_fleet_freeze_relief = true;
 bool g_mb_global_teacher_diag_relax_tuning_gates = true;
 bool g_mb_global_teacher_diag_relax_cost_gates = true;
 double g_mb_global_teacher_diag_breakout_gate_abs = 0.16;
 double g_mb_global_teacher_diag_trend_gate_abs = 0.14;
 double g_mb_global_teacher_diag_range_gate_abs = 0.10;
 double g_mb_global_teacher_diag_rejection_gate_abs = 0.10;
+datetime g_mb_global_teacher_diag_last_timer_scan_ts = 0;
+string g_mb_global_teacher_diag_last_timer_scan_symbol = "";
 
 string MbGlobalTeacherLearningDiagnosticPath()
   {
@@ -43,9 +49,12 @@ void MbResetGlobalTeacherLearningDiagnosticState()
   {
    g_mb_global_teacher_diag_enabled = false;
    g_mb_global_teacher_diag_max_age_sec = 43200;
+   g_mb_global_teacher_diag_force_scan_interval_sec = 60;
    g_mb_global_teacher_diag_allow_low_conversion_ratio = true;
    g_mb_global_teacher_diag_allow_forefield_dirty = true;
    g_mb_global_teacher_diag_allow_portfolio_heat = true;
+   g_mb_global_teacher_diag_allow_family_freeze_relief = true;
+   g_mb_global_teacher_diag_allow_fleet_freeze_relief = true;
    g_mb_global_teacher_diag_relax_tuning_gates = true;
    g_mb_global_teacher_diag_relax_cost_gates = true;
    g_mb_global_teacher_diag_breakout_gate_abs = 0.16;
@@ -116,12 +125,18 @@ void MbLoadGlobalTeacherLearningDiagnostic(const bool force_reload = false)
          g_mb_global_teacher_diag_enabled = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_enabled);
       else if(key == "max_age_sec")
          g_mb_global_teacher_diag_max_age_sec = MathMax(60,MbGlobalTeacherLearningDiagnosticParseInt(value,g_mb_global_teacher_diag_max_age_sec));
+      else if(key == "force_scan_interval_sec")
+         g_mb_global_teacher_diag_force_scan_interval_sec = MathMax(5,MbGlobalTeacherLearningDiagnosticParseInt(value,g_mb_global_teacher_diag_force_scan_interval_sec));
       else if(key == "allow_low_conversion_ratio")
          g_mb_global_teacher_diag_allow_low_conversion_ratio = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_allow_low_conversion_ratio);
       else if(key == "allow_forefield_dirty")
          g_mb_global_teacher_diag_allow_forefield_dirty = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_allow_forefield_dirty);
       else if(key == "allow_portfolio_heat")
          g_mb_global_teacher_diag_allow_portfolio_heat = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_allow_portfolio_heat);
+      else if(key == "allow_family_freeze_relief")
+         g_mb_global_teacher_diag_allow_family_freeze_relief = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_allow_family_freeze_relief);
+      else if(key == "allow_fleet_freeze_relief")
+         g_mb_global_teacher_diag_allow_fleet_freeze_relief = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_allow_fleet_freeze_relief);
       else if(key == "relax_tuning_gates")
          g_mb_global_teacher_diag_relax_tuning_gates = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_relax_tuning_gates);
       else if(key == "relax_cost_gates")
@@ -149,7 +164,11 @@ bool MbIsGlobalTeacherLearningDiagnosticActive(const string symbol,const bool pa
    if(!MbIsGlobalTeacherLearningDiagnosticSymbol(symbol))
       return false;
 
+   string rel_path = MbGlobalTeacherLearningDiagnosticPath();
+   bool file_present = FileIsExist(rel_path,FILE_COMMON);
    MbLoadGlobalTeacherLearningDiagnostic();
+   if(file_present && !g_mb_global_teacher_diag_enabled)
+      g_mb_global_teacher_diag_enabled = true;
    return g_mb_global_teacher_diag_enabled;
   }
 
@@ -191,6 +210,72 @@ bool MbShouldRelaxGlobalTeacherLearningCostGate(const string symbol,const bool p
    if(!MbIsGlobalTeacherLearningDiagnosticActive(symbol,paper_mode_active))
       return false;
    return g_mb_global_teacher_diag_relax_cost_gates;
+  }
+
+bool MbShouldForceGlobalTeacherLearningTimerScan(
+   const string symbol,
+   const bool paper_mode_active,
+   const datetime now_ts
+)
+  {
+   if(!MbIsGlobalTeacherLearningDiagnosticActive(symbol,paper_mode_active))
+      return false;
+
+   string canonical = MbCanonicalSymbol(symbol);
+   if(
+      g_mb_global_teacher_diag_last_timer_scan_ts > 0 &&
+      g_mb_global_teacher_diag_last_timer_scan_symbol == canonical &&
+      (now_ts - g_mb_global_teacher_diag_last_timer_scan_ts) < g_mb_global_teacher_diag_force_scan_interval_sec
+   )
+      return false;
+
+   g_mb_global_teacher_diag_last_timer_scan_ts = now_ts;
+   g_mb_global_teacher_diag_last_timer_scan_symbol = canonical;
+   return true;
+  }
+
+void MbApplyGlobalTeacherLearningTuningRescue(
+   const string symbol,
+   const bool paper_mode_active,
+   MbTuningFamilyPolicy &family_policy,
+   MbTuningCoordinatorState &coordinator_state
+)
+  {
+   if(!MbIsGlobalTeacherLearningDiagnosticActive(symbol,paper_mode_active))
+      return;
+
+   family_policy.paper_mode_active = true;
+   if(g_mb_global_teacher_diag_allow_family_freeze_relief)
+     {
+      family_policy.freeze_new_changes = false;
+      family_policy.dominant_confidence_cap = 1.0;
+      family_policy.dominant_risk_cap = 1.0;
+      family_policy.breakout_family_tax = 0.0;
+      family_policy.trend_family_tax = 0.0;
+      if(family_policy.last_action_code == "FREEZE_FAMILY" || family_policy.last_action_code == "DEFENSIVE_FAMILY")
+        {
+         family_policy.last_action_code = "GLOBAL_TEACHER_RELAX_FAMILY";
+         family_policy.last_action_detail = "paper global teacher diagnostic removed family freeze overlays";
+        }
+     }
+
+   coordinator_state.paper_mode_active = true;
+   if(g_mb_global_teacher_diag_allow_fleet_freeze_relief)
+     {
+      coordinator_state.freeze_new_changes = false;
+      coordinator_state.global_confidence_cap = 1.0;
+      coordinator_state.global_risk_cap = 1.0;
+      if(
+         coordinator_state.last_action_code == "FREEZE_FLEET" ||
+         coordinator_state.last_action_code == "DEFENSIVE_FLEET" ||
+         coordinator_state.last_action_code == "COOL_FLEET" ||
+         coordinator_state.last_action_code == "LIMIT_CHANGE_BUDGET"
+      )
+        {
+         coordinator_state.last_action_code = "GLOBAL_TEACHER_RELAX_FLEET";
+         coordinator_state.last_action_detail = "paper global teacher diagnostic removed fleet freeze overlays";
+        }
+     }
   }
 
 bool MbShouldBypassGlobalTeacherLearningCandidateArbitration(

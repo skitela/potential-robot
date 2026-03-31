@@ -410,6 +410,14 @@ void OnTimer()
    if(g_kill_switch.halt)
       g_state.halt = true;
    MbRuntimeOnTimer(g_state);
+   if(MbShouldForceGlobalTeacherLearningTimerScan(g_profile.symbol,IsLocalPaperModeActive(),now))
+     {
+      AppendEURAUDDecisionEvent(now,"DIAGNOSTIC","FORCE","TIMER_FALLBACK_SCAN",g_market.spread_points,0.0,0.0,0,true,60);
+      OnTick();
+      now = TimeCurrent();
+      MbRefreshMarketSnapshot(g_profile,g_market);
+      NormalizeEURAUDMarketPermissions();
+     }
    MbOnnxObservationResult timer_onnx_result;
    MbOnnxObservationEmitTimerShadow(now,g_profile.symbol,(IsLocalPaperModeActive() ? "PAPER" : "LIVE"),g_market.spread_points,timer_onnx_result);
    MbFlushHeartbeat(g_state);
@@ -445,6 +453,8 @@ void OnTimer()
          MbLoadTuningCoordinatorState(g_euraud_coordinator_state);
          coordinator_changed = MbRunTuningCoordinator(families,g_euraud_coordinator_state,coordinator_reason);
         }
+
+      MbApplyGlobalTeacherLearningTuningRescue(g_profile.symbol,IsLocalPaperModeActive(),g_euraud_family_tuning_policy,g_euraud_coordinator_state);
 
       MbTuningDeckhandReport tuning_deckhand;
       MbTuningDeckhandReportReset(tuning_deckhand);

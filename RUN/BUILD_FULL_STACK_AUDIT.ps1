@@ -19,6 +19,7 @@ $runtimeLogRotationScript = Join-Path $ProjectRoot "TOOLS\ROTATE_RUNTIME_LOGS.ps
 $repoHygieneScript = Join-Path $ProjectRoot "RUN\BUILD_REPO_HYGIENE_REPORT.ps1"
 $supervisorScopeAuditScript = Join-Path $ProjectRoot "RUN\BUILD_SUPERVISOR_SCOPE_AUDIT.ps1"
 $learningArtifactInventoryScript = Join-Path $ProjectRoot "RUN\BUILD_LEARNING_ARTIFACT_INVENTORY.ps1"
+$globalTeacherCohortAuditScript = Join-Path $ProjectRoot "RUN\BUILD_GLOBAL_TEACHER_COHORT_ACTIVITY_AUDIT.ps1"
 $mt5FirstWaveServerParityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_SERVER_PARITY_AUDIT.ps1"
 $mt5FirstWaveRuntimeActivityAuditScript = Join-Path $ProjectRoot "RUN\BUILD_MT5_FIRST_WAVE_RUNTIME_ACTIVITY_AUDIT.ps1"
 $firstWaveLessonClosureAuditScript = Join-Path $ProjectRoot "RUN\BUILD_FIRST_WAVE_LESSON_CLOSURE_AUDIT.ps1"
@@ -32,6 +33,7 @@ foreach ($path in @(
     $repoHygieneScript,
     $supervisorScopeAuditScript,
     $learningArtifactInventoryScript,
+    $globalTeacherCohortAuditScript,
     $mt5FirstWaveServerParityAuditScript,
     $mt5FirstWaveRuntimeActivityAuditScript,
     $firstWaveLessonClosureAuditScript,
@@ -200,6 +202,7 @@ $runtimeLogRotation = Read-JsonFile -Path (Join-Path $ProjectRoot "EVIDENCE\runt
 $repoHygiene = Read-JsonFile -Path (Join-Path $opsRoot "repo_hygiene_latest.json")
 $supervisorScopeAudit = Read-JsonFile -Path (Join-Path $opsRoot "supervisor_scope_audit_latest.json")
 $learningArtifactInventory = Read-JsonFile -Path (Join-Path $opsRoot "learning_artifact_inventory_latest.json")
+$globalTeacherCohortAudit = Read-JsonFile -Path (Join-Path $opsRoot "global_teacher_cohort_activity_latest.json")
 $learningHotPath = Read-JsonFile -Path $learningHotPathPath
 
 $freshness = @(
@@ -223,6 +226,7 @@ $freshness = @(
     Get-FileFreshness -Label "mt5_first_wave_server_parity" -Path (Join-Path $opsRoot "mt5_first_wave_server_parity_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "mt5_first_wave_runtime_activity" -Path (Join-Path $opsRoot "mt5_first_wave_runtime_activity_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "first_wave_lesson_closure" -Path (Join-Path $opsRoot "first_wave_lesson_closure_latest.json") -ThresholdSeconds 1800
+    Get-FileFreshness -Label "global_teacher_cohort_activity" -Path (Join-Path $opsRoot "global_teacher_cohort_activity_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "learning_artifact_inventory" -Path (Join-Path $opsRoot "learning_artifact_inventory_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "profit_tracking" -Path (Join-Path $opsRoot "profit_tracking_latest.json") -ThresholdSeconds 1800
     Get-FileFreshness -Label "research_export_manifest" -Path (Join-Path $ResearchRoot "reports\research_export_manifest_latest.json") -ThresholdSeconds 1800
@@ -263,6 +267,10 @@ if (Test-Path -LiteralPath $firstWaveLessonClosureAuditScript) {
     Invoke-JsonAuditTool -ScriptPath $firstWaveLessonClosureAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
 }
 $firstWaveLessonClosureAudit = Read-JsonFile -Path (Join-Path $opsRoot "first_wave_lesson_closure_latest.json")
+if (Test-Path -LiteralPath $globalTeacherCohortAuditScript) {
+    Invoke-JsonAuditTool -ScriptPath $globalTeacherCohortAuditScript -Parameters @{ ProjectRoot = $ProjectRoot }
+}
+$globalTeacherCohortAudit = Read-JsonFile -Path (Join-Path $opsRoot "global_teacher_cohort_activity_latest.json")
 $qdmCustomSmokeDir = Join-Path $ProjectRoot "EVIDENCE\STRATEGY_TESTER\qdm_custom_symbol_smoke"
 $qdmCustomSmokeSummaryFile = Get-LatestFileByPattern -DirectoryPath $qdmCustomSmokeDir -Filter "*_summary.json"
 $qdmCustomSmokeSummary = if ($null -ne $qdmCustomSmokeSummaryFile) { Read-JsonFile -Path $qdmCustomSmokeSummaryFile.FullName } else { $null }
@@ -373,6 +381,14 @@ $learningProgressFirstWaveAlert30m = if ($null -ne $learningArtifactInventory) {
 $learningProgressFirstWaveLessonAlert30m = if ($null -ne $learningArtifactInventory) { [bool](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_first_wave_lesson_alert_30m' -Default $false) } else { $false }
 $learningProgressObservationActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_observation_active_count_30m' -Default 0) } else { 0 }
 $learningProgressLessonActiveCount30m = if ($null -ne $learningArtifactInventory) { [int](Get-SafeObjectValue -Object $learningArtifactInventory.summary -PropertyName 'learning_progress_lesson_active_count_30m' -Default 0) } else { 0 }
+$globalTeacherCohortVerdict = if ($null -ne $globalTeacherCohortAudit) { [string](Get-SafeObjectValue -Object $globalTeacherCohortAudit -PropertyName 'verdict' -Default "") } else { "" }
+$globalTeacherCohortTargetCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-SafeObjectValue -Object $globalTeacherCohortAudit.summary -PropertyName 'target_symbol_count' -Default 0) } else { 0 }
+$globalTeacherCohortRuntimeActiveCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-SafeObjectValue -Object $globalTeacherCohortAudit.summary -PropertyName 'teacher_runtime_active_count' -Default 0) } else { 0 }
+$globalTeacherCohortRuntimeInactiveCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-SafeObjectValue -Object $globalTeacherCohortAudit.summary -PropertyName 'teacher_runtime_inactive_count' -Default 0) } else { 0 }
+$globalTeacherCohortFreshFullLessonCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-SafeObjectValue -Object $globalTeacherCohortAudit.summary -PropertyName 'fresh_full_lesson_count' -Default 0) } else { 0 }
+$globalTeacherCohortStalledCount = if ($null -ne $globalTeacherCohortAudit) { [int](Get-SafeObjectValue -Object $globalTeacherCohortAudit.summary -PropertyName 'learning_stalled_count' -Default 0) } else { 0 }
+$globalTeacherCohortInactiveSymbols = if ($null -ne $globalTeacherCohortAudit) { @(Get-SafeObjectValue -Object $globalTeacherCohortAudit.summary -PropertyName 'symbols_without_teacher_runtime' -Default @()) } else { @() }
+$globalTeacherCohortMissingLessonSymbols = if ($null -ne $globalTeacherCohortAudit) { @(Get-SafeObjectValue -Object $globalTeacherCohortAudit.summary -PropertyName 'symbols_without_fresh_lessons' -Default @()) } else { @() }
 $firstWaveLessonClosureVerdict = if ($null -ne $firstWaveLessonClosureAudit) { [string](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit -PropertyName 'verdict' -Default "") } else { "" }
 $firstWaveLessonClosureFreshReadyCount = if ($null -ne $firstWaveLessonClosureAudit) { [int](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit.summary -PropertyName 'fresh_chain_ready_count' -Default 0) } else { 0 }
 $firstWaveLessonClosureHistoricalReadyCount = if ($null -ne $firstWaveLessonClosureAudit) { [int](Get-SafeObjectValue -Object $firstWaveLessonClosureAudit.summary -PropertyName 'historical_chain_ready_count' -Default 0) } else { 0 }
@@ -696,6 +712,18 @@ $report = [ordered]@{
                 partial_gap_count = $firstWaveLessonClosurePartialGapCount
             }
         } else { $null }
+        global_teacher_cohort = if ($null -ne $globalTeacherCohortAudit) {
+            [ordered]@{
+                verdict = $globalTeacherCohortVerdict
+                target_symbol_count = $globalTeacherCohortTargetCount
+                teacher_runtime_active_count = $globalTeacherCohortRuntimeActiveCount
+                teacher_runtime_inactive_count = $globalTeacherCohortRuntimeInactiveCount
+                fresh_full_lesson_count = $globalTeacherCohortFreshFullLessonCount
+                learning_stalled_count = $globalTeacherCohortStalledCount
+                symbols_without_teacher_runtime = @($globalTeacherCohortInactiveSymbols)
+                symbols_without_fresh_lessons = @($globalTeacherCohortMissingLessonSymbols)
+            }
+        } else { $null }
         learning_artifact_inventory = if ($null -ne $learningArtifactInventory) {
             [ordered]@{
                 verdict = $learningArtifactInventoryVerdict
@@ -707,6 +735,11 @@ $report = [ordered]@{
                 learning_progress_fleet_alert_30m = $learningProgressFleetAlert30m
                 learning_progress_first_wave_alert_30m = $learningProgressFirstWaveAlert30m
                 learning_progress_first_wave_lesson_alert_30m = $learningProgressFirstWaveLessonAlert30m
+                global_teacher_cohort_verdict = $globalTeacherCohortVerdict
+                global_teacher_cohort_runtime_active_count = $globalTeacherCohortRuntimeActiveCount
+                global_teacher_cohort_runtime_inactive_count = $globalTeacherCohortRuntimeInactiveCount
+                global_teacher_cohort_fresh_full_lesson_count = $globalTeacherCohortFreshFullLessonCount
+                global_teacher_cohort_learning_stalled_count = $globalTeacherCohortStalledCount
                 learning_progress_observation_active_count_30m = $learningProgressObservationActiveCount30m
                 learning_progress_lesson_active_count_30m = $learningProgressLessonActiveCount30m
             }
@@ -740,6 +773,11 @@ $report = [ordered]@{
         learning_progress_fleet_alert_30m = $learningProgressFleetAlert30m
         learning_progress_first_wave_alert_30m = $learningProgressFirstWaveAlert30m
         learning_progress_first_wave_lesson_alert_30m = $learningProgressFirstWaveLessonAlert30m
+        global_teacher_cohort_verdict = $globalTeacherCohortVerdict
+        global_teacher_cohort_runtime_active_count = $globalTeacherCohortRuntimeActiveCount
+        global_teacher_cohort_runtime_inactive_count = $globalTeacherCohortRuntimeInactiveCount
+        global_teacher_cohort_fresh_full_lesson_count = $globalTeacherCohortFreshFullLessonCount
+        global_teacher_cohort_learning_stalled_count = $globalTeacherCohortStalledCount
         learning_progress_observation_active_count_30m = $learningProgressObservationActiveCount30m
         learning_progress_lesson_active_count_30m = $learningProgressLessonActiveCount30m
         first_wave_lesson_closure_verdict = $firstWaveLessonClosureVerdict
@@ -843,6 +881,11 @@ $lines.Add(("- learning_progress_verdict: {0}" -f $(if ([string]::IsNullOrWhiteS
 $lines.Add(("- learning_progress_fleet_alert_30m: {0}" -f ([string]$report.cleanliness.learning_progress_fleet_alert_30m).ToLowerInvariant()))
 $lines.Add(("- learning_progress_first_wave_alert_30m: {0}" -f ([string]$report.cleanliness.learning_progress_first_wave_alert_30m).ToLowerInvariant()))
 $lines.Add(("- learning_progress_first_wave_lesson_alert_30m: {0}" -f ([string]$report.cleanliness.learning_progress_first_wave_lesson_alert_30m).ToLowerInvariant()))
+$lines.Add(("- global_teacher_cohort_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.cleanliness.global_teacher_cohort_verdict)) { "BRAK" } else { $report.cleanliness.global_teacher_cohort_verdict })))
+$lines.Add(("- global_teacher_cohort_runtime_active_count: {0}" -f $report.cleanliness.global_teacher_cohort_runtime_active_count))
+$lines.Add(("- global_teacher_cohort_runtime_inactive_count: {0}" -f $report.cleanliness.global_teacher_cohort_runtime_inactive_count))
+$lines.Add(("- global_teacher_cohort_fresh_full_lesson_count: {0}" -f $report.cleanliness.global_teacher_cohort_fresh_full_lesson_count))
+$lines.Add(("- global_teacher_cohort_learning_stalled_count: {0}" -f $report.cleanliness.global_teacher_cohort_learning_stalled_count))
 $lines.Add(("- learning_progress_observation_active_count_30m: {0}" -f $report.cleanliness.learning_progress_observation_active_count_30m))
 $lines.Add(("- learning_progress_lesson_active_count_30m: {0}" -f $report.cleanliness.learning_progress_lesson_active_count_30m))
 $lines.Add(("- supervisor_scope_verdict: {0}" -f $report.cleanliness.supervisor_scope_verdict))
@@ -1039,6 +1082,21 @@ else {
     $lines.Add("- first-wave lesson closure audit not available")
 }
 $lines.Add("")
+$lines.Add("## Global Teacher Cohort")
+$lines.Add("")
+if ($null -ne $report.lab_health.global_teacher_cohort) {
+    $lines.Add(("- global_teacher_cohort_verdict: {0}" -f $report.lab_health.global_teacher_cohort.verdict))
+    $lines.Add(("- global_teacher_cohort_runtime_active_count: {0}/{1}" -f $report.lab_health.global_teacher_cohort.teacher_runtime_active_count, $report.lab_health.global_teacher_cohort.target_symbol_count))
+    $lines.Add(("- global_teacher_cohort_runtime_inactive_count: {0}" -f $report.lab_health.global_teacher_cohort.teacher_runtime_inactive_count))
+    $lines.Add(("- global_teacher_cohort_fresh_full_lesson_count: {0}" -f $report.lab_health.global_teacher_cohort.fresh_full_lesson_count))
+    $lines.Add(("- global_teacher_cohort_learning_stalled_count: {0}" -f $report.lab_health.global_teacher_cohort.learning_stalled_count))
+    $lines.Add(("- global_teacher_cohort_symbols_without_teacher_runtime: {0}" -f $(if ($report.lab_health.global_teacher_cohort.symbols_without_teacher_runtime.Count -gt 0) { ($report.lab_health.global_teacher_cohort.symbols_without_teacher_runtime -join ", ") } else { "BRAK" })))
+    $lines.Add(("- global_teacher_cohort_symbols_without_fresh_lessons: {0}" -f $(if ($report.lab_health.global_teacher_cohort.symbols_without_fresh_lessons.Count -gt 0) { ($report.lab_health.global_teacher_cohort.symbols_without_fresh_lessons -join ", ") } else { "BRAK" })))
+}
+else {
+    $lines.Add("- global-teacher cohort audit not available")
+}
+$lines.Add("")
 $lines.Add("## Learning Artifact Inventory")
 $lines.Add("")
 if ($null -ne $report.lab_health.learning_artifact_inventory) {
@@ -1051,6 +1109,11 @@ if ($null -ne $report.lab_health.learning_artifact_inventory) {
     $lines.Add(("- learning_progress_fleet_alert_30m: {0}" -f ([string]$report.lab_health.learning_artifact_inventory.learning_progress_fleet_alert_30m).ToLowerInvariant()))
     $lines.Add(("- learning_progress_first_wave_alert_30m: {0}" -f ([string]$report.lab_health.learning_artifact_inventory.learning_progress_first_wave_alert_30m).ToLowerInvariant()))
     $lines.Add(("- learning_progress_first_wave_lesson_alert_30m: {0}" -f ([string]$report.lab_health.learning_artifact_inventory.learning_progress_first_wave_lesson_alert_30m).ToLowerInvariant()))
+    $lines.Add(("- global_teacher_cohort_verdict: {0}" -f $(if ([string]::IsNullOrWhiteSpace($report.lab_health.learning_artifact_inventory.global_teacher_cohort_verdict)) { "BRAK" } else { $report.lab_health.learning_artifact_inventory.global_teacher_cohort_verdict })))
+    $lines.Add(("- global_teacher_cohort_runtime_active_count: {0}" -f $report.lab_health.learning_artifact_inventory.global_teacher_cohort_runtime_active_count))
+    $lines.Add(("- global_teacher_cohort_runtime_inactive_count: {0}" -f $report.lab_health.learning_artifact_inventory.global_teacher_cohort_runtime_inactive_count))
+    $lines.Add(("- global_teacher_cohort_fresh_full_lesson_count: {0}" -f $report.lab_health.learning_artifact_inventory.global_teacher_cohort_fresh_full_lesson_count))
+    $lines.Add(("- global_teacher_cohort_learning_stalled_count: {0}" -f $report.lab_health.learning_artifact_inventory.global_teacher_cohort_learning_stalled_count))
     $lines.Add(("- learning_progress_observation_active_count_30m: {0}" -f $report.lab_health.learning_artifact_inventory.learning_progress_observation_active_count_30m))
     $lines.Add(("- learning_progress_lesson_active_count_30m: {0}" -f $report.lab_health.learning_artifact_inventory.learning_progress_lesson_active_count_30m))
 }

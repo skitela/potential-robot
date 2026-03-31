@@ -83,9 +83,16 @@ foreach ($symbol in @($Symbols)) {
 $itemsArray = @($items.ToArray())
 $teacherRuntimeCount = @($itemsArray | Where-Object { $_.teacher_runtime_active }).Count
 $fullLessonCount = @($itemsArray | Where-Object { $_.fresh_full_lesson }).Count
+$teacherRuntimeInactive = @($itemsArray | Where-Object { -not $_.teacher_runtime_active })
+$stalledLearning = @($itemsArray | Where-Object { $_.decision_log.fresh -and $_.onnx_log.fresh -and -not $_.fresh_full_lesson })
+$inactiveSymbols = @($teacherRuntimeInactive | ForEach-Object { [string]$_.symbol_alias })
+$stalledSymbols = @($stalledLearning | ForEach-Object { [string]$_.symbol_alias })
 
-$verdict = if ($teacherRuntimeCount -eq @($Symbols).Count) {
-    "GLOBAL_TEACHER_COHORT_AKTYWNY"
+$verdict = if ($teacherRuntimeCount -eq @($Symbols).Count -and $fullLessonCount -eq @($Symbols).Count) {
+    "GLOBAL_TEACHER_COHORT_WSZYSTKIE_UCZA_SIE"
+}
+elseif ($teacherRuntimeCount -eq @($Symbols).Count) {
+    "GLOBAL_TEACHER_COHORT_WSZYSTKIE_OBSERWUJA"
 }
 elseif ($teacherRuntimeCount -gt 0) {
     "GLOBAL_TEACHER_COHORT_CZESCIOWO_AKTYWNY"
@@ -103,7 +110,11 @@ $report = [ordered]@{
     summary = [ordered]@{
         target_symbol_count = @($Symbols).Count
         teacher_runtime_active_count = $teacherRuntimeCount
+        teacher_runtime_inactive_count = $teacherRuntimeInactive.Count
         fresh_full_lesson_count = $fullLessonCount
+        learning_stalled_count = $stalledLearning.Count
+        symbols_without_teacher_runtime = $inactiveSymbols
+        symbols_without_fresh_lessons = $stalledSymbols
     }
     items = $itemsArray
 }
@@ -119,7 +130,11 @@ $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- verdict: {0}" -f $report.verdict))
 $lines.Add(("- target_symbol_count: {0}" -f $report.summary.target_symbol_count))
 $lines.Add(("- teacher_runtime_active_count: {0}" -f $report.summary.teacher_runtime_active_count))
+$lines.Add(("- teacher_runtime_inactive_count: {0}" -f $report.summary.teacher_runtime_inactive_count))
 $lines.Add(("- fresh_full_lesson_count: {0}" -f $report.summary.fresh_full_lesson_count))
+$lines.Add(("- learning_stalled_count: {0}" -f $report.summary.learning_stalled_count))
+$lines.Add(("- symbols_without_teacher_runtime: {0}" -f $(if ($report.summary.symbols_without_teacher_runtime.Count -gt 0) { ($report.summary.symbols_without_teacher_runtime -join ", ") } else { "BRAK" })))
+$lines.Add(("- symbols_without_fresh_lessons: {0}" -f $(if ($report.summary.symbols_without_fresh_lessons.Count -gt 0) { ($report.summary.symbols_without_fresh_lessons -join ", ") } else { "BRAK" })))
 $lines.Add("")
 $lines.Add("## Symbols")
 $lines.Add("")
