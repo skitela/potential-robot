@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "enabled": true,
+  "default_action": "NO_OP",
+  "allowed_actions": [
+    "NO_OP",
+    "REFRESH_AUDITS",
+    "RESTART_TERMINAL",
+    "ENABLE_DIAG_MODE",
+    "DISABLE_DIAG_MODE",
+    "REBUILD_PROFILE",
+    "ISOLATE_SYMBOL"
+  ],
+  "rules": [
+    {
+      "class": "WAIT_NEW_BAR_STARVED",
+      "action": "ENABLE_DIAG_MODE",
+      "reason": "CONTROLLED_NEW_BAR_BYPASS_WINDOW"
+    },
+    {
+      "class": "HEARTBEAT_ONLY",
+      "action": "REFRESH_AUDITS",
+      "reason": "RUNTIME_ALIVE_BUT_NO_SIGNAL_PROGRESS"
+    },
+    {
+      "class": "NO_SETUP_STARVED",
+      "action": "REFRESH_AUDITS",
+      "reason": "NEED_SETUP_CLASSIFICATION_REVIEW"
+    },
+    {
+      "class": "RATE_GUARD_STARVED",
+      "action": "ENABLE_DIAG_MODE",
+      "reason": "CONTROLLED_RATE_GUARD_RELIEF_WINDOW"
+    },
+    {
+      "class": "TUNING_FREEZE_STARVED",
+      "action": "ENABLE_DIAG_MODE",
+      "reason": "CONTROLLED_FAMILY_OR_FLEET_RELIEF"
+    },
+    {
+      "class": "SYMBOL_POLICY_STARVED",
+      "action": "ISOLATE_SYMBOL",
+      "reason": "SYMBOL_POLICY_REVIEW_REQUIRED"
+    },
+    {
+      "class": "GATE_VISIBLE_NO_OUTCOME",
+      "action": "REFRESH_AUDITS",
+      "reason": "OUTCOME_CHAIN_GAP_REVIEW"
+    },
+    {
+      "class": "OUTCOME_WRITE_FAIL",
+      "action": "REFRESH_AUDITS",
+      "reason": "WRITE_PATH_REVIEW"
+    },
+    {
+      "class": "RUNTIME_DOWN",
+      "action": "RESTART_TERMINAL",
+      "reason": "RUNTIME_NOT_PRODUCING_FRESH_STATE"
+    }
+  ]
+}

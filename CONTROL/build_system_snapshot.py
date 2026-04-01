@@ -150,6 +150,7 @@ def load_symbol_state(
         common_root / "state",
         aliases,
         [
+            "learning_supervisor_snapshot_latest.json",
             "supervisor_snapshot_latest.json",
             "student_gate_latest.json",
             "ml_execution_snapshot_latest.json",
@@ -168,6 +169,7 @@ def load_symbol_state(
     ) or (common_root / "logs" / canonical_symbol(symbol))
 
     supervisor_snapshot_path = state_dir / "supervisor_snapshot_latest.json"
+    learning_supervisor_snapshot_path = state_dir / "learning_supervisor_snapshot_latest.json"
     student_gate_path = state_dir / "student_gate_latest.json"
     execution_snapshot_path = state_dir / "ml_execution_snapshot_latest.json"
     learning_log_path = logs_dir / "learning_observations_v2.csv"
@@ -176,6 +178,7 @@ def load_symbol_state(
     decision_log_path = logs_dir / "decision_events.csv"
 
     supervisor_snapshot = read_json(supervisor_snapshot_path)
+    learning_supervisor_snapshot = read_json(learning_supervisor_snapshot_path)
     student_gate = read_json(student_gate_path)
     execution_snapshot = read_json(execution_snapshot_path)
     cohort_item = cohort_index.get(canonical_symbol(symbol)) or {}
@@ -186,12 +189,14 @@ def load_symbol_state(
         "state_alias": state_dir.name if state_dir.exists() else canonical_symbol(symbol),
         "logs_alias": logs_dir.name if logs_dir.exists() else canonical_symbol(symbol),
         "supervisor_snapshot": supervisor_snapshot,
+        "learning_supervisor_snapshot": learning_supervisor_snapshot,
         "global_teacher_audit": cohort_item,
         "first_wave_audit": first_wave_item,
         "student_gate": student_gate,
         "execution_snapshot": execution_snapshot,
         "files": {
             "supervisor_snapshot": file_probe(supervisor_snapshot_path),
+            "learning_supervisor_snapshot": file_probe(learning_supervisor_snapshot_path),
             "student_gate": file_probe(student_gate_path),
             "execution_snapshot": file_probe(execution_snapshot_path),
             "learning_log": file_probe(learning_log_path),
@@ -240,6 +245,9 @@ def main() -> int:
             "symbol_count": len(symbol_states),
             "supervisor_snapshot_present_count": sum(
                 1 for item in symbol_states if item["files"]["supervisor_snapshot"]["present"]
+            ),
+            "learning_supervisor_snapshot_present_count": sum(
+                1 for item in symbol_states if item["files"]["learning_supervisor_snapshot"]["present"]
             ),
             "student_gate_present_count": sum(
                 1 for item in symbol_states if item["files"]["student_gate"]["present"]

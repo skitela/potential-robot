@@ -190,9 +190,6 @@ void AppendGOLDCandidateEvent(
    const double lots
 )
   {
-   if(signal.setup_type == "NONE")
-      return;
-
    MbAppendCandidateSignal(
       g_candidate_log_path,
       ts,
@@ -424,6 +421,8 @@ void OnTimer()
    if(MbShouldForceGlobalTeacherLearningTimerScan(g_profile.symbol,IsLocalPaperModeActive(),now))
      {
       AppendGOLDDecisionEvent(now,"DIAGNOSTIC","FORCE","TIMER_FALLBACK_SCAN",g_market.spread_points,0.0,0.0,0,true,60);
+      MbMicrobotHooksRecordScan(g_hook_state,IsLocalPaperModeActive(),"TIMER_FALLBACK_SCAN","","TIMER_FALLBACK_SCAN");
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       OnTick();
       now = TimeCurrent();
       MbRefreshMarketSnapshot(g_profile,g_market);
@@ -568,19 +567,34 @@ void OnTick()
          AppendGOLDDecisionEvent(now,"KNOWLEDGE_WRITE",(close_result.knowledge_bridge_enabled ? (close_result.knowledge_written ? "OK" : "FAIL") : "SKIP"),(close_result.knowledge_bridge_enabled ? close_result.chain_reason : "ML_BRIDGE_DISABLED"),g_market.spread_points,0.0,0.0,0,false);
          AppendGOLDDecisionEvent(now,"PAPER_CLOSE",(paper_pnl >= 0.0 ? "OK" : "LOSS"),paper_close_reason,g_market.spread_points,0.0,paper_pnl,0,false);
          MbSavePaperPosition(g_profile.symbol,g_paper_position);
-         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"KNOWLEDGE_WRITE",(close_result.knowledge_bridge_enabled ? close_result.chain_reason : "ML_BRIDGE_DISABLED"));
+         MbMicrobotHooksMarkPaperClose(g_hook_state,IsLocalPaperModeActive(),paper_close_reason);
+         MbMicrobotHooksMarkOutcomeWrites(g_hook_state,IsLocalPaperModeActive(),close_result.lesson_written,close_result.knowledge_written,(close_result.knowledge_bridge_enabled ? close_result.chain_reason : "ML_BRIDGE_DISABLED"));
          MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
         }
      }
    ManageGOLDOpenPosition(g_trade,g_state,g_profile,g_market);
+   MbRefreshRateGuardWindows(g_state);
    MbRateGuardState rate_guard;
    MbRateGuardEvaluate(g_profile,g_state,rate_guard);
    if(rate_guard.halt)
      {
-      g_state.halt = true;
-      MbIncidentNoteGuard(g_incident_log_path,g_state.symbol,"rate_guard",rate_guard.reason_code,"ERROR","broker_policy");
-      return;
+      if(MbShouldBypassGlobalTeacherLearningRateGuard(g_profile.symbol,IsLocalPaperModeActive(),rate_guard.reason_code))
+        {
+         g_state.halt = false;
+         g_state.caution_mode = true;
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"RATE_GUARD",("PAPER_IGNORE_" + rate_guard.reason_code));
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
+         AppendGOLDDecisionEvent(now,"RATE_GUARD","BYPASS",("PAPER_IGNORE_" + rate_guard.reason_code),g_market.spread_points,0.0,0.0,0,true,60);
+        }
+      else
+        {
+         g_state.halt = true;
+         MbIncidentNoteGuard(g_incident_log_path,g_state.symbol,"rate_guard",rate_guard.reason_code,"ERROR","broker_policy");
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"RATE_GUARD",rate_guard.reason_code);
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
+         return;
+        }
      }
    if(rate_guard.caution_mode)
       g_state.caution_mode = true;
@@ -589,6 +603,8 @@ void OnTick()
    if(already_has_position)
      {
       AppendGOLDDecisionEvent(now,"POSITION","SKIP","POSITION_ALREADY_OPEN",g_market.spread_points,0.0,0.0,0,true,300);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"POSITION","POSITION_ALREADY_OPEN");
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       long local_latency_us_open_position = (long)(GetMicrosecondCount() - tick_t0_us);
       MbLatencyProfileRecord(g_latency,local_latency_us_open_position,0);
       return;
@@ -620,6 +636,8 @@ void OnTick()
          (market_guard == MB_GUARD_HALT ? "risk" : "guard")
       );
       AppendGOLDDecisionEvent(now,"MARKET","SKIP",guard_reason,g_market.spread_points,0.0,0.0,0,true,60);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"MARKET",guard_reason);
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       return;
      }
 
@@ -636,7 +654,11 @@ void OnTick()
       );
       AppendGOLDDecisionEvent(now,"EXEC_QUALITY",(exec_quality_guard == MB_GUARD_BLOCK ? "SKIP" : "CAUTION"),guard_reason,g_market.spread_points,0.0,0.0,0,true,30);
       if(exec_quality_guard == MB_GUARD_BLOCK)
+        {
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"EXEC_QUALITY",guard_reason);
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          return;
+        }
      }
 
    MbSignalDecision signal;
@@ -742,6 +764,8 @@ void OnTick()
      {
       AppendGOLDCandidateEvent(now,"SIZE_BLOCK",false,risk_plan.reason_code,signal,0.0);
       AppendGOLDDecisionEvent(now,"SIZE","SKIP",risk_plan.reason_code,g_market.spread_points,signal.score,0.0,0,true,30);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"SIZE",risk_plan.reason_code);
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
       return;
      }
@@ -786,6 +810,8 @@ void OnTick()
             risk_plan.lots,
             0
          );
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"ARBITRATION",arbitration_verdict.reason_code);
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          return;
         }
      }
@@ -848,6 +874,8 @@ void OnTick()
                1
             );
          AppendGOLDDecisionEvent(now,"EXEC_PRECHECK","BLOCK",exec_check.reason,g_market.spread_points,signal.score,risk_plan.lots,exec_check.order_check_retcode,true,30);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"EXEC_PRECHECK",exec_check.reason);
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
          return;
         }
@@ -880,14 +908,13 @@ void OnTick()
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
             AppendGOLDCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
             AppendGOLDDecisionEvent(now,"PAPER_OPEN","OK","PAPER_POSITION_OPENED",g_market.spread_points,signal.score,risk_plan.lots,0,false);
-            MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"PAPER_OPEN","PAPER_POSITION_OPENED");
            }
          else
            {
             AppendGOLDCandidateEvent(now,"PAPER_OPEN",false,paper_open_result.reason_code,signal,risk_plan.lots);
             AppendGOLDDecisionEvent(now,"PAPER_OPEN","SKIP",paper_open_result.reason_code,g_market.spread_points,signal.score,risk_plan.lots,0,false);
-            MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"PAPER_OPEN",paper_open_result.reason_code);
            }
+         MbMicrobotHooksMarkPaperOpen(g_hook_state,IsLocalPaperModeActive(),paper_opened,(paper_opened ? "PAPER_POSITION_OPENED" : paper_open_result.reason_code));
          MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          AppendGOLDDecisionEvent(now,"EXEC_SEND","SKIP","LIVE_SEND_DISABLED",g_market.spread_points,signal.score,risk_plan.lots,0,true,30);
         }
@@ -947,7 +974,7 @@ void OnTick()
    MbLatencyProfileRecord(g_latency,local_latency_us,0);
    bool throttle_scan = (!signal.valid && (signal.reason_code == "WAIT_NEW_BAR" || signal.reason_code == "SCORE_BELOW_TRIGGER" || StringFind(signal.reason_code,"PAPER_IGNORE_") == 0));
    AppendGOLDDecisionEvent(now,"SCAN",(signal.valid ? "READY" : "SKIP"),signal.reason_code,g_market.spread_points,signal.score,(signal.valid ? risk_plan.lots : 0.0),0,throttle_scan,60);
-   MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"SCAN",signal.reason_code);
+   MbMicrobotHooksRecordScan(g_hook_state,IsLocalPaperModeActive(),MbResolveGlobalTeacherLearningScanSource(g_profile.symbol,IsLocalPaperModeActive()),signal.setup_type,signal.reason_code);
    MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
   }
 
@@ -983,7 +1010,10 @@ void OnTradeTransaction(
          AppendGOLDDecisionEvent(now,"LESSON_WRITE",(live_close_result.lesson_written ? "OK" : "FAIL"),"LIVE_DEAL_CLOSE",g_market.spread_points,0.0,deal_lots,0,false);
         }
       AppendGOLDDecisionEvent(now,"KNOWLEDGE_WRITE",(!live_close_result.live_close_processed ? "SKIP" : (live_close_result.knowledge_bridge_enabled ? (live_close_result.knowledge_written ? "OK" : "FAIL") : "SKIP")),(!live_close_result.live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (live_close_result.knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")),g_market.spread_points,0.0,deal_lots,0,false);
-      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),(live_close_result.live_close_processed ? "KNOWLEDGE_WRITE" : "LIVE_DEAL_CLOSE"),(!live_close_result.live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (live_close_result.knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")));
+      MbMicrobotHooksMarkOutcomeWrites(g_hook_state,IsLocalPaperModeActive(),live_close_result.lesson_written,live_close_result.knowledge_written,(!live_close_result.live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (live_close_result.knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")));
       MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
      }
   }
+
+
+

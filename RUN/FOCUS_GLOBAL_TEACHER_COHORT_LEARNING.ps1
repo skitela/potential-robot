@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
-$targetSymbols = @("DE30","GOLD","SILVER","USDJPY","USDCHF","COPPER-US","EURAUD","EURUSD","GBPUSD")
+$learningUniverseContractPath = Join-Path $projectPath "CONFIG\learning_universe_contract.json"
 $chartPlanJson = Join-Path $projectPath "EVIDENCE\OPS\global_teacher_cohort_chart_plan_latest.json"
 $chartPlanTxt = Join-Path $projectPath "EVIDENCE\OPS\global_teacher_cohort_chart_plan_latest.txt"
 $chartPlanScript = Join-Path $projectPath "TOOLS\GENERATE_MT5_SYMBOL_GROUP_CHART_PLAN.ps1"
@@ -26,11 +26,52 @@ $guardScript = Join-Path $projectPath "TOOLS\mt5_risk_popup_guard.ps1"
 $controlSnapshotScript = Join-Path $projectPath "CONTROL\build_system_snapshot.py"
 $controlHealthScript = Join-Path $projectPath "CONTROL\build_symbol_health_matrix.py"
 $controlWorkbenchScript = Join-Path $projectPath "CONTROL\export_codex_workbench.py"
+$learningSupervisorMatrixScript = Join-Path $projectPath "CONTROL\build_learning_supervisor_matrix.py"
+$learningActionPlanScript = Join-Path $projectPath "CONTROL\build_learning_action_plan.py"
 $terminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
 $mt5Exe = "C:\Program Files\OANDA TMS MT5 Terminal\terminal64.exe"
 $preferredPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
 
 $stopped = New-Object System.Collections.Generic.List[object]
+
+function Read-JsonSafe {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-GlobalTeacherSymbols {
+    param([string]$ContractPath)
+
+    $payload = Read-JsonSafe -Path $ContractPath
+    if ($null -eq $payload -or $null -eq $payload.symbols) {
+        return @("DE30","GOLD","SILVER","USDJPY","USDCHF","COPPER-US","EURAUD","EURUSD","GBPUSD")
+    }
+
+    $resolved = New-Object System.Collections.Generic.List[string]
+    foreach ($property in $payload.symbols.PSObject.Properties) {
+        if ([string]$property.Value.cohort -eq "GLOBAL_TEACHER") {
+            $resolved.Add([string]$property.Name) | Out-Null
+        }
+    }
+
+    if ($resolved.Count -le 0) {
+        return @("DE30","GOLD","SILVER","USDJPY","USDCHF","COPPER-US","EURAUD","EURUSD","GBPUSD")
+    }
+
+    return @($resolved.ToArray())
+}
+
+$targetSymbols = Get-GlobalTeacherSymbols -ContractPath $learningUniverseContractPath
 
 function Resolve-PythonExecutable {
     param([string]$PreferredPath)
@@ -173,6 +214,8 @@ if ($RefreshAudits) {
 $controlHelpers = @(
     Invoke-OptionalPythonHelper -ScriptPath $controlSnapshotScript -Arguments @("--project-root", $projectPath)
     Invoke-OptionalPythonHelper -ScriptPath $controlHealthScript -Arguments @("--project-root", $projectPath)
+    Invoke-OptionalPythonHelper -ScriptPath $learningSupervisorMatrixScript -Arguments @("--project-root", $projectPath)
+    Invoke-OptionalPythonHelper -ScriptPath $learningActionPlanScript -Arguments @("--project-root", $projectPath)
     Invoke-OptionalPythonHelper -ScriptPath $controlWorkbenchScript -Arguments @("--project-root", $projectPath)
 )
 

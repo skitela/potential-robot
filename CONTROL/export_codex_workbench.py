@@ -30,9 +30,13 @@ def main() -> int:
     control_state = read_json(ops_root / "control_state_latest.json")
     health_matrix = read_json(ops_root / "symbol_health_matrix_latest.json")
     action_plan = read_json(ops_root / "control_action_plan_latest.json")
+    learning_matrix = read_json(ops_root / "learning_supervisor_matrix_latest.json")
+    learning_action_plan = read_json(ops_root / "learning_action_plan_latest.json")
 
     status_by_symbol = {item.get("symbol"): item for item in health_matrix.get("items", []) or []}
     action_by_symbol = {item.get("symbol"): item for item in action_plan.get("items", []) or []}
+    learning_by_symbol = {item.get("symbol"): item for item in learning_matrix.get("items", []) or []}
+    learning_action_by_symbol = {item.get("symbol"): item for item in learning_action_plan.get("items", []) or []}
 
     items = []
     for symbol_state in control_state.get("symbols", []) or []:
@@ -42,10 +46,12 @@ def main() -> int:
                 "symbol": symbol,
                 "status": status_by_symbol.get(symbol, {}).get("status"),
                 "reason": status_by_symbol.get(symbol, {}).get("reason"),
-                "last_stage": (symbol_state.get("supervisor_snapshot") or {}).get("last_stage"),
-                "last_reason_code": (symbol_state.get("supervisor_snapshot") or {}).get("last_reason_code"),
-                "action": action_by_symbol.get(symbol, {}).get("action", "NO_OP"),
-                "action_reason": action_by_symbol.get(symbol, {}).get("action_reason", "MISSING_ACTION_PLAN"),
+                "learning_blocker_class": learning_by_symbol.get(symbol, {}).get("blocker_class"),
+                "learning_blocker_reason": learning_by_symbol.get(symbol, {}).get("blocker_reason"),
+                "last_stage": ((symbol_state.get("learning_supervisor_snapshot") or {}).get("last_stage") or (symbol_state.get("supervisor_snapshot") or {}).get("last_stage")),
+                "last_reason_code": ((symbol_state.get("learning_supervisor_snapshot") or {}).get("last_reason_code") or (symbol_state.get("supervisor_snapshot") or {}).get("last_reason_code")),
+                "action": learning_action_by_symbol.get(symbol, {}).get("action", action_by_symbol.get(symbol, {}).get("action", "NO_OP")),
+                "action_reason": learning_action_by_symbol.get(symbol, {}).get("action_reason", action_by_symbol.get(symbol, {}).get("action_reason", "MISSING_ACTION_PLAN")),
             }
         )
 
@@ -83,6 +89,7 @@ def main() -> int:
     for item in items:
         lines.append(
             f"- {item['symbol']}: status={item['status']}, reason={item['reason']}, "
+            f"learning_class={item['learning_blocker_class']}, learning_reason={item['learning_blocker_reason']}, "
             f"last_stage={item['last_stage']}, action={item['action']}, action_reason={item['action_reason']}"
         )
     md_path.write_text("\n".join(lines), encoding="utf-8")

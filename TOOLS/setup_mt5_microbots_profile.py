@@ -24,6 +24,7 @@ DEFAULT_PROFILE_NAME = "MAKRO_I_MIKRO_BOT_AUTO"
 DEFAULT_TERMINAL_DATA_DIR = Path(
     r"C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
 )
+MAX_SAFE_COMMON_INI_BYTES = 8 * 1024 * 1024
 SAFE_WINDOW_FIELDS = {
     "window_left": "20",
     "window_top": "20",
@@ -277,29 +278,6 @@ def _pick_source_chart_for_expert(data_dir: Path, expert: str, exclude_profile: 
     return candidates[0]
 
 
-def _close_mt5_processes() -> None:
-    subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            (
-                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
-                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
-                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
-                "if($p){$p|%{$_.CloseMainWindow()|Out-Null}; Start-Sleep -Seconds 2; "
-                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
-                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
-                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
-                "if($p){$p|Stop-Process -Force}}"
-            ),
-        ],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
 def _list_oanda_terminal_processes(include_vps: bool = True) -> List[Dict[str, Any]]:
     command = [
         "powershell",
@@ -403,17 +381,131 @@ def _replace_or_append_ini_line(text: str, section: str, key: str, value: str) -
     return "\r\n".join(out) + "\r\n"
 
 
-def _prime_terminal_profile(data_dir: Path, profile_name: str) -> None:
+def _build_minimal_common_ini(profile_name: str) -> str:
+    return (
+        "[Charts]\r\n"
+        f"ProfileLast={profile_name}\r\n"
+        "\r\n"
+        "[Experts]\r\n"
+        "Enabled=1\r\n"
+    )
+
+
+def _normalize_common_ini_text(text: str) -> str:
+    compact_lines: List[str] = []
+    previous_blank = False
+    for raw_line in text.splitlines():
+        line = raw_line.replace("\x00", "").strip("\r")
+        stripped = line.strip()
+        if not stripped:
+            if not previous_blank:
+                compact_lines.append("")
+            previous_blank = True
+            continue
+        previous_blank = False
+        if stripped.startswith("[") and stripped.endswith("]"):
+            compact_lines.append(stripped)
+            continue
+        if "=" in stripped or stripped.startswith(";"):
+            compact_lines.append(stripped)
+    if not compact_lines:
+        return ""
+    return "\r\n".join(compact_lines).strip() + "\r\n"
+
+
+def _prime_terminal_profile(data_dir: Path, profile_name: str) -> Dict[str, Any]:
     common_ini = data_dir / "config" / "common.ini"
     if not common_ini.exists():
-        return
+        common_ini.parent.mkdir(parents=True, exist_ok=True)
+        common_ini.write_text(_build_minimal_common_ini(profile_name), encoding="utf-8")
+        return {
+            "path": str(common_ini),
+            "status": "CREATED_MINIMAL",
+            "size_before_bytes": 0,
+            "size_after_bytes": common_ini.stat().st_size,
+            "backup_path": None,
+        }
+    size_before = common_ini.stat().st_size
+    backup_path: Optional[Path] = None
+    if size_before > MAX_SAFE_COMMON_INI_BYTES:
+        backup_path = common_ini.with_name(f"common_oversize_backup_{int(time.time())}.ini")
+        common_ini.replace(backup_path)
+        common_ini.write_text(_build_minimal_common_ini(profile_name), encoding="utf-8")
+        return {
+            "path": str(common_ini),
+            "status": "REBUILT_FROM_OVERSIZE",
+            "size_before_bytes": size_before,
+            "size_after_bytes": common_ini.stat().st_size,
+            "backup_path": str(backup_path),
+        }
     try:
         text = common_ini.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
+        normalized = _normalize_common_ini_text(text)
+        if not normalized:
+            normalized = _build_minimal_common_ini(profile_name)
+            status = "REBUILT_FROM_EMPTY_OR_INVALID"
+        else:
+            normalized = _replace_or_append_ini_line(normalized, "Charts", "ProfileLast", profile_name)
+            normalized = _replace_or_append_ini_line(normalized, "Experts", "Enabled", "1")
+            status = "UPDATED"
+        common_ini.write_text(normalized, encoding="utf-8")
+        return {
+            "path": str(common_ini),
+            "status": status,
+            "size_before_bytes": size_before,
+            "size_after_bytes": common_ini.stat().st_size,
+            "backup_path": None,
+        }
+    except Exception as exc:
+        return {
+            "path": str(common_ini),
+            "status": f"FAILED: {exc}",
+            "size_before_bytes": size_before,
+            "size_after_bytes": size_before,
+            "backup_path": str(backup_path) if backup_path else None,
+        }
+
+
+def _close_mt5_processes(mt5_exe: Optional[Path] = None) -> None:
+    if mt5_exe and mt5_exe.exists():
+        for row in _list_terminal_processes_by_exe(mt5_exe):
+            pid = row.get("ProcessId")
+            if not pid:
+                continue
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "$pidToStop=$args[0]; if($pidToStop){Stop-Process -Id ([int]$pidToStop) -Force -ErrorAction SilentlyContinue}",
+                    str(pid),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        time.sleep(2)
         return
-    text = _replace_or_append_ini_line(text, "Charts", "ProfileLast", profile_name)
-    text = _replace_or_append_ini_line(text, "Experts", "Enabled", "1")
-    common_ini.write_text(text, encoding="utf-8")
+    subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            (
+                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
+                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
+                "if($p){$p|%{$_.CloseMainWindow()|Out-Null}; Start-Sleep -Seconds 2; "
+                "$p=Get-Process terminal64 -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.MainWindowTitle -like '*OANDA TMS Brokers S.A.*' -and "
+                "$_.MainWindowTitle -notmatch '\\[VPS\\]' }; "
+                "if($p){$p|Stop-Process -Force}}"
+            ),
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def _launch_mt5(mt5_exe: Path, profile_name: str, terminal_data_dir: Path) -> Dict[str, Any]:
@@ -432,31 +524,34 @@ def _launch_mt5(mt5_exe: Path, profile_name: str, terminal_data_dir: Path) -> Di
     launch_args.append(f"/profile:{profile_name}")
     before_all = _list_oanda_terminal_processes(include_vps=True)
     before_local = _list_oanda_terminal_processes(include_vps=False)
-    before_portable = _list_terminal_processes_by_exe(mt5_exe) if portable_launch else []
+    before_by_exe = _list_terminal_processes_by_exe(mt5_exe)
     subprocess.Popen(launch_args)
     time.sleep(8 if portable_launch else 6)
     after_all = _list_oanda_terminal_processes(include_vps=True)
     after_local = _list_oanda_terminal_processes(include_vps=False)
-    after_portable = _list_terminal_processes_by_exe(mt5_exe) if portable_launch else []
+    after_by_exe = _list_terminal_processes_by_exe(mt5_exe)
     before_ids = {int(row.get("Id", 0)) for row in before_local if row.get("Id")}
     after_ids = {int(row.get("Id", 0)) for row in after_local if row.get("Id")}
     new_local_ids = sorted(after_ids - before_ids)
+    before_by_exe_ids = {int(row.get("ProcessId", 0)) for row in before_by_exe if row.get("ProcessId")}
+    after_by_exe_ids = {int(row.get("ProcessId", 0)) for row in after_by_exe if row.get("ProcessId")}
+    new_by_exe_ids = sorted(after_by_exe_ids - before_by_exe_ids)
     if portable_launch:
-        before_portable_ids = {int(row.get("ProcessId", 0)) for row in before_portable if row.get("ProcessId")}
-        after_portable_ids = {int(row.get("ProcessId", 0)) for row in after_portable if row.get("ProcessId")}
-        new_local_ids = sorted(after_portable_ids - before_portable_ids)
-        launched = bool(new_local_ids) or bool(after_portable)
+        new_local_ids = new_by_exe_ids
+        launched = bool(new_local_ids) or bool(after_by_exe)
     else:
-        launched = bool(new_local_ids) or bool(after_local)
+        launched = bool(new_local_ids) or bool(after_local) or bool(after_by_exe)
     launch_note = "local_terminal_visible"
     if portable_launch:
-        if before_portable and after_portable and {int(row.get("ProcessId", 0)) for row in before_portable if row.get("ProcessId")} == {int(row.get("ProcessId", 0)) for row in after_portable if row.get("ProcessId")}:
+        if before_by_exe and after_by_exe and before_by_exe_ids == after_by_exe_ids:
             launch_note = "reused_existing_portable_terminal"
-        elif not after_portable:
+        elif not after_by_exe:
             launch_note = "portable_terminal_not_visible_after_launch"
     else:
         if before_local and after_local and before_ids == after_ids:
             launch_note = "reused_existing_local_terminal"
+        elif after_by_exe:
+            launch_note = "local_terminal_visible_by_path"
         elif not after_local:
             if any("[VPS]" in str(row.get("MainWindowTitle", "")) for row in after_all):
                 launch_note = "blocked_by_existing_vps_instance"
@@ -471,8 +566,8 @@ def _launch_mt5(mt5_exe: Path, profile_name: str, terminal_data_dir: Path) -> Di
         "before": before_all,
         "after": after_all,
         "new_local_ids": new_local_ids,
-        "before_portable": before_portable,
-        "after_portable": after_portable,
+        "before_by_exe": before_by_exe,
+        "after_by_exe": after_by_exe,
     }
 
 
@@ -527,7 +622,7 @@ def main() -> int:
         charts_dir.mkdir(parents=True, exist_ok=True)
 
         if launch_requested:
-            _close_mt5_processes()
+            _close_mt5_processes(mt5_exe)
 
     id_seed = max(int(time.time_ns() % 9_000_000_000_000_000_000), 1)
     written: List[Dict[str, Any]] = []
@@ -602,7 +697,15 @@ def main() -> int:
 
     if mutate_profile:
         _write_order_file(charts_dir, chart_filenames)
-        _prime_terminal_profile(data_dir, args.profile_name)
+        common_ini_update = _prime_terminal_profile(data_dir, args.profile_name)
+    else:
+        common_ini_update = {
+            "path": str(data_dir / "config" / "common.ini"),
+            "status": "SKIPPED_BY_MODE",
+            "size_before_bytes": None,
+            "size_after_bytes": None,
+            "backup_path": None,
+        }
 
     launch_report: Dict[str, Any] = {
         "requested": launch_requested,
@@ -641,6 +744,7 @@ def main() -> int:
         "chart_plan": str(chart_plan_path),
         "preset_root": str(preset_root),
         "use_active_presets": bool(args.use_active_presets),
+        "common_ini_update": common_ini_update,
         "charts": written,
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -659,6 +763,7 @@ def main() -> int:
         "chart_plan": str(chart_plan_path),
         "preset_root": str(preset_root),
         "use_active_presets": bool(args.use_active_presets),
+        "common_ini_update": common_ini_update,
         "launched": bool(launch_report.get("launched", False)),
         "launch_report": launch_report,
         "chart_manifest_path": str(manifest_path),

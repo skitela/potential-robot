@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0",
+  "generated_for": "mt5_oanda_learning_supervision",
+  "cohorts": {
+    "FIRST_WAVE": {
+      "teacher_mode": "PERSONAL",
+      "expected_outcome_chain": "FIRST_WAVE_V1"
+    },
+    "GLOBAL_TEACHER": {
+      "teacher_mode": "GLOBAL",
+      "expected_outcome_chain": "GLOBAL_COHORT_V1"
+    }
+  },
+  "symbols": {
+    "US500": {
+      "broker_symbol": "US500.pro",
+      "cohort": "FIRST_WAVE",
+      "family": "INDEX",
+      "teacher_mode": "PERSONAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "FIRST_WAVE_V1",
+      "policy_profile": "INDEX_FIRST_WAVE"
+    },
+    "EURJPY": {
+      "broker_symbol": "EURJPY.pro",
+      "cohort": "FIRST_WAVE",
+      "family": "FX_CROSS",
+      "teacher_mode": "PERSONAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "FIRST_WAVE_V1",
+      "policy_profile": "FX_CROSS_FIRST_WAVE"
+    },
+    "AUDUSD": {
+      "broker_symbol": "AUDUSD.pro",
+      "cohort": "FIRST_WAVE",
+      "family": "FX_MAJOR",
+      "teacher_mode": "PERSONAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "FIRST_WAVE_V1",
+      "policy_profile": "FX_MAJOR_FIRST_WAVE"
+    },
+    "USDCAD": {
+      "broker_symbol": "USDCAD.pro",
+      "cohort": "FIRST_WAVE",
+      "family": "FX_MAJOR",
+      "teacher_mode": "PERSONAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "FIRST_WAVE_V1",
+      "policy_profile": "FX_MAJOR_FIRST_WAVE"
+    },
+    "DE30": {
+      "broker_symbol": "DE30.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "INDEX",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "INDEX_GLOBAL"
+    },
+    "GOLD": {
+      "broker_symbol": "GOLD.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "METAL",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "METAL_GLOBAL"
+    },
+    "SILVER": {
+      "broker_symbol": "SILVER.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "METAL",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "METAL_GLOBAL"
+    },
+    "USDJPY": {
+      "broker_symbol": "USDJPY.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "FX_MAJOR",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "FX_MAJOR_GLOBAL"
+    },
+    "USDCHF": {
+      "broker_symbol": "USDCHF.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "FX_MAJOR",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "FX_MAJOR_GLOBAL"
+    },
+    "COPPER-US": {
+      "broker_symbol": "COPPER-US.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "COMMODITY",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "COMMODITY_GLOBAL"
+    },
+    "EURAUD": {
+      "broker_symbol": "EURAUD.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "FX_CROSS",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "FX_CROSS_GLOBAL"
+    },
+    "EURUSD": {
+      "broker_symbol": "EURUSD.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "FX_MAJOR",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "FX_MAJOR_GLOBAL"
+    },
+    "GBPUSD": {
+      "broker_symbol": "GBPUSD.pro",
+      "cohort": "GLOBAL_TEACHER",
+      "family": "FX_MAJOR",
+      "teacher_mode": "GLOBAL",
+      "diagnostic_timer_fallback_allowed": true,
+      "wait_new_bar_bypass_allowed": true,
+      "expected_outcome_chain": "GLOBAL_COHORT_V1",
+      "policy_profile": "FX_MAJOR_GLOBAL"
+    }
+  }
+}

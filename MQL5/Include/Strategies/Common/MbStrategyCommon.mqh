@@ -5,6 +5,7 @@
 #include "..\\..\\Core\\MbRuntimeTypes.mqh"
 #include "..\\..\\Core\\MbCapitalRiskContract.mqh"
 #include "..\\..\\Core\\MbFirstWaveTruthDiagnostic.mqh"
+#include "..\\..\\Core\\MbGlobalTeacherLearningDiagnostic.mqh"
 #include "..\\..\\Core\\MbLearningPolicy.mqh"
 
 struct MbStrategyRiskModel

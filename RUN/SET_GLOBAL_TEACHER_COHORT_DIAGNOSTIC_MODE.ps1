@@ -17,9 +17,11 @@ New-Item -ItemType Directory -Force -Path $diagnosticDir | Out-Null
 
 if ($Mode -eq "Enable") {
     $maxAgeSeconds = [Math]::Max(1800, $DurationMinutes * 60)
+    $generatedAtUtc = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     @(
         "key,value"
         "enabled,1"
+        "generated_at_utc,$generatedAtUtc"
         "max_age_sec,$maxAgeSeconds"
         "force_scan_interval_sec,60"
         "allow_low_conversion_ratio,1"

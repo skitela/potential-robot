@@ -6,6 +6,7 @@
 datetime g_mb_first_wave_truth_diag_last_reload_local = 0;
 bool g_mb_first_wave_truth_diag_loaded = false;
 bool g_mb_first_wave_truth_diag_enabled = false;
+datetime g_mb_first_wave_truth_diag_generated_at_utc = 0;
 int g_mb_first_wave_truth_diag_max_age_sec = 43200;
 bool g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
 bool g_mb_first_wave_truth_diag_allow_central_state_stale = true;
@@ -41,6 +42,7 @@ bool MbIsFirstWaveTruthDiagnosticSymbol(const string symbol)
 void MbResetFirstWaveTruthDiagnosticState()
   {
    g_mb_first_wave_truth_diag_enabled = false;
+   g_mb_first_wave_truth_diag_generated_at_utc = 0;
    g_mb_first_wave_truth_diag_max_age_sec = 43200;
    g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
    g_mb_first_wave_truth_diag_allow_central_state_stale = true;
@@ -118,6 +120,8 @@ void MbLoadFirstWaveTruthDiagnostic(const bool force_reload = false)
 
       if(key == "enabled")
          g_mb_first_wave_truth_diag_enabled = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_enabled);
+      else if(key == "generated_at_utc")
+         g_mb_first_wave_truth_diag_generated_at_utc = (datetime)MbFirstWaveTruthDiagnosticParseInt(value,(int)g_mb_first_wave_truth_diag_generated_at_utc);
       else if(key == "max_age_sec")
          g_mb_first_wave_truth_diag_max_age_sec = MathMax(60,MbFirstWaveTruthDiagnosticParseInt(value,g_mb_first_wave_truth_diag_max_age_sec));
       else if(key == "allow_symbol_daily_loss_hard")
@@ -148,7 +152,13 @@ void MbLoadFirstWaveTruthDiagnostic(const bool force_reload = false)
 
    FileClose(handle);
 
-   if(modified_local > 0 && (now_local - (datetime)modified_local) > g_mb_first_wave_truth_diag_max_age_sec)
+   datetime now_utc = TimeGMT();
+   if(g_mb_first_wave_truth_diag_generated_at_utc > 0)
+     {
+      if((now_utc - g_mb_first_wave_truth_diag_generated_at_utc) > g_mb_first_wave_truth_diag_max_age_sec)
+         g_mb_first_wave_truth_diag_enabled = false;
+     }
+   else if(modified_local > 0 && (now_local - (datetime)modified_local) > g_mb_first_wave_truth_diag_max_age_sec)
       g_mb_first_wave_truth_diag_enabled = false;
   }
 

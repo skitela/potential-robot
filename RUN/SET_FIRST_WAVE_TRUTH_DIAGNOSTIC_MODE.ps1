@@ -57,9 +57,11 @@ $json | Set-Content -LiteralPath $configPath -Encoding UTF8
 New-Item -ItemType Directory -Force -Path $diagnosticDir | Out-Null
 if ($Mode -eq "Enable") {
     $maxAgeSeconds = [Math]::Max(300, $DurationMinutes * 60)
+    $generatedAtUtc = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     @(
         "key,value"
         "enabled,1"
+        "generated_at_utc,$generatedAtUtc"
         "max_age_sec,$maxAgeSeconds"
         "allow_symbol_daily_loss_hard,1"
         "allow_central_state_stale,1"

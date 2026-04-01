@@ -7,6 +7,7 @@
 datetime g_mb_global_teacher_diag_last_reload_local = 0;
 bool g_mb_global_teacher_diag_loaded = false;
 bool g_mb_global_teacher_diag_enabled = false;
+datetime g_mb_global_teacher_diag_generated_at_utc = 0;
 int g_mb_global_teacher_diag_max_age_sec = 43200;
 int g_mb_global_teacher_diag_force_scan_interval_sec = 60;
 bool g_mb_global_teacher_diag_allow_low_conversion_ratio = true;
@@ -22,6 +23,7 @@ double g_mb_global_teacher_diag_range_gate_abs = 0.10;
 double g_mb_global_teacher_diag_rejection_gate_abs = 0.10;
 datetime g_mb_global_teacher_diag_last_timer_scan_ts = 0;
 string g_mb_global_teacher_diag_last_timer_scan_symbol = "";
+int g_mb_global_teacher_diag_timer_scan_grace_sec = 2;
 
 string MbGlobalTeacherLearningDiagnosticPath()
   {
@@ -48,6 +50,7 @@ bool MbIsGlobalTeacherLearningDiagnosticSymbol(const string symbol)
 void MbResetGlobalTeacherLearningDiagnosticState()
   {
    g_mb_global_teacher_diag_enabled = false;
+   g_mb_global_teacher_diag_generated_at_utc = 0;
    g_mb_global_teacher_diag_max_age_sec = 43200;
    g_mb_global_teacher_diag_force_scan_interval_sec = 60;
    g_mb_global_teacher_diag_allow_low_conversion_ratio = true;
@@ -123,6 +126,8 @@ void MbLoadGlobalTeacherLearningDiagnostic(const bool force_reload = false)
 
       if(key == "enabled")
          g_mb_global_teacher_diag_enabled = MbGlobalTeacherLearningDiagnosticParseBool(value,g_mb_global_teacher_diag_enabled);
+      else if(key == "generated_at_utc")
+         g_mb_global_teacher_diag_generated_at_utc = (datetime)MbGlobalTeacherLearningDiagnosticParseInt(value,(int)g_mb_global_teacher_diag_generated_at_utc);
       else if(key == "max_age_sec")
          g_mb_global_teacher_diag_max_age_sec = MathMax(60,MbGlobalTeacherLearningDiagnosticParseInt(value,g_mb_global_teacher_diag_max_age_sec));
       else if(key == "force_scan_interval_sec")
@@ -153,7 +158,13 @@ void MbLoadGlobalTeacherLearningDiagnostic(const bool force_reload = false)
 
    FileClose(handle);
 
-   if(modified_local > 0 && (now_local - (datetime)modified_local) > g_mb_global_teacher_diag_max_age_sec)
+   datetime now_utc = TimeGMT();
+   if(g_mb_global_teacher_diag_generated_at_utc > 0)
+     {
+      if((now_utc - g_mb_global_teacher_diag_generated_at_utc) > g_mb_global_teacher_diag_max_age_sec)
+         g_mb_global_teacher_diag_enabled = false;
+     }
+   else if(modified_local > 0 && (now_local - (datetime)modified_local) > g_mb_global_teacher_diag_max_age_sec)
       g_mb_global_teacher_diag_enabled = false;
   }
 
@@ -164,11 +175,7 @@ bool MbIsGlobalTeacherLearningDiagnosticActive(const string symbol,const bool pa
    if(!MbIsGlobalTeacherLearningDiagnosticSymbol(symbol))
       return false;
 
-   string rel_path = MbGlobalTeacherLearningDiagnosticPath();
-   bool file_present = FileIsExist(rel_path,FILE_COMMON);
    MbLoadGlobalTeacherLearningDiagnostic();
-   if(file_present && !g_mb_global_teacher_diag_enabled)
-      g_mb_global_teacher_diag_enabled = true;
    return g_mb_global_teacher_diag_enabled;
   }
 
@@ -212,6 +219,23 @@ bool MbShouldRelaxGlobalTeacherLearningCostGate(const string symbol,const bool p
    return g_mb_global_teacher_diag_relax_cost_gates;
   }
 
+bool MbShouldBypassGlobalTeacherLearningRateGuard(
+   const string symbol,
+   const bool paper_mode_active,
+   const string reason_code
+)
+  {
+   if(!MbIsGlobalTeacherLearningDiagnosticActive(symbol,paper_mode_active))
+      return false;
+
+   if(reason_code == "BROKER_ORDER_RATE_LIMIT")
+      return true;
+   if(reason_code == "BROKER_PRICE_RATE_LIMIT")
+      return true;
+
+   return false;
+  }
+
 bool MbShouldForceGlobalTeacherLearningTimerScan(
    const string symbol,
    const bool paper_mode_active,
@@ -232,6 +256,66 @@ bool MbShouldForceGlobalTeacherLearningTimerScan(
    g_mb_global_teacher_diag_last_timer_scan_ts = now_ts;
    g_mb_global_teacher_diag_last_timer_scan_symbol = canonical;
    return true;
+  }
+
+bool MbShouldBypassGlobalTeacherLearningNewBar(const string symbol,const bool paper_mode_active)
+  {
+   if(!MbIsGlobalTeacherLearningDiagnosticActive(symbol,paper_mode_active))
+      return false;
+   if(g_mb_global_teacher_diag_force_scan_interval_sec <= 0)
+      return false;
+   if(g_mb_global_teacher_diag_last_timer_scan_ts <= 0)
+      return false;
+   if(MbCanonicalSymbol(symbol) != g_mb_global_teacher_diag_last_timer_scan_symbol)
+      return false;
+
+   datetime now_ts = TimeCurrent();
+   int age_sec = (int)(now_ts - g_mb_global_teacher_diag_last_timer_scan_ts);
+   if(age_sec < 0)
+      age_sec = 0;
+   return (age_sec <= g_mb_global_teacher_diag_timer_scan_grace_sec);
+  }
+
+bool MbShouldBypassWaitNewBarDuringTimerFallbackScan(const string symbol,const bool paper_mode_active)
+  {
+   return MbShouldBypassGlobalTeacherLearningNewBar(symbol,paper_mode_active);
+  }
+
+string MbResolveGlobalTeacherLearningScanSource(const string symbol,const bool paper_mode_active)
+  {
+   if(MbShouldBypassGlobalTeacherLearningNewBar(symbol,paper_mode_active))
+      return "TIMER_FALLBACK_SCAN";
+   return "MARKET_TICK";
+  }
+
+string MbClassifyGlobalTeacherPreGateBlock(
+   const string reason_code,
+   const string setup_type,
+   const string scan_source
+)
+  {
+   if(StringLen(reason_code) <= 0)
+      return "UNCLASSIFIED";
+   if(scan_source == "TIMER_FALLBACK_SCAN" && reason_code == "WAIT_NEW_BAR")
+      return "WAIT_NEW_BAR_STARVED";
+   if(StringFind(reason_code,"NO_SETUP_",0) == 0 || setup_type == "NONE")
+      return "NO_SETUP_STARVED";
+   if(reason_code == "FREEZE_FAMILY" || reason_code == "FREEZE_FLEET" ||
+      reason_code == "DEFENSIVE_FAMILY" || reason_code == "DEFENSIVE_FLEET" ||
+      reason_code == "COOL_FLEET")
+      return "TUNING_FREEZE_STARVED";
+   if(StringFind(reason_code,"PORTFOLIO_HEAT",0) == 0 ||
+      StringFind(reason_code,"DAILY_LOSS",0) == 0 ||
+      StringFind(reason_code,"_BLOCK",0) > 0 ||
+      StringFind(reason_code,"DIRTY",0) >= 0)
+      return "SYMBOL_POLICY_STARVED";
+   if(reason_code == "SCORE_BELOW_TRIGGER" ||
+      reason_code == "LOW_CONFIDENCE" ||
+      reason_code == "CONTEXT_LOW_CONFIDENCE")
+      return "PRE_GATE_LOW_SCORE";
+   if(reason_code == "WAIT_NEW_BAR")
+      return "WAIT_NEW_BAR_STARVED";
+   return "UNCLASSIFIED";
   }
 
 void MbApplyGlobalTeacherLearningTuningRescue(

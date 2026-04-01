@@ -42,6 +42,10 @@
 #include "..\\..\\Include\\Core\\MbOnnxPilotObservation.mqh"
 #include "..\\..\\Include\\Core\\MbMlRuntimeBridge.mqh"
 #include "..\\..\\Include\\Core\\MbGlobalTeacherLearningDiagnostic.mqh"
+#include "..\\..\\Include\\Core\\MbRuntimeStatusSchema.mqh"
+#include "..\\..\\Include\\Core\\MbSupervisorSnapshot.mqh"
+#include "..\\..\\Include\\Core\\MbMicrobotHooks.mqh"
+#include "..\\..\\Include\\Core\\MbLearningOutcomeChain.mqh"
 #include "..\\..\\Include\\Profiles\\Profile_EURUSD.mqh"
 #include "..\\..\\Include\\Strategies\\Strategy_EURUSD.mqh"
 
@@ -83,6 +87,7 @@ string g_tuning_deckhand_log_path = "";
 string g_onnx_observation_log_path = "";
 string g_onnx_observation_state_path = "";
 MbMlRuntimeBridgeState g_ml_bridge;
+MbMicrobotHookState g_hook_state;
 
 bool ShouldRunEURUSDTuningCycle(const datetime now)
   {
@@ -196,9 +201,6 @@ void AppendEURUSDCandidateEvent(
    const double lots
 )
   {
-   if(signal.setup_type == "NONE")
-      return;
-
    MbAppendCandidateSignal(
       g_candidate_log_path,
       ts,
@@ -402,6 +404,10 @@ int OnInit()
    if(g_kill_switch.halt)
       g_state.halt = true;
 
+   MbMicrobotHooksInit(g_hook_state,IsLocalPaperModeActive());
+   MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"BOOTSTRAP",(g_kill_switch.halt ? g_kill_switch.reason_code : "INIT_SUCCEEDED"));
+   MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
+
    EventSetTimer((int)MathMax(1,(int)InpTimerSec));
    return(INIT_SUCCEEDED);
   }
@@ -438,9 +444,13 @@ void OnTimer()
    if(g_kill_switch.halt)
       g_state.halt = true;
    MbRuntimeOnTimer(g_state);
+   MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"TIMER",(g_kill_switch.halt ? g_kill_switch.reason_code : "TIMER_OK"));
+   MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
    if(MbShouldForceGlobalTeacherLearningTimerScan(g_profile.symbol,IsLocalPaperModeActive(),now))
      {
       AppendEURUSDDecisionEvent(now,"DIAGNOSTIC","FORCE","TIMER_FALLBACK_SCAN",g_market.spread_points,0.0,0.0,0,true,60);
+      MbMicrobotHooksRecordScan(g_hook_state,IsLocalPaperModeActive(),"TIMER_FALLBACK_SCAN","","TIMER_FALLBACK_SCAN");
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       OnTick();
       now = TimeCurrent();
       MbRefreshMarketSnapshot(g_profile,g_market);
@@ -567,42 +577,52 @@ void OnTick()
       MbPaperPositionReset(closed_paper);
       if(MbPaperMaybeClosePosition(g_market,g_paper_position,now,paper_pnl,paper_close_reason,closed_paper))
         {
+         MbLearningOutcomeCloseResult close_result;
          MbProcessSyntheticClosedDealFeedback(g_state,paper_pnl,now);
-         MbAppendLearningObservationV2(
-            g_state.symbol,
+         MbLearningOutcomeHandlePaperClose(
             now,
-            closed_paper.setup_type,
-            closed_paper.market_regime,
-            closed_paper.spread_regime,
-            closed_paper.execution_regime,
-            closed_paper.confidence_bucket,
-            closed_paper.confidence_score,
-            closed_paper.candle_bias,
-            closed_paper.candle_quality_grade,
-            closed_paper.candle_score,
-            closed_paper.renko_bias,
-            closed_paper.renko_quality_grade,
-            closed_paper.renko_score,
-            closed_paper.renko_run_length,
-            closed_paper.renko_reversal_flag,
-            closed_paper.side,
+            g_profile.symbol,
+            Symbol(),
+            g_ml_bridge,
+            g_market,
+            closed_paper,
             paper_pnl,
-            paper_close_reason
+            paper_close_reason,
+            close_result
          );
-         MbMlRuntimeBridgeAppendPaperLedger(g_ml_bridge,now,g_profile.symbol,closed_paper,g_market,paper_pnl,paper_close_reason);
+         AppendEURUSDDecisionEvent(now,"EXECUTION_TRUTH_CLOSE",(close_result.truth_close_written ? "OK" : "FAIL"),close_result.chain_reason,g_market.spread_points,0.0,0.0,0,false);
+         AppendEURUSDDecisionEvent(now,"LESSON_WRITE",(close_result.lesson_written ? "OK" : "FAIL"),close_result.chain_reason,g_market.spread_points,0.0,0.0,0,false);
+         AppendEURUSDDecisionEvent(now,"KNOWLEDGE_WRITE",(close_result.knowledge_bridge_enabled ? (close_result.knowledge_written ? "OK" : "FAIL") : "SKIP"),(close_result.knowledge_bridge_enabled ? close_result.chain_reason : "ML_BRIDGE_DISABLED"),g_market.spread_points,0.0,0.0,0,false);
          AppendEURUSDDecisionEvent(now,"PAPER_CLOSE",(paper_pnl >= 0.0 ? "OK" : "LOSS"),paper_close_reason,g_market.spread_points,0.0,paper_pnl,0,false);
          MbSavePaperPosition(g_profile.symbol,g_paper_position);
-            MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
+         MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
+         MbMicrobotHooksMarkPaperClose(g_hook_state,IsLocalPaperModeActive(),paper_close_reason);
+         MbMicrobotHooksMarkOutcomeWrites(g_hook_state,IsLocalPaperModeActive(),close_result.lesson_written,close_result.knowledge_written,(close_result.knowledge_bridge_enabled ? close_result.chain_reason : "ML_BRIDGE_DISABLED"));
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
         }
      }
    ManageEURUSDOpenPosition(g_trade,g_state,g_profile,g_market);
+   MbRefreshRateGuardWindows(g_state);
    MbRateGuardState rate_guard;
    MbRateGuardEvaluate(g_profile,g_state,rate_guard);
    if(rate_guard.halt)
      {
-      g_state.halt = true;
-      MbIncidentNoteGuard(g_incident_log_path,g_state.symbol,"rate_guard",rate_guard.reason_code,"ERROR","broker_policy");
-      return;
+      if(MbShouldBypassGlobalTeacherLearningRateGuard(g_profile.symbol,IsLocalPaperModeActive(),rate_guard.reason_code))
+        {
+         g_state.halt = false;
+         g_state.caution_mode = true;
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"RATE_GUARD",("PAPER_IGNORE_" + rate_guard.reason_code));
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
+         AppendEURUSDDecisionEvent(now,"RATE_GUARD","BYPASS",("PAPER_IGNORE_" + rate_guard.reason_code),g_market.spread_points,0.0,0.0,0,true,60);
+        }
+      else
+        {
+         g_state.halt = true;
+         MbIncidentNoteGuard(g_incident_log_path,g_state.symbol,"rate_guard",rate_guard.reason_code,"ERROR","broker_policy");
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"RATE_GUARD",rate_guard.reason_code);
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
+         return;
+        }
      }
    if(rate_guard.caution_mode)
       g_state.caution_mode = true;
@@ -611,6 +631,8 @@ void OnTick()
    if(already_has_position)
      {
       AppendEURUSDDecisionEvent(now,"POSITION","SKIP","POSITION_ALREADY_OPEN",g_market.spread_points,0.0,0.0,0,true,300);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"POSITION","POSITION_ALREADY_OPEN");
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       long local_latency_us_open_position = (long)(GetMicrosecondCount() - tick_t0_us);
       MbLatencyProfileRecord(g_latency,local_latency_us_open_position,0);
       return;
@@ -642,6 +664,8 @@ void OnTick()
          (market_guard == MB_GUARD_HALT ? "risk" : "guard")
       );
       AppendEURUSDDecisionEvent(now,"MARKET","SKIP",guard_reason,g_market.spread_points,0.0,0.0,0,true,60);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"MARKET",guard_reason);
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       return;
      }
 
@@ -658,7 +682,11 @@ void OnTick()
       );
       AppendEURUSDDecisionEvent(now,"EXEC_QUALITY",(exec_quality_guard == MB_GUARD_BLOCK ? "SKIP" : "CAUTION"),guard_reason,g_market.spread_points,0.0,0.0,0,true,30);
       if(exec_quality_guard == MB_GUARD_BLOCK)
+        {
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"EXEC_QUALITY",guard_reason);
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          return;
+        }
      }
 
    MbSignalDecision signal;
@@ -757,6 +785,7 @@ void OnTick()
       g_market.spread_points,
       onnx_result
    );
+   MbMicrobotHooksRecordObservation(g_hook_state,IsLocalPaperModeActive(),onnx_result);
    AppendEURUSDCandidateEvent(now,"EVALUATED",signal.valid,signal.reason_code,signal,0.0);
    if(!signal.valid)
       MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
@@ -782,10 +811,13 @@ void OnTick()
    );
    MbNormalizeRiskContractBlockAfterSizing(signal,risk_plan.allowed,risk_plan.reason_code,risk_plan.lots);
    MbMlRuntimeBridgeApplyStudentGate(g_ml_bridge,now,g_profile,g_market,g_latency,g_state,signal,onnx_result,risk_plan.lots);
+   MbMicrobotHooksRecordGate(g_hook_state,IsLocalPaperModeActive(),signal.valid,signal.reason_code);
    if(signal.valid && !risk_plan.allowed)
      {
       AppendEURUSDCandidateEvent(now,"SIZE_BLOCK",false,risk_plan.reason_code,signal,0.0);
       AppendEURUSDDecisionEvent(now,"SIZE","SKIP",risk_plan.reason_code,g_market.spread_points,signal.score,0.0,0,true,30);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"SIZE",risk_plan.reason_code);
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
       MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
       return;
      }
@@ -830,6 +862,8 @@ void OnTick()
             risk_plan.lots,
             0
          );
+         MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"ARBITRATION",arbitration_verdict.reason_code);
+         MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          return;
         }
      }
@@ -892,6 +926,8 @@ void OnTick()
                1
             );
          AppendEURUSDDecisionEvent(now,"EXEC_PRECHECK","BLOCK",exec_check.reason,g_market.spread_points,signal.score,risk_plan.lots,exec_check.order_check_retcode,true,30);
+      MbMicrobotHooksRecordStage(g_hook_state,IsLocalPaperModeActive(),"EXEC_PRECHECK",exec_check.reason);
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
          return;
         }
@@ -902,40 +938,37 @@ void OnTick()
            {
             MbMarkOrderSend(g_state);
             MbLatencyProfileRecordExecution(g_latency,true,0,0.0);
-            MbPaperOpenPosition(
+            MbLearningOutcomeOpenResult paper_open_result;
+            bool paper_opened = MbLearningOutcomeHandlePaperOpen(
                g_paper_position,
-               signal.side,
+               g_profile.symbol,
+               Symbol(),
+               signal,
                risk_plan.lots,
                entry_price,
                sl_price,
                tp_price,
-               g_market.spread_points,
+               exec_check,
+               g_market,
                now,
                ResolveEURUSDPaperHoldSeconds(signal),
-               signal.reason_code,
-               signal.setup_type,
-               signal.market_regime,
-               signal.spread_regime,
-               signal.execution_regime,
-               signal.confidence_bucket,
-               signal.confidence_score,
-               signal.risk_multiplier,
-               signal.candle_bias,
-               signal.candle_quality_grade,
-               signal.candle_score,
-               signal.renko_bias,
-               signal.renko_quality_grade,
-               signal.renko_score,
-               signal.renko_run_length,
-               signal.renko_reversal_flag,
-               exec_check.modeled_slippage_points,
-               exec_check.modeled_commission_points,
-               InpEnableLiveEntries
+               InpEnableLiveEntries,
+               paper_open_result
             );
-            MbSavePaperPosition(g_profile.symbol,g_paper_position);
             MbClearCandidateArbitrationSnapshot(g_profile.session_profile,g_profile.symbol);
-            AppendEURUSDCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
-            AppendEURUSDDecisionEvent(now,"PAPER_OPEN","OK","PAPER_POSITION_OPENED",g_market.spread_points,signal.score,risk_plan.lots,0,false);
+            AppendEURUSDDecisionEvent(now,"EXECUTION_TRUTH_OPEN",(paper_open_result.truth_open_written ? "OK" : "FAIL"),(paper_open_result.truth_open_written ? paper_open_result.candidate_id : "PAPER_OPEN_TRUTH_WRITE_FAIL"),g_market.spread_points,signal.score,risk_plan.lots,0,false);
+            AppendEURUSDDecisionEvent(now,"PAPER_POSITION_SAVE",(paper_open_result.paper_saved ? "OK" : "FAIL"),(paper_open_result.paper_saved ? (paper_opened ? paper_open_result.candidate_id : paper_open_result.reason_code) : "PAPER_POSITION_SAVE_FAIL"),g_market.spread_points,signal.score,risk_plan.lots,0,false);
+            if(paper_opened)
+              {
+               AppendEURUSDCandidateEvent(now,"PAPER_OPEN",true,"PAPER_POSITION_OPENED",signal,risk_plan.lots);
+               AppendEURUSDDecisionEvent(now,"PAPER_OPEN","OK","PAPER_POSITION_OPENED",g_market.spread_points,signal.score,risk_plan.lots,0,false);
+              }
+            else
+              {
+               AppendEURUSDDecisionEvent(now,"PAPER_OPEN","SKIP",paper_open_result.reason_code,g_market.spread_points,signal.score,risk_plan.lots,0,false);
+              }
+            MbMicrobotHooksMarkPaperOpen(g_hook_state,IsLocalPaperModeActive(),paper_opened,(paper_opened ? "PAPER_POSITION_OPENED" : paper_open_result.reason_code));
+            MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
          }
          AppendEURUSDDecisionEvent(now,"EXEC_SEND","SKIP","LIVE_SEND_DISABLED",g_market.spread_points,signal.score,risk_plan.lots,0,true,30);
         }
@@ -995,6 +1028,8 @@ void OnTick()
    MbLatencyProfileRecord(g_latency,local_latency_us,0);
    bool throttle_scan = (!signal.valid && (signal.reason_code == "WAIT_NEW_BAR" || signal.reason_code == "SCORE_BELOW_TRIGGER" || StringFind(signal.reason_code,"PAPER_IGNORE_") == 0));
    AppendEURUSDDecisionEvent(now,"SCAN",(signal.valid ? "READY" : "SKIP"),signal.reason_code,g_market.spread_points,signal.score,(signal.valid ? risk_plan.lots : 0.0),0,throttle_scan,60);
+   MbMicrobotHooksRecordScan(g_hook_state,IsLocalPaperModeActive(),MbResolveGlobalTeacherLearningScanSource(g_profile.symbol,IsLocalPaperModeActive()),signal.setup_type,signal.reason_code);
+   MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
   }
 
 void OnTradeTransaction(
@@ -1006,7 +1041,7 @@ void OnTradeTransaction(
    if(!MbTransactionMatchesLocalBot(g_state.symbol,g_state.magic,trans,request))
       return;
 
-   MbExecutionTruthCapture("MICROBOT",g_state.symbol,trans,request,result);
+   bool truth_capture_written = MbExecutionTruthCapture("MICROBOT",g_state.symbol,trans,request,result);
 
    MbAppendTradeTransactionEvent(
       g_trade_transaction_log_path,
@@ -1019,8 +1054,18 @@ void OnTradeTransaction(
 
    if(trans.deal > 0)
      {
-      if(MbProcessClosedDealFeedback(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state))
-         MbAppendHistoricalLearningObservation(g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,"LIVE_DEAL_CLOSE");
-      MbMlRuntimeBridgeAppendLiveDealLedger(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal);
+      MbLearningOutcomeCloseResult live_close_result;
+      MbLearningOutcomeHandleLiveClose(g_ml_bridge,g_state.symbol,g_state.magic,(ulong)trans.deal,g_state,truth_capture_written,live_close_result);
+      if(live_close_result.live_close_processed)
+        {
+         AppendEURUSDDecisionEvent(TimeCurrent(),"EXECUTION_TRUTH_CLOSE",(live_close_result.truth_close_written ? "OK" : "FAIL"),live_close_result.chain_reason,g_market.spread_points,0.0,0.0,0,false);
+         AppendEURUSDDecisionEvent(TimeCurrent(),"LESSON_WRITE",(live_close_result.lesson_written ? "OK" : "FAIL"),"LIVE_DEAL_CLOSE",g_market.spread_points,0.0,0.0,0,false);
+        }
+      AppendEURUSDDecisionEvent(TimeCurrent(),"KNOWLEDGE_WRITE",(!live_close_result.live_close_processed ? "SKIP" : (live_close_result.knowledge_bridge_enabled ? (live_close_result.knowledge_written ? "OK" : "FAIL") : "SKIP")),(!live_close_result.live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (live_close_result.knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")),g_market.spread_points,0.0,0.0,0,false);
+      MbMicrobotHooksMarkOutcomeWrites(g_hook_state,IsLocalPaperModeActive(),live_close_result.lesson_written,live_close_result.knowledge_written,(!live_close_result.live_close_processed ? "LIVE_DEAL_NOT_CLOSED" : (live_close_result.knowledge_bridge_enabled ? "LIVE_DEAL_CLOSE" : "ML_BRIDGE_DISABLED")));
+      MbMicrobotHooksWriteSnapshot(g_hook_state,g_profile.symbol,IsLocalPaperModeActive(),g_paper_position,g_state,g_market,g_latency,g_ml_bridge);
      }
   }
+
+
+

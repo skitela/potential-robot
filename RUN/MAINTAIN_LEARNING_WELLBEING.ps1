@@ -299,6 +299,8 @@ $controlSnapshotScript = Join-Path $ProjectRoot "CONTROL\build_system_snapshot.p
 $controlHealthScript = Join-Path $ProjectRoot "CONTROL\build_symbol_health_matrix.py"
 $controlActionPlanScript = Join-Path $ProjectRoot "CONTROL\build_action_plan.py"
 $controlWorkbenchScript = Join-Path $ProjectRoot "CONTROL\export_codex_workbench.py"
+$learningSupervisorMatrixScript = Join-Path $ProjectRoot "CONTROL\build_learning_supervisor_matrix.py"
+$learningActionPlanScript = Join-Path $ProjectRoot "CONTROL\build_learning_action_plan.py"
 $jsonPath = Join-Path $opsRoot "learning_wellbeing_latest.json"
 $mdPath = Join-Path $opsRoot "learning_wellbeing_latest.md"
 
@@ -1123,6 +1125,8 @@ if ($report.runtime_archive_prune.deleted.Count -gt 0) {
 Invoke-OptionalPythonHelper -ScriptPath $controlSnapshotScript -Arguments @("--project-root", $ProjectRoot)
 Invoke-OptionalPythonHelper -ScriptPath $controlHealthScript -Arguments @("--project-root", $ProjectRoot)
 Invoke-OptionalPythonHelper -ScriptPath $controlActionPlanScript -Arguments @("--project-root", $ProjectRoot)
+Invoke-OptionalPythonHelper -ScriptPath $learningSupervisorMatrixScript -Arguments @("--project-root", $ProjectRoot)
+Invoke-OptionalPythonHelper -ScriptPath $learningActionPlanScript -Arguments @("--project-root", $ProjectRoot)
 Invoke-OptionalPythonHelper -ScriptPath $controlWorkbenchScript -Arguments @("--project-root", $ProjectRoot)
 
 $report | ConvertTo-Json -Depth 8
