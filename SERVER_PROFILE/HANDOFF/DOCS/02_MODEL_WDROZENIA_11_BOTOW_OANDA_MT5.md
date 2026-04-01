@@ -1,19 +1,42 @@
-﻿# Model Wdrozenia 11 Botow W OANDA MT5
+# Model Wdrozenia Aktywnej Floty MT5
 
-> Status 2026-03-29: ten dokument opisuje historyczny model 11 botow FX dla OANDA MT5 i nie jest juz glownym source of truth dla aktywnej floty. Biezacy stan aktywnej floty to 13 symboli zgodnie z aktualnym README i registry/runtime projektu.
+> Status 2026-04-01: nazwa pliku zostaje zachowana dla zgodnosci z eksportem `HANDOFF`, ale ten dokument opisuje juz aktywna flote `13` symboli. Wycofane symbole z historycznego modelu FX-only nie naleza do biezacego modelu wdrozenia.
 
 ## Cel
 
-Ten dokument opisuje bardzo szczegolowy model wdrozenia `11` autonomicznych mikro-botow w terminalu `MetaTrader 5` brokera `OANDA`.
+Ten dokument opisuje aktywny model wdrozenia mikro-botow w terminalu `MetaTrader 5` brokera `OANDA` dla projektu `MAKRO_I_MIKRO_BOT`.
 
 Model zaklada:
 
-- `1 mikro-bot = 1 wykres = 1 para`,
-- brak centralnego `EA`, ktory steruje wszystkimi parami,
+- `1 mikro-bot = 1 wykres = 1 symbol`,
+- brak centralnego `EA`, ktory steruje wszystkimi symbolami,
 - wspolny kod jako biblioteka `Core`,
 - kazdy bot jako oddzielna instancja na oddzielnym wykresie,
-- serwer `MT5-only`,
-- pelna zgodnosc z naturalnym modelem pracy `MT5`.
+- wspolny `FILE_COMMON` z separacja stanu per symbol,
+- bezpieczne presety domyslne i jawne generowanie presetow aktywnych.
+
+## Aktywna Flota
+
+### Pierwsza fala
+
+1. `MicroBot_US500`
+2. `MicroBot_EURJPY`
+3. `MicroBot_AUDUSD`
+4. `MicroBot_USDCAD`
+
+### Kohorta globalnego nauczyciela
+
+5. `MicroBot_DE30`
+6. `MicroBot_GOLD`
+7. `MicroBot_SILVER`
+8. `MicroBot_USDJPY`
+9. `MicroBot_USDCHF`
+10. `MicroBot_COPPERUS`
+11. `MicroBot_EURAUD`
+12. `MicroBot_EURUSD`
+13. `MicroBot_GBPUSD`
+
+Kazdy bot jest osobnym `EA` i osobnym plikiem `.ex5`.
 
 ## Podstawowa Zasada Techniczna
 
@@ -21,49 +44,34 @@ W `MT5` na jednym wykresie dziala jeden `EA`.
 
 Dlatego:
 
-- otwieramy `11` wykresow,
+- otwieramy jeden wykres per aktywny symbol,
 - do kazdego wykresu przypinamy odpowiedni mikro-bot,
-- kazdy mikro-bot handluje tylko symbolem swojego wykresu.
+- kazdy mikro-bot handluje tylko symbolem swojego wykresu,
+- `Core` pozostaje wspolnym kodem wkompilowanym w boty.
 
 To jest model najbezpieczniejszy, najbardziej czytelny i najlatwiejszy do utrzymania.
-
-## Lista Instancji
-
-Ponizej model przykładowy dla `11` par FX. Ostateczna lista moze zostac dostosowana do Twojej polityki symboli.
-
-1. `MicroBot_EURUSD`
-2. `MicroBot_GBPUSD`
-3. `MicroBot_USDJPY`
-4. `MicroBot_AUDUSD`
-5. `MicroBot_USDCAD`
-6. `MicroBot_USDCHF`
-7. `MicroBot_NZDUSD`
-8. `MicroBot_EURJPY`
-9. `MicroBot_GBPJPY`
-10. `MicroBot_EURAUD`
-
-Kazdy bot jest osobnym `EA` i osobnym plikiem `.ex5`.
 
 ## Przypisanie Do Wykresow
 
 ### Zasada
 
-Bot nie wybiera sobie dowolnej pary.
-Para nie jest tez obslugiwana przez centralny nadrzedny bot.
+Bot nie wybiera sobie dowolnego symbolu i nie jest sterowany przez centralny nadrzedny bot.
 
 Zamiast tego:
 
-- `MicroBot_EURUSD` przypinamy do wykresu `EURUSD`,
-- `MicroBot_GBPUSD` przypinamy do wykresu `GBPUSD`,
+- `MicroBot_US500` przypinamy do `US500`,
+- `MicroBot_EURJPY` przypinamy do `EURJPY`,
+- `MicroBot_GOLD` przypinamy do `GOLD`,
+- `MicroBot_EURUSD` przypinamy do `EURUSD`,
 - itd.
 
-Kazdy bot powinien przy starcie sprawdzic:
+Kazdy bot przy starcie powinien sprawdzic:
 
 - czy `Symbol()` zgadza sie z jego profilem,
 - czy wlaczono `Algo Trading`,
 - czy dostepne sa wymagane pliki lokalne,
 - czy `kill-switch` jest wazny,
-- czy symbol ma odpowiedni tryb handlu.
+- czy symbol ma poprawny tryb handlu.
 
 Jesli nie:
 
@@ -73,48 +81,27 @@ Jesli nie:
 
 ## Interwal Wykresu
 
-Kazdy bot powinien byc przypiety do takiego wykresu, jaki jest przewidziany przez jego profil referencyjny.
-
-Przykladowo:
-
-- wykres `M5` dla botow scalpingowych,
-- dodatkowe wskazniki `M1` lub `M15` czytane wewnetrznie przez kod,
-- ale glowny wykres powinien byc zgodny z zalozonym profilem glownym.
-
 Minimalna rekomendacja operacyjna:
 
-- wszystkie `11` botow uruchamiane na wykresach `M5`,
-- a inne interwaly pobierane przez `CopyBuffer` / `CopyTime` wewnatrz kodu.
+- wszystkie aktywne mikro-boty uruchamiane na wykresach `M5`,
+- dodatkowe interwaly pobierane wewnatrz kodu przez `CopyBuffer` / `CopyTime`.
 
-To upraszcza operacje terminalowe.
+To upraszcza operacje terminalowe i utrzymuje spojnosc planu chartow.
 
-## Jak Bedzie Wygladal Terminal
+## Jak Wyglada Terminal
 
 Na terminalu `MT5`:
 
-- otwierasz `11` wykresow,
-- kazdy wykres ma nazwe odpowiadajaca parze,
+- otwierasz `13` wykresow zgodnych z aktywna flota,
+- kazdy wykres ma nazwe odpowiadajaca symbolowi,
 - do kazdego przeciagasz odpowiedni `EA`,
 - wczytujesz odpowiedni preset,
 - sprawdzasz status `Algo Trading`,
-- sprawdzasz, czy bot wszedl w `READY` albo `CAUTION`.
-
-Przyklad:
-
-- Chart 1: `EURUSD` -> `MicroBot_EURUSD`
-- Chart 2: `GBPUSD` -> `MicroBot_GBPUSD`
-- Chart 3: `USDJPY` -> `MicroBot_USDJPY`
-- Chart 4: `AUDUSD` -> `MicroBot_AUDUSD`
-- Chart 5: `USDCAD` -> `MicroBot_USDCAD`
-- Chart 6: `USDCHF` -> `MicroBot_USDCHF`
-- Chart 7: `NZDUSD` -> `MicroBot_NZDUSD`
-- Chart 8: `EURJPY` -> `MicroBot_EURJPY`
-- Chart 9: `GBPJPY` -> `MicroBot_GBPJPY`
-- Chart 10: `EURAUD` -> `MicroBot_EURAUD`
+- sprawdzasz, czy bot wszedl w `READY`, `OBSERVING` albo inny poprawny stan runtime.
 
 ## Organizacja Plikow Runtime
 
-Kazdy mikro-bot powinien miec w `FILE_COMMON` wlasny katalog, np.:
+Kazdy mikro-bot ma w `FILE_COMMON` wlasny katalog, np.:
 
 ```text
 MAKRO_I_MIKRO_BOT\state\EURUSD\
@@ -122,15 +109,15 @@ MAKRO_I_MIKRO_BOT\logs\EURUSD\
 MAKRO_I_MIKRO_BOT\run\EURUSD\
 ```
 
-Analogicznie dla kazdej pary.
+Analogicznie dla kazdego aktywnego symbolu.
 
-Dzieki temu:
+To daje:
 
-- boty nie nadpisuja sobie stanu,
-- logi sa rozdzielone,
-- backup jest prosty,
-- diagnostyka jest prosta,
-- integracja z serwer profile jest prosta.
+- brak nadpisywania stanu miedzy symbolami,
+- rozdzielone logi,
+- prosty backup,
+- prostsza diagnostyke,
+- prostsza integracje z `SERVER_PROFILE`.
 
 ## Co Kazdy Bot Musi Miec Lokalnie
 
@@ -147,7 +134,7 @@ Kazdy bot musi miec lokalnie:
 - lokalne limity doby, godziny i sesji,
 - lokalne liczniki requestow i order send,
 - lokalny cache rynku,
-- lokalny `black swan`.
+- lokalne snapshoty supervision i learning.
 
 To nie moze byc wspolna instancja.
 
@@ -155,25 +142,7 @@ To nie moze byc wspolna instancja.
 
 Kazdy bot powinien miec osobny `.set`.
 
-Przyklad:
-
-- `MicroBot_EURUSD_Live.set`
-- `MicroBot_GBPUSD_Live.set`
-- `MicroBot_USDJPY_Live.set`
-
-Preset zawiera tylko:
-
-- parametry symbolu,
-- parametry okien handlu,
-- progi spreadowe,
-- parametry risk,
-- progi uczenia,
-- progi `black swan`.
-
-Kod wspolny nie siedzi w presetach.
-Kod wspolny siedzi w `Core`.
-
-W aktualnym projekcie domyslne `*_Live.set` pozostaja bezpieczne:
+Domyslne `*_Live.set` pozostaja bezpieczne:
 
 - `InpEnableLiveEntries=false`
 
@@ -187,46 +156,12 @@ powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\TOOLS\GENERATE_ACT
 
 Wynik trafia do:
 
-- `SERVER_PROFILE\PACKAGE\MQL5\Presets\ActiveLive`
-
-## Sesje Dzienne I Azjatyckie
-
-Nie dzielimy botow wedlug centralnego planera.
-
-Kazdy bot sam ma wiedziec:
-
-- czy jest botem dziennym,
-- czy azjatyckim,
-- czy hybrydowym,
-- kiedy wolno mu otwierac pozycje,
-- kiedy przechodzi w `close-only`,
-- kiedy ma tylko pilnowac pozycji.
-
-To powinno byc zapisane w jego profilu i presiecie.
-
-## Limity Godzinowe, Dobowe, Seryjne
-
-Kazdy bot sam trzyma swoje:
-
-- `max_entries_per_hour`,
-- `max_entries_per_day`,
-- `max_entries_per_session`,
-- `max_order_attempts_per_min`,
-- `max_price_requests_per_min`,
-- `cooldown_after_loss_streak`,
-- `cooldown_after_execution_errors`.
-
-Powod:
-
-- mikro-bot ma byc autonomiczny,
-- ma sam pilnowac swojej higieny,
-- nie moze czekac na zewnetrzna decyzje.
+- `MQL5\Presets\ActiveLive`
+- oraz do pakietu `SERVER_PROFILE\PACKAGE\MQL5\Presets\ActiveLive`
 
 ## Wspolna Warstwa W MT5
 
-`Core` nie bedzie przypinany jako osobny `EA`.
-
-To jest kluczowe.
+`Core` nie jest osobnym `EA`.
 
 W `MT5` operator widzi tylko mikro-boty.
 
@@ -243,7 +178,7 @@ Czyli:
 
 ## Server Profile
 
-Projekt powinien miec jeden `SERVER_PROFILE`, ktory zawiera:
+Projekt ma jeden `SERVER_PROFILE`, ktory zawiera:
 
 - `MQL5/Experts/MicroBots/*.mq5`,
 - `MQL5/Include/Core/*.mqh`,
@@ -254,16 +189,16 @@ Projekt powinien miec jeden `SERVER_PROFILE`, ktory zawiera:
 
 Nie powinno byc zaleznosci runtime od:
 
-- starego repo OANDA,
-- starego repo EURUSD,
-- zewnetrznego Pythona,
-- zewnetrznego bridge.
+- starego repo `OANDA_MT5_SYSTEM`,
+- wycofanych symboli,
+- historycznych presetow pochodzacych z wycofanego modelu FX-only,
+- zewnetrznego bridge poza kontraktami systemu.
 
 ## Operacyjna Procedura Wdrozenia
 
 ### Krok 1
 
-Uruchomic jeden wrapper preflight:
+Uruchomic wrapper preflight:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\PREPARE_MT5_ROLLOUT.ps1
@@ -272,10 +207,10 @@ powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\RUN\PREPARE_MT5_RO
 Ten krok obejmuje:
 
 - sync tokenow `kill-switch`,
-- kompilacje calej partii,
+- kompilacje aktywnej floty,
 - walidacje ukladu projektu,
 - walidacje gotowosci wdrozenia,
-- regeneracje planu przypiecia,
+- regeneracje planu chartow,
 - eksport paczki serwerowej,
 - zapis backupu ZIP.
 
@@ -285,8 +220,7 @@ Sprawdzic raporty:
 
 - `EVIDENCE\prepare_mt5_rollout_report.json`
 - `EVIDENCE\deployment_readiness_report.json`
-
-Oba raporty musza dawac `ok=true`.
+- `EVIDENCE\mt5_microbots_profile_setup_report.json`
 
 ### Krok 3
 
@@ -294,7 +228,7 @@ Skopiowac paczke do katalogu `MT5`.
 
 ### Krok 4
 
-Utworzyc lub odtworzyc `11` wykresow.
+Utworzyc lub odtworzyc `13` wykresow zgodnych z aktywna flota.
 
 ### Krok 5
 
@@ -317,12 +251,12 @@ Zweryfikowac:
 - `Algo Trading = ON`,
 - status `kill-switch`,
 - status symbolu,
-- poprawny tryb `READY` / `CAUTION`,
+- poprawny tryb `READY` / `OBSERVING` / `LEARNING`,
 - poprawnosc katalogow `FILE_COMMON`.
 
 ### Krok 9
 
-Zapisac profil terminala z `11` wykresami.
+Zapisac profil terminala z aktywna flota.
 
 ### Krok 10
 
@@ -334,18 +268,7 @@ Przy kolejnym starcie ladowac gotowy profil.
 
 Kazdy bot ma unikalny `magic`.
 
-Rekomendowany aktualny przydzial:
-
-- `EURUSD` -> `910101`
-- `GBPUSD` -> `910102`
-- `USDJPY` -> `910103`
-- `AUDUSD` -> `910104`
-- `USDCAD` -> `910105`
-- `USDCHF` -> `910106`
-- `NZDUSD` -> `910107`
-- `EURJPY` -> `910108`
-- `GBPJPY` -> `910109`
-- `EURAUD` -> `910110`
+Rekomendowany przydzial bierze sie z `CONFIG/microbots_registry.json` i to ten plik jest zrodlem prawdy.
 
 ### Zasada 2
 
@@ -365,7 +288,7 @@ Kazdy bot ma fail-fast przy zlej konfiguracji.
 
 ### Zasada 6
 
-Kazdy bot ma lokalny `heartbeat`.
+Kazdy bot ma lokalny `heartbeat` oraz snapshoty supervision.
 
 ### Zasada 7
 
@@ -383,28 +306,27 @@ Projekt `C:\MAKRO_I_MIKRO_BOT` powinien miec:
 - walidator gotowosci rolloutowej,
 - wrapper jednego preflightu rolloutowego,
 - pakowanie `zip`,
-- delta deploy,
 - backup i restore.
 
-## Potencjalne Rozszerzenie
+## Rozszerzenie Makro / Mikro
 
-Jesli kiedys powstanie warstwa makro, to tylko jako:
+Warstwa makro pozostaje cienka:
 
 - obserwator,
 - agregator raportow,
 - generator rekomendacji offline,
-- read-only supervisor.
+- control-plane i supervision.
 
-Nie jako centralny bot decydujacy o wejsciu wszystkich par.
+Nie jest to centralny bot wejsc.
 
 ## Konkluzja
 
-Technicznie model wdrozenia `11` botow w `OANDA MT5` powinien byc:
+Technicznie model wdrozenia aktywnej floty powinien byc:
 
 - prosty,
 - czytelny,
 - zgodny z `MT5`,
 - oparty o `1 bot = 1 chart = 1 symbol`,
-- z bardzo mocna autonomia lokalna,
+- z mocna autonomia lokalna,
 - z cienka warstwa wspolnego kodu,
-- bez centralnego przejmowania decyzji przez makro-bota.
+- bez powrotu do wycofanych symboli i starego 11-botowego modelu FX-only.

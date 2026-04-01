@@ -7,6 +7,8 @@ param(
     [string]$ProfitTrackingPath = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS\profit_tracking_latest.json",
     [string]$CommonStateRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state",
     [string]$CommonLogRoot = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\logs",
+    [string]$HandoffRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\HANDOFF",
+    [string]$RemoteSimRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\REMOTE_SIM",
     [string]$OutputRoot = "C:\MAKRO_I_MIKRO_BOT\EVIDENCE\OPS"
 )
 
@@ -34,6 +36,34 @@ function Test-JsonContainsSymbol {
     }
 
     return (($JsonObject | ConvertTo-Json -Depth 16) -match ('"' + [regex]::Escape($Symbol) + '"'))
+}
+
+function Test-TreeContainsSymbol {
+    param(
+        [string]$RootPath,
+        [string]$Symbol
+    )
+
+    if (-not (Test-Path -LiteralPath $RootPath)) {
+        return $false
+    }
+
+    $pattern = [regex]::Escape($Symbol)
+    $files = Get-ChildItem -LiteralPath $RootPath -File -Recurse -ErrorAction SilentlyContinue
+    foreach ($file in $files) {
+        if ($file.FullName -match $pattern) {
+            return $true
+        }
+        try {
+            if (Select-String -LiteralPath $file.FullName -Pattern $pattern -Quiet -Encoding UTF8) {
+                return $true
+            }
+        }
+        catch {
+        }
+    }
+
+    return $false
 }
 
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
@@ -64,6 +94,8 @@ $items = foreach ($symbol in @($RetiredSymbols | ForEach-Object { Normalize-Symb
         obecny_w_hostingu_aktywnym = ($hostingContains -and -not $historicallyExcluded)
         katalog_stanu_istnieje = (Test-Path -LiteralPath (Join-Path $CommonStateRoot $symbol))
         katalog_logow_istnieje = (Test-Path -LiteralPath (Join-Path $CommonLogRoot $symbol))
+        obecny_w_handoff = Test-TreeContainsSymbol -RootPath $HandoffRoot -Symbol $symbol
+        obecny_w_remote_sim = Test-TreeContainsSymbol -RootPath $RemoteSimRoot -Symbol $symbol
     }
 }
 
@@ -77,7 +109,9 @@ $report = [ordered]@{
         $_.obecny_w_profit_tracking -or
         $_.obecny_w_hostingu_aktywnym -or
         $_.katalog_stanu_istnieje -or
-        $_.katalog_logow_istnieje
+        $_.katalog_logow_istnieje -or
+        $_.obecny_w_handoff -or
+        $_.obecny_w_remote_sim
     }).Count -eq 0
     items = $items
 }
@@ -101,6 +135,8 @@ foreach ($item in @($items)) {
     $lines.Add(("- obecny_w_hostingu_aktywnym: {0}" -f $item.obecny_w_hostingu_aktywnym))
     $lines.Add(("- katalog_stanu_istnieje: {0}" -f $item.katalog_stanu_istnieje))
     $lines.Add(("- katalog_logow_istnieje: {0}" -f $item.katalog_logow_istnieje))
+    $lines.Add(("- obecny_w_handoff: {0}" -f $item.obecny_w_handoff))
+    $lines.Add(("- obecny_w_remote_sim: {0}" -f $item.obecny_w_remote_sim))
     $lines.Add("")
 }
 ($lines -join "`r`n") | Set-Content -LiteralPath $mdPath -Encoding UTF8
