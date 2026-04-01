@@ -201,6 +201,71 @@ function Read-JsonOrNull {
     }
 }
 
+function Read-KeyValueFile {
+    param([string]$Path)
+
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $map
+    }
+
+    foreach ($line in @(Get-Content -LiteralPath $Path -Encoding UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch ",|`t") {
+            continue
+        }
+
+        $parts = if ($line -match "`t") {
+            $line -split "`t", 2
+        }
+        else {
+            $line -split ",", 2
+        }
+
+        if ($parts.Count -eq 2) {
+            $map[[string]$parts[0]] = [string]$parts[1]
+        }
+    }
+
+    return $map
+}
+
+function Test-FirstWaveParityControlActive {
+    param(
+        [string]$CommonStateRootPath,
+        [int]$FallbackMaxAgeSeconds = 3600
+    )
+
+    $diagnosticPath = Join-Path $CommonStateRootPath "MAKRO_I_MIKRO_BOT\run\first_wave_truth_diagnostic.csv"
+    $sessionCoordinatorPath = Join-Path $CommonStateRootPath "MAKRO_I_MIKRO_BOT\state\_global\session_capital_coordinator.csv"
+
+    $runtimeState = Read-KeyValueFile -Path $sessionCoordinatorPath
+    $runtimeProfile = if ($runtimeState.ContainsKey("runtime_profile")) { [string]$runtimeState["runtime_profile"] } else { "" }
+    if ($runtimeProfile -eq "BROKER_PARITY_FIRST_WAVE") {
+        return $true
+    }
+
+    if (-not (Test-Path -LiteralPath $diagnosticPath)) {
+        return $false
+    }
+
+    $diagnostic = Read-KeyValueFile -Path $diagnosticPath
+    $enabled = if ($diagnostic.ContainsKey("enabled")) { [string]$diagnostic["enabled"] } else { "0" }
+    if ($enabled -ne "1") {
+        return $false
+    }
+
+    $maxAgeSeconds = $FallbackMaxAgeSeconds
+    if ($diagnostic.ContainsKey("max_age_sec")) {
+        $parsedMaxAge = 0
+        if ([int]::TryParse([string]$diagnostic["max_age_sec"], [ref]$parsedMaxAge) -and $parsedMaxAge -gt 0) {
+            $maxAgeSeconds = $parsedMaxAge
+        }
+    }
+
+    $ageSeconds = [int][math]::Round(((Get-Date) - (Get-Item -LiteralPath $diagnosticPath).LastWriteTime).TotalSeconds)
+    return ($ageSeconds -le $maxAgeSeconds)
+}
+
 function Get-PlanSummaryValue {
     param(
         [object]$PlanReport,
@@ -1308,6 +1373,9 @@ while ($true) {
     } | Out-Null
 
     Invoke-SupervisorAction -Actions $actions -Name "laptop_runtime" -Operation {
+        if (Test-FirstWaveParityControlActive -CommonStateRootPath $commonStateRoot) {
+            return "skipped first_wave_parity_active"
+        }
         & $applyLaptopRuntimeScript | Out-Null
         "applied"
     } | Out-Null
