@@ -20,6 +20,20 @@ struct MbDecisionEventRecord
 MbDecisionEventRecord g_mb_decision_queue[];
 string g_mb_decision_queue_path = "";
 
+datetime MbDecisionJournalResolveUtcTimestamp(const datetime ts)
+  {
+   datetime utc_now = TimeGMT();
+   if(ts <= 0)
+      return utc_now;
+
+   datetime runtime_now = TimeCurrent();
+   long utc_offset_sec = (long)(utc_now - runtime_now);
+   if(MathAbs(utc_offset_sec) < 60)
+      return ts;
+
+   return (datetime)(ts + utc_offset_sec);
+  }
+
 void MbEnsureDecisionHeader(const int h)
   {
    if(h == INVALID_HANDLE || FileSize(h) > 0)
@@ -29,9 +43,10 @@ void MbEnsureDecisionHeader(const int h)
 
 void MbWriteDecisionEventRecord(const int h,const MbDecisionEventRecord &record)
   {
+   datetime ts_utc = MbDecisionJournalResolveUtcTimestamp(record.ts);
    FileWrite(
       h,
-      (long)record.ts,
+      (long)ts_utc,
       record.symbol,
       record.phase,
       record.verdict,

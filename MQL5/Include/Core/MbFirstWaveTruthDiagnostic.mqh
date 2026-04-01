@@ -9,6 +9,8 @@ bool g_mb_first_wave_truth_diag_enabled = false;
 datetime g_mb_first_wave_truth_diag_generated_at_utc = 0;
 int g_mb_first_wave_truth_diag_max_age_sec = 43200;
 bool g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
+bool g_mb_first_wave_truth_diag_allow_daily_loss_hard = false;
+bool g_mb_first_wave_truth_diag_allow_session_loss_hard = false;
 bool g_mb_first_wave_truth_diag_allow_central_state_stale = true;
 bool g_mb_first_wave_truth_diag_allow_low_conversion_ratio = true;
 bool g_mb_first_wave_truth_diag_allow_forefield_dirty = true;
@@ -45,6 +47,8 @@ void MbResetFirstWaveTruthDiagnosticState()
    g_mb_first_wave_truth_diag_generated_at_utc = 0;
    g_mb_first_wave_truth_diag_max_age_sec = 43200;
    g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = false;
+   g_mb_first_wave_truth_diag_allow_daily_loss_hard = false;
+   g_mb_first_wave_truth_diag_allow_session_loss_hard = false;
    g_mb_first_wave_truth_diag_allow_central_state_stale = true;
    g_mb_first_wave_truth_diag_allow_low_conversion_ratio = true;
    g_mb_first_wave_truth_diag_allow_forefield_dirty = true;
@@ -126,6 +130,10 @@ void MbLoadFirstWaveTruthDiagnostic(const bool force_reload = false)
          g_mb_first_wave_truth_diag_max_age_sec = MathMax(60,MbFirstWaveTruthDiagnosticParseInt(value,g_mb_first_wave_truth_diag_max_age_sec));
       else if(key == "allow_symbol_daily_loss_hard")
          g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard);
+      else if(key == "allow_daily_loss_hard")
+         g_mb_first_wave_truth_diag_allow_daily_loss_hard = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_daily_loss_hard);
+      else if(key == "allow_session_loss_hard")
+         g_mb_first_wave_truth_diag_allow_session_loss_hard = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_session_loss_hard);
       else if(key == "allow_central_state_stale")
          g_mb_first_wave_truth_diag_allow_central_state_stale = MbFirstWaveTruthDiagnosticParseBool(value,g_mb_first_wave_truth_diag_allow_central_state_stale);
       else if(key == "allow_low_conversion_ratio")
@@ -162,6 +170,46 @@ void MbLoadFirstWaveTruthDiagnostic(const bool force_reload = false)
       g_mb_first_wave_truth_diag_enabled = false;
   }
 
+bool MbFirstWaveTruthDiagnosticIsFresh()
+  {
+   if(!g_mb_first_wave_truth_diag_enabled)
+      return false;
+
+   datetime now_utc = TimeGMT();
+   datetime now_local = TimeLocal();
+   if(g_mb_first_wave_truth_diag_generated_at_utc > 0)
+     {
+      if((now_utc - g_mb_first_wave_truth_diag_generated_at_utc) > g_mb_first_wave_truth_diag_max_age_sec)
+        {
+         g_mb_first_wave_truth_diag_enabled = false;
+         return false;
+        }
+      return true;
+     }
+
+   string rel_path = MbFirstWaveTruthDiagnosticPath();
+   if(!FileIsExist(rel_path,FILE_COMMON))
+     {
+      g_mb_first_wave_truth_diag_enabled = false;
+      return false;
+     }
+
+   int handle = FileOpen(rel_path,FILE_COMMON | FILE_READ | FILE_CSV | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+      return g_mb_first_wave_truth_diag_enabled;
+
+   long modified_local = FileGetInteger(handle,FILE_MODIFY_DATE);
+   FileClose(handle);
+
+   if(modified_local > 0 && (now_local - (datetime)modified_local) > g_mb_first_wave_truth_diag_max_age_sec)
+     {
+      g_mb_first_wave_truth_diag_enabled = false;
+      return false;
+     }
+
+   return true;
+  }
+
 bool MbIsFirstWaveTruthDiagnosticActive(const string symbol,const bool paper_mode_active)
   {
    if(!paper_mode_active)
@@ -170,7 +218,7 @@ bool MbIsFirstWaveTruthDiagnosticActive(const string symbol,const bool paper_mod
       return false;
 
    MbLoadFirstWaveTruthDiagnostic();
-   return g_mb_first_wave_truth_diag_enabled;
+   return MbFirstWaveTruthDiagnosticIsFresh();
   }
 
 bool MbShouldBypassFirstWaveTruthDiagnosticGuard(const string symbol,const bool paper_mode_active,const string reason_code)
@@ -179,6 +227,10 @@ bool MbShouldBypassFirstWaveTruthDiagnosticGuard(const string symbol,const bool 
       return false;
 
    if(reason_code == "SYMBOL_DAILY_LOSS_HARD" && g_mb_first_wave_truth_diag_allow_symbol_daily_loss_hard)
+      return true;
+   if(reason_code == "DAILY_LOSS_HARD" && g_mb_first_wave_truth_diag_allow_daily_loss_hard)
+      return true;
+   if(reason_code == "SESSION_LOSS_HARD" && g_mb_first_wave_truth_diag_allow_session_loss_hard)
       return true;
    if(reason_code == "CENTRAL_STATE_STALE" && g_mb_first_wave_truth_diag_allow_central_state_stale)
       return true;
@@ -253,6 +305,16 @@ bool MbShouldBypassFirstWaveTruthDiagnosticNewBar(const string symbol,const bool
    if(!MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
       return false;
    return (g_mb_first_wave_truth_diag_force_scan_interval_sec > 0);
+  }
+
+string MbResolveFirstWaveTruthDiagnosticScanSource(const string symbol,const bool paper_mode_active)
+  {
+   if(g_mb_first_wave_truth_diag_timer_scan_active &&
+      MbCanonicalSymbol(symbol) == g_mb_first_wave_truth_diag_timer_scan_symbol &&
+      MbIsFirstWaveTruthDiagnosticActive(symbol,paper_mode_active))
+      return "TIMER_FALLBACK_SCAN";
+
+   return "MARKET_TICK";
   }
 
 bool MbShouldBypassFirstWaveTruthDiagnosticSoftReject(

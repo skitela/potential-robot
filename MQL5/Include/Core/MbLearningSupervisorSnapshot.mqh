@@ -54,7 +54,7 @@ bool MbLearningSupervisorSnapshotWrite(
    string payload = StringFormat(
       "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"generated_at_utc\":%I64d,\"runtime_channel\":\"%s\",\"runtime_heartbeat_alive\":%s,\"paper_mode_active\":%s,\"last_stage\":\"%s\",\"last_reason_code\":\"%s\",\"last_scan_source\":\"%s\",\"setup_type\":\"%s\",\"gate_visible\":%s,\"paper_open_visible\":%s,\"paper_close_visible\":%s,\"lesson_write_visible\":%s,\"knowledge_write_visible\":%s,\"paper_position_open\":%s,\"teacher_score\":%.6f,\"student_score\":%.6f,\"contract_present\":%s,\"local_model_available\":%s,\"global_model_available\":%s,\"outcome_ready\":%s,\"local_training_mode\":\"%s\",\"runtime_scope\":\"%s\",\"market_session_open\":%s,\"spread_points\":%.4f,\"terminal_ping_ms\":%I64d,\"local_latency_us_avg\":%.2f}",
       MbLearningSupervisorSnapshotEscapeJson(canonical_symbol),
-      (long)TimeCurrent(),
+      (long)TimeGMT(),
       MbLearningSupervisorSnapshotEscapeJson(runtime_channel),
       MbJsonBool(runtime_heartbeat_alive),
       MbJsonBool(paper_mode_active),

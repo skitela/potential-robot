@@ -3,7 +3,8 @@ param(
     [int]$DurationMinutes = 180,
     [switch]$StopNonFirstWaveTesters = $true,
     [switch]$RefreshAudits = $true,
-    [switch]$UseActivePresets
+    [switch]$UseActivePresets,
+    [bool]$RestartTerminal = $true
 )
 
 Set-StrictMode -Version Latest
@@ -32,6 +33,11 @@ $allowedSymbols = @("US500","EURJPY","AUDUSD","USDCAD")
 $chartPlanJson = Join-Path $projectPath "EVIDENCE\OPS\first_wave_chart_plan_latest.json"
 $chartPlanTxt = Join-Path $projectPath "EVIDENCE\OPS\first_wave_chart_plan_latest.txt"
 $stopped = New-Object System.Collections.Generic.List[object]
+$startupWaitSeconds = 25
+$pollIntervalSeconds = 60
+$focusSucceeded = $false
+$pollIterations = 0
+$pollSummary = @()
 
 function Resolve-PythonExecutable {
     param([string]$PreferredPath)
@@ -109,6 +115,47 @@ function Stop-ProcessRow {
             reason = "$Reason|STOP_FAILED"
         }) | Out-Null
     }
+}
+
+function Stop-OandaTerminal {
+    param([bool]$Enabled)
+
+    if(-not $Enabled) {
+        return @()
+    }
+
+    $stoppedLocal = New-Object System.Collections.Generic.List[object]
+    $terminalRows = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -eq "terminal64.exe" -and [string]$_.CommandLine -like "*OANDA TMS MT5 Terminal*"
+    })
+
+    foreach($row in $terminalRows) {
+        try {
+            Stop-Process -Id ([int]$row.ProcessId) -Force -ErrorAction Stop
+            $entry = [pscustomobject]@{
+                pid = [int]$row.ProcessId
+                name = [string]$row.Name
+                reason = "FIRST_WAVE_TERMINAL_RESTART"
+            }
+            $stopped.Add($entry) | Out-Null
+            $stoppedLocal.Add($entry) | Out-Null
+        }
+        catch {
+            $entry = [pscustomobject]@{
+                pid = [int]$row.ProcessId
+                name = [string]$row.Name
+                reason = "FIRST_WAVE_TERMINAL_RESTART|STOP_FAILED"
+            }
+            $stopped.Add($entry) | Out-Null
+            $stoppedLocal.Add($entry) | Out-Null
+        }
+    }
+
+    if($stoppedLocal.Count -gt 0) {
+        Start-Sleep -Seconds 3
+    }
+
+    return @($stoppedLocal.ToArray())
 }
 
 if($StopNonFirstWaveTesters) {
@@ -225,8 +272,10 @@ if (Test-Path -LiteralPath $guardScript) {
     Start-Sleep -Seconds 1
 }
 
+$terminalRestartRows = Stop-OandaTerminal -Enabled:$RestartTerminal
+
 & $pythonExe @profileArgs | Out-Null
-Start-Sleep -Seconds 25
+Start-Sleep -Seconds $startupWaitSeconds
 
 $runtimeAudit = $null
 $closureAudit = $null
@@ -234,27 +283,55 @@ $parityAudit = $null
 $tradeTransitionAudit = $null
 
 if($RefreshAudits) {
-    & $runtimeAuditScript | Out-Null
-    & $closureAuditScript | Out-Null
-    if (Test-Path -LiteralPath $paperLiveGapAuditScript) {
-        & $paperLiveGapAuditScript | Out-Null
-    }
-    if (Test-Path -LiteralPath $tradeTransitionAuditScript) {
-        & $tradeTransitionAuditScript | Out-Null
-    }
-    if (Test-Path -LiteralPath $parityAuditScript) {
-        & $parityAuditScript | Out-Null
-    }
-    $runtimeAudit = Get-Content (Join-Path $projectPath "EVIDENCE\OPS\mt5_first_wave_runtime_activity_latest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-    $closureAudit = Get-Content (Join-Path $projectPath "EVIDENCE\OPS\first_wave_lesson_closure_latest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-    $parityAuditPath = Join-Path $projectPath "EVIDENCE\OPS\mt5_first_wave_server_parity_latest.json"
-    if (Test-Path -LiteralPath $parityAuditPath) {
-        $parityAudit = Get-Content $parityAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    }
-    $tradeTransitionAuditPath = Join-Path $projectPath "EVIDENCE\OPS\first_wave_final_deploy_latest.json"
-    if (Test-Path -LiteralPath $tradeTransitionAuditPath) {
-        $tradeTransitionAudit = Get-Content $tradeTransitionAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    }
+    $deadlineUtc = (Get-Date).ToUniversalTime().AddMinutes([double]$DurationMinutes)
+    do {
+        & $runtimeAuditScript | Out-Null
+        & $closureAuditScript | Out-Null
+        if (Test-Path -LiteralPath $paperLiveGapAuditScript) {
+            & $paperLiveGapAuditScript | Out-Null
+        }
+        if (Test-Path -LiteralPath $tradeTransitionAuditScript) {
+            & $tradeTransitionAuditScript | Out-Null
+        }
+        if (Test-Path -LiteralPath $parityAuditScript) {
+            & $parityAuditScript | Out-Null
+        }
+
+        $runtimeAudit = Get-Content (Join-Path $projectPath "EVIDENCE\OPS\mt5_first_wave_runtime_activity_latest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        $closureAudit = Get-Content (Join-Path $projectPath "EVIDENCE\OPS\first_wave_lesson_closure_latest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        $parityAuditPath = Join-Path $projectPath "EVIDENCE\OPS\mt5_first_wave_server_parity_latest.json"
+        if (Test-Path -LiteralPath $parityAuditPath) {
+            $parityAudit = Get-Content $parityAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        }
+        $tradeTransitionAuditPath = Join-Path $projectPath "EVIDENCE\OPS\first_wave_final_deploy_latest.json"
+        if (Test-Path -LiteralPath $tradeTransitionAuditPath) {
+            $tradeTransitionAudit = Get-Content $tradeTransitionAuditPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        }
+
+        $pollIterations += 1
+        $currentFreshCount = 0
+        if($null -ne $closureAudit -and $null -ne $closureAudit.summary) {
+            $currentFreshCount = [int]$closureAudit.summary.fresh_chain_ready_count
+        }
+
+        $pollSummary += [pscustomobject]@{
+            iteration = $pollIterations
+            ts_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            fresh_chain_ready_count = $currentFreshCount
+            verdict = if($closureAudit) { [string]$closureAudit.verdict } else { "" }
+        }
+
+        if($currentFreshCount -ge $allowedSymbols.Count) {
+            $focusSucceeded = $true
+            break
+        }
+
+        if((Get-Date).ToUniversalTime() -ge $deadlineUtc) {
+            break
+        }
+
+        Start-Sleep -Seconds $pollIntervalSeconds
+    } while ($true)
 }
 
 $controlHelpers = @(
@@ -278,7 +355,17 @@ $controlHelpers = @(
     active_presets_requested = [bool]$UseActivePresets
     active_preset_root = $activePresetRoot
     stopped_processes = @($stopped.ToArray())
+    terminal_restart = [pscustomobject]@{
+        requested = $RestartTerminal
+        stopped_count = @($terminalRestartRows).Count
+        stopped = @($terminalRestartRows)
+    }
     diagnostic_mode = $diagnosticResult
+    startup_wait_seconds = $startupWaitSeconds
+    poll_interval_seconds = $pollIntervalSeconds
+    poll_iterations = $pollIterations
+    focus_succeeded = $focusSucceeded
+    poll_summary = $pollSummary
     runtime_activity_verdict = if($runtimeAudit) { [string]$runtimeAudit.verdict } else { $null }
     lesson_closure_verdict = if($closureAudit) { [string]$closureAudit.verdict } else { $null }
     fresh_chain_ready_count = if($closureAudit) { [int]$closureAudit.summary.fresh_chain_ready_count } else { $null }

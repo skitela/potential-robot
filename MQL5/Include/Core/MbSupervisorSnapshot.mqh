@@ -57,7 +57,7 @@ bool MbSupervisorSnapshotWrite(
    string payload = StringFormat(
       "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"generated_at_utc\":%I64d,\"runtime_channel\":\"%s\",\"status_code\":\"%s\",\"last_stage\":\"%s\",\"last_reason_code\":\"%s\",\"paper_mode_active\":%s,\"paper_position_open\":%s,\"teacher_score\":%.6f,\"student_score\":%.6f,\"gate_allowed\":%s,\"gate_reason_code\":\"%s\",\"contract_present\":%s,\"local_model_available\":%s,\"global_model_available\":%s,\"outcome_ready\":%s,\"local_training_mode\":\"%s\",\"runtime_scope\":\"%s\",\"terminal_ping_ms\":%I64d,\"local_latency_us_avg\":%.2f,\"spread_points\":%.4f,\"signal_confidence\":%.6f,\"last_setup_type\":\"%s\"}",
       MbSupervisorSnapshotEscapeJson(canonical_symbol),
-      (long)TimeCurrent(),
+      (long)TimeGMT(),
       MbSupervisorSnapshotEscapeJson(runtime_channel),
       MbSupervisorSnapshotEscapeJson(status_code),
       MbSupervisorSnapshotEscapeJson(last_stage),
