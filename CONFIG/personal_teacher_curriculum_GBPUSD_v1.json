@@ -1,0 +1,138 @@
+{
+  "teacher_id": "PERSONAL_GBPUSD_V1",
+  "scope": "PERSONAL",
+  "symbol": "GBPUSD",
+  "symbol_family": "FX_MAJOR",
+  "family_kind": "MB_FAMILY_KIND_MAIN",
+  "mode": "GLOBAL_PLUS_PERSONAL",
+  "promotion_target_mode": "PERSONAL_PRIMARY",
+  "pilot_role": "FOLLOW_ON_PILOT",
+  "template_ref": "PERSONAL_EURUSD_REFERENCE",
+  "session_profile": "FX_MAIN",
+  "trade_window": {
+    "start_hour": 8,
+    "end_hour": 11
+  },
+  "genotype": {
+    "profile_symbol": "GBPUSD",
+    "max_spread_points": 25.0,
+    "caution_spread_points": 18.0,
+    "max_tick_age_sec": 5,
+    "min_seconds_between_entries": 60,
+    "kill_switch_token_name": "oandakey_gbpusd.token",
+    "kill_switch_max_age_sec": 120,
+    "ema_fast_period": 12,
+    "ema_slow_period": 34,
+    "atr_period": 14,
+    "rsi_period": 14,
+    "base_risk_pct": 0.38,
+    "min_risk_pct": 0.22,
+    "max_risk_pct": 0.55,
+    "execution_floor": 0.68,
+    "execution_decay": 0.55,
+    "sl_atr_multiplier": 1.90,
+    "sl_min_points": 42.0,
+    "tp_atr_multiplier": 2.50,
+    "tp_min_points": 70.0,
+    "trail_atr_multiplier": 1.25
+  },
+  "knowledge_bands": {
+    "inherits_global": true,
+    "instrument_specific": [
+      "gbpusd_pound_impulse_flag",
+      "gbpusd_london_breakout_quality",
+      "gbpusd_overlap_reversal_risk",
+      "gbpusd_false_break_risk",
+      "gbpusd_spread_stress_bucket",
+      "gbpusd_trend_extension_bucket",
+      "gbpusd_news_surge_risk",
+      "gbpusd_pullback_quality"
+    ],
+    "family_specific": [
+      "usd_strength_bucket",
+      "gbp_strength_bucket",
+      "fx_major_dispersion_bucket",
+      "family_leader_return_1m",
+      "family_leader_return_5m",
+      "family_leader_volatility_bucket"
+    ],
+    "execution_specific": [
+      "server_ping_ms",
+      "server_latency_us_avg",
+      "spread_points",
+      "decision_score_pln",
+      "expected_edge_pln",
+      "runtime_scope",
+      "price_request_eco_state"
+    ],
+    "session_microstructure": [
+      "gbpusd_london_open_impulse_flag",
+      "gbpusd_us_overlap_pressure_bucket",
+      "gbpusd_trade_window_phase_bucket",
+      "gbpusd_friday_cutoff_risk_flag"
+    ],
+    "local_policy_blocks": [
+      "gbpusd_risk_ladder_bucket",
+      "gbpusd_execution_floor_bucket",
+      "gbpusd_aggressive_sl_profile",
+      "gbpusd_pressure_step_bucket"
+    ],
+    "local_intermarket": [
+      "gbpusd_usd_cross_alignment",
+      "gbpusd_eurusd_divergence_flag",
+      "gbpusd_dxy_pressure_bucket"
+    ],
+    "local_promotion_readiness": [
+      "gbpusd_shadow_agreement_vs_global",
+      "gbpusd_feature_quality_ratio",
+      "gbpusd_diagnostic_only_ratio",
+      "gbpusd_fallback_usage_ratio"
+    ]
+  },
+  "required_features": [
+    "setup_type",
+    "market_regime",
+    "spread_regime",
+    "score",
+    "confidence_score",
+    "spread_points",
+    "server_ping_ms",
+    "server_latency_us_avg",
+    "usd_strength_bucket",
+    "gbp_strength_bucket",
+    "gbpusd_london_breakout_quality",
+    "gbpusd_news_surge_risk",
+    "gbpusd_risk_ladder_bucket",
+    "gbpusd_shadow_agreement_vs_global"
+  ],
+  "thresholds": {
+    "min_gate_probability": 0.60,
+    "min_decision_score_pln": 0.34,
+    "max_spread_points": 25.0,
+    "max_server_ping_ms": 4.0,
+    "max_server_latency_us_avg": 3200.0
+  },
+  "promotion_gate": {
+    "enabled": true,
+    "min_full_lessons": 750,
+    "min_gate_visible_events": 7000,
+    "min_feature_coverage_ratio": 0.97,
+    "min_feature_quality_ratio": 0.90,
+    "min_days_observed": 45,
+    "require_no_unclassified": true,
+    "require_outcome_ready": true,
+    "require_no_sticky_diagnostic": true,
+    "min_relative_quality_vs_global": 0.06,
+    "min_relative_quality_vs_family": 0.02
+  },
+  "diagnostic_binding": {
+    "timer_truth_scan_forced": false,
+    "force_scan_interval_sec": 0,
+    "heartbeat_expected_sec": 900
+  },
+  "source_refs": [
+    "MQL5/Experts/MicroBots/MicroBot_GBPUSD.mq5",
+    "MQL5/Include/Profiles/Profile_GBPUSD.mqh",
+    "MQL5/Include/Strategies/Strategy_GBPUSD.mqh"
+  ]
+}

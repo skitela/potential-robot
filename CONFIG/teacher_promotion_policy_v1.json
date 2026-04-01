@@ -1,17 +1,60 @@
 {
   "schema_version": "1.0",
-  "default_mode_without_package": "GLOBAL_ONLY",
-  "pilot_symbols": {
-    "EURUSD": "GLOBAL_PLUS_PERSONAL"
+  "policy_id": "TEACHER_PROMOTION_POLICY_V1",
+  "intent": "Promotion and rollback policy with hysteresis for shared-runtime teacher packages",
+  "mode_hysteresis": {
+    "min_consecutive_approve_windows": 3,
+    "promotion_cooldown_hours": 24,
+    "rollback_cooldown_hours": 72
   },
-  "verdicts": [
-    "HOLD_GLOBAL",
-    "PROMOTE_TO_PERSONAL",
-    "ROLLBACK_TO_GLOBAL"
-  ],
-  "safe_actions": [
-    "no_op",
-    "build_package",
-    "validate_promotion"
+  "rollback_triggers": {
+    "quality_drop_vs_baseline_gt": 0.10,
+    "sticky_diagnostic": true,
+    "relative_quality_vs_global_lt": -0.02
+  },
+  "threshold_overrides": {
+    "default": {
+      "require_no_unclassified": true,
+      "require_outcome_ready": true,
+      "require_no_sticky_diagnostic": true
+    },
+    "GLOBAL": {
+      "min_full_lessons": 500,
+      "min_gate_visible_events": 5000,
+      "min_feature_coverage_ratio": 0.95,
+      "min_days_observed": 30,
+      "min_relative_quality_vs_global": 0.0
+    },
+    "PERSONAL": {
+      "min_full_lessons": 750,
+      "min_gate_visible_events": 7000,
+      "min_feature_coverage_ratio": 0.97,
+      "min_days_observed": 45,
+      "min_relative_quality_vs_global": 0.05
+    }
+  },
+  "allowed_mode_transitions": {
+    "GLOBAL_ONLY": [
+      "GLOBAL_PLUS_PERSONAL"
+    ],
+    "GLOBAL_PLUS_PERSONAL": [
+      "GLOBAL_ONLY",
+      "PERSONAL_PRIMARY"
+    ],
+    "PERSONAL_PRIMARY": [
+      "GLOBAL_ONLY",
+      "GLOBAL_PLUS_PERSONAL"
+    ]
+  },
+  "required_inputs": [
+    "full_lessons_window",
+    "gate_visible_events_window",
+    "feature_coverage_ratio",
+    "days_observed",
+    "unclassified_count",
+    "sticky_diagnostic",
+    "relative_quality_vs_global",
+    "quality_drop_vs_baseline",
+    "outcome_ready"
   ]
 }

@@ -1,0 +1,141 @@
+{
+  "teacher_id": "PERSONAL_US500_V1",
+  "scope": "PERSONAL",
+  "symbol": "US500",
+  "symbol_family": "INDICES",
+  "family_kind": "MB_FAMILY_KIND_INDEX_US",
+  "mode": "GLOBAL_PLUS_PERSONAL",
+  "promotion_target_mode": "PERSONAL_PRIMARY",
+  "pilot_role": "FOLLOW_ON_PILOT",
+  "template_ref": "PERSONAL_EURUSD_REFERENCE",
+  "session_profile": "INDEX_US",
+  "trade_window": {
+    "start_hour": 17,
+    "end_hour": 20
+  },
+  "genotype": {
+    "profile_symbol": "US500",
+    "max_spread_points": 95.0,
+    "caution_spread_points": 60.0,
+    "max_tick_age_sec": 6,
+    "min_seconds_between_entries": 90,
+    "kill_switch_token_name": "oandakey_us500.token",
+    "kill_switch_max_age_sec": 120,
+    "ema_fast_period": 11,
+    "ema_slow_period": 32,
+    "atr_period": 14,
+    "rsi_period": 14,
+    "base_risk_pct": 0.16,
+    "min_risk_pct": 0.07,
+    "max_risk_pct": 0.21,
+    "execution_floor": 0.75,
+    "execution_decay": 0.46,
+    "sl_atr_multiplier": 1.65,
+    "sl_min_points": 70.0,
+    "tp_atr_multiplier": 2.15,
+    "tp_min_points": 115.0,
+    "trail_atr_multiplier": 1.05,
+    "truth_diagnostic_interval_sec": 90
+  },
+  "knowledge_bands": {
+    "inherits_global": true,
+    "instrument_specific": [
+      "us500_cash_open_drive_bucket",
+      "us500_opening_range_extension_flag",
+      "us500_spread_stress_bucket",
+      "us500_pullback_quality",
+      "us500_false_break_risk",
+      "us500_session_bias",
+      "us500_timer_truth_scan_due_flag",
+      "us500_window_end_decay_bucket"
+    ],
+    "family_specific": [
+      "index_us_dispersion_bucket",
+      "us_index_sector_leadership_proxy_bucket",
+      "family_leader_return_1m",
+      "family_leader_return_5m",
+      "family_leader_volatility_bucket",
+      "indices_liquidity_state"
+    ],
+    "execution_specific": [
+      "server_ping_ms",
+      "server_latency_us_avg",
+      "spread_points",
+      "decision_score_pln",
+      "expected_edge_pln",
+      "runtime_scope",
+      "price_request_eco_state",
+      "market_order_eco_state"
+    ],
+    "session_microstructure": [
+      "us500_minutes_from_window_start_bucket",
+      "us500_minutes_to_window_end_bucket",
+      "us500_cash_open_flag",
+      "us500_trade_window_phase_bucket"
+    ],
+    "local_policy_blocks": [
+      "us500_entry_cooldown_pressure",
+      "us500_execution_floor_bucket",
+      "us500_execution_decay_bucket",
+      "us500_spread_buffer_bucket"
+    ],
+    "local_intermarket": [
+      "us500_vix_proxy_bucket",
+      "us500_us10y_proxy_bucket",
+      "us500_dxy_pressure_bucket",
+      "us500_nasdaq_leadlag_bucket"
+    ],
+    "local_promotion_readiness": [
+      "us500_shadow_agreement_vs_global",
+      "us500_feature_quality_ratio",
+      "us500_diagnostic_only_ratio",
+      "us500_fallback_usage_ratio"
+    ]
+  },
+  "required_features": [
+    "setup_type",
+    "market_regime",
+    "spread_regime",
+    "score",
+    "confidence_score",
+    "spread_points",
+    "server_ping_ms",
+    "server_latency_us_avg",
+    "us500_cash_open_drive_bucket",
+    "us500_opening_range_extension_flag",
+    "us500_timer_truth_scan_due_flag",
+    "us500_minutes_from_window_start_bucket",
+    "us500_trade_window_phase_bucket",
+    "us500_shadow_agreement_vs_global"
+  ],
+  "thresholds": {
+    "min_gate_probability": 0.63,
+    "min_decision_score_pln": 0.37,
+    "max_spread_points": 95.0,
+    "max_server_ping_ms": 4.8,
+    "max_server_latency_us_avg": 3600.0
+  },
+  "promotion_gate": {
+    "enabled": true,
+    "min_full_lessons": 820,
+    "min_gate_visible_events": 8200,
+    "min_feature_coverage_ratio": 0.97,
+    "min_feature_quality_ratio": 0.91,
+    "min_days_observed": 50,
+    "require_no_unclassified": true,
+    "require_outcome_ready": true,
+    "require_no_sticky_diagnostic": true,
+    "min_relative_quality_vs_global": 0.06,
+    "min_relative_quality_vs_family": 0.03
+  },
+  "diagnostic_binding": {
+    "timer_truth_scan_forced": true,
+    "force_scan_interval_sec": 90,
+    "heartbeat_expected_sec": 900
+  },
+  "source_refs": [
+    "MQL5/Experts/MicroBots/MicroBot_US500.mq5",
+    "MQL5/Include/Profiles/Profile_US500.mqh",
+    "MQL5/Include/Strategies/Strategy_US500.mqh"
+  ]
+}

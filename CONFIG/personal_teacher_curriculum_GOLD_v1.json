@@ -1,0 +1,140 @@
+{
+  "teacher_id": "PERSONAL_GOLD_V1",
+  "scope": "PERSONAL",
+  "symbol": "GOLD",
+  "symbol_family": "METALS",
+  "family_kind": "MB_FAMILY_KIND_METAL_SPOT",
+  "mode": "GLOBAL_PLUS_PERSONAL",
+  "promotion_target_mode": "PERSONAL_PRIMARY",
+  "pilot_role": "FOLLOW_ON_PILOT",
+  "template_ref": "PERSONAL_EURUSD_REFERENCE",
+  "session_profile": "METALS_SPOT_PM",
+  "trade_window": {
+    "start_hour": 14,
+    "end_hour": 17
+  },
+  "genotype": {
+    "profile_symbol": "GOLD",
+    "max_spread_points": 120.0,
+    "caution_spread_points": 80.0,
+    "max_tick_age_sec": 6,
+    "min_seconds_between_entries": 90,
+    "kill_switch_token_name": "oandakey_gold.token",
+    "kill_switch_max_age_sec": 120,
+    "ema_fast_period": 13,
+    "ema_slow_period": 36,
+    "atr_period": 14,
+    "rsi_period": 14,
+    "base_risk_pct": 0.24,
+    "min_risk_pct": 0.10,
+    "max_risk_pct": 0.30,
+    "execution_floor": 0.74,
+    "execution_decay": 0.48,
+    "sl_atr_multiplier": 2.10,
+    "sl_min_points": 180.0,
+    "tp_atr_multiplier": 2.70,
+    "tp_min_points": 280.0,
+    "trail_atr_multiplier": 1.18
+  },
+  "knowledge_bands": {
+    "inherits_global": true,
+    "instrument_specific": [
+      "gold_safe_haven_rotation_bucket",
+      "gold_real_yield_proxy_bucket",
+      "gold_inflation_shock_bucket",
+      "gold_news_spike_absorption",
+      "gold_spread_stress_bucket",
+      "gold_pullback_quality",
+      "gold_session_bias",
+      "gold_pm_fix_pressure_bucket"
+    ],
+    "family_specific": [
+      "metal_spot_dispersion_bucket",
+      "gold_silver_ratio_bucket",
+      "family_leader_return_1m",
+      "family_leader_return_5m",
+      "family_leader_volatility_bucket",
+      "metals_liquidity_state"
+    ],
+    "execution_specific": [
+      "server_ping_ms",
+      "server_latency_us_avg",
+      "spread_points",
+      "decision_score_pln",
+      "expected_edge_pln",
+      "runtime_scope",
+      "price_request_eco_state",
+      "market_order_eco_state"
+    ],
+    "session_microstructure": [
+      "gold_london_pm_flag",
+      "gold_ny_open_overlap_flag",
+      "gold_trade_window_phase_bucket",
+      "gold_fixing_proximity_bucket"
+    ],
+    "local_policy_blocks": [
+      "gold_entry_cooldown_pressure",
+      "gold_execution_floor_bucket",
+      "gold_execution_decay_bucket",
+      "gold_spread_buffer_bucket"
+    ],
+    "local_intermarket": [
+      "gold_dxy_pressure_bucket",
+      "gold_real_yield_direction_bucket",
+      "gold_risk_off_proxy_bucket",
+      "gold_oil_inflation_proxy_bucket"
+    ],
+    "local_promotion_readiness": [
+      "gold_shadow_agreement_vs_global",
+      "gold_feature_quality_ratio",
+      "gold_diagnostic_only_ratio",
+      "gold_fallback_usage_ratio"
+    ]
+  },
+  "required_features": [
+    "setup_type",
+    "market_regime",
+    "spread_regime",
+    "score",
+    "confidence_score",
+    "spread_points",
+    "server_ping_ms",
+    "server_latency_us_avg",
+    "gold_safe_haven_rotation_bucket",
+    "gold_real_yield_proxy_bucket",
+    "gold_inflation_shock_bucket",
+    "gold_pm_fix_pressure_bucket",
+    "gold_trade_window_phase_bucket",
+    "gold_shadow_agreement_vs_global"
+  ],
+  "thresholds": {
+    "min_gate_probability": 0.64,
+    "min_decision_score_pln": 0.40,
+    "max_spread_points": 120.0,
+    "max_server_ping_ms": 4.8,
+    "max_server_latency_us_avg": 3600.0
+  },
+  "promotion_gate": {
+    "enabled": true,
+    "min_full_lessons": 820,
+    "min_gate_visible_events": 8200,
+    "min_feature_coverage_ratio": 0.97,
+    "min_feature_quality_ratio": 0.91,
+    "min_days_observed": 50,
+    "require_no_unclassified": true,
+    "require_outcome_ready": true,
+    "require_no_sticky_diagnostic": true,
+    "min_relative_quality_vs_global": 0.07,
+    "min_relative_quality_vs_family": 0.03
+  },
+  "diagnostic_binding": {
+    "timer_truth_scan_forced": false,
+    "force_scan_interval_sec": 0,
+    "heartbeat_expected_sec": 900
+  },
+  "source_refs": [
+    "MQL5/Experts/MicroBots/MicroBot_GOLD.mq5",
+    "MQL5/Include/Profiles/Profile_GOLD.mqh",
+    "MQL5/Include/Strategies/Strategy_GOLD.mqh"
+  ]
+}

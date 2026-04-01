@@ -1,0 +1,143 @@
+{
+  "teacher_id": "PERSONAL_AUDUSD_V1",
+  "scope": "PERSONAL",
+  "symbol": "AUDUSD",
+  "symbol_family": "FX_MAJOR",
+  "family_kind": "MB_FAMILY_KIND_ASIA",
+  "mode": "GLOBAL_PLUS_PERSONAL",
+  "promotion_target_mode": "PERSONAL_PRIMARY",
+  "pilot_role": "FOLLOW_ON_PILOT",
+  "template_ref": "PERSONAL_EURUSD_REFERENCE",
+  "session_profile": "FX_ASIA",
+  "trade_window": {
+    "start_hour": 0,
+    "end_hour": 5
+  },
+  "genotype": {
+    "profile_symbol": "AUDUSD",
+    "max_spread_points": 25.0,
+    "caution_spread_points": 18.0,
+    "max_tick_age_sec": 5,
+    "min_seconds_between_entries": 60,
+    "kill_switch_token_name": "oandakey_audusd.token",
+    "kill_switch_max_age_sec": 120,
+    "ema_fast_period": 11,
+    "ema_slow_period": 30,
+    "atr_period": 14,
+    "rsi_period": 14,
+    "base_risk_pct": 0.30,
+    "min_risk_pct": 0.18,
+    "max_risk_pct": 0.44,
+    "execution_floor": 0.74,
+    "execution_decay": 0.50,
+    "sl_atr_multiplier": 1.60,
+    "sl_min_points": 26.0,
+    "tp_atr_multiplier": 2.05,
+    "tp_min_points": 44.0,
+    "trail_atr_multiplier": 1.12,
+    "tester_inputs_external": true,
+    "truth_diagnostic_interval_sec": 90
+  },
+  "knowledge_bands": {
+    "inherits_global": true,
+    "instrument_specific": [
+      "audusd_asia_range_quality",
+      "audusd_session_bias",
+      "audusd_commodity_drift_bucket",
+      "audusd_false_break_risk",
+      "audusd_spread_stress_bucket",
+      "audusd_pullback_quality",
+      "audusd_thin_liquidity_flag",
+      "audusd_diagnostic_scan_pressure"
+    ],
+    "family_specific": [
+      "usd_strength_bucket",
+      "aud_strength_bucket",
+      "fx_asia_dispersion_bucket",
+      "family_leader_return_1m",
+      "family_leader_return_5m",
+      "family_leader_volatility_bucket"
+    ],
+    "execution_specific": [
+      "server_ping_ms",
+      "server_latency_us_avg",
+      "spread_points",
+      "decision_score_pln",
+      "expected_edge_pln",
+      "runtime_scope",
+      "price_request_eco_state"
+    ],
+    "session_microstructure": [
+      "audusd_asia_open_flag",
+      "audusd_pre_tokyo_noise_flag",
+      "audusd_post_asia_decay_flag",
+      "audusd_timer_truth_scan_due_flag"
+    ],
+    "local_policy_blocks": [
+      "audusd_entry_cooldown_pressure",
+      "audusd_kill_switch_token_age_bucket",
+      "audusd_execution_floor_bucket",
+      "audusd_diagnostic_interval_bucket",
+      "audusd_tester_safety_margin_scale",
+      "audusd_tester_edge_requirement_scale",
+      "audusd_tester_time_stop_scale"
+    ],
+    "local_intermarket": [
+      "audusd_gold_alignment_bucket",
+      "audusd_copper_alignment_bucket",
+      "audusd_asia_risk_sentiment_bucket"
+    ],
+    "local_promotion_readiness": [
+      "audusd_shadow_agreement_vs_global",
+      "audusd_feature_quality_ratio",
+      "audusd_diagnostic_only_ratio",
+      "audusd_fallback_usage_ratio"
+    ]
+  },
+  "required_features": [
+    "setup_type",
+    "market_regime",
+    "spread_regime",
+    "score",
+    "confidence_score",
+    "spread_points",
+    "server_ping_ms",
+    "server_latency_us_avg",
+    "usd_strength_bucket",
+    "aud_strength_bucket",
+    "audusd_asia_range_quality",
+    "audusd_commodity_drift_bucket",
+    "audusd_timer_truth_scan_due_flag",
+    "audusd_shadow_agreement_vs_global"
+  ],
+  "thresholds": {
+    "min_gate_probability": 0.60,
+    "min_decision_score_pln": 0.33,
+    "max_spread_points": 25.0,
+    "max_server_ping_ms": 4.5,
+    "max_server_latency_us_avg": 3200.0
+  },
+  "promotion_gate": {
+    "enabled": true,
+    "min_full_lessons": 760,
+    "min_gate_visible_events": 7000,
+    "min_feature_coverage_ratio": 0.97,
+    "min_feature_quality_ratio": 0.90,
+    "min_days_observed": 45,
+    "require_no_unclassified": true,
+    "require_outcome_ready": true,
+    "require_no_sticky_diagnostic": true,
+    "min_relative_quality_vs_global": 0.05,
+    "min_relative_quality_vs_family": 0.02
+  },
+  "diagnostic_binding": {
+    "timer_truth_scan_forced": true,
+    "force_scan_interval_sec": 90,
+    "heartbeat_expected_sec": 900
+  },
+  "source_refs": [
+    "MQL5/Experts/MicroBots/MicroBot_AUDUSD.mq5",
+    "MQL5/Include/Profiles/Profile_AUDUSD.mqh",
+    "MQL5/Include/Strategies/Strategy_AUDUSD.mqh"
+  ]
+}

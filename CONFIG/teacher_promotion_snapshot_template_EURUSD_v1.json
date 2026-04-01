@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "symbol": "EURUSD",
+  "teacher_package_mode": "GLOBAL_PLUS_PERSONAL",
+  "teacher_score": 0.0,
+  "student_score": 0.0,
+  "lesson_ready": false,
+  "knowledge_ready": false,
+  "gate_visible": false,
+  "outcome_ready": false,
+  "full_lessons_window": 0,
+  "gate_visible_events_window": 0,
+  "feature_coverage_ratio": 0.0,
+  "feature_quality_ratio": 0.0,
+  "days_observed": 0,
+  "unclassified_count": 0,
+  "sticky_diagnostic": false,
+  "relative_quality_vs_global": 0.0,
+  "relative_quality_vs_family": 0.0,
+  "quality_drop_vs_baseline": 0.0,
+  "source_refs": {}
+}

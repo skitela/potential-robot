@@ -1,0 +1,138 @@
+{
+  "teacher_id": "PERSONAL_USDCHF_V1",
+  "scope": "PERSONAL",
+  "symbol": "USDCHF",
+  "symbol_family": "FX_MAJOR",
+  "family_kind": "MB_FAMILY_KIND_MAIN",
+  "mode": "GLOBAL_PLUS_PERSONAL",
+  "promotion_target_mode": "PERSONAL_PRIMARY",
+  "pilot_role": "FOLLOW_ON_PILOT",
+  "template_ref": "PERSONAL_EURUSD_REFERENCE",
+  "session_profile": "FX_MAIN",
+  "trade_window": {
+    "start_hour": 8,
+    "end_hour": 12
+  },
+  "genotype": {
+    "profile_symbol": "USDCHF",
+    "max_spread_points": 25.0,
+    "caution_spread_points": 18.0,
+    "max_tick_age_sec": 5,
+    "min_seconds_between_entries": 60,
+    "kill_switch_token_name": "oandakey_usdchf.token",
+    "kill_switch_max_age_sec": 120,
+    "ema_fast_period": 13,
+    "ema_slow_period": 36,
+    "atr_period": 14,
+    "rsi_period": 14,
+    "base_risk_pct": 0.30,
+    "min_risk_pct": 0.18,
+    "max_risk_pct": 0.44,
+    "execution_floor": 0.74,
+    "execution_decay": 0.48,
+    "sl_atr_multiplier": 1.75,
+    "sl_min_points": 40.0,
+    "tp_atr_multiplier": 2.20,
+    "tp_min_points": 56.0,
+    "trail_atr_multiplier": 1.18
+  },
+  "knowledge_bands": {
+    "inherits_global": true,
+    "instrument_specific": [
+      "usdchf_safe_haven_flip_flag",
+      "usdchf_precision_entry_bias",
+      "usdchf_slow_trend_confirmation_flag",
+      "usdchf_false_break_risk",
+      "usdchf_spread_stress_bucket",
+      "usdchf_pullback_quality",
+      "usdchf_session_bias",
+      "usdchf_execution_decay_bucket"
+    ],
+    "family_specific": [
+      "usd_strength_bucket",
+      "chf_strength_bucket",
+      "fx_major_dispersion_bucket",
+      "family_leader_return_1m",
+      "family_leader_return_5m",
+      "family_leader_volatility_bucket"
+    ],
+    "execution_specific": [
+      "server_ping_ms",
+      "server_latency_us_avg",
+      "spread_points",
+      "decision_score_pln",
+      "expected_edge_pln",
+      "runtime_scope",
+      "price_request_eco_state"
+    ],
+    "session_microstructure": [
+      "usdchf_europe_core_flag",
+      "usdchf_overlap_transition_flag",
+      "usdchf_trade_window_phase_bucket",
+      "usdchf_safe_haven_transition_flag"
+    ],
+    "local_policy_blocks": [
+      "usdchf_entry_cooldown_pressure",
+      "usdchf_execution_floor_bucket",
+      "usdchf_execution_decay_bucket",
+      "usdchf_precision_ema_gate"
+    ],
+    "local_intermarket": [
+      "usdchf_equity_stress_proxy_bucket",
+      "usdchf_gold_alignment_bucket",
+      "usdchf_safe_haven_spread_bucket"
+    ],
+    "local_promotion_readiness": [
+      "usdchf_shadow_agreement_vs_global",
+      "usdchf_feature_quality_ratio",
+      "usdchf_diagnostic_only_ratio",
+      "usdchf_fallback_usage_ratio"
+    ]
+  },
+  "required_features": [
+    "setup_type",
+    "market_regime",
+    "spread_regime",
+    "score",
+    "confidence_score",
+    "spread_points",
+    "server_ping_ms",
+    "server_latency_us_avg",
+    "usd_strength_bucket",
+    "chf_strength_bucket",
+    "usdchf_safe_haven_flip_flag",
+    "usdchf_precision_entry_bias",
+    "usdchf_execution_decay_bucket",
+    "usdchf_shadow_agreement_vs_global"
+  ],
+  "thresholds": {
+    "min_gate_probability": 0.61,
+    "min_decision_score_pln": 0.33,
+    "max_spread_points": 25.0,
+    "max_server_ping_ms": 4.5,
+    "max_server_latency_us_avg": 3200.0
+  },
+  "promotion_gate": {
+    "enabled": true,
+    "min_full_lessons": 760,
+    "min_gate_visible_events": 7000,
+    "min_feature_coverage_ratio": 0.97,
+    "min_feature_quality_ratio": 0.90,
+    "min_days_observed": 45,
+    "require_no_unclassified": true,
+    "require_outcome_ready": true,
+    "require_no_sticky_diagnostic": true,
+    "min_relative_quality_vs_global": 0.05,
+    "min_relative_quality_vs_family": 0.02
+  },
+  "diagnostic_binding": {
+    "timer_truth_scan_forced": false,
+    "force_scan_interval_sec": 0,
+    "heartbeat_expected_sec": 900
+  },
+  "source_refs": [
+    "MQL5/Experts/MicroBots/MicroBot_USDCHF.mq5",
+    "MQL5/Include/Profiles/Profile_USDCHF.mqh",
+    "MQL5/Include/Strategies/Strategy_USDCHF.mqh"
+  ]
+}

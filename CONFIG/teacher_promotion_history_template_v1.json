@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "current_mode": "GLOBAL_PLUS_PERSONAL",
+  "recent_verdicts": [
+    {
+      "generated_at_utc": "2026-03-30T06:00:00Z",
+      "verdict": "PROMOTE_TO_PERSONAL"
+    },
+    {
+      "generated_at_utc": "2026-03-31T06:00:00Z",
+      "verdict": "PROMOTE_TO_PERSONAL"
+    }
+  ],
+  "last_promotion_at_utc": "",
+  "last_rollback_at_utc": ""
+}

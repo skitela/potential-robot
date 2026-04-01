@@ -1,0 +1,157 @@
+{
+  "schema_version": "1.0",
+  "registry_id": "PERSONAL_TEACHER_CURRICULA_REGISTRY_V1",
+  "scope": "PERSONAL_TEACHER_PILOTS",
+  "reference_pilot_symbol": "EURUSD",
+  "reference_pilot_file": "personal_teacher_curriculum_EURUSD_v1.json",
+  "active_training_universe": [
+    {
+      "symbol": "EURUSD",
+      "broker_symbol": "EURUSD.pro",
+      "code_symbol": "EURUSD",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "FX_MAJOR",
+      "teacher_family": "FX_MAJOR",
+      "curriculum_file": "personal_teacher_curriculum_EURUSD_v1.json",
+      "pilot_role": "REFERENCE_PILOT"
+    },
+    {
+      "symbol": "AUDUSD",
+      "broker_symbol": "AUDUSD.pro",
+      "code_symbol": "AUDUSD",
+      "cohort": "FIRST_WAVE",
+      "teacher_mode_cohort": "PERSONAL",
+      "repo_family": "FX_MAJOR",
+      "teacher_family": "FX_MAJOR",
+      "curriculum_file": "personal_teacher_curriculum_AUDUSD_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "GBPUSD",
+      "broker_symbol": "GBPUSD.pro",
+      "code_symbol": "GBPUSD",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "FX_MAJOR",
+      "teacher_family": "FX_MAJOR",
+      "curriculum_file": "personal_teacher_curriculum_GBPUSD_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "USDJPY",
+      "broker_symbol": "USDJPY.pro",
+      "code_symbol": "USDJPY",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "FX_MAJOR",
+      "teacher_family": "FX_MAJOR",
+      "curriculum_file": "personal_teacher_curriculum_USDJPY_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "USDCAD",
+      "broker_symbol": "USDCAD.pro",
+      "code_symbol": "USDCAD",
+      "cohort": "FIRST_WAVE",
+      "teacher_mode_cohort": "PERSONAL",
+      "repo_family": "FX_MAJOR",
+      "teacher_family": "FX_MAJOR",
+      "curriculum_file": "personal_teacher_curriculum_USDCAD_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "USDCHF",
+      "broker_symbol": "USDCHF.pro",
+      "code_symbol": "USDCHF",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "FX_MAJOR",
+      "teacher_family": "FX_MAJOR",
+      "curriculum_file": "personal_teacher_curriculum_USDCHF_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "EURJPY",
+      "broker_symbol": "EURJPY.pro",
+      "code_symbol": "EURJPY",
+      "cohort": "FIRST_WAVE",
+      "teacher_mode_cohort": "PERSONAL",
+      "repo_family": "FX_CROSS",
+      "teacher_family": "FX_CROSS",
+      "curriculum_file": "personal_teacher_curriculum_EURJPY_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "EURAUD",
+      "broker_symbol": "EURAUD.pro",
+      "code_symbol": "EURAUD",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "FX_CROSS",
+      "teacher_family": "FX_CROSS",
+      "curriculum_file": "personal_teacher_curriculum_EURAUD_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "GOLD",
+      "broker_symbol": "GOLD.pro",
+      "code_symbol": "GOLD",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "METAL",
+      "teacher_family": "METALS",
+      "curriculum_file": "personal_teacher_curriculum_GOLD_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "SILVER",
+      "broker_symbol": "SILVER.pro",
+      "code_symbol": "SILVER",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "METAL",
+      "teacher_family": "METALS",
+      "curriculum_file": "personal_teacher_curriculum_SILVER_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "COPPER-US",
+      "broker_symbol": "COPPER-US.pro",
+      "code_symbol": "COPPERUS",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "COMMODITY",
+      "teacher_family": "METALS",
+      "curriculum_file": "personal_teacher_curriculum_COPPERUS_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "DE30",
+      "broker_symbol": "DE30.pro",
+      "code_symbol": "DE30",
+      "cohort": "GLOBAL_TEACHER",
+      "teacher_mode_cohort": "GLOBAL",
+      "repo_family": "INDEX",
+      "teacher_family": "INDICES",
+      "curriculum_file": "personal_teacher_curriculum_DE30_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    },
+    {
+      "symbol": "US500",
+      "broker_symbol": "US500.pro",
+      "code_symbol": "US500",
+      "cohort": "FIRST_WAVE",
+      "teacher_mode_cohort": "PERSONAL",
+      "repo_family": "INDEX",
+      "teacher_family": "INDICES",
+      "curriculum_file": "personal_teacher_curriculum_US500_v1.json",
+      "pilot_role": "FOLLOW_ON_PILOT"
+    }
+  ],
+  "implementation_notes": [
+    "Kazdy personal curriculum dziedziczy globalne pasma wiedzy i dodaje lokalne pasma genotypu instrumentu.",
+    "EURUSD pozostaje pierwszym pilotem referencyjnym dla kontrolowanego przejscia GLOBAL_ONLY -> GLOBAL_PLUS_PERSONAL -> PERSONAL_PRIMARY.",
+    "Registry mapuje nazwy repo, nazwy kodowe i teacher family bez mieszania kohort runtime z package mode."
+  ]
+}

@@ -14,7 +14,7 @@ bool MbTeacherWriteKnowledgeSnapshot(
    const string symbol,
    const string teacher_id,
    const string teacher_scope,
-   const string teacher_mode,
+   const string teacher_package_mode,
    const bool teacher_present,
    const bool personal_allowed,
    const bool gate_visible,
@@ -38,13 +38,14 @@ bool MbTeacherWriteKnowledgeSnapshot(
       return false;
 
    string payload = StringFormat(
-      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"generated_at_utc\":%I64d,\"teacher_present\":%s,\"teacher_id\":\"%s\",\"teacher_scope\":\"%s\",\"teacher_mode\":\"%s\",\"personal_allowed\":%s,\"gate_visible\":%s,\"lesson_ready\":%s,\"knowledge_ready\":%s,\"reason_code\":\"%s\",\"runtime_scope\":\"%s\",\"local_training_mode\":\"%s\",\"teacher_score\":%.6f,\"student_score\":%.6f,\"spread_points\":%.6f,\"server_ping_ms\":%.6f,\"server_latency_us_avg\":%.6f}",
+      "{\"schema_version\":\"1.0\",\"symbol\":\"%s\",\"generated_at_utc\":%I64d,\"teacher_present\":%s,\"teacher_id\":\"%s\",\"teacher_scope\":\"%s\",\"teacher_package_mode\":\"%s\",\"teacher_mode\":\"%s\",\"personal_allowed\":%s,\"gate_visible\":%s,\"lesson_ready\":%s,\"knowledge_ready\":%s,\"reason_code\":\"%s\",\"runtime_scope\":\"%s\",\"local_training_mode\":\"%s\",\"teacher_score\":%.6f,\"student_score\":%.6f,\"spread_points\":%.6f,\"server_ping_ms\":%.6f,\"server_latency_us_avg\":%.6f}",
       MbTeacherEscapeJson(symbol),
       (long)TimeGMT(),
       (teacher_present ? "true" : "false"),
       MbTeacherEscapeJson(teacher_id),
       MbTeacherEscapeJson(teacher_scope),
-      MbTeacherEscapeJson(teacher_mode),
+      MbTeacherEscapeJson(teacher_package_mode),
+      MbTeacherEscapeJson(teacher_package_mode),
       (personal_allowed ? "true" : "false"),
       (gate_visible ? "true" : "false"),
       (lesson_ready ? "true" : "false"),

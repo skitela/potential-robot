@@ -12,7 +12,9 @@ struct MbTeacherPackageContract
    bool global_model_available;
    bool paper_live_enabled;
    string teacher_scope;
+   string teacher_package_mode;
    string teacher_mode;
+   string teacher_policy_id;
    string teacher_id;
    string symbol;
    string symbol_family;
@@ -39,13 +41,15 @@ void MbTeacherPackageReset(MbTeacherPackageContract &contract)
    contract.global_model_available = false;
    contract.paper_live_enabled = false;
    contract.teacher_scope = "GLOBAL";
+   contract.teacher_package_mode = "GLOBAL_ONLY";
    contract.teacher_mode = "GLOBAL_ONLY";
+   contract.teacher_policy_id = "TEACHER_PROMOTION_POLICY_V1";
    contract.teacher_id = "";
    contract.symbol = "";
    contract.symbol_family = "";
    contract.local_training_mode = "FALLBACK_ONLY";
    contract.runtime_scope = "LAPTOP_ONLY";
-   contract.paper_live_bucket = "GLOBAL_ONLY";
+   contract.paper_live_bucket = "GLOBAL_TEACHER_ONLY";
    contract.universe_version = "";
    contract.plan_hash = "";
    contract.min_gate_probability = 0.0;
@@ -103,8 +107,12 @@ bool MbTeacherPackageLoad(const string rel_path,MbTeacherPackageContract &contra
          contract.plan_hash = value;
       else if(key == "teacher_scope")
          contract.teacher_scope = value;
+      else if(key == "teacher_package_mode")
+         contract.teacher_package_mode = value;
       else if(key == "teacher_mode")
          contract.teacher_mode = value;
+      else if(key == "teacher_policy_id")
+         contract.teacher_policy_id = value;
       else if(key == "teacher_id")
          contract.teacher_id = value;
       else if(key == "symbol")
@@ -127,10 +135,14 @@ bool MbTeacherPackageLoad(const string rel_path,MbTeacherPackageContract &contra
 
    FileClose(handle);
    contract.present = true;
+   if(StringLen(contract.teacher_package_mode) <= 0)
+      contract.teacher_package_mode = contract.teacher_mode;
+   if(StringLen(contract.teacher_package_mode) <= 0)
+      contract.teacher_package_mode = "GLOBAL_ONLY";
    if(StringLen(contract.teacher_mode) <= 0)
-      contract.teacher_mode = contract.paper_live_bucket;
+      contract.teacher_mode = contract.teacher_package_mode;
    if(StringLen(contract.paper_live_bucket) <= 0)
-      contract.paper_live_bucket = contract.teacher_mode;
+      contract.paper_live_bucket = "GLOBAL_TEACHER_ONLY";
    return true;
   }
 

@@ -55,7 +55,7 @@
       "global_model_available",
       "local_training_mode",
       "outcome_ready",
-      "fresh_full_lessons_window",
+      "fresh_full_lesson_count_window",
       "gate_visible_rate_window",
       "lesson_closure_rate_window",
       "drift_guard_state"

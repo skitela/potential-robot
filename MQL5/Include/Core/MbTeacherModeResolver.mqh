@@ -10,7 +10,9 @@ enum MbTeacherMode
 
 MbTeacherMode MbResolveTeacherMode(const MbTeacherPackageContract &contract)
   {
-   string mode = contract.teacher_mode;
+   string mode = contract.teacher_package_mode;
+   if(StringLen(mode) <= 0)
+      mode = contract.teacher_mode;
    StringToUpper(mode);
    if(mode == "PERSONAL_PRIMARY")
       return MB_TEACHER_MODE_PERSONAL_PRIMARY;
