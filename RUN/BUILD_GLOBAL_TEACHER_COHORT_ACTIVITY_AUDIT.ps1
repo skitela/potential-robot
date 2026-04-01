@@ -61,12 +61,13 @@ foreach ($symbol in @($Symbols)) {
     $gatePayload = Read-JsonSafe -Path (Join-Path $stateRoot "student_gate_latest.json")
     $gateProbe = New-FileProbe -Path (Join-Path $stateRoot "student_gate_latest.json") -ThresholdSeconds $FreshThresholdSeconds
 
-    $teacherRuntimeActive = ($decisionProbe.fresh -and $onnxProbe.fresh -and $gateProbe.fresh)
+    $teacherRuntimeActive = ($decisionProbe.fresh -and $onnxProbe.fresh)
     $fullLessonFresh = ($learningProbe.fresh -and $knowledgeProbe.fresh)
 
     $items.Add([pscustomobject]@{
         symbol_alias = $symbol
         teacher_runtime_active = $teacherRuntimeActive
+        teacher_gate_visible = $gateProbe.fresh
         fresh_full_lesson = $fullLessonFresh
         local_training_mode = if ($null -ne $gatePayload) { [string]$gatePayload.local_training_mode } else { "" }
         gate_reason_code = if ($null -ne $gatePayload) { [string]$gatePayload.reason_code } else { "" }
@@ -82,6 +83,7 @@ foreach ($symbol in @($Symbols)) {
 
 $itemsArray = @($items.ToArray())
 $teacherRuntimeCount = @($itemsArray | Where-Object { $_.teacher_runtime_active }).Count
+$teacherGateVisibleCount = @($itemsArray | Where-Object { $_.teacher_gate_visible }).Count
 $fullLessonCount = @($itemsArray | Where-Object { $_.fresh_full_lesson }).Count
 $teacherRuntimeInactive = @($itemsArray | Where-Object { -not $_.teacher_runtime_active })
 $stalledLearning = @($itemsArray | Where-Object { $_.decision_log.fresh -and $_.onnx_log.fresh -and -not $_.fresh_full_lesson })
@@ -110,6 +112,7 @@ $report = [ordered]@{
     summary = [ordered]@{
         target_symbol_count = @($Symbols).Count
         teacher_runtime_active_count = $teacherRuntimeCount
+        teacher_gate_visible_count = $teacherGateVisibleCount
         teacher_runtime_inactive_count = $teacherRuntimeInactive.Count
         fresh_full_lesson_count = $fullLessonCount
         learning_stalled_count = $stalledLearning.Count
@@ -130,6 +133,7 @@ $lines.Add(("- generated_at_local: {0}" -f $report.generated_at_local))
 $lines.Add(("- verdict: {0}" -f $report.verdict))
 $lines.Add(("- target_symbol_count: {0}" -f $report.summary.target_symbol_count))
 $lines.Add(("- teacher_runtime_active_count: {0}" -f $report.summary.teacher_runtime_active_count))
+$lines.Add(("- teacher_gate_visible_count: {0}" -f $report.summary.teacher_gate_visible_count))
 $lines.Add(("- teacher_runtime_inactive_count: {0}" -f $report.summary.teacher_runtime_inactive_count))
 $lines.Add(("- fresh_full_lesson_count: {0}" -f $report.summary.fresh_full_lesson_count))
 $lines.Add(("- learning_stalled_count: {0}" -f $report.summary.learning_stalled_count))
@@ -139,9 +143,10 @@ $lines.Add("")
 $lines.Add("## Symbols")
 $lines.Add("")
 foreach ($item in $itemsArray) {
-    $lines.Add(("- {0}: teacher_runtime_active={1}, fresh_full_lesson={2}, mode={3}, reason={4}, teacher_score={5}, student_score={6}" -f
+    $lines.Add(("- {0}: teacher_runtime_active={1}, teacher_gate_visible={2}, fresh_full_lesson={3}, mode={4}, reason={5}, teacher_score={6}, student_score={7}" -f
         $item.symbol_alias,
         $item.teacher_runtime_active,
+        $item.teacher_gate_visible,
         $item.fresh_full_lesson,
         $item.local_training_mode,
         $item.gate_reason_code,

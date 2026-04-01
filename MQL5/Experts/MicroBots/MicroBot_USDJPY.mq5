@@ -799,8 +799,7 @@ void OnTick()
       risk_plan.lots
    );
    MbNormalizeRiskContractBlockAfterSizing(signal,risk_plan.allowed,risk_plan.reason_code,risk_plan.lots);
-   if(signal.valid)
-      MbMlRuntimeBridgeApplyStudentGate(g_ml_bridge,now,g_profile,g_market,g_latency,g_state,signal,onnx_result,risk_plan.lots);
+   MbMlRuntimeBridgeApplyStudentGate(g_ml_bridge,now,g_profile,g_market,g_latency,g_state,signal,onnx_result,risk_plan.lots);
    if(signal.valid && !risk_plan.allowed)
      {
       AppendUSDJPYCandidateEvent(now,"SIZE_BLOCK",false,risk_plan.reason_code,signal,0.0);
