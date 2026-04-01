@@ -49,6 +49,41 @@ def file_probe(path: Path) -> Dict[str, Any]:
     }
 
 
+def canonical_symbol(symbol: str) -> str:
+    normalized = str(symbol or "").strip()
+    if normalized.lower().endswith(".pro"):
+        normalized = normalized[:-4]
+    return normalized
+
+
+def symbol_aliases(symbol: str) -> List[str]:
+    canonical = canonical_symbol(symbol)
+    aliases: List[str] = []
+    for candidate in (canonical, f"{canonical}.pro", symbol.strip()):
+        if candidate and candidate not in aliases:
+            aliases.append(candidate)
+    return aliases
+
+
+def pick_best_symbol_dir(root: Path, aliases: List[str], required_files: List[str]) -> Optional[Path]:
+    best_dir: Optional[Path] = None
+    best_score = -1
+
+    for alias in aliases:
+        candidate = root / alias
+        if not candidate.exists() or not candidate.is_dir():
+            continue
+        score = 0
+        for file_name in required_files:
+            if (candidate / file_name).exists():
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_dir = candidate
+
+    return best_dir
+
+
 def extract_symbols(
     common_root: Path,
     profile_report: Optional[Dict[str, Any]],
@@ -61,7 +96,7 @@ def extract_symbols(
     if state_root.exists():
         for child in state_root.iterdir():
             if child.is_dir() and not child.name.startswith("_"):
-                symbols.add(child.name)
+                symbols.add(canonical_symbol(child.name))
 
     for payload in (profile_report, chart_manifest):
         if not isinstance(payload, dict):
@@ -69,20 +104,39 @@ def extract_symbols(
         for chart in payload.get("charts", []) or []:
             symbol = str(chart.get("symbol") or chart.get("broker_symbol") or "").strip()
             if symbol:
-                symbols.add(symbol)
+                symbols.add(canonical_symbol(symbol))
 
     if isinstance(cohort_report, dict):
         for item in cohort_report.get("items", []) or []:
             symbol = str(item.get("symbol_alias") or "").strip()
             if symbol:
-                symbols.add(symbol)
+                symbols.add(canonical_symbol(symbol))
 
     return sorted(symbols)
 
 
 def load_symbol_state(common_root: Path, symbol: str) -> Dict[str, Any]:
-    state_dir = common_root / "state" / symbol
-    logs_dir = common_root / "logs" / symbol
+    aliases = symbol_aliases(symbol)
+    state_dir = pick_best_symbol_dir(
+        common_root / "state",
+        aliases,
+        [
+            "supervisor_snapshot_latest.json",
+            "student_gate_latest.json",
+            "ml_execution_snapshot_latest.json",
+            "runtime_status.json",
+        ],
+    ) or (common_root / "state" / canonical_symbol(symbol))
+    logs_dir = pick_best_symbol_dir(
+        common_root / "logs",
+        aliases,
+        [
+            "decision_events.csv",
+            "onnx_observations.csv",
+            "learning_observations_v2.csv",
+            "broker_net_ledger_runtime.csv",
+        ],
+    ) or (common_root / "logs" / canonical_symbol(symbol))
 
     supervisor_snapshot_path = state_dir / "supervisor_snapshot_latest.json"
     student_gate_path = state_dir / "student_gate_latest.json"
@@ -97,7 +151,9 @@ def load_symbol_state(common_root: Path, symbol: str) -> Dict[str, Any]:
     execution_snapshot = read_json(execution_snapshot_path)
 
     return {
-        "symbol": symbol,
+        "symbol": canonical_symbol(symbol),
+        "state_alias": state_dir.name if state_dir.exists() else canonical_symbol(symbol),
+        "logs_alias": logs_dir.name if logs_dir.exists() else canonical_symbol(symbol),
         "supervisor_snapshot": supervisor_snapshot,
         "student_gate": student_gate,
         "execution_snapshot": execution_snapshot,
