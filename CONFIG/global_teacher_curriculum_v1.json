@@ -1,0 +1,99 @@
+{
+  "teacher_id": "GLOBAL_TEACHER_V1",
+  "scope": "GLOBAL",
+  "symbol": "_GLOBAL",
+  "symbol_family": "ALL",
+  "mode": "GLOBAL_ONLY",
+  "knowledge_bands": {
+    "setup_core": [
+      "setup_type",
+      "market_regime",
+      "spread_regime",
+      "confidence_bucket",
+      "candle_bias",
+      "candle_quality_grade",
+      "renko_bias",
+      "renko_quality_grade",
+      "score",
+      "confidence_score",
+      "candle_score",
+      "renko_score",
+      "renko_run_length",
+      "renko_reversal_flag"
+    ],
+    "execution_context": [
+      "spread_points",
+      "expected_edge_pln",
+      "decision_score_pln",
+      "server_ping_ms",
+      "server_latency_us_avg",
+      "mt5_runtime_alive",
+      "runtime_scope",
+      "paper_live_bucket",
+      "timer_fallback_scan_flag",
+      "order_rate_limit_state"
+    ],
+    "session_context": [
+      "session_bucket",
+      "weekday_bucket",
+      "hour_bucket",
+      "liquidity_bucket",
+      "volatility_bucket",
+      "market_open_flag"
+    ],
+    "family_context": [
+      "symbol_family",
+      "family_leader_return_1m",
+      "family_leader_return_5m",
+      "family_leader_volatility_bucket",
+      "usd_strength_bucket",
+      "metals_strength_bucket",
+      "indices_risk_bucket"
+    ],
+    "promotion_readiness": [
+      "local_model_available",
+      "global_model_available",
+      "local_training_mode",
+      "outcome_ready",
+      "fresh_full_lessons_window",
+      "gate_visible_rate_window",
+      "lesson_closure_rate_window",
+      "drift_guard_state"
+    ]
+  },
+  "required_features": [
+    "setup_type",
+    "market_regime",
+    "spread_regime",
+    "confidence_bucket",
+    "score",
+    "confidence_score",
+    "spread_points",
+    "server_ping_ms",
+    "server_latency_us_avg",
+    "runtime_scope",
+    "symbol_family",
+    "session_bucket",
+    "volatility_bucket",
+    "gate_visible_rate_window",
+    "lesson_closure_rate_window"
+  ],
+  "thresholds": {
+    "min_gate_probability": 0.55,
+    "min_decision_score_pln": 0.25,
+    "max_spread_points": 45.0,
+    "max_server_ping_ms": 5.0,
+    "max_server_latency_us_avg": 4000.0
+  },
+  "promotion_gate": {
+    "enabled": true,
+    "min_full_lessons": 500,
+    "min_gate_visible_events": 5000,
+    "min_feature_coverage_ratio": 0.95,
+    "min_days_observed": 30,
+    "require_no_unclassified": true,
+    "require_outcome_ready": true,
+    "require_no_sticky_diagnostic": true,
+    "min_relative_quality_vs_global": 0.0
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "contract_file": "state/<SYMBOL>/teacher_package_contract.csv",
+  "manifest_file": "state/<SYMBOL>/teacher_package_manifest_latest.json",
+  "snapshot_file": "state/<SYMBOL>/teacher_knowledge_snapshot_latest.json",
+  "required_contract_keys": [
+    "enabled",
+    "teacher_required",
+    "outcome_ready",
+    "teacher_scope",
+    "teacher_mode",
+    "teacher_id",
+    "symbol",
+    "symbol_family",
+    "personal_allowed",
+    "min_gate_probability",
+    "min_decision_score_pln",
+    "max_spread_points",
+    "max_server_ping_ms",
+    "max_server_latency_us_avg"
+  ],
+  "optional_overlay_keys": [
+    "student_gate_enabled",
+    "local_model_available",
+    "global_model_available",
+    "paper_live_enabled",
+    "local_training_mode",
+    "runtime_scope",
+    "paper_live_bucket",
+    "universe_version",
+    "plan_hash"
+  ]
+}

@@ -8,6 +8,8 @@
 #include "MbStorage.mqh"
 #include "MbPaperTrading.mqh"
 #include "MbOnnxPilotObservation.mqh"
+#include "MbTeacherPackage.mqh"
+#include "MbTeacherModeResolver.mqh"
 
 struct MbMlRuntimeBridgeContract
   {
@@ -37,9 +39,12 @@ struct MbMlRuntimeBridgeState
    string ledger_log_path;
    string student_gate_state_path;
    string contract_path;
+   string teacher_contract_path;
+   string teacher_snapshot_state_path;
    datetime last_contract_refresh_at;
    datetime last_feature_contract_write_at;
    MbMlRuntimeBridgeContract contract;
+   MbTeacherPackageContract teacher_package;
   };
 
 string MbMlRuntimeBridgeEscapeJson(const string value)
@@ -78,9 +83,12 @@ void MbMlRuntimeBridgeReset(MbMlRuntimeBridgeState &state)
    state.ledger_log_path = "";
    state.student_gate_state_path = "";
    state.contract_path = "";
+   state.teacher_contract_path = "";
+   state.teacher_snapshot_state_path = "";
    state.last_contract_refresh_at = 0;
    state.last_feature_contract_write_at = 0;
    MbMlRuntimeBridgeResetContract(state.contract);
+   MbTeacherPackageReset(state.teacher_package);
   }
 
 bool MbMlRuntimeBridgeReadBool(const string value)
@@ -146,7 +154,15 @@ bool MbMlRuntimeBridgeLoadContract(MbMlRuntimeBridgeState &state)
    FileClose(handle);
    state.contract.present = true;
    state.last_contract_refresh_at = TimeCurrent();
-   return true;
+  return true;
+  }
+
+bool MbMlRuntimeBridgeLoadTeacherPackage(MbMlRuntimeBridgeState &state)
+  {
+   MbTeacherPackageReset(state.teacher_package);
+   if(StringLen(state.teacher_contract_path) <= 0 || !FileIsExist(state.teacher_contract_path,FILE_COMMON))
+      return false;
+   return MbTeacherPackageLoad(state.teacher_contract_path,state.teacher_package);
   }
 
 bool MbMlRuntimeBridgePaperLiveEnabled(const MbMlRuntimeBridgeState &state)
@@ -187,6 +203,40 @@ string MbMlRuntimeBridgeRuntimeScope(const MbMlRuntimeBridgeState &state)
 string MbMlRuntimeBridgePaperLiveBucket(const MbMlRuntimeBridgeState &state)
   {
    return state.contract.paper_live_bucket;
+  }
+
+bool MbMlRuntimeBridgeTeacherPackagePresent(const MbMlRuntimeBridgeState &state)
+  {
+   return state.teacher_package.present;
+  }
+
+string MbMlRuntimeBridgeTeacherId(const MbMlRuntimeBridgeState &state)
+  {
+   return state.teacher_package.teacher_id;
+  }
+
+string MbMlRuntimeBridgeTeacherScope(const MbMlRuntimeBridgeState &state)
+  {
+   return state.teacher_package.teacher_scope;
+  }
+
+string MbMlRuntimeBridgeTeacherModeLabel(const MbMlRuntimeBridgeState &state)
+  {
+   if(!state.teacher_package.present)
+      return "GLOBAL_ONLY";
+   return MbTeacherModeLabel(state.teacher_package);
+  }
+
+bool MbMlRuntimeBridgeTeacherPersonalAllowed(const MbMlRuntimeBridgeState &state)
+  {
+   if(!state.teacher_package.present)
+      return false;
+   return MbTeacherAllowsPersonal(state.teacher_package);
+  }
+
+string MbMlRuntimeBridgeTeacherSnapshotPath(const MbMlRuntimeBridgeState &state)
+  {
+   return state.teacher_snapshot_state_path;
   }
 
 bool MbMlRuntimeBridgeBlocksLiveExecution(
@@ -260,8 +310,11 @@ void MbMlRuntimeBridgeInit(
    state.ledger_log_path = MbLogFilePath(state.symbol,"broker_net_ledger_runtime.csv");
    state.student_gate_state_path = MbStateFilePath(state.symbol,"student_gate_latest.json");
    state.contract_path = MbStateFilePath(state.symbol,"student_gate_contract.csv");
+   state.teacher_contract_path = MbStateFilePath(state.symbol,"teacher_package_contract.csv");
+   state.teacher_snapshot_state_path = MbStateFilePath(state.symbol,"teacher_knowledge_snapshot_latest.json");
    MbStorageInit(state.symbol);
    MbMlRuntimeBridgeLoadContract(state);
+   MbMlRuntimeBridgeLoadTeacherPackage(state);
   }
 
 void MbMlRuntimeBridgeShutdown(MbMlRuntimeBridgeState &state)
@@ -407,7 +460,10 @@ void MbMlRuntimeBridgeFlushSnapshot(
    MbMlRuntimeBridgeWriteExecutionSnapshot(state,profile,market,latency);
    MbMlRuntimeBridgeWriteFeatureContract(state);
    if(state.last_contract_refresh_at <= 0 || (TimeCurrent() - state.last_contract_refresh_at) >= 60)
+     {
       MbMlRuntimeBridgeLoadContract(state);
+      MbMlRuntimeBridgeLoadTeacherPackage(state);
+     }
   }
 
 double MbMlRuntimeBridgeEstimateEdgePln(

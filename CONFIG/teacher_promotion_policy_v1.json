@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "default_mode_without_package": "GLOBAL_ONLY",
+  "pilot_symbols": {
+    "EURUSD": "GLOBAL_PLUS_PERSONAL"
+  },
+  "verdicts": [
+    "HOLD_GLOBAL",
+    "PROMOTE_TO_PERSONAL",
+    "ROLLBACK_TO_GLOBAL"
+  ],
+  "safe_actions": [
+    "no_op",
+    "build_package",
+    "validate_promotion"
+  ]
+}

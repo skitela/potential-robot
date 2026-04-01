@@ -4,6 +4,8 @@
 #include "MbSupervisorSnapshot.mqh"
 #include "MbLearningSupervisorSnapshot.mqh"
 #include "MbOnnxPilotObservation.mqh"
+#include "MbMlRuntimeBridge.mqh"
+#include "MbTeacherKnowledgeSnapshot.mqh"
 
 struct MbMicrobotHookState
   {
@@ -214,7 +216,32 @@ bool MbMicrobotHooksWriteSnapshot(
       state.teacher_score,
       state.student_score
    );
-   return (supervisor_written && learning_written);
+   double server_ping_ms = (market.operational_ping_ms > 0.0 ? market.operational_ping_ms : (double)market.terminal_ping_last_ms);
+   double server_latency_us_avg = (latency.sample_count > 0 ? (double)latency.local_latency_us_sum / (double)latency.sample_count : 0.0);
+   string teacher_id = (MbMlRuntimeBridgeTeacherPackagePresent(ml_bridge) ? MbMlRuntimeBridgeTeacherId(ml_bridge) : "GLOBAL_TEACHER_DEFAULT");
+   string teacher_scope = (MbMlRuntimeBridgeTeacherPackagePresent(ml_bridge) ? MbMlRuntimeBridgeTeacherScope(ml_bridge) : "GLOBAL");
+   string teacher_mode = MbMlRuntimeBridgeTeacherModeLabel(ml_bridge);
+   bool teacher_snapshot_written = MbTeacherWriteKnowledgeSnapshot(
+      MbMlRuntimeBridgeTeacherSnapshotPath(ml_bridge),
+      symbol,
+      teacher_id,
+      teacher_scope,
+      teacher_mode,
+      MbMlRuntimeBridgeTeacherPackagePresent(ml_bridge),
+      MbMlRuntimeBridgeTeacherPersonalAllowed(ml_bridge),
+      state.gate_visible,
+      state.lesson_write_visible,
+      state.knowledge_write_visible,
+      state.last_reason_code,
+      MbMlRuntimeBridgeRuntimeScope(ml_bridge),
+      MbMlRuntimeBridgeLocalTrainingMode(ml_bridge),
+      state.teacher_score,
+      state.student_score,
+      market.spread_points,
+      server_ping_ms,
+      server_latency_us_avg
+   );
+   return (supervisor_written && learning_written && teacher_snapshot_written);
   }
 
 #endif
