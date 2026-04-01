@@ -53,6 +53,8 @@ def canonical_symbol(symbol: str) -> str:
     normalized = str(symbol or "").strip()
     if normalized.lower().endswith(".pro"):
         normalized = normalized[:-4]
+    if normalized.upper() == "COPPERUS":
+        normalized = "COPPER-US"
     return normalized
 
 
@@ -115,7 +117,34 @@ def extract_symbols(
     return sorted(symbols)
 
 
-def load_symbol_state(common_root: Path, symbol: str) -> Dict[str, Any]:
+def build_cohort_index(cohort_report: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(cohort_report, dict):
+        return index
+    for item in cohort_report.get("items", []) or []:
+        symbol = canonical_symbol(str(item.get("symbol_alias") or ""))
+        if symbol:
+            index[symbol] = item
+    return index
+
+
+def build_first_wave_index(first_wave_report: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(first_wave_report, dict):
+        return index
+    for item in first_wave_report.get("results", []) or []:
+        symbol = canonical_symbol(str(item.get("symbol_alias") or ""))
+        if symbol:
+            index[symbol] = item
+    return index
+
+
+def load_symbol_state(
+    common_root: Path,
+    symbol: str,
+    cohort_index: Dict[str, Dict[str, Any]],
+    first_wave_index: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
     aliases = symbol_aliases(symbol)
     state_dir = pick_best_symbol_dir(
         common_root / "state",
@@ -149,12 +178,16 @@ def load_symbol_state(common_root: Path, symbol: str) -> Dict[str, Any]:
     supervisor_snapshot = read_json(supervisor_snapshot_path)
     student_gate = read_json(student_gate_path)
     execution_snapshot = read_json(execution_snapshot_path)
+    cohort_item = cohort_index.get(canonical_symbol(symbol)) or {}
+    first_wave_item = first_wave_index.get(canonical_symbol(symbol)) or {}
 
     return {
         "symbol": canonical_symbol(symbol),
         "state_alias": state_dir.name if state_dir.exists() else canonical_symbol(symbol),
         "logs_alias": logs_dir.name if logs_dir.exists() else canonical_symbol(symbol),
         "supervisor_snapshot": supervisor_snapshot,
+        "global_teacher_audit": cohort_item,
+        "first_wave_audit": first_wave_item,
         "student_gate": student_gate,
         "execution_snapshot": execution_snapshot,
         "files": {
@@ -182,16 +215,20 @@ def main() -> int:
 
     wellbeing_path = ops_root / "learning_wellbeing_latest.json"
     cohort_path = ops_root / "global_teacher_cohort_activity_latest.json"
+    first_wave_path = ops_root / "first_wave_lesson_closure_latest.json"
     chart_manifest_path = ops_root / "chart_profile_manifest_latest.json"
     profile_report_path = project_root / "EVIDENCE" / "mt5_microbots_profile_setup_report.json"
 
     wellbeing = read_json(wellbeing_path)
     cohort = read_json(cohort_path)
+    first_wave = read_json(first_wave_path)
     chart_manifest = read_json(chart_manifest_path)
     profile_report = read_json(profile_report_path)
+    cohort_index = build_cohort_index(cohort)
+    first_wave_index = build_first_wave_index(first_wave)
 
     symbols = extract_symbols(common_root, profile_report, chart_manifest, cohort)
-    symbol_states = [load_symbol_state(common_root, symbol) for symbol in symbols]
+    symbol_states = [load_symbol_state(common_root, symbol, cohort_index, first_wave_index) for symbol in symbols]
 
     payload = {
         "schema_version": "1.0",
@@ -221,6 +258,11 @@ def main() -> int:
                 "path": str(cohort_path),
                 "probe": file_probe(cohort_path),
                 "payload": cohort,
+            },
+            "first_wave_lesson_closure": {
+                "path": str(first_wave_path),
+                "probe": file_probe(first_wave_path),
+                "payload": first_wave,
             },
             "chart_profile_manifest": {
                 "path": str(chart_manifest_path),

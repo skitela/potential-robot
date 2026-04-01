@@ -40,6 +40,8 @@ def snapshot_age_seconds(snapshot: Optional[Dict[str, Any]]) -> Optional[int]:
 def classify_symbol(item: Dict[str, Any]) -> Dict[str, Any]:
     symbol = str(item.get("symbol") or "")
     supervisor = item.get("supervisor_snapshot") or {}
+    cohort = item.get("global_teacher_audit") or {}
+    first_wave = item.get("first_wave_audit") or {}
     gate = item.get("student_gate") or {}
     files = item.get("files") or {}
     snapshot_file = files.get("supervisor_snapshot") or {}
@@ -56,8 +58,21 @@ def classify_symbol(item: Dict[str, Any]) -> Dict[str, Any]:
     reason = "SUPERVISOR_SNAPSHOT_OK"
 
     if not snapshot_file.get("present"):
-        status = "RUNTIME_DOWN"
-        reason = "SUPERVISOR_SNAPSHOT_MISSING"
+        if bool(first_wave.get("fresh_chain_ready")):
+            status = "RUNNING_LEARNING"
+            reason = "FIRST_WAVE_AUDIT_LEARNING"
+        elif bool(cohort.get("fresh_full_lesson")):
+            status = "RUNNING_LEARNING"
+            reason = "GLOBAL_TEACHER_AUDIT_LEARNING"
+        elif bool(cohort.get("teacher_runtime_active")):
+            status = "RUNNING_OBSERVING"
+            reason = "GLOBAL_TEACHER_AUDIT_ACTIVE"
+        elif files.get("decision_log", {}).get("present") and files.get("decision_log", {}).get("age_seconds") is not None and files.get("decision_log", {}).get("age_seconds") <= FRESHNESS_THRESHOLD_SECONDS:
+            status = "RUNNING_OBSERVING"
+            reason = "DECISION_LOG_FRESH"
+        else:
+            status = "RUNTIME_DOWN"
+            reason = "SUPERVISOR_SNAPSHOT_MISSING"
     elif age_seconds is not None and age_seconds > FRESHNESS_THRESHOLD_SECONDS:
         status = "RUNTIME_DOWN"
         reason = "SUPERVISOR_SNAPSHOT_STALE"
