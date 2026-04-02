@@ -158,6 +158,13 @@ function Sync-CompiledExpertToTerminalDataDir {
     $result.attempted = $true
     $result.target_path = $targetPath
 
+    $sourcePathNormalized = [System.IO.Path]::GetFullPath($SourceExpertPath).TrimEnd('\\').ToLowerInvariant()
+    $targetPathNormalized = [System.IO.Path]::GetFullPath($targetPath).TrimEnd('\\').ToLowerInvariant()
+    if ($sourcePathNormalized -eq $targetPathNormalized) {
+        $result.skipped_reason = "source_equals_target"
+        return [pscustomobject]$result
+    }
+
     try {
         New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
         Copy-Item -LiteralPath $SourceExpertPath -Destination $targetPath -Force -ErrorAction Stop
@@ -199,6 +206,13 @@ function Sync-CompiledExpertToPortableLab {
     $targetPath = Join-Path $targetDir ("{0}.ex5" -f $CompiledExpertName)
     $result.attempted = $true
     $result.target_path = $targetPath
+
+    $sourcePathNormalized = [System.IO.Path]::GetFullPath($sourcePath).TrimEnd('\\').ToLowerInvariant()
+    $targetPathNormalized = [System.IO.Path]::GetFullPath($targetPath).TrimEnd('\\').ToLowerInvariant()
+    if ($sourcePathNormalized -eq $targetPathNormalized) {
+        $result.skipped_reason = "source_equals_target"
+        return [pscustomobject]$result
+    }
 
     try {
         New-Item -ItemType Directory -Force -Path $targetDir | Out-Null

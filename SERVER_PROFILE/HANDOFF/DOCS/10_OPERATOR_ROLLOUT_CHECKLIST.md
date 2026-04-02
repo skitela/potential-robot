@@ -44,6 +44,17 @@ To jest zrodlo prawdy dla:
 - presetu,
 - `magic number`.
 
+## Krok 3A
+
+Nazwy nie sa zamienne. Przed attach kazdy operator musi rozrozniac:
+
+- `symbol_alias` - nazwa kanoniczna w repo, auditach i supervision, np. `COPPER-US`
+- `broker_symbol` - nazwa wykresu i Market Watch w `OANDA TMS MT5`, np. `COPPER-US.pro`
+- `code_symbol` - nazwa plikowa dla `Profile_*.mqh`, `Strategy_*.mqh` i `MicroBot_*`, np. `COPPERUS`
+- `state_alias` - katalog runtime pod `MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state\<alias>`
+
+Do attachu uzywaj zawsze `broker_symbol` z chart planu. Do walidacji plikow i runtime uzywaj `code_symbol` oraz `state_alias`. Nie zamieniaj recznie `COPPER-US`, `COPPERUS` i `COPPER-US.pro`.
+
 ## Krok 4
 
 Skopiuj lub odswiez paczke serwerowa:
@@ -75,7 +86,7 @@ Jesli pakiet ma byc przenoszony jako archiwum, uzyj osobnego ZIP operatorskiego:
 
 W `MetaTrader 5`:
 
-- otworz wykresy dla symboli z aktualnego chart planu,
+- otworz wykresy dla `broker_symbol` z aktualnego chart planu,
 - przypnij wlasciwy `MicroBot_*` do wlasciwego symbolu,
 - zaladuj odpowiadajacy preset `*_Live.set` jako bezpieczny attach startowy,
 - upewnij sie, ze `Algo Trading` jest wlaczone.
@@ -105,6 +116,20 @@ python C:\MAKRO_I_MIKRO_BOT\TOOLS\setup_mt5_microbots_profile.py --launch
 
 To buduje profil `MAKRO_I_MIKRO_BOT_AUTO` z jednym mikro-botem na wykres i moze od razu uruchomic `MT5` na tym profilu.
 
+## Krok 5C
+
+Jesli rollout idzie przez `MetaTrader VPS`, obowiazuja dodatkowe zasady z dokumentacji MetaQuotes:
+
+- synchronizacja jest jednokierunkowa: lokalny terminal -> wirtualny terminal, nigdy odwrotnie
+- nie ma auto-resynchronizacji; po kazdej zmianie wykresow, `Market Watch`, `EA`, presetow, `WebRequest`, `FTP`, `Email` lub signalu trzeba wykonac nowa synchronizacje
+- migruja tylko wykresy z przypietym `EA`; puste wykresy nie przejda
+- limit to `32` wykresy z `EA` na hostingu platnym i `16` na darmowym; nasza aktywna flota `13` miesci sie, ale dodatkowe wykresy tez zuzywaja sloty
+- skrypty nie migruja
+- `Algo Trading` jest zawsze wlaczone na terminalu wirtualnym, nawet jesli lokalnie bylo wylaczone
+- wykresy z niestandardowymi symbolami albo niestandardowymi timeframe'ami nie migruja
+- pierwszy sync dociaga historie dla otwartych wykresow; boty musza poprawnie przezyc dogrzanie historii
+- wywolania `DLL` sa zabronione na `MetaTrader VPS`
+
 ## Krok 6
 
 Po attach potwierdz:
@@ -123,6 +148,16 @@ Po pierwszym heartbeat sprawdz pierwszy zywy zapis do spoola truth:
 
 Jesli katalogi pozostaja puste albo timestamp CSV nie rusza po attach, sekcja 3 nadal jest dormant i rollout parity nie jest domkniety.
 
+## Krok 6B
+
+Po attach i ewentualnej synchronizacji `VPS` sprawdz dodatkowo:
+
+- `EVIDENCE\OPS\mt5_active_symbol_deployment_audit_latest.md`
+- `EVIDENCE\OPS\mt5_symbol_metadata_profile_audit_latest.md`
+- `EVIDENCE\OPS\mt5_first_wave_server_parity_latest.md`
+- w `MetaQuotes\Terminal\Common\Files\MAKRO_I_MIKRO_BOT\state\<state_alias>` obecnosci `teacher_package_contract.csv` i `broker_profile.json`
+- w logach terminala albo `VPS` brakow migracji, brakow indikatorow i brakow bibliotek
+
 ## Krok 7
 
 Jesli raport gotowosci wskazuje `TOKEN_STALE`, najpierw odswiez tokeny:
@@ -133,10 +168,18 @@ powershell -ExecutionPolicy Bypass -File C:\MAKRO_I_MIKRO_BOT\TOOLS\SYNC_ALL_OAN
 
 Potem ponow preflight.
 
+## Znane Kruczki 2026-04-01
+
+- audit aktywnego terminala pokazal brak `MicroBot_AUDUSD.ex5` w instancji `OANDA TMS MT5`, mimo zgodnosci zrodel `.mq5` i presetow
+- `teacher_package_contract.csv` brakowal dla `12/13` symboli; tylko `EURUSD` byl w pelni domkniety deploymentowo
+- profile repo nadal nie importuja `volume_min/volume_step/volume_max`, `tick_size/tick_value` oraz `stops_level/freeze_level`; audit metadata oznacza to jako stale `import_gaps`
+- bezposredni odczyt `bases\OANDATMS-MT5\symbols\symbols-*.dat` nie daje jeszcze stabilnego potwierdzenia mapowania nazw, wiec zrodlem prawdy operacyjnej pozostaja `chart plan` + `broker_profile.json`
+- presety `ActiveLive` sa oczekiwane tylko dla `paper_live_first_wave`; brak takich presetow dla pozostalych symboli nie jest bledem instalacji
+
 ## Konkluzja
 
 Operator ma jeden glowny punkt wejscia:
 
 - `RUN\PREPARE_MT5_ROLLOUT.ps1`
 
-To ma byc standardowa droga przed wdrozeniem lub wznowieniem pracy aktywnej floty MT5 zgodnej z aktualnym registry i chart planem.
+To ma byc standardowa droga przed wdrozeniem lub wznowieniem pracy aktywnej floty MT5 zgodnej z aktualnym registry i chart planem. Po kazdej zmianie lokalnego srodowiska albo synchronizacji `MetaTrader VPS` wracaj do tej checklisty i ponawiaj audyty parity.

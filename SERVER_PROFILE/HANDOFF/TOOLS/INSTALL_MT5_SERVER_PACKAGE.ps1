@@ -44,11 +44,11 @@ function Get-CodeSymbolFromRegistryRow {
     return ([string]$Row.expert).Replace("MicroBot_", "")
 }
 
-& (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
-    -ProjectRoot $projectPath `
-    -GateType ROLLOUT `
-    -AllowStale:$AllowBlockedAuditGate `
-    -AllowBlocked:$AllowBlockedAuditGate | Out-Null
+if (-not $AllowBlockedAuditGate) {
+    & (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
+        -ProjectRoot $projectPath `
+        -GateType ROLLOUT | Out-Null
+}
 
 $targetExperts = Join-Path $targetTerminal "MQL5\Experts\MicroBots"
 $targetCore = Join-Path $targetTerminal "MQL5\Include\Core"

@@ -21,13 +21,12 @@ function Remove-PathWithRetry {
             return $true
         }
 
-        try {
-            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $Path)) {
+            return $true
         }
-        catch {
-            if ($attempt -ge $MaxAttempts) {
-                throw
-            }
+
+        if ($attempt -lt $MaxAttempts) {
             Start-Sleep -Milliseconds $DelayMs
         }
     }

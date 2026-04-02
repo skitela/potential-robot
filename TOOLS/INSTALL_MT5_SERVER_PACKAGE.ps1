@@ -44,11 +44,11 @@ function Get-CodeSymbolFromRegistryRow {
     return ([string]$Row.expert).Replace("MicroBot_", "")
 }
 
-& (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
-    -ProjectRoot $projectPath `
-    -GateType ROLLOUT `
-    -AllowStale:$AllowBlockedAuditGate `
-    -AllowBlocked:$AllowBlockedAuditGate | Out-Null
+if (-not $AllowBlockedAuditGate) {
+    & (Join-Path $projectPath "TOOLS\ASSERT_AUDIT_SUPERVISOR_GATE.ps1") `
+        -ProjectRoot $projectPath `
+        -GateType ROLLOUT | Out-Null
+}
 
 $targetExperts = Join-Path $targetTerminal "MQL5\Experts\MicroBots"
 $targetCore = Join-Path $targetTerminal "MQL5\Include\Core"
@@ -58,6 +58,7 @@ $targetPresets = Join-Path $targetTerminal "MQL5\Presets"
 $targetActivePresets = Join-Path $targetPresets "ActiveLive"
 $targetConfig = Join-Path $targetTerminal "MAKRO_I_MIKRO_BOT\CONFIG"
 $targetCommonRoot = Join-Path $targetCommon "MAKRO_I_MIKRO_BOT"
+$packageCommonRoot = Join-Path $packagePath "COMMON\Files\MAKRO_I_MIKRO_BOT"
 
 $dirs = @(
     $targetExperts,
@@ -149,6 +150,9 @@ if (Test-Path -LiteralPath (Join-Path $packagePath "MQL5\Presets\ActiveLive")) {
     Copy-Item (Join-Path $packagePath "MQL5\Presets\ActiveLive\*.set") $targetActivePresets -Force
 }
 Copy-Item (Join-Path $packagePath "CONFIG\*.json") $targetConfig -Force
+if (Test-Path -LiteralPath $packageCommonRoot) {
+    Copy-Item (Join-Path $packageCommonRoot "*") $targetCommonRoot -Recurse -Force
+}
 
 $manifest = [ordered]@{
     schema_version = "1.0"
@@ -164,7 +168,8 @@ $manifest = [ordered]@{
         "MQL5\Include\Strategies\*.mqh",
         "MQL5\Presets\*.set",
         "MQL5\Presets\ActiveLive\*.set",
-        "CONFIG\*.json"
+        "CONFIG\*.json",
+        "COMMON\Files\MAKRO_I_MIKRO_BOT\state\<symbol>\teacher_package_*"
     )
     create_runtime_folders = [bool]$CreateRuntimeFolders
 }

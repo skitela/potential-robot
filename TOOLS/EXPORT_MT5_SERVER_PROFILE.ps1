@@ -1,30 +1,12 @@
 param(
     [string]$ProjectRoot = "C:\MAKRO_I_MIKRO_BOT",
     [string]$ProfileRoot = "C:\MAKRO_I_MIKRO_BOT\SERVER_PROFILE\PACKAGE",
-    [string]$SourceTerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856"
+    [string]$SourceTerminalDataDir = "C:\Users\skite\AppData\Roaming\MetaQuotes\Terminal\47AEB69EDDAD4D73097816C71FB25856",
+    [string]$ResearchPython = "C:\TRADING_TOOLS\MicroBotResearchEnv\Scripts\python.exe"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-
-$projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
-$profilePath = $ProfileRoot
-$registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
-$planPath = Join-Path $projectPath "CONFIG\scalping_universe_plan.json"
-
-if (-not (Test-Path -LiteralPath $registryPath)) {
-    throw "Missing registry: $registryPath"
-}
-if (-not (Test-Path -LiteralPath $planPath)) {
-    throw "Missing scalping universe plan: $planPath"
-}
-
-$registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$planHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $planPath).Hash
-$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
-$trainingUniverse = @($plan.training_universe | ForEach-Object { [string]$_ })
-$retiredSymbols = @($plan.retired_symbols | ForEach-Object { [string]$_ })
 
 function Get-CodeSymbolFromRegistryRow {
     param(
@@ -36,6 +18,44 @@ function Get-CodeSymbolFromRegistryRow {
     }
 
     return ([string]$Row.expert).Replace("MicroBot_", "")
+}
+
+function Resolve-ResearchPython {
+    param([string]$PreferredPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath) -and (Test-Path -LiteralPath $PreferredPath)) {
+        return (Resolve-Path -LiteralPath $PreferredPath).Path
+    }
+
+    $command = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -ne $command -and -not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
+        return [string]$command.Source
+    }
+
+    throw "Python executable not found for teacher package export."
+}
+
+function Get-DeploymentBucketForSymbol {
+    param(
+        [string]$Symbol,
+        [object]$UniversePlan
+    )
+
+    $paperLiveFirstWave = @($UniversePlan.paper_live_first_wave | ForEach-Object { [string]$_ })
+    $paperLiveSecondWave = @($UniversePlan.paper_live_second_wave | ForEach-Object { [string]$_ })
+    $paperLiveHold = @($UniversePlan.paper_live_hold | ForEach-Object { [string]$_ })
+
+    if ($paperLiveFirstWave -contains $Symbol) {
+        return "PAPER_LIVE_FIRST_WAVE"
+    }
+    if ($paperLiveSecondWave -contains $Symbol) {
+        return "PAPER_LIVE_SECOND_WAVE"
+    }
+    if ($paperLiveHold -contains $Symbol) {
+        return "PAPER_LIVE_HOLD"
+    }
+
+    return "GLOBAL_TEACHER_ONLY"
 }
 
 function Resolve-PreferredCompiledSourceDir {
@@ -93,6 +113,35 @@ function Resolve-CompiledExpertPath {
     return $null
 }
 
+$projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
+$profilePath = $ProfileRoot
+$registryPath = Join-Path $projectPath "CONFIG\microbots_registry.json"
+$planPath = Join-Path $projectPath "CONFIG\scalping_universe_plan.json"
+$curriculaRegistryPath = Join-Path $projectPath "CONFIG\personal_teacher_curricula_registry_v1.json"
+$globalCurriculumPath = Join-Path $projectPath "CONFIG\global_teacher_curriculum_v1.json"
+$teacherPolicyPath = Join-Path $projectPath "CONFIG\teacher_promotion_policy_v1.json"
+$teacherPackageBuilderPath = Join-Path $projectPath "CONTROL\build_teacher_package.py"
+
+foreach ($requiredPath in @($registryPath, $planPath, $curriculaRegistryPath, $globalCurriculumPath, $teacherPackageBuilderPath)) {
+    if (-not (Test-Path -LiteralPath $requiredPath)) {
+        throw "Missing required export dependency: $requiredPath"
+    }
+}
+
+$registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$curriculaRegistry = Get-Content -LiteralPath $curriculaRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$planHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $planPath).Hash
+$paperLiveSymbols = @($plan.paper_live_first_wave | ForEach-Object { [string]$_ })
+$trainingUniverse = @($plan.training_universe | ForEach-Object { [string]$_ })
+$retiredSymbols = @($plan.retired_symbols | ForEach-Object { [string]$_ })
+$teacherPackagePython = Resolve-ResearchPython -PreferredPath $ResearchPython
+
+$curriculumFileBySymbol = @{}
+foreach ($entry in @($curriculaRegistry.active_training_universe)) {
+    $curriculumFileBySymbol[[string]$entry.symbol] = [string]$entry.curriculum_file
+}
+
 $resolvedSourceTerminalDataDir = $null
 if (-not [string]::IsNullOrWhiteSpace($SourceTerminalDataDir) -and (Test-Path -LiteralPath $SourceTerminalDataDir)) {
     $resolvedSourceTerminalDataDir = (Resolve-Path -LiteralPath $SourceTerminalDataDir).Path
@@ -113,7 +162,8 @@ $dirs = @(
     (Join-Path $profilePath "MQL5\\Presets"),
     (Join-Path $profilePath "MQL5\\Presets\\ActiveLive"),
     (Join-Path $profilePath "CONFIG"),
-    (Join-Path $profilePath "COMMON\\Files\\MAKRO_I_MIKRO_BOT")
+    (Join-Path $profilePath "COMMON\\Files\\MAKRO_I_MIKRO_BOT"),
+    (Join-Path $profilePath "COMMON\\Files\\MAKRO_I_MIKRO_BOT\\state")
 )
 
 foreach ($dir in $dirs) {
@@ -127,6 +177,7 @@ $packageStrategies = Join-Path $profilePath "MQL5\\Include\\Strategies"
 $packagePresets = Join-Path $profilePath "MQL5\\Presets"
 $packageActivePresets = Join-Path $profilePath "MQL5\\Presets\\ActiveLive"
 $packageConfig = Join-Path $profilePath "CONFIG"
+$packageCommonStateRoot = Join-Path $profilePath "COMMON\\Files\\MAKRO_I_MIKRO_BOT\\state"
 $configAllowList = @(
     "candidate_arbitration_contract_v1.json",
     "capital_risk_contract_v1.json",
@@ -143,18 +194,14 @@ $configAllowList = @(
     "tuning_fleet_registry.json"
 )
 
-foreach ($cleanDir in @($packageExperts, $packageCore, $packageProfiles, $packageStrategies, $packagePresets, $packageActivePresets, $packageConfig)) {
+foreach ($cleanDir in @($packageExperts, $packageCore, $packageProfiles, $packageStrategies, $packagePresets, $packageActivePresets, $packageConfig, $packageCommonStateRoot)) {
     if (Test-Path -LiteralPath $cleanDir) {
         Get-ChildItem -LiteralPath $cleanDir -Force | Remove-Item -Recurse -Force
     }
 }
 
-foreach ($dir in @($packageExperts, $packageCore, $packageProfiles, $packageStrategies, $packagePresets, $packageActivePresets, $packageConfig)) {
+foreach ($dir in @($packageExperts, $packageCore, $packageProfiles, $packageStrategies, $packagePresets, $packageActivePresets, $packageConfig, $packageCommonStateRoot)) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-}
-
-foreach ($file in @(Get-ChildItem -LiteralPath $packageConfig -File -Filter "*.json" -ErrorAction SilentlyContinue)) {
-    Remove-Item -LiteralPath $file.FullName -Force
 }
 
 $copiedExperts = New-Object System.Collections.Generic.List[string]
@@ -163,17 +210,19 @@ $copiedStrategies = New-Object System.Collections.Generic.List[string]
 $copiedPresets = New-Object System.Collections.Generic.List[string]
 $copiedActivePresets = New-Object System.Collections.Generic.List[string]
 $copiedConfigs = New-Object System.Collections.Generic.List[string]
+$copiedTeacherPackageStates = New-Object System.Collections.Generic.List[string]
 
 foreach ($row in @($registry.symbols)) {
     $expert = [string]$row.expert
     $preset = [string]$row.preset
+    $symbol = [string]$row.symbol
     $codeSymbol = Get-CodeSymbolFromRegistryRow -Row $row
 
     $sourceMq5 = Join-Path $projectPath ("MQL5\\Experts\\MicroBots\\{0}.mq5" -f $expert)
     $sourceProfile = Join-Path $projectPath ("MQL5\\Include\\Profiles\\Profile_{0}.mqh" -f $codeSymbol)
     $sourceStrategy = Join-Path $projectPath ("MQL5\\Include\\Strategies\\Strategy_{0}.mqh" -f $codeSymbol)
     $sourcePreset = Join-Path $projectPath ("MQL5\\Presets\\{0}" -f $preset)
-    $shouldGenerateActivePreset = ($paperLiveSymbols -contains [string]$row.symbol)
+    $shouldGenerateActivePreset = ($paperLiveSymbols -contains $symbol)
     $activePresetName = "{0}_ACTIVE.set" -f ([System.IO.Path]::GetFileNameWithoutExtension($preset))
     $targetActivePreset = Join-Path $packageActivePresets $activePresetName
 
@@ -205,6 +254,37 @@ foreach ($row in @($registry.symbols)) {
         Set-Content -LiteralPath $targetActivePreset -Value $activePresetContent -Encoding ASCII
         [void]$copiedActivePresets.Add($activePresetName)
     }
+
+    if (-not $curriculumFileBySymbol.ContainsKey($symbol)) {
+        throw "Missing personal curriculum registry entry for symbol: $symbol"
+    }
+
+    $curriculumFile = [string]$curriculumFileBySymbol[$symbol]
+    $curriculumPath = Join-Path $projectPath ("CONFIG\\{0}" -f $curriculumFile)
+    if (-not (Test-Path -LiteralPath $curriculumPath)) {
+        throw "Missing curriculum file for symbol ${symbol}: $curriculumPath"
+    }
+
+    $teacherOutDir = Join-Path $packageCommonStateRoot $symbol
+    New-Item -ItemType Directory -Force -Path $teacherOutDir | Out-Null
+
+    $teacherBuildArgs = @(
+        $teacherPackageBuilderPath,
+        "--curriculum", $curriculumPath,
+        "--global-curriculum", $globalCurriculumPath,
+        "--out-dir", $teacherOutDir,
+        "--deployment-bucket", (Get-DeploymentBucketForSymbol -Symbol $symbol -UniversePlan $plan)
+    )
+    if (Test-Path -LiteralPath $teacherPolicyPath) {
+        $teacherBuildArgs += @("--policy", $teacherPolicyPath)
+    }
+
+    & $teacherPackagePython @teacherBuildArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Teacher package build failed for symbol: $symbol"
+    }
+
+    [void]$copiedTeacherPackageStates.Add($symbol)
 }
 
 Copy-Item (Join-Path $projectPath "MQL5\\Include\\Core\\*.mqh") $packageCore -Force
@@ -256,9 +336,12 @@ $manifest = [ordered]@{
         "MQL5\\Presets\\*.set",
         "MQL5\\Presets\\ActiveLive\\*.set",
         "MQL5\\Experts\\MicroBots\\*.ex5",
-        "CONFIG\\selected_runtime_json"
+        "CONFIG\\selected_runtime_json",
+        "COMMON\\Files\\MAKRO_I_MIKRO_BOT\\state\\<symbol>\\teacher_package_contract.csv",
+        "COMMON\\Files\\MAKRO_I_MIKRO_BOT\\state\\<symbol>\\teacher_package_manifest_latest.json"
     )
     source_terminal_data_dir = $resolvedSourceTerminalDataDir
+    teacher_package_python = $teacherPackagePython
     active_symbols = $activeSymbols
     active_live_symbols = $paperLiveSymbols
     copied_inventory = [ordered]@{
@@ -268,6 +351,7 @@ $manifest = [ordered]@{
         presets = @($copiedPresets | Sort-Object -Unique)
         active_presets = @($copiedActivePresets | Sort-Object -Unique)
         configs = @($copiedConfigs | Sort-Object -Unique)
+        teacher_package_state = @($copiedTeacherPackageStates | Sort-Object -Unique)
     }
 }
 

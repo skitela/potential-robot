@@ -17,6 +17,15 @@ Najwazniejsze:
 - `BRYGADA` jest silniejsza w procesie `globalny -> personalny`,
 - poprawna droga to implantacja warstwowa: adaptery, polityki, registry i snapshot promocji, a nie wymiana calego runtime.
 
+## Aktualizacja stanu po ostatnim wdrozeniu
+
+Na dzien `2026-04-01` ten dokument nie moze juz byc czytany jako lista brakow "przed wdrozeniem".
+
+Stan prawdy jest dzis taki:
+- czesc kontraktowa i walidacyjna z planu `BRYGADA` zostala juz osadzona w repo,
+- otwarte pozostaja elementy wykonawcze wysokiego ryzyka: orkiestracja `RUN`, routing runtime ONNX, shadow lifecycle i rollback jako proces operacyjny,
+- problem nie polega juz na braku package/policy/blueprint, tylko na tym, ze nie caly plan `Pro` zostal jeszcze domkniety w stalej petli operacyjnej.
+
 ## Co juz mamy w repo i czego nie wolno zdublowac
 
 ### Runtime i bridge
@@ -57,51 +66,155 @@ Najwazniejsze:
 - `DLA_CODEX__PLAN_ROZWOJU_PROCESU_UCZENIA__20260401.md`
 - `DLA_CODEX__WALIDACJA_PLANOW_NAUCZYCIELI__20260401.md`
 
-## Najwazniejsze roznice do zamkniecia przed wdrozeniem
+## Status po ostatnim wdrozeniu
 
-### 1. `paper_live_bucket` jest przeciazony w obecnym builderze repo
+### Zamkniete w repo
+
+### 1. Separacja `teacher_package_mode` od `paper_live_bucket`
+
+Ten zarzut byl prawdziwy wczesniej, ale jest juz zamkniety.
 
 W repo:
-- `CONTROL/build_teacher_package.py` zapisuje `paper_live_bucket = mode`
+- `CONTROL/build_teacher_package.py` zapisuje dzis osobno `paper_live_bucket = deployment_bucket` i `teacher_package_mode`,
+- `MQL5/Include/Core/MbTeacherPackage.mqh` laduje oba pola rozdzielnie,
+- `CONFIG/teacher_package_schema_v1.json` pilnuje, ze `teacher_package_mode` ma pozostac oddzielone od `paper_live_bucket`.
 
-To jest bledne semantycznie, bo:
-- `paper_live_bucket` juz ma znaczenie deployment/parity,
-- tryb nauczyciela to osobna os semantyczna.
+Wniosek:
+- problem przeciazenia semantyki bucketu nie jest juz otwartym brakiem.
 
-Wymagana korekta:
-- dodac osobne pole `teacher_package_mode` albo `teacher_runtime_mode`,
-- przestac wpisywac `GLOBAL_ONLY`, `GLOBAL_PLUS_PERSONAL`, `PERSONAL_PRIMARY` do `paper_live_bucket`.
+### 2. Adapter `promotion snapshot`
 
-### 2. Walidator promocji nie ma jeszcze pelnego snapshotu z obecnego control-plane
+Ten punkt jest juz wdrozony.
 
-Repo ma walidator, ale nie ma jeszcze kompletnego adaptera dostarczajacego:
-- `full_lessons_window`
-- `gate_visible_events_window`
-- `feature_coverage_ratio`
-- `days_observed`
-- `unclassified_count`
-- `sticky_diagnostic`
-- `relative_quality_vs_global`
-- `quality_drop_vs_baseline`
+W repo istnieje:
+- `CONTROL/build_teacher_promotion_snapshot.py`,
+- builder sklada snapshot z wielu zrodel: learning snapshot, supervisor snapshot, teacher snapshot, cohort audit, student gate i window metrics.
 
-`BRYGADA` dodaje brakujacy element:
-- `build_teacher_promotion_snapshot.py`
+Wniosek:
+- promotion nie musi juz opierac sie na pojedynczym surowym snapshotcie runtime.
 
-### 3. Personal curricula w repo sa zbyt waskie
+### 3. Historia, histereza i cooldowny promocji
 
-Repo ma tylko:
-- `CONFIG/personal_teacher_curriculum_EURUSD_v1.json`
+Ten punkt jest juz wdrozony po stronie kontraktu i walidacji.
 
-`BRYGADA` ma:
-- registry oraz curricula dla calej aktywnej 13-symbolowej floty.
+W repo istnieje:
+- `CONTROL/validate_teacher_promotion.py`,
+- `CONFIG/teacher_promotion_policy_v1.json`,
+- `CONFIG/teacher_promotion_history_template_v1.json`.
 
-### 4. Obecny teacher snapshot nie ma jeszcze pelnego procesu history/hysteresis
+Walidator umie dzis:
+- liczyc `approval_streak`,
+- pilnowac `promotion_cooldown_hours`,
+- pilnowac `rollback_cooldown_hours`,
+- oceniac rollback triggers,
+- rozrozniac `PROMOTE_TO_PERSONAL`, `HOLD_GLOBAL` i `ROLLBACK_TO_GLOBAL`.
 
-`BRYGADA` bardzo sensownie dodaje:
-- approval streak,
-- cooldown promocji,
-- cooldown rollbacku,
-- rozdzielenie `GLOBAL_PLUS_PERSONAL` od `PERSONAL_PRIMARY`.
+Wniosek:
+- brak historii/histerezy nie jest juz prawdziwa krytyka obecnego repo.
+
+### 4. Blueprint faz dojrzewania
+
+Ten punkt jest juz wdrozony.
+
+W repo istnieje:
+- `CONFIG/teacher_learning_process_blueprint_v1.json`,
+- blueprint prowadzi fazy `GLOBAL_ONLY -> GLOBAL_PLUS_PERSONAL -> PERSONAL_PRIMARY` i jawnie zabrania przeciazania `paper_live_bucket` oraz udawania dynamicznego routingu ONNX w fazie 1.
+
+### 5. Registry i curricula dla calej aktywnej floty
+
+Ten punkt jest juz wdrozony.
+
+W repo istnieje:
+- `CONFIG/personal_teacher_curricula_registry_v1.json`,
+- komplet `CONFIG/personal_teacher_curriculum_*.json` dla 13 aktywnych symboli.
+
+Wniosek:
+- zewnetrzny dokument nie jest juz aktualny tam, gdzie sugerowal tylko pojedynczy pilot `EURUSD` bez pelnej floty curricula.
+
+### 6. Szerokosc kontraktu personalnych curricula
+
+Ten punkt jest dzis czesciowo zamkniety na poziomie kontraktu wiedzy.
+
+Repo ma juz w curricula pasma typu:
+- `local_policy_blocks`,
+- `local_intermarket`,
+- `local_promotion_readiness`,
+- wskazniki `feature_quality_ratio` i `relative_quality_vs_family` w gate/promocji.
+
+Wniosek:
+- nie mozna juz uczciwie twierdzic, ze repo nie ma tych kategorii w ogole.
+- Nadal otwarte pozostaje cos innego: dowod runtime, ze te pola sa stale emitowane, utrzymywane i wykorzystywane w treningu/promocji dla calej floty.
+
+### Nadal otwarte i realnie blokujace domkniecie planu `Pro`
+
+### 1. Brak pelnej orkiestracji promotion pipeline end-to-end w `RUN`
+
+To pozostaje otwarte.
+
+Na dzis nie ma jeszcze stalej petli operacyjnej, ktora:
+- buduje `teacher_promotion_snapshot_latest.json`,
+- liczy verdict przez `validate_teacher_promotion.py`,
+- zapisuje `teacher_promotion_verdict_latest.json`,
+- aktualizuje `teacher_promotion_history_latest.json`,
+- robi to stale jako czesc `RUN`.
+
+Wniosek:
+- warstwa kontraktu jest gotowa, ale control-plane nie zostal jeszcze wpiety do regularnego cyklu pracy.
+
+### 2. Brak dynamicznego routingu ONNX po `teacher_id` albo `teacher_package_mode`
+
+To pozostaje otwarte.
+
+W runtime:
+- `MQL5/Include/Core/MbOnnxPilotObservation.mqh` nadal laduje nauczyciela globalnego z `_GLOBAL`,
+- kontrakt globalny i model globalny sa pobierane ze sciezek `paper_gate_acceptor_runtime_contract_latest.csv` oraz `paper_gate_acceptor_runtime_latest.onnx` dla `_GLOBAL`.
+
+Wniosek:
+- teacher package juz istnieje,
+- teacher mode juz istnieje,
+- ale runtime ONNX nie przelacza jeszcze modelu dynamicznie wedlug personalnego package.
+
+### 3. `GLOBAL_PLUS_PERSONAL` nie jest jeszcze pelnym shadow lifecycle sterowanym operacyjnie
+
+To pozostaje otwarte.
+
+Mamy juz:
+- tryb,
+- blueprint,
+- validator,
+- policy,
+- historiograficzny template.
+
+Brakuje nadal:
+- stalego zapisu historii verdictow per symbol,
+- automatycznego przejscia miedzy fazami na podstawie historii,
+- guarded fallback / hard rollback jako jawnego procesu operacyjnego.
+
+### 4. Brak dowodu pelnej runtimeowej dojrzalosci personalnych nauczycieli dla calej floty
+
+To pozostaje otwarte.
+
+Fakt, ze mamy curricula dla 13 symboli, nie dowodzi jeszcze, ze kazdy symbol:
+- ma gotowy lokalny model,
+- ma pelny runtime feature space,
+- ma stale promotion truth,
+- jest gotowy do `PERSONAL_PRIMARY`.
+
+Wniosek:
+- pakiet wiedzy jest przygotowany szybciej niz pelna gotowosc runtime.
+
+### 5. Brak domknietego operational loop dla retraining / promotion / rollback
+
+To pozostaje otwarte.
+
+Brakuje nadal:
+- scheduled retraining jako spojnego procesu,
+- promotion / rollback jako stalej automatyki,
+- kontrolowanego zapisu decyzji i reakcji systemu na te decyzje.
+
+To jest nadal wdrozenie typu:
+- `phase 1 / phase 2 foundation`,
+- a nie pelny autonomiczny lifecycle nauczyciela.
 
 ## Czego nie wolno zrobic
 
@@ -174,140 +287,96 @@ Nie importujemy teraz jako produktu runtime:
 
 One moga byc materialem pomocniczym, ale nie warstwa systemowa.
 
-## Plan wdrozenia etapami
+## Pozostaly plan domkniecia `Pro`
 
-## Etap 1. Naprawa semantyki kontraktu teacher package
-
-Cel:
-- oddzielic deployment bucket od teacher runtime mode.
-
-Zakres:
-- poprawic `CONTROL/build_teacher_package.py`,
-- poprawic `MQL5/Include/Core/MbTeacherPackage.mqh`,
-- ewentualnie lekko dopasowac `MQL5/Include/Core/MbTeacherModeResolver.mqh`.
-
-Wynik:
-- `paper_live_bucket` zostaje deploymentowe,
-- `teacher_package_mode` staje sie osobnym polem.
-
-Kryterium odbioru:
-- wygenerowany `teacher_package_contract.csv` niesie oba pola osobno,
-- runtime laduje nowy kontrakt bez regresji.
-
-## Etap 2. Promotion snapshot jako adapter nad obecnym CONTROL
+## Etap 1. Wpiecie promotion pipeline do `RUN`
 
 Cel:
-- zbudowac prawdziwe zrodlo dla decyzji promocyjnej.
+- przestac utrzymywac snapshot/validator jako narzedzia tylko kontraktowe.
 
 Zakres:
-- dodac `CONTROL/build_teacher_promotion_snapshot.py`,
-- zmapowac wejscia z:
-  - `learning_supervisor_snapshot_latest.json`
-  - `supervisor_snapshot_latest.json`
-  - `global_teacher_cohort_activity_latest.json`
-  - `student_gate_latest.json`
-  - metryk okiennych i audytow
-
-Wynik:
-- `teacher_promotion_snapshot_latest.json` per symbol.
+- uruchamiac `CONTROL/build_teacher_promotion_snapshot.py` z cyklu operacyjnego,
+- uruchamiac `CONTROL/validate_teacher_promotion.py` z cyklu operacyjnego,
+- zapisywac `teacher_promotion_verdict_latest.json`,
+- utrzymywac `teacher_promotion_history_latest.json` per symbol.
 
 Kryterium odbioru:
-- `validate_teacher_promotion.py` dostaje pelny snapshot i nie musi zgadywac brakujacych pol.
+- verdict i historia sa odswiezane regularnie bez recznej interwencji.
 
-## Etap 3. Lifecycle polityki: history, hysteresis, cooldown
+## Etap 2. Pierwszy prawdziwy pilot `GLOBAL_PLUS_PERSONAL`
 
 Cel:
-- odseparowac pojedyncze dobre okno od dojrzalej promocji.
+- wejsc w kontrolowany shadow mode bez udawania pelnego `PERSONAL_PRIMARY`.
 
 Zakres:
-- rozszerzyc `CONTROL/validate_teacher_promotion.py`,
-- dodac obsluge:
-  - `approval_streak`
-  - `promotion_cooldown`
-  - `rollback_cooldown`
-  - `rollback triggers`
-- wykorzystac:
-  - `teacher_promotion_policy_v1.json`
-  - `teacher_promotion_history_template_v1.json`
-
-Wynik:
-- werdykty:
-  - `PROMOTE_TO_PERSONAL`
-  - `HOLD_GLOBAL`
-  - `ROLLBACK_TO_GLOBAL`
-  staja sie stabilniejsze i audytowalne.
+- pilot na `EURUSD`,
+- 24-48h stabilnych danych,
+- kontrola flappingu verdictow,
+- jawny monitoring historii promocji.
 
 Kryterium odbioru:
-- brak flappingu `PROMOTE/HOLD/ROLLBACK` na pojedynczych oknach.
+- `EURUSD` przechodzi czysto przez `GLOBAL_ONLY -> GLOBAL_PLUS_PERSONAL` bez utraty globalnego fallbacku.
 
-## Etap 4. Rozszerzenie curricula i registry na cala aktywna flote
+## Etap 3. Lifecycle przejsc i rollback jako proces, nie tylko kontrakt
 
 Cel:
-- miec jeden, jawny rejestr pilotow personalnych.
+- zamienic blueprint i policy w realna automatyke systemowa.
 
 Zakres:
-- dodac `CONFIG/personal_teacher_curricula_registry_v1.json`,
-- dodac curricula dla 13 aktywnych symboli,
-- sprawdzic zgodnosc nazw symboli z repo.
-
-Wynik:
-- repo ma komplet curricula,
-- ale aktywacja nadal etapowa.
+- jawne przejscia miedzy fazami na podstawie historii,
+- guarded fallback,
+- hard rollback,
+- audytowalny zapis decyzji i reakcji systemu.
 
 Kryterium odbioru:
-- registry jest zgodny z:
-  - `learning_universe_contract.json`
-  - `microbots_registry.json`
+- system umie nie tylko wydac verdict, ale tez konsekwentnie nim zarzadzic w runtime.
 
-## Etap 5. Shadow mode i pierwszy pilot runtime
+## Etap 4. Routing runtime ONNX
 
 Cel:
-- nie przeskakiwac prosto do `PERSONAL_PRIMARY`.
+- domknac wykonawczo personalnego nauczyciela tam, gdzie plan `Pro` faktycznie dotyka runtime.
 
 Zakres:
-- pierwszy pilot: `EURUSD`,
-- tryb:
-  - start `GLOBAL_ONLY`
-  - potem `GLOBAL_PLUS_PERSONAL`
-  - dopiero po stabilnej promocji `PERSONAL_PRIMARY`
-- bez zmiany routingu ONNX w pierwszej iteracji.
-
-Wynik:
-- personalny teacher jest liczony, oceniany i dokumentowany,
-- ale globalny pozostaje glownym zabezpieczeniem.
+- routing po `teacher_id` albo `teacher_package_mode`,
+- albo inny jawny mechanizm przelaczania modelu teacher runtime,
+- z zachowaniem bezpiecznego fallbacku do `_GLOBAL`.
 
 Kryterium odbioru:
-- `EURUSD` ma komplet:
-  - curriculum
-  - package manifest
-  - promotion snapshot
-  - promotion history
-  - stabilny verdict bez flappingu.
+- runtime nie jest juz skazany na stalego globalnego teacher modela.
 
-## Kolejnosc techniczna prac
+## Etap 5. Dowod gotowosci flotowej
 
-1. Poprawa `teacher_package_mode` w repo.
-2. Dodanie `build_teacher_promotion_snapshot.py`.
-3. Rozszerzenie `validate_teacher_promotion.py`.
-4. Dodanie registry + curricula dla 13 symboli.
-5. Integracja z `CONTROL` i `codex workbench`.
-6. Dopiero potem pierwszy realny pilot `EURUSD`.
+Cel:
+- udowodnic, ze personalny teacher nie jest tylko kontraktem wiedzy.
 
-## Rekomendowany zakres pierwszego wdrozenia
+Zakres:
+- audyt emisji feature space dla 13 symboli,
+- audyt dostepnosci modeli lokalnych,
+- audyt promotion truth i jakosci cech,
+- dopiero potem rozszerzanie `PERSONAL_PRIMARY`.
 
-### Do wdrozenia od razu
-- separacja `teacher_package_mode`
-- promotion snapshot builder
-- policy + history + hysteresis
-- curricula registry
+Kryterium odbioru:
+- kazdy symbol ma dowod runtimeowej dojrzalosci, a nie tylko curriculum.
 
-### Do wdrozenia po walidacji
-- komplet personal curricula do repo
-- pierwszy pilot `EURUSD` w `GLOBAL_PLUS_PERSONAL`
+## Jednoznaczny werdykt gotowosci
 
-### Na pozniej
-- routing ONNX po `teacher_id` albo `teacher_package_mode`
-- automatyczny guarded fallback / hard rollback w runtime
+### Gotowi teraz
+
+- do dalszego wdrazania: tak,
+- do domkniecia control-plane: tak,
+- do rozpoczecia pierwszego kontrolowanego pilota shadow po wpiece do `RUN`: tak.
+
+### Jeszcze nie gotowi
+
+- do szerokiego `PERSONAL_PRIMARY` dla calej floty,
+- do pelnego autonomicznego lifecycle nauczyciela,
+- do uczciwego twierdzenia, ze runtime personalnych teacherow jest juz domkniety end-to-end.
+
+### Praktyczny horyzont
+
+- nastepny etap: od razu,
+- pierwszy sensowny pilot shadow: po 1-2 czystych iteracjach wdrozeniowych i `24-48h` stabilnych danych,
+- pelna dojrzalosc: dopiero po kilku kolejnych cyklach stabilnej walidacji, nie po samym wdrozeniu kodu.
 
 ## Jak to laczy sie z obecnym problemem uczenia
 

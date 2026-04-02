@@ -65,7 +65,7 @@ Rekomendowany preflight rollout:
 Ten wrapper:
 
 - synchronizuje tokeny `kill-switch`,
-- kompiluje cala partie `11`,
+- kompiluje cala aktywna flote `13`,
 - waliduje uklad projektu,
 - waliduje bezpieczenstwo presetow,
 - waliduje gotowosc wdrozenia,
@@ -76,6 +76,11 @@ Ten wrapper:
 - symuluje instalacje pakietu na testowym katalogu `MT5`,
 - zapisuje ZIP backup projektu,
 - zapisuje osobny ZIP `HANDOFF`.
+
+Wazne przy `MetaTrader VPS`:
+
+- synchronizacja jest jednokierunkowa lokalny terminal -> `VPS`; brak auto-resyncu po zmianach w repo
+- migruja tylko wykresy z przypietym `EA`; skrypty nie sa przenoszone
 
 Po stronie docelowego serwera mozna potem uzyc:
 

@@ -38,6 +38,32 @@ Model zaklada:
 
 Kazdy bot jest osobnym `EA` i osobnym plikiem `.ex5`.
 
+## Kanoniczna Macierz Nazw
+
+| symbol_alias | broker_symbol | code_symbol | expert | preset | state_alias |
+| --- | --- | --- | --- | --- | --- |
+| EURUSD | EURUSD.pro | EURUSD | MicroBot_EURUSD | MicroBot_EURUSD_Live.set | EURUSD |
+| AUDUSD | AUDUSD.pro | AUDUSD | MicroBot_AUDUSD | MicroBot_AUDUSD_Live.set | AUDUSD |
+| GBPUSD | GBPUSD.pro | GBPUSD | MicroBot_GBPUSD | MicroBot_GBPUSD_Live.set | GBPUSD |
+| USDJPY | USDJPY.pro | USDJPY | MicroBot_USDJPY | MicroBot_USDJPY_Live.set | USDJPY |
+| USDCAD | USDCAD.pro | USDCAD | MicroBot_USDCAD | MicroBot_USDCAD_Live.set | USDCAD |
+| USDCHF | USDCHF.pro | USDCHF | MicroBot_USDCHF | MicroBot_USDCHF_Live.set | USDCHF |
+| EURJPY | EURJPY.pro | EURJPY | MicroBot_EURJPY | MicroBot_EURJPY_Live.set | EURJPY |
+| EURAUD | EURAUD.pro | EURAUD | MicroBot_EURAUD | MicroBot_EURAUD_Live.set | EURAUD |
+| GOLD | GOLD.pro | GOLD | MicroBot_GOLD | MicroBot_GOLD_Live.set | GOLD |
+| SILVER | SILVER.pro | SILVER | MicroBot_SILVER | MicroBot_SILVER_Live.set | SILVER |
+| COPPER-US | COPPER-US.pro | COPPERUS | MicroBot_COPPERUS | MicroBot_COPPERUS_Live.set | COPPER-US |
+| DE30 | DE30.pro | DE30 | MicroBot_DE30 | MicroBot_DE30_Live.set | DE30 |
+| US500 | US500.pro | US500 | MicroBot_US500 | MicroBot_US500_Live.set | US500 |
+
+Reguly sa stale i nie powinny byc mieszane:
+
+- `symbol_alias` jest kanoniczny dla repo, research, readiness i auditow
+- `broker_symbol` jest dokladna nazwa wykresu oraz `Market Watch` u brokera
+- `code_symbol` sluzy do nazw plikow `Profile_*`, `Strategy_*` i do rdzenia nazwy `MicroBot_*`
+- `state_alias` powinien pozostawac rowny aliasowi kanonicznemu; helper runtime dopuszcza warianty broker/code tylko jako fallback
+- `COPPER-US` jest aktywnym wyjatkiem, gdzie alias, broker symbol i code symbol roznia sie forma
+
 ## Podstawowa Zasada Techniczna
 
 W `MT5` na jednym wykresie dziala jeden `EA`.

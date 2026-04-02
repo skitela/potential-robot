@@ -52,7 +52,9 @@ foreach ($item in $registry.symbols) {
     $required += @(
         (Join-Path $targetTerminal ("MQL5\Experts\MicroBots\{0}.mq5" -f $expert)),
         (Join-Path $targetTerminal ("MQL5\Presets\{0}" -f $preset)),
-        (Join-Path $targetTerminal ("MQL5\Experts\MicroBots\{0}.ex5" -f $expert))
+        (Join-Path $targetTerminal ("MQL5\Experts\MicroBots\{0}.ex5" -f $expert)),
+        (Join-Path $targetCommon ("state\{0}\teacher_package_contract.csv" -f $symbol)),
+        (Join-Path $targetCommon ("state\{0}\teacher_package_manifest_latest.json" -f $symbol))
     )
 
     if ($paperLiveSymbols -contains $symbol) {
