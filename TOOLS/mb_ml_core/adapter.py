@@ -25,6 +25,31 @@ class LoadedSources:
     symbols: list[str]
 
 
+BROKER_LEDGER_CANDIDATE_COLUMNS = [
+    "ts",
+    "symbol_alias",
+    "side",
+    "side_normalized",
+    "score",
+    "confidence_score",
+    "risk_multiplier",
+    "lots",
+    "spread_points",
+    "feedback_key",
+    "outcome_key",
+    "advisory_match_key",
+]
+
+BROKER_LEDGER_LEARNING_COLUMNS = [
+    "symbol_alias",
+    "outcome_key",
+    "advisory_match_key",
+    "pnl",
+    "close_reason",
+    "ts",
+]
+
+
 def _filter_frame_to_symbols(frame: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
     if frame.empty or not symbols:
         return frame
@@ -33,7 +58,12 @@ def _filter_frame_to_symbols(frame: pd.DataFrame, symbols: list[str]) -> pd.Data
     return frame.loc[frame["symbol_alias"].isin(symbols)].copy()
 
 
-def _read_symbol_scoped_table(path: str | Path | None, symbols: list[str]) -> pd.DataFrame:
+def _read_symbol_scoped_table(
+    path: str | Path | None,
+    symbols: list[str],
+    *,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
     if path is None:
         return pd.DataFrame()
 
@@ -43,24 +73,49 @@ def _read_symbol_scoped_table(path: str | Path | None, symbols: list[str]) -> pd
 
     if candidate_path.suffix.lower() == ".parquet":
         try:
-            return read_parquet_window(candidate_path, symbol_aliases=symbols)
+            return read_parquet_window(candidate_path, columns=columns, symbol_aliases=symbols)
         except Exception:
             frame = read_table(candidate_path)
-            return frame if frame is not None else pd.DataFrame()
+            if frame is None:
+                return pd.DataFrame()
+            if columns:
+                available = [column for column in columns if column in frame.columns]
+                return frame[available].copy()
+            return frame
 
     frame = read_table(candidate_path)
-    return frame if frame is not None else pd.DataFrame()
+    if frame is None:
+        return pd.DataFrame()
+    if columns:
+        available = [column for column in columns if column in frame.columns]
+        return frame[available].copy()
+    return frame
 
 
-def load_sources(paths: CompatPaths, symbols_override: list[str] | None = None) -> LoadedSources:
+def load_sources(
+    paths: CompatPaths,
+    symbols_override: list[str] | None = None,
+    *,
+    lightweight: bool = False,
+) -> LoadedSources:
     symbols = symbols_override or load_active_symbols(paths)
 
-    candidates = _read_symbol_scoped_table(paths.candidate_signals_norm_latest, symbols)
-    runtime = _read_symbol_scoped_table(paths.onnx_observations_norm_latest, symbols)
-    learning = _read_symbol_scoped_table(paths.learning_observations_v2_norm_latest, symbols)
-    ping = read_table(paths.execution_ping_contract_csv)
+    candidates = _read_symbol_scoped_table(
+        paths.candidate_signals_norm_latest,
+        symbols,
+        columns=BROKER_LEDGER_CANDIDATE_COLUMNS if lightweight else None,
+    )
+    runtime = pd.DataFrame() if lightweight else _read_symbol_scoped_table(paths.onnx_observations_norm_latest, symbols)
+    learning = _read_symbol_scoped_table(
+        paths.learning_observations_v2_norm_latest,
+        symbols,
+        columns=BROKER_LEDGER_LEARNING_COLUMNS if lightweight else None,
+    )
+    ping = pd.DataFrame() if lightweight else read_table(paths.execution_ping_contract_csv)
 
-    feedback_path = find_optional_file(paths.common_state_root, "paper_live_feedback_latest.json")
+    feedback_path = paths.paper_live_feedback_latest
+    if not feedback_path.exists():
+        feedback_path = find_optional_file(paths.common_state_root, "paper_live_feedback_latest.json")
     runtime_feedback = read_table(feedback_path) if feedback_path else None
 
     candidates = candidates if candidates is not None else pd.DataFrame()
@@ -79,39 +134,40 @@ def load_sources(paths: CompatPaths, symbols_override: list[str] | None = None) 
     runtime_feedback = _filter_frame_to_symbols(runtime_feedback, symbols)
 
     qdm = pd.DataFrame()
-    if not candidates.empty and "ts" in candidates.columns:
-        candidate_window_min = candidates["ts"].min() - pd.Timedelta("1D")
-        candidate_window_max = candidates["ts"].max() + pd.Timedelta("1D")
-        qdm = read_parquet_window(
-            paths.qdm_minute_bars_latest,
-            columns=[
-                "symbol_alias",
-                "bar_minute",
-                "tick_count",
-                "spread_mean",
-                "spread_max",
-                "mid_range_1m",
-                "mid_return_1m",
-            ],
-            symbol_aliases=symbols,
-            ts_col="bar_minute",
-            ts_min=candidate_window_min,
-            ts_max=candidate_window_max,
-        )
-    else:
-        qdm = read_parquet_window(
-            paths.qdm_minute_bars_latest,
-            columns=[
-                "symbol_alias",
-                "bar_minute",
-                "tick_count",
-                "spread_mean",
-                "spread_max",
-                "mid_range_1m",
-                "mid_return_1m",
-            ],
-            symbol_aliases=symbols,
-        )
+    if not lightweight:
+        if not candidates.empty and "ts" in candidates.columns:
+            candidate_window_min = candidates["ts"].min() - pd.Timedelta("1D")
+            candidate_window_max = candidates["ts"].max() + pd.Timedelta("1D")
+            qdm = read_parquet_window(
+                paths.qdm_minute_bars_latest,
+                columns=[
+                    "symbol_alias",
+                    "bar_minute",
+                    "tick_count",
+                    "spread_mean",
+                    "spread_max",
+                    "mid_range_1m",
+                    "mid_return_1m",
+                ],
+                symbol_aliases=symbols,
+                ts_col="bar_minute",
+                ts_min=candidate_window_min,
+                ts_max=candidate_window_max,
+            )
+        else:
+            qdm = read_parquet_window(
+                paths.qdm_minute_bars_latest,
+                columns=[
+                    "symbol_alias",
+                    "bar_minute",
+                    "tick_count",
+                    "spread_mean",
+                    "spread_max",
+                    "mid_range_1m",
+                    "mid_return_1m",
+                ],
+                symbol_aliases=symbols,
+            )
     if not qdm.empty and "bar_minute" in qdm.columns:
         qdm["bar_minute"] = normalize_ts(qdm["bar_minute"])
     if not ping.empty:
@@ -469,8 +525,27 @@ def _collapse_duplicate_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({name: collapsed[name] for name in ordered_names}, index=frame.index)
 
 
-def build_master_training_frame(paths: CompatPaths, symbols: list[str] | None = None) -> tuple[pd.DataFrame, dict[str, Any], LoadedSources]:
-    src = load_sources(paths, symbols_override=symbols)
+def _filter_to_outcome_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    outcome_mask = pd.Series(False, index=frame.index)
+    for column in ("pnl", "net_pln"):
+        if column not in frame.columns:
+            continue
+        outcome_mask = outcome_mask | pd.to_numeric(frame[column], errors="coerce").notna()
+    if not outcome_mask.any():
+        return frame.iloc[0:0].copy()
+    return frame.loc[outcome_mask].copy()
+
+
+def build_master_training_frame(
+    paths: CompatPaths,
+    symbols: list[str] | None = None,
+    *,
+    lightweight: bool = False,
+) -> tuple[pd.DataFrame, dict[str, Any], LoadedSources]:
+    src = load_sources(paths, symbols_override=symbols, lightweight=lightweight)
     candidates = src.candidates.copy()
     if candidates.empty:
         return pd.DataFrame(), {
@@ -492,6 +567,8 @@ def build_master_training_frame(paths: CompatPaths, symbols: list[str] | None = 
     merged = _merge_runtime_features(merged, src.runtime)
     merged = _merge_ping_features(merged, src.ping)
     merged = _merge_outcomes(merged, src.learning, src.runtime_feedback)
+    if lightweight:
+        merged = _filter_to_outcome_rows(merged)
     if src.broker_economics is not None and not src.broker_economics.empty:
         broker_lookup = src.broker_economics.drop_duplicates("symbol_alias", keep="last").set_index("symbol_alias")
         broker_frame = pd.DataFrame(index=merged.index)
@@ -697,7 +774,7 @@ def _build_broker_net_ledger_from_frame(
 
 
 def build_broker_net_ledger(paths: CompatPaths, symbols: list[str] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
-    frame, summary, _ = build_master_training_frame(paths, symbols=symbols)
+    frame, summary, _ = build_master_training_frame(paths, symbols=symbols, lightweight=True)
     return _build_broker_net_ledger_from_frame(
         frame,
         summary,

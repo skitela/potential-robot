@@ -7,8 +7,10 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
 if TYPE_CHECKING:
-    import pandas as pd
+    pass
 
 from .io_utils import first_present, read_table
 from .paths import CompatPaths, DEFAULT_SYMBOLS

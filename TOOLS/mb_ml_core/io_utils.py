@@ -85,6 +85,15 @@ def _sql_timestamp_literal(value: Any) -> str:
     return _quote_sql(ts.strftime("%Y-%m-%d %H:%M:%S"))
 
 
+def _filter_frame_to_symbol_aliases(df: "pd.DataFrame", symbol_aliases: Iterable[str] | None) -> "pd.DataFrame":
+    if df.empty or not symbol_aliases or "symbol_alias" not in df.columns:
+        return df
+    safe_symbols = {str(symbol).strip() for symbol in symbol_aliases if str(symbol).strip()}
+    if not safe_symbols:
+        return df
+    return df.loc[df["symbol_alias"].astype(str).isin(safe_symbols)].copy()
+
+
 def read_parquet_window(
     path: str | Path,
     *,
@@ -100,10 +109,24 @@ def read_parquet_window(
         return pd.DataFrame()
 
     cols = list(columns) if columns else None
-    use_windowing = bool(symbol_aliases) or ts_col is not None or ts_min is not None or ts_max is not None
+    safe_symbols = [str(symbol).strip() for symbol in (symbol_aliases or []) if str(symbol).strip()]
+    use_windowing = bool(safe_symbols) or ts_col is not None or ts_min is not None or ts_max is not None
+    only_symbol_filter = bool(safe_symbols) and ts_col is None and ts_min is None and ts_max is None
     if not use_windowing or duckdb is None:
         try:
             return pd.read_parquet(path, columns=cols)
+        except MemoryError:
+            pass
+        except Exception:
+            if duckdb is None:
+                raise
+
+    # Avoid the DuckDB -> Pandas materialization penalty for simple symbol filters
+    # when the normalized contract is still small enough to read directly.
+    if only_symbol_filter and path.stat().st_size <= 256 * 1024 * 1024:
+        try:
+            frame = pd.read_parquet(path, columns=cols)
+            return _filter_frame_to_symbol_aliases(frame, safe_symbols)
         except MemoryError:
             pass
         except Exception:
@@ -118,11 +141,9 @@ def read_parquet_window(
         select_sql = ", ".join(f'"{col}"' for col in cols)
 
     where_parts: list[str] = []
-    if symbol_aliases:
-        safe_symbols = [str(s) for s in symbol_aliases if str(s).strip()]
-        if safe_symbols:
-            symbol_sql = ", ".join(_quote_sql(sym) for sym in safe_symbols)
-            where_parts.append(f'"symbol_alias" IN ({symbol_sql})')
+    if safe_symbols:
+        symbol_sql = ", ".join(_quote_sql(sym) for sym in safe_symbols)
+        where_parts.append(f'"symbol_alias" IN ({symbol_sql})')
     if ts_col:
         if ts_min is not None:
             where_parts.append(f'try_cast("{ts_col}" as timestamp) >= TIMESTAMP {_sql_timestamp_literal(ts_min)}')

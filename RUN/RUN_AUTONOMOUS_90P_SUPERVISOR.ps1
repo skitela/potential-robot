@@ -1335,6 +1335,8 @@ while ($true) {
         "verdict=$($report.verdict); clean_boundary=$cleanBoundary; contaminated=$contaminated; missing=$missing"
     } | Out-Null
 
+    Write-SupervisorStatus -Cycle $cycle -Actions $actions -LearningPerfProfile $learningPerf.profile -BootAgeMinutes $learningPerf.boot_age_minutes -StartupTurboActive $learningPerf.startup_turbo_active
+
     Invoke-SupervisorAction -Actions $actions -Name "learning_wellbeing" -Operation {
         $report = (& $learningWellbeingScript -ProjectRoot $ProjectRoot -Apply | ConvertFrom-Json)
         $summary = Get-OptionalValue -Object $report -Name "summary" -Default $null

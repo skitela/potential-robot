@@ -63,9 +63,11 @@ foreach ($item in $items) {
 
     $codeHasInclude = ($botCode -match 'MbOnnxPilotObservation\.mqh')
     $codeHasToggle = ($botCode -match 'InpEnableOnnxObservation')
-    $codeHasEvaluation = ($botCode -match 'MbOnnxObservationEvaluate\(')
+    $codeHasObservationInit = ($botCode -match 'MbOnnxObservationInit\(')
+    $codeHasObservationRuntime = ($botCode -match 'MbOnnxObservationEmitTimerShadow\(') -or ($botCode -match 'MbOnnxObservationEvaluate\(')
+    $codeHasBridge = ($botCode -match 'MbMlRuntimeBridgeApplyStudentGate\(') -or ($botCode -match 'MbMlRuntimeBridgeInit\(')
     $codeHasChannel = ($botCode -match '\? "PAPER" : "LIVE"')
-    $codeWired = ($codeHasInclude -and $codeHasToggle -and $codeHasEvaluation)
+    $codeWired = ($codeHasInclude -and $codeHasToggle -and $codeHasObservationInit -and $codeHasObservationRuntime -and $codeHasBridge)
 
     $keyDir = Join-Path $CommonRoot ("key\{0}" -f $symbol)
     $runtimeOnnxPath = Join-Path $keyDir "paper_gate_acceptor_runtime_latest.onnx"
