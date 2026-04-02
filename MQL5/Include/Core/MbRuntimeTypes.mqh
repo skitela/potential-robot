@@ -99,6 +99,9 @@ struct MbSymbolProfile
    ENUM_TIMEFRAMES trade_tf;
    double max_spread_points;
    double caution_spread_points;
+  bool import_volume_limits;
+  bool import_tick_contract;
+  bool import_stop_freeze_levels;
    int deviation_points;
    double quotes_tolerance_pct;
    int max_tick_age_sec;
@@ -395,6 +398,9 @@ void MbSymbolProfileReset(MbSymbolProfile &profile)
    profile.trade_tf = PERIOD_M5;
    profile.max_spread_points = 0.0;
    profile.caution_spread_points = 0.0;
+  profile.import_volume_limits = false;
+  profile.import_tick_contract = false;
+  profile.import_stop_freeze_levels = false;
    profile.deviation_points = 20;
    profile.quotes_tolerance_pct = 0.10;
    profile.max_tick_age_sec = 5;
@@ -416,6 +422,13 @@ void MbSymbolProfileReset(MbSymbolProfile &profile)
    profile.max_market_orders_per_sec = 2;
    profile.max_market_orders_per_min = 12;
    profile.market_orders_eco_threshold_pct = 80;
+  }
+
+void MbEnableBrokerMetadataImport(MbSymbolProfile &profile)
+  {
+   profile.import_volume_limits = true;
+   profile.import_tick_contract = true;
+   profile.import_stop_freeze_levels = true;
   }
 
 void MbSignalDecisionReset(MbSignalDecision &decision)

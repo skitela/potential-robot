@@ -6,6 +6,7 @@
 void LoadProfileEURJPY(MbSymbolProfile &out)
   {
    MbSymbolProfileReset(out);
+  MbEnableBrokerMetadataImport(out);
    out.symbol = "EURJPY";
    out.trade_tf = PERIOD_M5;
    out.max_spread_points = 35.0;

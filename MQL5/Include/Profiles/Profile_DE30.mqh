@@ -6,6 +6,7 @@
 void LoadProfileDE30(MbSymbolProfile &out)
   {
    MbSymbolProfileReset(out);
+  MbEnableBrokerMetadataImport(out);
    out.symbol = "DE30.pro";
    out.trade_tf = PERIOD_M5;
    out.max_spread_points = 110.0;

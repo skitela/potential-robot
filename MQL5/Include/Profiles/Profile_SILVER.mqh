@@ -6,6 +6,7 @@
 void LoadProfileSILVER(MbSymbolProfile &out)
   {
    MbSymbolProfileReset(out);
+  MbEnableBrokerMetadataImport(out);
    out.symbol = "SILVER.pro";
    out.trade_tf = PERIOD_M5;
    out.max_spread_points = 170.0;

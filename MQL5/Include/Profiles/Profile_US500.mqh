@@ -6,6 +6,7 @@
 void LoadProfileUS500(MbSymbolProfile &out)
   {
    MbSymbolProfileReset(out);
+  MbEnableBrokerMetadataImport(out);
    out.symbol = "US500.pro";
    out.trade_tf = PERIOD_M5;
    out.max_spread_points = 95.0;

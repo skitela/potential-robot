@@ -6,6 +6,7 @@
 void LoadProfileEURUSD(MbSymbolProfile &out)
   {
    MbSymbolProfileReset(out);
+  MbEnableBrokerMetadataImport(out);
    out.symbol = "EURUSD";
    out.trade_tf = PERIOD_M5;
    out.max_spread_points = 24.0;

@@ -6,6 +6,7 @@
 void LoadProfileGOLD(MbSymbolProfile &out)
   {
    MbSymbolProfileReset(out);
+  MbEnableBrokerMetadataImport(out);
    out.symbol = "GOLD.pro";
    out.trade_tf = PERIOD_M5;
    out.max_spread_points = 120.0;

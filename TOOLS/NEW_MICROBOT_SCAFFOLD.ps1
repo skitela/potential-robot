@@ -570,6 +570,7 @@ $profileContent = @"
 void LoadProfile${symbolUpper}(MbSymbolProfile &out)
   {
    MbSymbolProfileReset(out);
+   MbEnableBrokerMetadataImport(out);
    out.symbol = "$symbolUpper";
    out.trade_tf = PERIOD_M5;
    out.max_spread_points = 25.0;
